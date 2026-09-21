@@ -5,7 +5,7 @@
 //! ever leave this module as a [`Cmd`], which the runtime interprets. The pure
 //! `view` lives in [`crate::view`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use ownai_core::{AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath};
@@ -570,10 +570,58 @@ pub struct DiffHighlight {
 ///
 /// Highlighting is pure but not free, so it is computed once per file when the
 /// selection first reaches it and reused while the user stays on that file.
+///
+/// Both maps are bounded: browsing a large tree touches many files, and an
+/// unbounded cache would grow without limit and make every `Model` clone
+/// proportional to how far the user has scrolled.
 #[derive(Clone, Default)]
 struct HighlightCache {
-    show: BTreeMap<RepoPath, Arc<Vec<StyledLine>>>,
-    diff: BTreeMap<RepoPath, Arc<DiffHighlight>>,
+    show: BoundedCache<Arc<Vec<StyledLine>>>,
+    diff: BoundedCache<Arc<DiffHighlight>>,
+}
+
+/// How many highlighted files are retained before the oldest is dropped.
+const HIGHLIGHT_CACHE_CAP: usize = 32;
+
+/// A small insertion-ordered map that evicts its oldest entry past a cap.
+///
+/// Eviction is by insertion order rather than true recency: entries are read
+/// without `&mut self` from `view`, and for navigation the insertion order is
+/// the access order.
+#[derive(Clone)]
+struct BoundedCache<V> {
+    entries: BTreeMap<RepoPath, V>,
+    order: VecDeque<RepoPath>,
+}
+
+impl<V> Default for BoundedCache<V> {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+}
+
+impl<V> BoundedCache<V> {
+    fn get(&self, path: &RepoPath) -> Option<&V> {
+        self.entries.get(path)
+    }
+
+    fn contains_key(&self, path: &RepoPath) -> bool {
+        self.entries.contains_key(path)
+    }
+
+    fn insert(&mut self, path: RepoPath, value: V) {
+        if self.entries.insert(path.clone(), value).is_none() {
+            self.order.push_back(path);
+        }
+        while self.order.len() > HIGHLIGHT_CACHE_CAP {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
 }
 
 /// The inputs a cached diff layout depends on.
@@ -921,9 +969,8 @@ impl Model {
         }
         self.body_scroll = 0;
         self.body_hscroll = 0;
-        self.ensure_highlight();
-        self.resync_search();
-        self.refresh_derived();
+        // Highlighting, search re-sync, and diff layout are deferred to
+        // [`settle`], which the runtime runs once per input batch.
     }
 
     fn nearest_visible(&self, hint: usize) -> Option<RepoPath> {
@@ -983,7 +1030,6 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
         Msg::Resize { width, height } => {
             next.width = width;
             next.height = height;
-            next.refresh_derived();
             clamp_view(&mut next);
         }
         Msg::Tick => {
@@ -1032,8 +1078,35 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
         next.pending = Some(request.clone());
     }
 
-    next.refresh_derived();
     (next, cmds)
+}
+
+/// Runs the selection-dependent work a frame needs, once per input batch.
+///
+/// Highlighting, search re-sync, and the wrapped diff layout are pure but not
+/// free, and they depend only on the *final* selection of a batch. Running them
+/// here rather than inside `update` means a burst of tree navigation pays for
+/// one file instead of every row the cursor passed over.
+///
+/// The runtime calls this after folding a batch of messages and before drawing.
+pub(crate) fn settle(mut model: Model) -> Model {
+    if body_is_visible(&model) {
+        model.ensure_highlight();
+    }
+    model.resync_search();
+    model.refresh_derived();
+    model
+}
+
+/// Whether the current layout draws the content pane at all.
+///
+/// In a narrow terminal with the tree focused, the body is not drawn, so
+/// highlighting the selection would be wasted work.
+fn body_is_visible(model: &Model) -> bool {
+    if model.width < SINGLE_PANE_MIN_WIDTH || model.height < MIN_HEIGHT {
+        return false;
+    }
+    model.width >= SIDE_BY_SIDE_MIN_WIDTH || model.focus != Pane::Tree
 }
 
 fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
@@ -1674,8 +1747,8 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                         model.body_scroll = 0;
                         model.body_hscroll = 0;
                         model.overlay = None;
-                        model.ensure_highlight();
-                        model.resync_search();
+                        // Highlighting and search re-sync are deferred to
+                        // [`settle`].
                     }
                 }
                 Key::Char(character) => {
@@ -1817,8 +1890,7 @@ fn tree_key(key: Key, model: &mut Model) {
                 }
                 RowKind::File { path } => {
                     model.selected = Some(path);
-                    model.ensure_highlight();
-                    model.resync_search();
+                    // Highlighting and search re-sync are deferred to [`settle`].
                 }
             }
         }
@@ -1943,8 +2015,7 @@ fn sync_selected(model: &mut Model) {
         model.body_hscroll = 0;
     }
     model.selected = Some(path);
-    model.ensure_highlight();
-    model.resync_search();
+    // Highlighting and search re-sync are deferred to [`settle`].
 }
 
 fn directory_at_cursor(model: &Model) -> Option<(RepoPath, bool)> {
@@ -2160,7 +2231,9 @@ mod tests {
             Icons::new(IconStyle::None),
         );
         model.install(Content::Show(files.into()), false);
-        model
+        // Install defers selection work; settle so rendering tests see the
+        // highlighted, laid-out model a frame would.
+        settle(model)
     }
 
     fn diff_model(diffs: Vec<FileDiff>) -> Model {
@@ -2174,11 +2247,78 @@ mod tests {
             Icons::new(IconStyle::None),
         );
         model.install(Content::Diff(diffs.into()), false);
+        settle(model)
+    }
+
+    /// A show model with the selection work *not* settled, for deferral tests.
+    fn unsettled_show(files: Vec<ProjectedFile>) -> Model {
+        let mut model = Model::new(
+            "/repo".to_owned(),
+            show_request(),
+            "all".to_owned(),
+            100,
+            30,
+            Theme::dark(),
+            Icons::new(IconStyle::None),
+        );
+        model.install(Content::Show(files.into()), false);
         model
     }
 
     fn two_files() -> Model {
         model_with(vec![projected("a.rs", "a\n"), projected("b.rs", "b\n")])
+    }
+
+    #[test]
+    fn navigation_defers_highlighting_until_settle() {
+        let model = unsettled_show(vec![
+            projected("a.rs", "pub fn a();\n"),
+            projected("b.rs", "pub fn b();\n"),
+        ]);
+        assert!(
+            model.active_show_lines().is_none(),
+            "install must not highlight"
+        );
+
+        let (moved, _) = update(Msg::Key(Key::Down), &model);
+        assert!(
+            moved.active_show_lines().is_none(),
+            "update must not highlight"
+        );
+
+        let settled = settle(moved);
+        assert!(
+            settled.active_show_lines().is_some(),
+            "settle highlights the final selection"
+        );
+    }
+
+    #[test]
+    fn settle_skips_highlighting_when_the_body_is_hidden() {
+        let mut model = unsettled_show(vec![projected("a.rs", "pub fn a();\n")]);
+        model.width = 60;
+        model.focus = Pane::Tree;
+
+        let settled = settle(model);
+        assert!(
+            settled.active_show_lines().is_none(),
+            "a hidden body must not be highlighted"
+        );
+    }
+
+    #[test]
+    fn the_highlight_cache_is_bounded() {
+        let mut cache: BoundedCache<usize> = BoundedCache::default();
+        for index in 0..(HIGHLIGHT_CACHE_CAP + 10) {
+            let path = RepoPath::new(format!("f{index}.rs")).expect("valid path");
+            cache.insert(path, index);
+        }
+
+        assert_eq!(cache.order.len(), HIGHLIGHT_CACHE_CAP);
+        assert_eq!(cache.entries.len(), HIGHLIGHT_CACHE_CAP);
+        assert!(!cache.contains_key(&RepoPath::new("f0.rs").expect("valid path")));
+        let newest = RepoPath::new(format!("f{}.rs", HIGHLIGHT_CACHE_CAP + 9)).expect("valid path");
+        assert!(cache.contains_key(&newest));
     }
 
     #[test]

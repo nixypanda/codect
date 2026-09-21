@@ -16,7 +16,7 @@
 
 use std::io::{IsTerminal, Stdout};
 use std::sync::Once;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::cursor;
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind, MouseEvent};
@@ -40,7 +40,7 @@ mod view;
 pub mod bench;
 
 pub use app::LoadRequest;
-use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, update};
+use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, settle, update};
 pub use icons::IconStyle;
 use icons::Icons;
 use theme::Theme;
@@ -49,6 +49,13 @@ use view::view;
 /// How long the driver waits for input before emitting a tick, which drives the
 /// spinner and lets a diagnostic expire without another keypress.
 const TICK_INTERVAL: Duration = Duration::from_millis(150);
+
+/// The most input events folded into a single frame.
+const MAX_INPUT_BATCH: usize = 256;
+
+/// The longest a batch may spend draining. Bounds how long a continuous stream
+/// of events can delay drawing.
+const INPUT_BATCH_BUDGET: Duration = Duration::from_millis(8);
 
 /// Everything `run` needs beyond the engine, built by the caller.
 ///
@@ -143,6 +150,8 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
     let mut dirty = true;
     loop {
         if dirty {
+            // Selection-dependent work runs once per frame, on the final state.
+            model = settle(model);
             session.driver().draw(&model)?;
         }
         let msg = session.driver().read_msg()?;
@@ -151,7 +160,26 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
             dirty = false;
             continue;
         }
-        let (mut next, cmds) = update(msg, &model);
+
+        // Fold every event already queued into one batch, so a burst of tree
+        // navigation costs one settle and one frame instead of one per row.
+        let mut batch = vec![msg];
+        let deadline = Instant::now() + INPUT_BATCH_BUDGET;
+        while batch.len() < MAX_INPUT_BATCH && Instant::now() < deadline {
+            match session.driver().try_read_msg()? {
+                Some(msg) => batch.push(msg),
+                None => break,
+            }
+        }
+
+        let mut next = model;
+        let mut cmds = Vec::new();
+        for msg in batch {
+            let (updated, produced) = update(msg, &next);
+            next = updated;
+            cmds.extend(produced);
+        }
+        next = settle(next);
         if !cmds.is_empty() {
             // Draw the busy state before a blocking effect runs.
             session.driver().draw(&next)?;
@@ -209,6 +237,9 @@ trait Driver {
     fn size(&mut self) -> Result<(u16, u16), TuiError>;
     fn draw(&mut self, model: &Model) -> Result<(), TuiError>;
     fn read_msg(&mut self) -> Result<Msg, TuiError>;
+    /// A message for an event that is already available, or `None` when the
+    /// input queue is empty. Never blocks.
+    fn try_read_msg(&mut self) -> Result<Option<Msg>, TuiError>;
 }
 
 /// Owns a driver and guarantees its teardown on drop, whether the runtime
@@ -354,6 +385,28 @@ impl Driver for CrosstermDriver {
                     }
                 }
                 Event::Resize(width, height) => return Ok(Msg::Resize { width, height }),
+                _ => {}
+            }
+        }
+    }
+
+    fn try_read_msg(&mut self) -> Result<Option<Msg>, TuiError> {
+        loop {
+            if !event::poll(Duration::ZERO).map_err(TuiError::Terminal)? {
+                return Ok(None);
+            }
+            match event::read().map_err(TuiError::Terminal)? {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    if let Some(msg) = translate(key) {
+                        return Ok(Some(msg));
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    if let Some(msg) = translate_mouse(mouse) {
+                        return Ok(Some(msg));
+                    }
+                }
+                Event::Resize(width, height) => return Ok(Some(Msg::Resize { width, height })),
                 _ => {}
             }
         }
@@ -514,6 +567,10 @@ mod tests {
                 .pop_front()
                 .unwrap_or(Msg::Key(Key::Char('q'))))
         }
+
+        fn try_read_msg(&mut self) -> Result<Option<Msg>, TuiError> {
+            Ok(self.messages.pop_front())
+        }
     }
 
     fn log() -> Rc<RefCell<Log>> {
@@ -643,6 +700,35 @@ mod tests {
             vec!["mouse_off", "show_cursor", "leave_alternate", "disable_raw"]
         );
         assert!(log.draws >= 1, "the model must be drawn at least once");
+    }
+
+    #[test]
+    fn a_burst_of_input_is_folded_into_one_frame() {
+        let repo = TestRepo::new();
+        let engine = Engine::discover(repo.path()).expect("discover");
+        let log = log();
+        let messages = VecDeque::from([
+            Msg::Key(Key::Down),
+            Msg::Key(Key::Down),
+            Msg::Key(Key::Down),
+            Msg::Key(Key::Char('q')),
+        ]);
+        let driver = MockDriver::new(None, log.clone(), messages);
+
+        let options = TuiOptions {
+            request: LoadRequest::Show {
+                revision: "HEAD".to_owned(),
+                mode: ProjectionMode::Types,
+                selection: Selection::all(),
+            },
+            scope_label: "all".to_owned(),
+            icons: IconStyle::None,
+        };
+        run_with(engine, options, driver).expect("run");
+
+        // One frame for the initial busy state and one for the whole burst. The
+        // old one-message-per-frame loop would have drawn once per event.
+        assert_eq!(log.borrow().draws, 2);
     }
 
     #[test]

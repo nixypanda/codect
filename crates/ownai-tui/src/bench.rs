@@ -66,6 +66,11 @@ pub fn compute_diff_rows(model: &Model) -> Vec<VisualRow> {
     model.compute_diff_rows()
 }
 
+/// Runs the selection-dependent work once, as the runtime does per batch.
+pub fn settle(model: Model) -> Model {
+    crate::app::settle(model)
+}
+
 /// A projected file whose canonical text is `text`, built the same way the
 /// language adapters build one: a single top-level item with that fragment.
 pub fn projected(path: &str, language: Language, text: &str) -> ProjectedFile {
@@ -106,18 +111,19 @@ pub fn file_diff(
     }
 }
 
-/// A model showing `files`, installed through the real `Msg::Loaded` path so
-/// highlighting and the derived cache are populated exactly as at runtime.
+/// A model showing `files`, installed and settled through the real runtime
+/// paths so highlighting and the derived cache are populated as at runtime.
 pub fn show_model(files: Vec<ProjectedFile>, width: u16, height: u16) -> Model {
     let request = LoadRequest::Show {
         revision: "HEAD".to_owned(),
         mode: ProjectionMode::Types,
         selection: Selection::all(),
     };
-    load_show(files, &base(request, width, height))
+    settle(load_show(files, &base(request, width, height)))
 }
 
-/// A model diffing `diffs`, installed through the real `Msg::Loaded` path.
+/// A model diffing `diffs`, installed and settled through the real runtime
+/// paths.
 pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> Model {
     let request = LoadRequest::Diff {
         base: "HEAD~1".to_owned(),
@@ -125,7 +131,7 @@ pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> Model {
         mode: ProjectionMode::Types,
         selection: Selection::all(),
     };
-    load_diff(diffs, &base(request, width, height))
+    settle(load_diff(diffs, &base(request, width, height)))
 }
 
 /// Applies a completed `show` projection, as the runtime does on `Msg::Loaded`.

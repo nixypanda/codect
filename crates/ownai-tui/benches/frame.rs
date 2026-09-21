@@ -388,7 +388,8 @@ fn scroll_benchmarks(c: &mut Criterion) {
 
     for n in SCROLL_SIZES {
         // Pure message handling: how much work `update` does per row as the
-        // cursor passes over the tree. This is where eager highlighting shows.
+        // cursor passes over the tree. Highlighting is deferred to `settle`, so
+        // this is now cheap regardless of how many rows are crossed.
         group.bench_with_input(BenchmarkId::new("updates_only", n), &n, |b, &n| {
             b.iter_batched(
                 || model.clone(),
@@ -402,14 +403,33 @@ fn scroll_benchmarks(c: &mut Criterion) {
             );
         });
 
-        // The run loop as it stands: every row is updated and drawn.
-        group.bench_with_input(BenchmarkId::new("per_key", n), &n, |b, &n| {
+        // The new runtime: every row is updated, then one settle and one draw.
+        group.bench_with_input(BenchmarkId::new("batched", n), &n, |b, &n| {
             let mut terminal = bench::terminal(WIDE.0, WIDE.1);
             b.iter_batched(
                 || model.clone(),
                 |mut current| {
                     for _ in 0..n {
                         current = bench::update(Msg::Key(Key::Down), &current).0;
+                    }
+                    current = bench::settle(current);
+                    bench::draw(&current, &mut terminal);
+                    black_box(current)
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        // The previous runtime: settle and draw after every single row. This
+        // reproduces the pre-coalescing cost for comparison.
+        group.bench_with_input(BenchmarkId::new("per_step", n), &n, |b, &n| {
+            let mut terminal = bench::terminal(WIDE.0, WIDE.1);
+            b.iter_batched(
+                || model.clone(),
+                |mut current| {
+                    for _ in 0..n {
+                        current = bench::update(Msg::Key(Key::Down), &current).0;
+                        current = bench::settle(current);
                         bench::draw(&current, &mut terminal);
                     }
                     black_box(current)
