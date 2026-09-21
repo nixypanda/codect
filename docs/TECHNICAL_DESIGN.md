@@ -68,12 +68,23 @@ crates/
       extract.rs
       render.rs
       syntax.rs
+  ownai-engine/
+    src/
+      lib.rs
+      engine.rs
+      config.rs
+      error.rs
+      selection.rs
+  ownai-tui/
+    src/
+      lib.rs
+      app.rs
+      highlight.rs
   ownai-cli/
     src/
       main.rs
       args.rs
       command.rs
-      config.rs
       output.rs
       pathspec.rs
 fixtures/
@@ -91,15 +102,28 @@ Dependency direction is one-way:
 ownai-cli
   ├── ownai-core
   ├── ownai-git
-  ├── ownai-language-elm
-  └── ownai-language-rust
+  ├── ownai-engine
+  └── ownai-tui (optional, default-on)
 
+ownai-tui           ──→ ownai-core
+                    └──→ ownai-engine
+ownai-engine        ──→ ownai-core, ownai-git
+                    └──→ ownai-language-elm, ownai-language-rust
 ownai-language-elm  ──→ ownai-core
 ownai-language-rust ──→ ownai-core
 ownai-git           ──→ ownai-core
 ```
 
 `ownai-core` must not depend on `gix`, Tree-sitter, either grammar, or `clap`. Language-specific Tree-sitter node names must never appear in `ownai-core`. `gix` types must never leave `ownai-git`.
+
+`ownai-engine` is the shared Git-aware application layer both frontends use. It
+must not depend on `clap`, `miette`, `ratatui`, or `crossterm`, and it never
+renders a document or reads command-line arguments.
+
+`ownai-tui` is the terminal frontend (section 21). It must not depend on `clap`
+or `miette`, discover repositories, parse arguments, or read `.ownai.toml`; it
+receives an `Engine` and a fully-built `Selection` and talks to the terminal
+through `ratatui`/`crossterm` only.
 
 ## 4. Dependencies
 
@@ -126,17 +150,35 @@ anstream = "1.0"
 anstyle = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+
+# Terminal frontend only. `ratatui` is built without its default feature bundle
+# so the enabled feature set stays auditable; the crossterm backend is the only
+# backend. `syntect` uses the pure-Rust `fancy-regex` backend, and `two-face`
+# supplies the bat syntax and theme assets delta uses.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+unicode-width = "0.2"
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 ```
 
-`serde` and `toml` parse the CLI's own `.ownai.toml` (section 14.1); they are
-not a serialization dependency of `gix`, whose `serde` feature stays disabled
-(section 4.1).
+`serde` and `toml` parse `.ownai.toml` for the shared engine (section 14.1);
+they are not a serialization dependency of `gix`, whose `serde` feature stays
+disabled (section 4.1).
+
+The terminal dependencies are used only by `ownai-tui`, behind the default-on
+`tui` feature of `ownai-cli`. With `--no-default-features`, none of `ratatui`,
+`crossterm`, `unicode-width`, `syntect`, or `two-face` may appear in
+`ownai-cli`'s dependency tree; this is enforced by `just check-workspace-nodefault`
+(section 18.1). `syntect` uses the `fancy-regex` backend so the build needs no
+Oniguruma C toolchain.
 
 Use current compatible releases for test-only dependencies:
 
 - `assert_cmd` for CLI tests.
 - `predicates` for CLI assertions.
 - `tempfile` for temporary repositories.
+- `portable-pty` for the terminal frontend's PTY smoke test.
 
 Projection and diff expected output is stored as plain fixture text and compared
 directly (section 16.2), which is easier to review than opaque snapshots, so no
@@ -299,7 +341,7 @@ Nested items remain in `items` so that stable keys and later per-declaration com
 
 The variants make named areas and literal paths mutually exclusive by construction. `PathSelection::resolve` turns a selection into a `PathScope`; `All` and an empty literal list both match everything.
 
-`Area` is a named list of repository paths, and `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. Resolution reports an undefined name as `PathSelectionError::UnknownArea` and an area with no paths as `PathSelectionError::EmptyArea`. Areas are data only and core stays file-format-free: the CLI loads them from `.ownai.toml` (section 14.1) and passes the resulting `AreaSet` to `PathSelection::resolve`, so `All`, literal paths, and named areas are all reachable at the CLI boundary.
+`Area` is a named list of repository paths, and `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. Resolution reports an undefined name as `PathSelectionError::UnknownArea` and an area with no paths as `PathSelectionError::EmptyArea`. Areas are data only and core stays file-format-free: the engine loads them from `.ownai.toml` (section 14.1) and passes the resulting `AreaSet` to `PathSelection::resolve`, so `All`, literal paths, and named areas are all reachable at the frontend boundary.
 
 ## 6. Language adapter interface
 
@@ -325,6 +367,10 @@ The adapters own all language meaning. Core selects an adapter by path, invokes 
 Parsing and projection must be deterministic and must not depend on the current directory, locale, terminal width, wall clock, environment variables, or installed compilers.
 
 ## 7. End-to-end pipeline
+
+The pipeline is implemented once in `ownai-engine` and shared by the command
+line and the terminal frontend (section 21). The two frontends differ only in
+how they build the initial selection and present the result.
 
 ### 7.1 Show
 
@@ -677,6 +723,14 @@ Requirements:
 
 Do not implement declaration rename or move detection. Do not compare syntax trees directly. Canonical projection is the semantic step; the diff remains textual.
 
+Alongside `unified_hunks`, core exposes a structured side-by-side alignment:
+`aligned_rows(old, new)` returns ordered rows carrying optional old and new line
+numbers, old and new text, and an `Equal`/`Add`/`Delete`/`Change`
+classification. It shares `unified_hunks`'s patience configuration and line
+tokenization, so the two always identify the same changed lines. The terminal
+frontend renders side by side from `aligned_rows` and must never derive a
+side-by-side view by parsing unified-diff text.
+
 ## 14. CLI contract
 
 The binary name is `ownai`.
@@ -710,7 +764,12 @@ Rules:
 - Write diagnostics to stderr.
 - Do not add progress output in the MVP.
 
-The CLI constructs the two projectors, opens `ownai-git`, and implements the Git-aware pipeline in `command.rs`, composing `ownai-git`'s snapshot reads with `ownai-core`'s pure `show` and `diff` rendering. `ownai-core` stays Git-free (section 3). Business rules do not belong in `main.rs`.
+The Git-aware pipeline lives in `ownai-engine`, which composes `ownai-git`'s
+snapshot reads with `ownai-core`'s pure rendering and exposes `show` and `diff`
+over a `Selection`. The CLI builds that selection from `argv`, invokes the
+engine, and renders the result or a diagnostic; `main.rs` stays a thin entry
+point. `ownai-core` stays Git-free (section 3). Business rules do not belong in
+`main.rs`.
 
 ### 14.1 `.ownai.toml` and named areas
 
@@ -729,7 +788,7 @@ Rules:
 - The file is read lazily, only when `--area` is present. It is read at most once per command, and it never affects `--path` or unscoped runs.
 - The on-disk shape is a single `[areas]` table of `name = [paths]`. Unknown keys are rejected, so a typo cannot silently drop the area it was meant to define.
 - Area paths are repository-root-relative. Unlike `--path`, they do not depend on the current directory.
-- Parsing lives in `crates/ownai-cli/src/config.rs`. `ownai-core` stays free of file formats: the CLI turns TOML into an `AreaSet` and passes it to core's `PathSelection::resolve` (section 5.4).
+- Parsing lives in `crates/ownai-engine/src/config.rs`. `ownai-core` stays free of file formats: the engine turns TOML into an `AreaSet` and passes it to core's `PathSelection::resolve` (section 5.4).
 - The config is untrusted input. It is size-bounded to 1 MiB, a symlinked config is rejected rather than followed, and an empty or whitespace-only area name or an empty path list is rejected.
 - A path that is absolute, contains `..`, or is otherwise unusable is rejected. `.`, repeated slashes, and a trailing slash are normalized leniently; normalization is lexical and never consults the filesystem.
 - `--area` and `--path` are mutually exclusive: the `PathSelection` variants make the two selections disjoint by construction, and `clap` rejects a command that passes both with a usage error (exit `2`).
@@ -877,6 +936,22 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
 
 `config.rs` unit tests cover the schema: a valid file, a missing file, malformed TOML, an unknown top-level key, a duplicate area key, an empty area name, an empty path list, an absolute path, a `..` path, lenient `.`/trailing-slash normalization, a file with no `[areas]` table, an oversized file, and a symlinked file.
 
+### 16.6 Terminal frontend tests
+
+- `update` and `view` are pure: tests drive `update` with `Msg` sequences and
+  assert the resulting model and effects, and assert that an engine call leaves
+  `update` as a `Cmd` rather than being performed inline.
+- `ratatui::TestBackend` covers the file tree, empty states, help, diagnostics,
+  responsive layouts, the modal overlays, syntax coloring, delta diff
+  backgrounds, intra-line emphasis, hunk headers, and side-by-side wrapping.
+- An injected terminal driver covers partial setup and matching cleanup; a PTY
+  smoke test runs where the platform supports one.
+- The feature graph is checked by `just check-workspace-nodefault`: the
+  no-default-features build must not link `ratatui`, `crossterm`, `syntect`, or
+  `two-face`.
+- No test launches an editor, writes repository data, or depends on the
+  developer's terminal configuration.
+
 ## 17. Performance constraints
 
 Correctness and stable output take priority over concurrency in the MVP.
@@ -893,6 +968,18 @@ Initial performance rules:
 - Do not enable parallel projection until deterministic tests and profiling exist.
 
 Add benchmarks for large synthetic trees and representative real Elm/Rust repositories before adding threads, persistent caches, or broader `gix` features.
+
+The terminal frontend follows the same rules. It holds large, rarely-changed
+collections (`Content`, tree rows, visible paths) behind `Arc`, so cloning the
+TEA model per message is O(1) rather than proportional to repository size.
+Syntax highlighting is computed once per selected file and cached by path, and
+the wrapped diff layout is cached and invalidated by content generation, size,
+selection, and tree width. It keeps no persistent cache, and engine caches stay
+per-operation.
+
+Frontend responsiveness work is deferred until it is measured. If input-to-redraw
+latency exceeds roughly 100 ms median or 200 ms p95 on the reference host, add a
+cancellable worker and a loading state before considering persistent caches.
 
 ### Performance baseline
 
@@ -923,6 +1010,12 @@ persistent caches, or broader `gix` features were added to obtain these numbers.
 - Report allocation or parser failures rather than panicking.
 - Reserve `panic!`, `unwrap`, and `expect` for tests or statically guaranteed initialization only.
 
+The terminal frontend verifies that standard input and output are terminals
+before emitting any control sequence, stages setup so a partial failure is
+undone in reverse order, and restores the terminal on normal return, error, and
+unwinding panic. Teardown is best-effort and never panics from `Drop`. Terminal
+events, and everything the frontend reads, are untrusted input.
+
 Fuzzing Tree-sitter itself is out of scope, but adapter traversal and canonical token rendering should be structured so they can receive arbitrary byte input in later fuzz targets.
 
 ### 18.1 Required development checks
@@ -935,9 +1028,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
 cargo tree -e features -p ownai-git
+cargo build -p ownai-cli --no-default-features
 ```
 
-Review the final command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features.
+Review the `cargo tree` command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features. The final build must succeed and link none of `ratatui`, `crossterm`, `syntect`, or `two-face`; `just check-workspace-nodefault` additionally asserts their absence with `cargo tree`.
 
 ## 19. Implementation sequence
 
@@ -1005,6 +1099,27 @@ Acceptance gate: all documented command forms work in normal, bare, Elm-only, Ru
 
 Acceptance gate: a release build passes all tests and the dependency feature tree matches this document.
 
+### Phase 8: Engine extraction and the Show frontend
+
+- Extract the Git-aware pipeline into `ownai-engine` without changing CLI output.
+- Add `ownai-tui` with the TEA core and terminal runtime, behind the default-on `tui` feature.
+- Implement `ownai tui show`: file tree, projection pane, mode switch, scrolling, help, and the terminal-safety contract.
+
+Acceptance gate: `ownai tui show` works in normal, bare, Elm-only, Rust-only, and mixed repositories; CLI output is byte-for-byte unchanged; the no-default-features build links no terminal dependency.
+
+### Phase 9: Diff frontend
+
+- Add `aligned_rows` to core and render a side-by-side projection diff with synchronized scrolling and long-line wrapping.
+- Add syntax highlighting and delta-style diff styling (section 21.6).
+
+Acceptance gate: added, deleted, and modified projected files render correctly; body-only changes stay invisible; wrapping never crosses pane bounds.
+
+### Phase 10: Frontend usability
+
+- Add revision, scope/area, and mode controls; a resizable tree; a structured status bar; and hunk headers.
+
+Acceptance gate: the documented keybindings work end to end, and every earlier frontend gate still passes.
+
 ## 20. Completion definition
 
 The MVP implementation is complete when:
@@ -1020,8 +1135,100 @@ The MVP implementation is complete when:
 - Output is deterministic across repeated runs and independent of terminal width.
 - All required tests and snapshots pass.
 - Only the approved `gix` features are enabled.
+- The terminal frontend opens, browses, and quits safely in normal, bare,
+  Elm-only, Rust-only, and mixed repositories, restoring the terminal on every
+  exit path.
+- The frontend switches modes, changes scope and revisions, resizes the tree,
+  and renders syntax-highlighted side-by-side diffs with hunk headers.
+- Building `ownai-cli --no-default-features` succeeds and links no terminal
+  dependency.
 
-## 21. Upstream references
+## 21. Terminal frontend
+
+`ownai tui` is an optional, default-on terminal frontend over the same
+projections. `ownai-tui` is the only crate that touches the terminal.
+
+### 21.1 Command surface
+
+```text
+ownai tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+ownai tui diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+```
+
+- `show` defaults `REVISION` to `HEAD`; both diff revisions are required.
+- The feature is default-on: `default = ["tui"]`, `tui = ["dep:ownai-tui"]`.
+  Without it, `tui` is an unknown command (exit `2`) and no terminal dependency
+  is linked.
+- The command line owns `argv` conversion and builds the initial `Selection`; it
+  never passes `clap` types into the frontend.
+- A non-terminal invocation exits `1` with empty stdout and one diagnostic on
+  stderr.
+
+### 21.2 The Elm Architecture
+
+`ownai-tui` follows The Elm Architecture. `app.rs` holds the pure `Model`,
+`Msg`, `Cmd`, `update`, and `view`; `lib.rs` is the only imperative layer,
+owning the run loop, terminal lifecycle, and effect interpretation.
+
+- **Model** — one plain data structure holds the entire UI state. `update`
+  replaces it wholesale rather than editing it in place.
+- **Msg** — every input is a value: a key, a resize, or the completion of an
+  effect.
+- **update** — a pure `(Msg, &Model) -> (Model, Vec<Cmd>)`. It performs no I/O.
+- **Cmd** — I/O is described as data. `Load` runs `Engine::show` or
+  `Engine::diff`; `LoadAreas` reads `.ownai.toml` through
+  `Engine::load_areas`.
+- **view** — a pure `&Model -> widgets`.
+- Effects are transactional: a failed reload keeps the previous model and
+  displays a dismissible diagnostic.
+
+### 21.3 State sharing and derived cache
+
+Large, wholesale-replaced collections (`Content` payloads, tree rows, visible
+paths) are `Arc`-backed, so cloning a `Model` is O(1) rather than proportional
+to repository size. Syntax highlighting is cached per selected path, and the
+wrapped diff layout is cached in `Derived`, invalidated by content generation,
+size, selection, and tree width. Per-frame data stays in plain `Vec`. The
+frontend keeps no persistent cache.
+
+### 21.4 Layout and interaction
+
+- A file tree sits beside a content region. `Tab` toggles between them. For a
+  diff the two sides are one focus unit, and vertical scrolling moves both in
+  lockstep; below 80 columns the sides stack vertically.
+- Modal overlays capture keys until dismissed: help, revision entry, the scope
+  chooser, and the mode picker. The scope chooser loads areas as an effect and
+  keeps `RepoPath` identity for named areas; literal path entry is UTF-8.
+- The file-tree width is adjustable and clamped.
+- `RepoPath` remains the identity; labels are escaped for display only.
+
+### 21.5 Terminal lifecycle and safety
+
+- Verify that standard input and output are terminals before emitting any
+  control sequence.
+- Stage setup (raw mode, alternate screen, cursor) and record which steps
+  succeeded; undo exactly those, in reverse order, on normal return, error, or
+  unwinding panic. Teardown is best-effort and never panics from `Drop`.
+- A panic hook restores the terminal before the panic message prints.
+- Resize events clamp all selections and offsets, including zero-sized layouts.
+- The runtime is generic over an injected driver so setup and cleanup can be
+  tested without a real terminal; a PTY smoke test covers the real crossterm
+  path where the platform supports one.
+
+### 21.6 Syntax highlighting and diff styling
+
+- Syntax foregrounds come from `syntect` with the `two-face` bat assets (Rust
+  and Elm included), using the pure-Rust `fancy-regex` backend.
+- Diff rows use delta's default full-line added and removed backgrounds, with a
+  brighter intra-line emphasis on the bytes that differ.
+- Hunk headers and the collapsing of long unchanged runs are computed in the
+  frontend from `aligned_rows`; core's diff model is untouched.
+- `NO_COLOR` disables all styling; structure such as line numbers, continuation
+  markers, and hunk headers survives.
+- Highlighting is presentation only: canonical projection text and CLI output
+  are byte-for-byte unchanged.
+
+## 22. Upstream references
 
 Use primary upstream documentation when an API detail in this design needs confirmation:
 
@@ -1032,5 +1239,9 @@ Use primary upstream documentation when an API detail in this design needs confi
 - [Tree-sitter Rust grammar](https://github.com/tree-sitter/tree-sitter-rust)
 - [`similar` diff crate](https://docs.rs/similar/latest/similar/)
 - [`clap` derive reference](https://docs.rs/clap/latest/clap/_derive/)
+- [`ratatui`](https://docs.rs/ratatui/latest/ratatui/)
+- [`crossterm`](https://docs.rs/crossterm/latest/crossterm/)
+- [`syntect`](https://docs.rs/syntect/latest/syntect/)
+- [`two-face`](https://docs.rs/two-face/latest/two_face/)
 
 Pin resolved versions in `Cargo.lock`. When upgrading `gix` or a grammar, read its changelog, inspect feature resolution or `NODE_TYPES`, and run the complete fixture and integration suite before accepting new snapshots.

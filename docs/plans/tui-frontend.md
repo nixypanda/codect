@@ -1,10 +1,17 @@
 # Planning: `ownai tui`, delivered in three usable phases
 
-> **Status: forward-looking plan. No part of this is implemented.**
+> **Status: partially completed.** The Show MVP, the Diff MVP, the engine
+> extraction, and several improvements are implemented on `feat/tui-usability`:
+> in-TUI revision controls, scope and area controls, mode controls, a resizable
+> file tree, a richer status bar, `Tab` toggling the tree and both diff panes,
+> hunk headers, and delta-style syntax and diff coloring.
 >
-> `PRODUCT.md`, `TECHNICAL_DESIGN.md`, and `README.md` describe the current
-> system until this work is ready. Updating them is part of the final phase and
-> a merge gate, not a separate cleanup change.
+> Still open from section 6: file filtering (§6.3), declaration navigation and
+> the committed-source pane (§6.4), unified and no-wrap diff options (§6.5), and
+> performance work (§6.6).
+>
+> `README.md`, `PRODUCT.md`, and `TECHNICAL_DESIGN.md` (section 21) now describe
+> the implemented terminal frontend.
 
 ## 1. Delivery principle
 

@@ -36,14 +36,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
 cargo tree -e features -p ownai-git
+cargo build -p ownai-cli --no-default-features
 ```
 
-The final `cargo tree` command audits the enabled `gix` features. It must show
+The `cargo tree` command audits the enabled `gix` features. It must show
 nothing beyond the approved feature list in TECHNICAL_DESIGN.md section 4.1 and
 their unavoidable transitive implications.
 
+The final `cargo build` proves the terminal frontend is optional: with
+`--no-default-features`, `ratatui`, `crossterm`, `syntect`, and `two-face` must
+not appear in `ownai-cli`'s dependency tree.
+
 Individual recipes are available as `just build`, `just test`, `just format`,
-`just check-workspace-clippy`, and `just check-workspace-features`.
+`just check-workspace-clippy`, `just check-workspace-features`, and
+`just check-workspace-nodefault`.
 
 ## Usage
 
@@ -71,6 +77,58 @@ backend  = ["services/api"]
 Focused diffs intentionally hide implementation-only changes: if a function body
 changes while its projected declaration is unchanged, the focused diff shows no
 change for that function.
+
+## Terminal frontend
+
+`ownai` also ships an interactive terminal browser for the same projections. It
+is a default-on feature of the CLI.
+
+```text
+ownai tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+ownai tui diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+```
+
+`tui show` opens a file tree beside the canonical projection of the selected
+file. `tui diff` opens a changed-file tree beside a side-by-side projection
+diff. The diff panes are syntax-highlighted and styled like
+[`delta`](https://github.com/dandavison/delta): per-token syntax colors,
+full-line add/delete backgrounds, brighter intra-line emphasis on the bytes that
+changed, and `@@` hunk headers. `NO_COLOR` disables all styling.
+
+Keybindings:
+
+| Key | Action |
+|---|---|
+| `q`, `Ctrl-C` | Quit |
+| `↑`/`↓` or `k`/`j` | Move in the tree, or scroll the focused content |
+| `←`/`→` or `h`/`l` | Fold/unfold the tree, or scroll the projection sideways |
+| `Tab`, `Shift-Tab` | Switch between the tree and the content |
+| `Enter` | Open a file or fold a directory |
+| `m` | Choose Types or Signatures |
+| `s` | Choose a scope: everything, a named area, or a literal path |
+| `r` | Edit the show revision |
+| `b`, `t` | Edit the diff base and target revisions |
+| `[`, `]` | Shrink or grow the file tree; `\` resets it |
+| `?` | Toggle help |
+| `Esc` | Close an overlay or dismiss a diagnostic |
+
+Requirements:
+
+- Both standard input and standard output must be terminals; a redirected
+  invocation exits `1` with empty stdout and one diagnostic on stderr.
+- The frontend is read-only: it reads committed blobs and never writes the
+  repository, worktree, or index.
+- Terminals narrower than 40 columns or shorter than 8 rows show a minimal
+  "terminal too small" view; between 40 and 79 columns one region is shown at a
+  time, and at 80 columns or wider the tree and content share the screen.
+
+Building without the frontend:
+
+```sh
+cargo build -p ownai-cli --no-default-features
+```
+
+`tui` then becomes an unknown command, and no terminal dependency is linked.
 
 ## Performance baseline
 
