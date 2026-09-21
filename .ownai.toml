@@ -1,0 +1,19 @@
+# Named areas for studying OwnAI itself. Paths are repo-root-relative and
+# literal (no globs). Select with --area/-a, e.g.
+#   ownai show --mode signatures --area seams
+#   ownai show --mode types --area core --area cli
+
+[areas]
+core      = ["crates/ownai-core/src"]
+git       = ["crates/ownai-git/src"]
+cli       = ["crates/ownai-cli/src"]
+languages = ["crates/ownai-language-elm/src", "crates/ownai-language-rust/src"]
+
+seams = [
+    "crates/ownai-core/src/lib.rs",
+    "crates/ownai-git/src/lib.rs",
+    "crates/ownai-language-elm/src/lib.rs",
+    "crates/ownai-language-rust/src/lib.rs",
+    "crates/ownai-cli/src/main.rs",
+    "crates/ownai-cli/src/command.rs",
+]
