@@ -71,6 +71,35 @@ fn tui_show_without_a_mode_is_a_usage_error() {
 }
 
 #[test]
+fn tui_accepts_the_icons_flag() {
+    let repo = repo();
+    // Accepted, then rejected only because stdout is not a terminal.
+    ownai_in(
+        &repo,
+        &["tui", "show", "--mode", "types", "--icons", "nerd"],
+    )
+    .assert()
+    .code(1);
+    ownai_in(
+        &repo,
+        &["tui", "show", "--mode", "types", "--icons", "none"],
+    )
+    .assert()
+    .code(1);
+}
+
+#[test]
+fn an_unknown_icons_value_is_a_usage_error() {
+    let repo = repo();
+    ownai_in(
+        &repo,
+        &["tui", "show", "--mode", "types", "--icons", "bogus"],
+    )
+    .assert()
+    .code(2);
+}
+
+#[test]
 fn tui_without_a_subcommand_is_a_usage_error() {
     let repo = repo();
     ownai_in(&repo, &["tui"]).assert().code(2);

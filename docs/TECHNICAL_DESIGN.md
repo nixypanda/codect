@@ -82,6 +82,7 @@ crates/
       highlight.rs
       theme.rs
       fuzzy.rs
+      icons.rs
       view/
         mod.rs
         chrome.rs
@@ -1284,6 +1285,12 @@ frontend keeps no persistent cache.
   both.
 - The palette and finder use a small dependency-free fuzzy matcher
   (`fuzzy.rs`); no new crate is added for navigation.
+- `icons.rs` holds an opt-in Nerd Font glyph set. Nerd Fonts cannot be detected
+  from inside a program, so icons default off and are enabled with
+  `--icons=nerd` or `OWNAI_ICONS=nerd`. Every glyph is a single display column,
+  which keeps the tree's display-width alignment intact; the glyphs come from
+  the Font Awesome and Devicons/Seti ranges that exist in Nerd Fonts v2 and are
+  aliased in v3.
 
 ### 21.8 Loading and feedback
 

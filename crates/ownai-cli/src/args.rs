@@ -31,6 +31,12 @@ pub struct Cli {
     #[arg(long, value_enum, default_value = "auto", global = true)]
     pub color: ColorChoice,
 
+    /// Draw Nerd Font icons in the terminal frontend's file tree. Requires a
+    /// Nerd Font installed in the terminal; `OWNAI_ICONS=nerd` sets the same
+    /// default.
+    #[arg(long, value_enum, global = true)]
+    pub icons: Option<IconChoice>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -171,4 +177,13 @@ pub enum ColorChoice {
     Always,
     /// Never emit ANSI color.
     Never,
+}
+
+/// Whether the terminal frontend draws Nerd Font icons.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum IconChoice {
+    /// No icons; readable on any font.
+    None,
+    /// Nerd Font folder and file-type glyphs.
+    Nerd,
 }

@@ -31,11 +31,14 @@ use ratatui::backend::CrosstermBackend;
 mod app;
 mod fuzzy;
 mod highlight;
+mod icons;
 mod theme;
 mod view;
 
 pub use app::LoadRequest;
 use app::{Cmd, Content, Key, Model, Msg, update};
+pub use icons::IconStyle;
+use icons::Icons;
 use theme::Theme;
 use view::view;
 
@@ -53,6 +56,8 @@ pub struct TuiOptions {
     pub request: LoadRequest,
     /// A short label for the initial scope, shown in the status bar.
     pub scope_label: String,
+    /// Whether the file tree draws Nerd Font icons.
+    pub icons: IconStyle,
 }
 
 /// A failure that prevents the frontend from starting or continuing.
@@ -99,6 +104,7 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
         width,
         height,
         Theme::detect(),
+        Icons::new(options.icons),
     );
 
     // The initial projection is the startup effect. Unlike a later reload, a
@@ -510,6 +516,7 @@ mod tests {
                 selection: Selection::all(),
             },
             scope_label: "all".to_owned(),
+            icons: IconStyle::None,
         };
         run_with(engine, options, driver).expect("run");
 
@@ -537,6 +544,7 @@ mod tests {
                 selection: Selection::all(),
             },
             scope_label: "all".to_owned(),
+            icons: IconStyle::None,
         };
         let error = run_with(engine, options, driver).expect_err("startup failure");
         assert!(matches!(error, TuiError::Engine(_)), "got {error:?}");

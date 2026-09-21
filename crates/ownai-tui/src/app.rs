@@ -15,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::fuzzy;
 use crate::highlight::{self, StyledLine};
+use crate::icons::Icons;
 use crate::theme::Theme;
 use crate::view::diff::layout_diff;
 use crate::view::geom::{Edge, frame_chunks, gutter_width, pane_block, split_with_dividers};
@@ -608,6 +609,8 @@ pub struct Model {
     pub height: u16,
     /// The resolved design tokens; view code never names a raw color.
     pub theme: Theme,
+    /// The resolved tree glyph set; icons are opt-in.
+    pub icons: Icons,
     /// A load in flight, so the view can show a spinner.
     pub pending: Option<LoadRequest>,
     /// The spinner animation frame, advanced by [`Msg::Tick`].
@@ -626,6 +629,7 @@ impl Model {
         width: u16,
         height: u16,
         theme: Theme,
+        icons: Icons,
     ) -> Self {
         let mode = request.mode();
         Self {
@@ -653,6 +657,7 @@ impl Model {
             width,
             height,
             theme,
+            icons,
             spinner: 0,
             diagnostic_ttl: 0,
             quit: false,
@@ -1989,6 +1994,7 @@ fn is_within(path: &[u8], directory: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::highlight::Run;
+    use crate::icons::IconStyle;
     use crate::view::geom::{centered, window_offset};
     use crate::view::text::clip_line;
     use crate::view::view;
@@ -2055,6 +2061,7 @@ mod tests {
             100,
             30,
             Theme::dark(),
+            Icons::new(IconStyle::None),
         );
         model.install(Content::Show(files.into()), false);
         model
@@ -2068,6 +2075,7 @@ mod tests {
             100,
             30,
             Theme::dark(),
+            Icons::new(IconStyle::None),
         );
         model.install(Content::Diff(diffs.into()), false);
         model
@@ -2970,6 +2978,29 @@ mod tests {
     }
 
     #[test]
+    fn nerd_icons_render_and_leave_labels_intact() {
+        let build = || {
+            model_with(vec![
+                projected("src/main.rs", "x\n"),
+                projected("src/Main.elm", "y\n"),
+            ])
+        };
+        let plain = build();
+        let mut nerd = build();
+        nerd.icons = Icons::new(IconStyle::Nerd);
+
+        let plain_text = buffer_text(&render(&plain, 100, 20));
+        let nerd_text = buffer_text(&render(&nerd, 100, 20));
+
+        assert!(!plain_text.contains('\u{f07b}'), "no glyph by default");
+        assert!(nerd_text.contains('\u{f07b}'), "folder glyph missing");
+        assert!(nerd_text.contains('\u{e7a8}'), "rust glyph missing");
+        assert!(nerd_text.contains('\u{e62c}'), "elm glyph missing");
+        assert!(nerd_text.contains("main.rs"), "the label survives");
+        assert!(nerd_text.contains("Main.elm"), "the label survives");
+    }
+
+    #[test]
     fn a_wide_terminal_shows_both_diff_sides_with_revision_labels() {
         let model = diff_model(vec![file_diff(
             "a.rs",
@@ -3106,6 +3137,21 @@ mod tests {
         assert!(delete, "expected a removed-line background");
         assert!(add, "expected an added-line background");
         assert!(emphasis, "expected intra-line emphasis");
+    }
+
+    /// Renders the file tree with Nerd Font icons. Run with
+    /// `--ignored --nocapture`.
+    #[test]
+    #[ignore = "prints a colored preview"]
+    fn preview_nerd_icons() {
+        let mut model = model_with(vec![
+            projected("src/main.rs", "pub fn main() {}\n"),
+            projected("src/Main.elm", "module Main exposing (..)\n"),
+            projected("README.md", "# hi\n"),
+        ]);
+        model.icons = Icons::new(IconStyle::Nerd);
+        let buffer = render(&model, 80, 12);
+        print!("{}", ansi_preview(&buffer));
     }
 
     /// Renders a diff and prints it with ANSI color, plus writes an HTML preview

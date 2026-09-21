@@ -80,12 +80,14 @@ fn tree_line(
 
     let mut spans: Vec<Span<'static>> = Vec::new();
 
-    // The selection bar occupies the first column of a focused selection.
+    // The selection bar reserves its column on every row so labels stay aligned.
     if selected {
         spans.push(Span::styled(
             "▌".to_owned(),
             theme.fg_bg(theme.palette.selection_bar, theme.palette.selection_bg),
         ));
+    } else {
+        spans.push(Span::styled(" ".to_owned(), base));
     }
 
     // Guides: one three-column cell per ancestor level, then a connector.
@@ -117,6 +119,19 @@ fn tree_line(
             marker.to_owned(),
             theme.fg(label_color).add_modifier(Modifier::BOLD),
         ));
+    }
+
+    // An opt-in Nerd Font glyph sits between the marker and the label.
+    let icon = match &row.kind {
+        RowKind::Directory { .. } => model.icons.folder(),
+        RowKind::File { path } => model.icons.file(path),
+    };
+    if !icon.is_empty() {
+        let color = match &row.kind {
+            RowKind::Directory { .. } => theme.palette.dir,
+            RowKind::File { .. } => theme.palette.text_muted,
+        };
+        spans.push(Span::styled(format!("{icon} "), theme.fg(color)));
     }
 
     let used: usize = spans

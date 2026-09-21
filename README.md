@@ -100,6 +100,10 @@ A command palette (`Ctrl-P`), a fuzzy file finder (`Ctrl-F`), and in-pane search
 `OWNAI_THEME=light` switches to a light palette, and colors degrade gracefully on
 terminals that only support 256 or 16 colors.
 
+The file tree can draw Nerd Font folder and file-type glyphs with `--icons=nerd`
+(or `OWNAI_ICONS=nerd`). This requires a Nerd Font installed in your terminal;
+without one the glyphs render as boxes, so the default is `--icons=none`.
+
 Keybindings:
 
 | Key | Action |

@@ -20,6 +20,8 @@ use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
 use ownai_git::GitError;
 
 #[cfg(feature = "tui")]
+use crate::args::IconChoice;
+#[cfg(feature = "tui")]
 use crate::args::TuiCommand;
 use crate::args::{Cli, Command as CliCommand};
 use crate::output::{self, DocumentKind};
@@ -104,7 +106,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
                 .map_err(output_failure)
         }
         #[cfg(feature = "tui")]
-        CliCommand::Tui { command } => run_tui(engine, command, &start),
+        CliCommand::Tui { command } => run_tui(engine, command, &start, cli.icons),
     }
 }
 
@@ -126,7 +128,12 @@ fn split_diff(diffs: Vec<FileDiff>) -> (Vec<ProjectedFile>, Vec<ProjectedFile>) 
 
 /// Runs the terminal frontend for one `tui` subcommand.
 #[cfg(feature = "tui")]
-fn run_tui(engine: Engine, command: &TuiCommand, start: &Path) -> Result<(), CliError> {
+fn run_tui(
+    engine: Engine,
+    command: &TuiCommand,
+    start: &Path,
+    icons: Option<IconChoice>,
+) -> Result<(), CliError> {
     let (request, scope_label) = match command {
         TuiCommand::Show {
             mode,
@@ -169,8 +176,23 @@ fn run_tui(engine: Engine, command: &TuiCommand, start: &Path) -> Result<(), Cli
     let options = ownai_tui::TuiOptions {
         request,
         scope_label,
+        icons: resolve_icons(icons),
     };
     ownai_tui::run(engine, options).map_err(tui_failure)
+}
+
+/// Resolves the icon style: an explicit `--icons` wins, then `OWNAI_ICONS`,
+/// then no icons. Unknown environment values fall back to no icons.
+#[cfg(feature = "tui")]
+fn resolve_icons(choice: Option<IconChoice>) -> ownai_tui::IconStyle {
+    match choice {
+        Some(IconChoice::Nerd) => ownai_tui::IconStyle::Nerd,
+        Some(IconChoice::None) => ownai_tui::IconStyle::None,
+        None => match std::env::var("OWNAI_ICONS").ok().as_deref() {
+            Some("nerd") => ownai_tui::IconStyle::Nerd,
+            _ => ownai_tui::IconStyle::None,
+        },
+    }
 }
 
 /// A short label for the initial scope, shown in the status bar.
