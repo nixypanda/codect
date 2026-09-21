@@ -37,17 +37,16 @@ const TREE_STEP: u16 = 5;
 /// Columns a tab expands to, so display width stays deterministic.
 const TAB_WIDTH: usize = 4;
 
-/// Which pane currently has focus.
+/// Which region currently has focus.
 ///
-/// `Body` is the single projection pane of a `show`; `Old` and `New` are the
-/// two panes of a `diff`. Only the panes that belong to the current content are
-/// reachable by `Tab`.
+/// `Body` is the single projection pane of a `show`; `Diff` is both diff panes
+/// treated as one focus unit, so `Tab` only ever toggles between the tree and
+/// the content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pane {
     Tree,
     Body,
-    Old,
-    New,
+    Diff,
 }
 
 /// A key the frontend understands, already translated from a terminal event.
@@ -757,7 +756,7 @@ impl Model {
 fn focus_order(model: &Model) -> &'static [Pane] {
     match model.content {
         Content::Show(_) => &[Pane::Tree, Pane::Body],
-        Content::Diff(_) => &[Pane::Tree, Pane::Old, Pane::New],
+        Content::Diff(_) => &[Pane::Tree, Pane::Diff],
     }
 }
 
@@ -858,7 +857,7 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
         Key::Tab | Key::BackTab => cycle_focus(model, key == Key::Tab),
         _ => match model.focus {
             Pane::Tree => tree_key(key, model),
-            Pane::Body | Pane::Old | Pane::New => body_key(key, model),
+            Pane::Body | Pane::Diff => body_key(key, model),
         },
     }
 }
@@ -1413,16 +1412,27 @@ pub fn view(model: &Model, frame: &mut Frame) {
         }
         Content::Diff(_) => {
             let rows = model.derived.diff_rows.as_slice();
+            let diff_focused = model.focus == Pane::Diff;
             if side_by_side {
                 let (tree, old, new) = split_diff_columns(content, model.tree_percent);
                 render_tree(model, frame, tree, model.focus == Pane::Tree);
-                render_diff_pane(model, frame, old, Side::Old, model.focus == Pane::Old, rows);
-                render_diff_pane(model, frame, new, Side::New, model.focus == Pane::New, rows);
+                render_diff_pane(model, frame, old, Side::Old, diff_focused, rows);
+                render_diff_pane(model, frame, new, Side::New, diff_focused, rows);
             } else {
                 match model.focus {
-                    Pane::Old => render_diff_pane(model, frame, content, Side::Old, true, rows),
-                    Pane::New => render_diff_pane(model, frame, content, Side::New, true, rows),
-                    _ => render_tree(model, frame, content, true),
+                    Pane::Tree => render_tree(model, frame, content, true),
+                    Pane::Diff => {
+                        // Too narrow for side by side: stack old over new; both
+                        // halves stay synchronized on the same aligned rows.
+                        let halves = Layout::vertical([
+                            Constraint::Percentage(50),
+                            Constraint::Percentage(50),
+                        ])
+                        .split(content);
+                        render_diff_pane(model, frame, halves[0], Side::Old, true, rows);
+                        render_diff_pane(model, frame, halves[1], Side::New, true, rows);
+                    }
+                    Pane::Body => {}
                 }
             }
         }
@@ -1814,7 +1824,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
         Line::from("  q / Ctrl-C    quit"),
         Line::from("  ↑ ↓ / k j     move or scroll"),
         Line::from("  ← → / h l     fold or scroll sideways"),
-        Line::from("  Tab           switch pane"),
+        Line::from("  Tab           switch tree/content"),
         Line::from("  Enter         open or fold"),
         Line::from("  m             switch mode"),
         Line::from("  s             change scope"),
@@ -2320,20 +2330,33 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_three_panes_for_a_diff_and_two_for_a_show() {
+    fn tab_toggles_the_tree_and_both_diff_panes() {
         let diff = diff_model(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
         let (step, _) = update(Msg::Key(Key::Tab), &diff);
-        assert_eq!(step.focus, Pane::Old);
-        let (step, _) = update(Msg::Key(Key::Tab), &step);
-        assert_eq!(step.focus, Pane::New);
+        assert_eq!(step.focus, Pane::Diff, "the diff panes are one focus unit");
         let (step, _) = update(Msg::Key(Key::Tab), &step);
         assert_eq!(step.focus, Pane::Tree);
+        let (step, _) = update(Msg::Key(Key::BackTab), &step);
+        assert_eq!(step.focus, Pane::Diff);
 
         let show = two_files();
         let (step, _) = update(Msg::Key(Key::Tab), &show);
         assert_eq!(step.focus, Pane::Body);
         let (step, _) = update(Msg::Key(Key::BackTab), &step);
         assert_eq!(step.focus, Pane::Tree);
+    }
+
+    #[test]
+    fn a_narrow_diff_stacks_old_over_new_when_focused() {
+        let mut model = diff_model(vec![file_diff(
+            "a.rs",
+            Some("old line\n"),
+            Some("new line\n"),
+        )]);
+        model.focus = Pane::Diff;
+        let text = buffer_text(&render(&model, 60, 20));
+        assert!(text.contains("old line"), "{text}");
+        assert!(text.contains("new line"), "{text}");
     }
 
     #[test]
