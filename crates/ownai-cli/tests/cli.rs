@@ -187,6 +187,21 @@ fn show_empty_supported_file_set_is_empty_and_successful() {
         .stderr(predicates::str::is_empty());
 }
 
+#[test]
+fn show_path_with_no_supported_files_is_empty_and_successful() {
+    let repo = TestRepo::init();
+    repo.write("docs/readme.md", "not a supported source file\n");
+    repo.commit("docs");
+
+    // The directory exists in the revision, so the empty result is real rather
+    // than a mistyped `--path`.
+    ownai_in(&repo, &["show", "--mode", "types", "--path", "docs"])
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty())
+        .stderr(predicates::str::is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // diff
 // ---------------------------------------------------------------------------
@@ -311,6 +326,40 @@ fn type_change_appears_in_both_modes() {
     }
 }
 
+#[test]
+fn diff_path_deleted_in_target_still_succeeds() {
+    let repo = TestRepo::init();
+    repo.write("src/gone.rs", RUST_BASE);
+    repo.commit("base");
+    repo.remove("src/gone.rs");
+    repo.commit("remove");
+
+    // The path exists only in the base revision; the target's deletion is the
+    // change being projected, so the scope must not be rejected.
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "types",
+            "--path",
+            "src/gone.rs",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        output.stderr.is_empty(),
+        "successful diff must not write diagnostics"
+    );
+    assert!(
+        stdout(&output).contains("diff --ownai a/src/gone.rs b/src/gone.rs"),
+        "deleted file block missing: {:?}",
+        stdout(&output)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // bare repositories
 // ---------------------------------------------------------------------------
@@ -352,6 +401,50 @@ fn invalid_revision_exits_one_with_a_diagnostic_and_empty_stdout() {
     assert!(
         stderr(&output).contains("no-such-revision"),
         "diagnostic missing the revision: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn show_path_absent_from_the_revision_exits_one() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+
+    let output = run(
+        &repo,
+        &["show", "--mode", "types", "--path", "src/missing.rs"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
+    assert!(
+        stderr(&output).contains("src/missing.rs"),
+        "diagnostic missing the path: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn diff_path_absent_from_both_revisions_exits_one() {
+    let repo = repo_with_type_change();
+
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "types",
+            "--path",
+            "src/missing.rs",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
+    assert!(
+        stderr(&output).contains("src/missing.rs"),
+        "diagnostic missing the path: {}",
         stderr(&output)
     );
 }

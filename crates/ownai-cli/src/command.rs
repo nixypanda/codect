@@ -18,7 +18,7 @@ use ownai_core::{
     ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
     SourceSpan, decode_source, diff_document, select_projector, show_document,
 };
-use ownai_git::{GitError, GitRepository, ObjectId, SnapshotRepository, SourceEntry};
+use ownai_git::{GitError, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
 use ownai_language_rust::RustProjector;
 
@@ -124,6 +124,7 @@ fn show(
     scope: &PathScope,
 ) -> Result<String, CliError> {
     let revision = repository.resolve_commit(spec).map_err(git_failure)?;
+    ensure_paths_in_revision(repository, &revision, spec, scope)?;
     let entries = repository
         .source_entries(&revision)
         .map_err(|error| git_failure_for(error, Some(spec)))?;
@@ -157,6 +158,7 @@ fn diff(
     let target = repository
         .resolve_commit(target_spec)
         .map_err(git_failure)?;
+    ensure_diff_paths(repository, &base, &target, base_spec, target_spec, scope)?;
     let base_entries = repository
         .source_entries(&base)
         .map_err(|error| git_failure_for(error, Some(base_spec)))?;
@@ -220,6 +222,76 @@ fn diff(
     }
 
     Ok(diff_document(&old_files, &new_files))
+}
+
+/// Fails when a literal in `scope` names nothing in `revision`, before any blob
+/// is read, so a mistyped `--path` cannot masquerade as an empty projection.
+fn ensure_paths_in_revision(
+    repository: &GitRepository,
+    revision: &Revision,
+    revision_spec: &str,
+    scope: &PathScope,
+) -> Result<(), CliError> {
+    if scope.is_match_all() {
+        return Ok(());
+    }
+
+    let mut missing = Vec::new();
+    for path in scope.paths() {
+        let exists = repository
+            .path_exists(revision, path)
+            .map_err(|error| git_failure_for(error, Some(revision_spec)))?;
+        if !exists {
+            missing.push(path.clone());
+        }
+    }
+
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(missing_paths_failure(
+            missing,
+            &format!("`{revision_spec}`"),
+        ))
+    }
+}
+
+/// Fails when a literal in `scope` is absent from both revisions, before any
+/// blob is read. A path deleted by the target still belongs to the diff, so it
+/// counts as present wherever either side names it.
+fn ensure_diff_paths(
+    repository: &GitRepository,
+    base: &Revision,
+    target: &Revision,
+    base_spec: &str,
+    target_spec: &str,
+    scope: &PathScope,
+) -> Result<(), CliError> {
+    if scope.is_match_all() {
+        return Ok(());
+    }
+
+    let mut missing = Vec::new();
+    for path in scope.paths() {
+        let in_base = repository
+            .path_exists(base, path)
+            .map_err(|error| git_failure_for(error, Some(base_spec)))?;
+        if !in_base {
+            let in_target = repository
+                .path_exists(target, path)
+                .map_err(|error| git_failure_for(error, Some(target_spec)))?;
+            if !in_target {
+                missing.push(path.clone());
+            }
+        }
+    }
+
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        let revisions = format!("`{base_spec}` or `{target_spec}`");
+        Err(missing_paths_failure(missing, &revisions))
+    }
 }
 
 /// Per-command caches; never persisted (section 17).
@@ -375,6 +447,39 @@ fn path_arg_failure(error: PathArgError) -> CliError {
     CliError {
         message: error.to_string(),
         help: None,
+        source: Box::new(error),
+    }
+}
+
+/// `--path` literals that name nothing in the revision(s) being projected.
+///
+/// Reported together so one invocation lists every path that must be fixed,
+/// rather than making the user correct them one failure at a time.
+#[derive(Debug, thiserror::Error)]
+#[error("a selected path does not exist in the projected revision")]
+struct MissingPaths {
+    missing: Vec<RepoPath>,
+}
+
+impl MissingPaths {
+    /// The structured help body: the revision label followed by one `path:`
+    /// line per missing literal.
+    fn help(&self, revisions: &str) -> String {
+        let mut lines = Vec::with_capacity(self.missing.len() + 1);
+        lines.push(format!("revision: {revisions}"));
+        for path in &self.missing {
+            lines.push(format!("path: {path}"));
+        }
+        lines.join("\n")
+    }
+}
+
+fn missing_paths_failure(missing: Vec<RepoPath>, revisions: &str) -> CliError {
+    let error = MissingPaths { missing };
+    let help = error.help(revisions);
+    CliError {
+        message: error.to_string(),
+        help: Some(help),
         source: Box::new(error),
     }
 }
