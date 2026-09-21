@@ -258,6 +258,18 @@ Stable keys identify declarations inside a projected file. They are not global d
 
 If two declarations produce the same key, append a deterministic source-order ordinal. Never include byte offsets in the primary key because harmless edits before a declaration would destabilize it.
 
+### 5.3 Canonical text assembly
+
+`ProjectedFile::canonical_text` is derived from `items` by the constructor and is never independently mutable. Emission is determined solely by an item's `parent_key`:
+
+1. Only items whose `parent_key` is `None` are emitted. Their `canonical_text` fragments are joined by exactly one blank line, and the result ends with exactly one trailing newline. A file with no top-level items has empty canonical text.
+2. An item whose `parent_key` is `Some(_)` is an index-only entry. Its text is already contained in the fragment of the ancestor that owns it. It is never emitted as its own top-level block.
+3. Every item's `canonical_text` is a self-contained fragment. A top-level fragment includes the canonical rendering of its nested members, indented four spaces per nesting level (section 10). A nested item's text appears exactly once in the file text, inside its ancestor.
+4. The `parent_key` relationship is independent of the container naming used in stable keys (section 5.2). Naming a container in a stable key does not suppress emission; only `parent_key == Some(_)` does. An adapter marks each declaration it wants emitted as top-level.
+5. Every nested item must have a top-level ancestor, and an adapter must not produce an item whose `parent_key` refers to a non-existent item. This is a documented adapter obligation; core does not validate it at runtime.
+
+Nested items remain in `items` so that stable keys and later per-declaration comparisons can address them, even though their text is emitted through an ancestor.
+
 ## 6. Language adapter interface
 
 Expose this conceptual interface from `ownai-core`:
@@ -421,7 +433,7 @@ Do not implement adaptive line wrapping. Terminal width must never change output
 - One simple declaration or signature per line.
 - One union constructor, enum variant, struct field, or record field per indented line when a declaration has a body.
 - One trait or implementation member per indented block.
-- Blank line between top-level projected declarations.
+- Blank line between top-level projected declarations (see section 5.3 for how top-level items assemble into file text).
 - Four spaces per nesting level.
 - Exactly one trailing newline per projected file.
 

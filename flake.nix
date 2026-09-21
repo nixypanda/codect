@@ -39,6 +39,7 @@
             (rustToolchain pkgs)
             pkgs.rust-bin.stable.latest.rust-analyzer
             pkgs.cargo-llvm-cov
+            pkgs.cargo-insta
             pkgs.just
           ];
 

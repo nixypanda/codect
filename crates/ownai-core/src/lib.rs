@@ -12,3 +12,11 @@ pub mod diff;
 pub mod language;
 pub mod model;
 pub mod render;
+
+pub use diagnostic::{
+    Diagnostic, DiagnosticContext, ProjectionError, RepoPathError, decode_source,
+};
+pub use language::{LanguageProjector, ProjectionInput};
+pub use model::{
+    ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath, SourceSpan,
+};
