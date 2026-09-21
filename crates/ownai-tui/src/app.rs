@@ -448,7 +448,6 @@ struct DerivedKey {
     height: u16,
     selected: Option<RepoPath>,
     tree_percent: u16,
-    diagnostic: bool,
 }
 
 /// Expensive rendering state derived from the model, cached so a frame or a
@@ -631,7 +630,6 @@ impl Model {
             height: self.height,
             selected: self.selected.clone(),
             tree_percent: self.tree_percent,
-            diagnostic: self.diagnostic.is_some(),
         };
         if self.derived.key.as_ref() == Some(&key) {
             return;
@@ -648,7 +646,7 @@ impl Model {
         let Some(diff) = self.active_diff() else {
             return Vec::new();
         };
-        let (content, _, _) = frame_chunks(self.width, self.height, self.diagnostic.is_some());
+        let (content, _) = frame_chunks(self.width, self.height);
         let (old_width, new_width) = self.diff_side_widths(content, diff);
         let empty = DiffHighlight::default();
         let highlights = self.active_diff_highlight().unwrap_or(&empty);
@@ -1345,18 +1343,12 @@ fn expand_tabs(line: &str) -> String {
 // Layout
 // ---------------------------------------------------------------------------
 
-/// Splits a terminal of `width` × `height` into content, status, and an
-/// optional diagnostic line. Pure, so `update` and `view` agree.
-fn frame_chunks(width: u16, height: u16, diagnostic: bool) -> (Rect, Rect, Option<Rect>) {
+/// Splits a terminal of `width` × `height` into content and status. Pure, so
+/// `update` and `view` agree.
+fn frame_chunks(width: u16, height: u16) -> (Rect, Rect) {
     let area = Rect::new(0, 0, width, height);
-    let mut constraints = vec![Constraint::Min(1)];
-    if diagnostic {
-        constraints.push(Constraint::Length(1));
-    }
-    constraints.push(Constraint::Length(1));
-    let chunks = Layout::vertical(constraints).split(area);
-    let diagnostic_area = diagnostic.then(|| chunks[1]);
-    (chunks[0], chunks[chunks.len() - 1], diagnostic_area)
+    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
+    (chunks[0], chunks[1])
 }
 
 fn split_show_columns(content: Rect, tree_percent: u16) -> (Rect, Rect) {
@@ -1394,8 +1386,7 @@ pub fn view(model: &Model, frame: &mut Frame) {
         return;
     }
 
-    let (content, status, diagnostic) =
-        frame_chunks(area.width, area.height, model.diagnostic.is_some());
+    let (content, status) = frame_chunks(area.width, area.height);
     let side_by_side = area.width >= SIDE_BY_SIDE_MIN_WIDTH;
 
     match &model.content {
@@ -1439,9 +1430,7 @@ pub fn view(model: &Model, frame: &mut Frame) {
     }
 
     render_status(model, frame, status);
-    if let Some(area) = diagnostic {
-        render_diagnostic(model, frame, area);
-    }
+    render_diagnostic(model, frame, area);
     render_overlay(model, frame, area);
 }
 
@@ -1788,33 +1777,103 @@ fn line_background(kind: DiffRowKind, side: Side) -> Style {
 }
 
 fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
-    let selected = model
-        .selected
-        .as_ref()
-        .map_or_else(|| "-".to_owned(), |path| path.to_string());
-    let mode = mode_label(model.mode);
     let revision = match &model.request {
         LoadRequest::Show { revision, .. } => revision.clone(),
         LoadRequest::Diff { base, target, .. } => format!("{base}..{target}"),
     };
-    let text = format!(
-        " {}  ·  {}  ·  {}  ·  scope: {}  ·  {} ",
-        model.root, mode, revision, model.scope_label, selected
-    );
-    frame.render_widget(
-        Paragraph::new(clip_line(&text, 0, area.width as usize)),
-        area,
-    );
+    let selected = model
+        .selected
+        .as_ref()
+        .map_or_else(|| "-".to_owned(), |path| path.to_string());
+
+    let mut spans = vec![
+        Span::styled(
+            format!(" {} ", model.root),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            format!(" {} ", mode_label(model.mode)),
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(format!("  {revision}  "), Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!("scope: {}  ", model.scope_label),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(selected, Style::default().fg(Color::White)),
+    ];
+
+    if let Some((added, removed)) = diff_stats(model) {
+        spans.push(Span::styled(
+            format!("  +{added}"),
+            Style::default().fg(Color::Green),
+        ));
+        spans.push(Span::styled(
+            format!(" −{removed}"),
+            Style::default().fg(Color::Red),
+        ));
+    }
+
+    let left_width: usize = spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum();
+    let hints = " ? help   m mode   s scope   r rev   [ ] tree ";
+    let hints_width = UnicodeWidthStr::width(hints);
+    if area.width as usize >= left_width + hints_width + 2 {
+        spans.push(Span::raw(
+            " ".repeat(area.width as usize - left_width - hints_width),
+        ));
+        spans.push(Span::styled(hints, Style::default().fg(Color::DarkGray)));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Added and removed logical-line counts for the selected diff.
+fn diff_stats(model: &Model) -> Option<(usize, usize)> {
+    if !matches!(model.content, Content::Diff(_)) {
+        return None;
+    }
+    let mut added = 0;
+    let mut removed = 0;
+    for row in &model.derived.diff_rows {
+        if row.continuation {
+            continue;
+        }
+        match row.kind {
+            DiffRowKind::Add => added += 1,
+            DiffRowKind::Delete => removed += 1,
+            DiffRowKind::Change => {
+                added += 1;
+                removed += 1;
+            }
+            DiffRowKind::Equal => {}
+        }
+    }
+    Some((added, removed))
 }
 
 fn render_diagnostic(model: &Model, frame: &mut Frame, area: Rect) {
-    if let Some(text) = &model.diagnostic {
-        let style = Style::default().fg(Color::Red);
-        frame.render_widget(
-            Paragraph::new(clip_line(text, 0, area.width as usize)).style(style),
-            area,
-        );
+    let Some(text) = &model.diagnostic else {
+        return;
+    };
+    let width = area.width.saturating_sub(4).min(90);
+    if width == 0 || area.height < 2 {
+        return;
     }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + area.height - 2,
+        width,
+        height: 1,
+    };
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(clip_line(text, 0, width as usize))
+            .style(Style::default().fg(Color::White).bg(Color::Red)),
+        popup,
+    );
 }
 
 fn render_help(frame: &mut Frame, area: Rect) {
@@ -2153,6 +2212,35 @@ mod tests {
         let text = buffer_text(&render(&wide_tree, 100, 20));
         assert!(text.contains("Files"), "{text}");
         assert!(text.contains("pub fn a();"), "{text}");
+    }
+
+    #[test]
+    fn the_status_bar_shows_mode_scope_and_hints() {
+        let model = model_with(vec![projected("a.rs", "x\n")]);
+        let text = buffer_text(&render(&model, 120, 20));
+        assert!(text.contains("types"), "{text}");
+        assert!(text.contains("scope:"), "{text}");
+        assert!(text.contains("help"), "{text}");
+    }
+
+    #[test]
+    fn the_status_bar_counts_diff_changes() {
+        let model = diff_model(vec![file_diff(
+            "a.rs",
+            Some("one\ntwo\n"),
+            Some("one\n2\n"),
+        )]);
+        let text = buffer_text(&render(&model, 120, 20));
+        assert!(text.contains("+1"), "{text}");
+        assert!(text.contains("−1"), "{text}");
+    }
+
+    #[test]
+    fn a_diagnostic_renders_as_a_toast() {
+        let mut model = two_files();
+        model.diagnostic = Some("boom".to_owned());
+        let text = buffer_text(&render(&model, 100, 20));
+        assert!(text.contains("boom"), "{text}");
     }
 
     #[test]
