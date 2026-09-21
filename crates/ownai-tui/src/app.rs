@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use ownai_core::{
-    AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath, aligned_rows,
+    AlignedRow, AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath,
+    aligned_rows,
 };
 use ownai_engine::{EngineError, FileDiff, Selection, SelectionGroup};
 use ratatui::Frame;
@@ -409,13 +410,21 @@ pub struct TreeRow {
     pub kind: RowKind,
 }
 
+/// The kind of a rendered diff row: either an aligned diff row or a synthetic
+/// hunk header inserted where context was collapsed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VisualRowKind {
+    Diff(DiffRowKind),
+    Hunk,
+}
+
 /// One visual row of a wrapped side-by-side diff.
 ///
 /// A logical aligned row with a wrapped side expands into several `VisualRow`s;
 /// only the first carries line numbers and the rest are continuation rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VisualRow {
-    pub kind: DiffRowKind,
+    pub kind: VisualRowKind,
     pub old_number: Option<usize>,
     pub new_number: Option<usize>,
     pub old_runs: StyledLine,
@@ -1268,55 +1277,127 @@ fn layout_diff(
 ) -> Vec<VisualRow> {
     let old_text = diff.old.as_ref().map_or("", ProjectedFile::canonical_text);
     let new_text = diff.new.as_ref().map_or("", ProjectedFile::canonical_text);
+    let rows = aligned_rows(old_text, new_text);
 
     let mut visual = Vec::new();
-    for row in aligned_rows(old_text, new_text) {
-        let (old_emphasis, new_emphasis) = match (row.old, row.new, row.kind) {
-            (Some(old), Some(new), DiffRowKind::Change) => {
-                highlight::emphasis_ranges(old.text, new.text)
+    for (start, end) in context_windows(&rows) {
+        visual.push(hunk_header(&rows, start, end));
+        for row in &rows[start..=end] {
+            let (old_emphasis, new_emphasis) = match (row.old, row.new, row.kind) {
+                (Some(old), Some(new), DiffRowKind::Change) => {
+                    highlight::emphasis_ranges(old.text, new.text)
+                }
+                _ => (Vec::new(), Vec::new()),
+            };
+
+            let old_segments = row
+                .old
+                .map(|line| {
+                    let runs = styled_line(old_highlight, line.number, line.text);
+                    let runs =
+                        highlight::apply_emphasis(&runs, &old_emphasis, highlight::DELETE_EMPH_BG);
+                    highlight::wrap_runs(&runs, old_width)
+                })
+                .unwrap_or_default();
+            let new_segments = row
+                .new
+                .map(|line| {
+                    let runs = styled_line(new_highlight, line.number, line.text);
+                    let runs =
+                        highlight::apply_emphasis(&runs, &new_emphasis, highlight::ADD_EMPH_BG);
+                    highlight::wrap_runs(&runs, new_width)
+                })
+                .unwrap_or_default();
+
+            let height = old_segments.len().max(new_segments.len()).max(1);
+            for index in 0..height {
+                visual.push(VisualRow {
+                    kind: VisualRowKind::Diff(row.kind),
+                    old_number: if index == 0 {
+                        row.old.map(|line| line.number)
+                    } else {
+                        None
+                    },
+                    new_number: if index == 0 {
+                        row.new.map(|line| line.number)
+                    } else {
+                        None
+                    },
+                    old_runs: old_segments.get(index).cloned().unwrap_or_default(),
+                    new_runs: new_segments.get(index).cloned().unwrap_or_default(),
+                    continuation: index > 0,
+                });
             }
-            _ => (Vec::new(), Vec::new()),
-        };
-
-        let old_segments = row
-            .old
-            .map(|line| {
-                let runs = styled_line(old_highlight, line.number, line.text);
-                let runs =
-                    highlight::apply_emphasis(&runs, &old_emphasis, highlight::DELETE_EMPH_BG);
-                highlight::wrap_runs(&runs, old_width)
-            })
-            .unwrap_or_default();
-        let new_segments = row
-            .new
-            .map(|line| {
-                let runs = styled_line(new_highlight, line.number, line.text);
-                let runs = highlight::apply_emphasis(&runs, &new_emphasis, highlight::ADD_EMPH_BG);
-                highlight::wrap_runs(&runs, new_width)
-            })
-            .unwrap_or_default();
-
-        let height = old_segments.len().max(new_segments.len()).max(1);
-        for index in 0..height {
-            visual.push(VisualRow {
-                kind: row.kind,
-                old_number: if index == 0 {
-                    row.old.map(|line| line.number)
-                } else {
-                    None
-                },
-                new_number: if index == 0 {
-                    row.new.map(|line| line.number)
-                } else {
-                    None
-                },
-                old_runs: old_segments.get(index).cloned().unwrap_or_default(),
-                new_runs: new_segments.get(index).cloned().unwrap_or_default(),
-                continuation: index > 0,
-            });
         }
     }
     visual
+}
+
+/// Context lines kept around each change, matching the core diff engine.
+const CONTEXT_RADIUS: usize = 3;
+
+/// The inclusive index ranges of aligned rows to display, one per hunk.
+///
+/// Each change pulls in [`CONTEXT_RADIUS`] rows of surrounding context; ranges
+/// that touch or overlap merge, and the gaps between them become hunk headers.
+fn context_windows(rows: &[AlignedRow<'_>]) -> Vec<(usize, usize)> {
+    let changes: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.kind != DiffRowKind::Equal)
+        .map(|(index, _)| index)
+        .collect();
+
+    if changes.is_empty() {
+        return if rows.is_empty() {
+            Vec::new()
+        } else {
+            vec![(0, rows.len() - 1)]
+        };
+    }
+
+    let mut windows: Vec<(usize, usize)> = Vec::new();
+    for index in changes {
+        let start = index.saturating_sub(CONTEXT_RADIUS);
+        let end = (index + CONTEXT_RADIUS).min(rows.len() - 1);
+        match windows.last_mut() {
+            Some(last) if start <= last.1 + 1 => last.1 = last.1.max(end),
+            _ => windows.push((start, end)),
+        }
+    }
+    windows
+}
+
+/// A synthetic header describing the line ranges covered by one hunk.
+fn hunk_header(rows: &[AlignedRow<'_>], start: usize, end: usize) -> VisualRow {
+    let slice = &rows[start..=end];
+    let old_numbers: Vec<usize> = slice
+        .iter()
+        .filter_map(|row| row.old.map(|line| line.number))
+        .collect();
+    let new_numbers: Vec<usize> = slice
+        .iter()
+        .filter_map(|row| row.new.map(|line| line.number))
+        .collect();
+    let old_start = old_numbers.first().copied().unwrap_or(0);
+    let new_start = new_numbers.first().copied().unwrap_or(0);
+    let text = format!(
+        "@@ -{old_start},{} +{new_start},{} @@",
+        old_numbers.len(),
+        new_numbers.len()
+    );
+    let run = Run {
+        style: Style::default(),
+        text,
+    };
+    VisualRow {
+        kind: VisualRowKind::Hunk,
+        old_number: None,
+        new_number: None,
+        old_runs: vec![run.clone()],
+        new_runs: vec![run],
+        continuation: false,
+    }
 }
 
 /// The highlighted runs for one aligned diff line, falling back to a single
@@ -1724,11 +1805,28 @@ fn diff_line(
     number: Option<usize>,
     continuation: bool,
     runs: &[Run],
-    kind: DiffRowKind,
+    kind: VisualRowKind,
     side: Side,
     gutter: usize,
     width: usize,
 ) -> Line<'static> {
+    let VisualRowKind::Diff(kind) = kind else {
+        // A hunk header spans the whole pane with a distinct style.
+        let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+        let full = gutter + width;
+        let mut padded = text;
+        let used = UnicodeWidthStr::width(padded.as_str());
+        if used < full {
+            padded.push_str(&" ".repeat(full - used));
+        }
+        return Line::from(Span::styled(
+            padded,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+    };
+
     let field = gutter.saturating_sub(1);
     let marker = match number {
         Some(number) => format!("{number:>field$}"),
@@ -1842,13 +1940,13 @@ fn diff_stats(model: &Model) -> Option<(usize, usize)> {
             continue;
         }
         match row.kind {
-            DiffRowKind::Add => added += 1,
-            DiffRowKind::Delete => removed += 1,
-            DiffRowKind::Change => {
+            VisualRowKind::Diff(DiffRowKind::Add) => added += 1,
+            VisualRowKind::Diff(DiffRowKind::Delete) => removed += 1,
+            VisualRowKind::Diff(DiffRowKind::Change) => {
                 added += 1;
                 removed += 1;
             }
-            DiffRowKind::Equal => {}
+            VisualRowKind::Diff(DiffRowKind::Equal) | VisualRowKind::Hunk => {}
         }
     }
     Some((added, removed))
@@ -2701,7 +2799,11 @@ mod tests {
             Some(&format!("{}\nsecond\n", "x".repeat(25))),
             Some("short\nsecond\n"),
         );
-        let rows = layout_diff(&diff, 10, 10, &[], &[]);
+        let all = layout_diff(&diff, 10, 10, &[], &[]);
+        let rows: Vec<&VisualRow> = all
+            .iter()
+            .filter(|row| row.kind != VisualRowKind::Hunk)
+            .collect();
 
         // The long old line wraps into 3 segments, so that logical row is 3
         // visual rows; the second logical row adds one more.
@@ -2721,10 +2823,17 @@ mod tests {
     #[test]
     fn layout_diff_handles_an_added_file_with_a_missing_old_side() {
         let diff = file_diff("a.rs", None, Some("one\ntwo\n"));
-        let rows = layout_diff(&diff, 20, 20, &[], &[]);
+        let all = layout_diff(&diff, 20, 20, &[], &[]);
+        let rows: Vec<&VisualRow> = all
+            .iter()
+            .filter(|row| row.kind != VisualRowKind::Hunk)
+            .collect();
 
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|row| row.kind == DiffRowKind::Add));
+        assert!(
+            rows.iter()
+                .all(|row| row.kind == VisualRowKind::Diff(DiffRowKind::Add))
+        );
         assert!(rows.iter().all(|row| row.old_number.is_none()));
         assert_eq!(rows[0].new_number, Some(1));
         assert_eq!(rows[1].new_number, Some(2));
@@ -2733,11 +2842,47 @@ mod tests {
     #[test]
     fn layout_diff_handles_a_deleted_file() {
         let diff = file_diff("a.rs", Some("one\n"), None);
-        let rows = layout_diff(&diff, 20, 20, &[], &[]);
+        let all = layout_diff(&diff, 20, 20, &[], &[]);
+        let rows: Vec<&VisualRow> = all
+            .iter()
+            .filter(|row| row.kind != VisualRowKind::Hunk)
+            .collect();
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].kind, DiffRowKind::Delete);
+        assert_eq!(rows[0].kind, VisualRowKind::Diff(DiffRowKind::Delete));
         assert!(rows[0].new_number.is_none());
+    }
+
+    #[test]
+    fn layout_diff_emits_a_hunk_header_with_line_ranges() {
+        let diff = file_diff("a.rs", Some("one\ntwo\n"), Some("one\n2\n"));
+        let rows = layout_diff(&diff, 20, 20, &[], &[]);
+
+        assert_eq!(rows[0].kind, VisualRowKind::Hunk);
+        assert_eq!(runs_text(&rows[0].old_runs), "@@ -1,2 +1,2 @@");
+    }
+
+    #[test]
+    fn layout_diff_collapses_long_unchanged_runs_between_hunks() {
+        let old = (0..40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let mut changed: Vec<String> = (0..40).map(|index| format!("line {index}")).collect();
+        changed[0] = "changed".to_owned();
+        changed[39] = "changed too".to_owned();
+        let new = changed.join("\n") + "\n";
+
+        let diff = file_diff("a.rs", Some(&old), Some(&new));
+        let rows = layout_diff(&diff, 20, 20, &[], &[]);
+
+        let hunks = rows
+            .iter()
+            .filter(|row| row.kind == VisualRowKind::Hunk)
+            .count();
+        assert_eq!(hunks, 2, "two separated changes produce two hunks");
+        assert!(rows.len() < 40, "the middle context is collapsed");
     }
 
     // -----------------------------------------------------------------------
