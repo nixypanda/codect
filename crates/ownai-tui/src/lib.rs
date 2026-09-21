@@ -28,6 +28,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 mod app;
+mod highlight;
 
 pub use app::LoadRequest;
 use app::{Cmd, Content, Key, Model, Msg, update, view};

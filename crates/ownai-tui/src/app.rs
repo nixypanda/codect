@@ -5,9 +5,10 @@
 //! model into a frame. Engine calls only ever leave this module as a [`Cmd`],
 //! which the runtime interprets.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-use ownai_core::{DiffRowKind, ProjectedFile, ProjectionMode, RepoPath, aligned_rows};
+use ownai_core::{DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath, aligned_rows};
 use ownai_engine::{EngineError, FileDiff, Selection};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -15,6 +16,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::highlight::{self, Run, StyledLine};
 
 /// At or above this width the tree and content render side by side.
 const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
@@ -178,9 +181,26 @@ pub struct VisualRow {
     pub kind: DiffRowKind,
     pub old_number: Option<usize>,
     pub new_number: Option<usize>,
-    pub old_text: String,
-    pub new_text: String,
+    pub old_runs: StyledLine,
+    pub new_runs: StyledLine,
     pub continuation: bool,
+}
+
+/// Syntax-highlighted lines for the selected diff, one side at a time.
+#[derive(Clone, Default)]
+pub struct DiffHighlight {
+    pub old: Vec<StyledLine>,
+    pub new: Vec<StyledLine>,
+}
+
+/// Highlighted lines for the selected file, keyed by path.
+///
+/// Highlighting is pure but not free, so it is computed once per file when the
+/// selection first reaches it and reused while the user stays on that file.
+#[derive(Clone, Default)]
+struct HighlightCache {
+    show: BTreeMap<RepoPath, Arc<Vec<StyledLine>>>,
+    diff: BTreeMap<RepoPath, Arc<DiffHighlight>>,
 }
 
 /// The entire UI state. It is replaced wholesale by `update`, never edited in
@@ -205,6 +225,8 @@ pub struct Model {
     pub body_hscroll: u16,
     pub help: bool,
     pub diagnostic: Option<String>,
+    /// Lazily computed syntax highlighting for the selected file.
+    highlights: HighlightCache,
     pub width: u16,
     pub height: u16,
     pub quit: bool,
@@ -236,6 +258,7 @@ impl Model {
             body_hscroll: 0,
             help: false,
             diagnostic: None,
+            highlights: HighlightCache::default(),
             width,
             height,
             quit: false,
@@ -264,6 +287,59 @@ impl Model {
         }
     }
 
+    /// The syntax-highlighted lines of the selected `show` file, if computed.
+    fn active_show_lines(&self) -> Option<&[StyledLine]> {
+        let path = self.selected.as_ref()?;
+        self.highlights.show.get(path).map(|lines| lines.as_slice())
+    }
+
+    /// The syntax-highlighted lines of the selected diff, if computed.
+    fn active_diff_highlight(&self) -> Option<&DiffHighlight> {
+        let path = self.selected.as_ref()?;
+        self.highlights.diff.get(path).map(|lines| lines.as_ref())
+    }
+
+    /// Computes and caches highlighting for the selected file when missing.
+    fn ensure_highlight(&mut self) {
+        let Some(path) = self.selected.clone() else {
+            return;
+        };
+        match &self.content {
+            Content::Show(files) => {
+                if self.highlights.show.contains_key(&path) {
+                    return;
+                }
+                let Some(file) = files.iter().find(|file| file.path() == &path) else {
+                    return;
+                };
+                let lines = highlight::highlight(file.canonical_text(), file.language());
+                self.highlights.show.insert(path, Arc::new(lines));
+            }
+            Content::Diff(diffs) => {
+                if self.highlights.diff.contains_key(&path) {
+                    return;
+                }
+                let Some(diff) = diffs.iter().find(|diff| diff.path == path) else {
+                    return;
+                };
+                let language = diff
+                    .old
+                    .as_ref()
+                    .or(diff.new.as_ref())
+                    .map_or(Language::Rust, ProjectedFile::language);
+                let old = diff.old.as_ref().map_or_else(Vec::new, |file| {
+                    highlight::highlight(file.canonical_text(), language)
+                });
+                let new = diff.new.as_ref().map_or_else(Vec::new, |file| {
+                    highlight::highlight(file.canonical_text(), language)
+                });
+                self.highlights
+                    .diff
+                    .insert(path, Arc::new(DiffHighlight { old, new }));
+            }
+        }
+    }
+
     fn line_count(&self) -> usize {
         self.active_text().map_or(0, |text| text.lines().count())
     }
@@ -285,7 +361,9 @@ impl Model {
         };
         let (content, _, _) = frame_chunks(self.width, self.height, self.diagnostic.is_some());
         let (old_width, new_width) = self.diff_side_widths(content, diff);
-        layout_diff(diff, old_width, new_width)
+        let empty = DiffHighlight::default();
+        let highlights = self.active_diff_highlight().unwrap_or(&empty);
+        layout_diff(diff, old_width, new_width, &highlights.old, &highlights.new)
     }
 
     fn diff_side_widths(&self, content: Rect, diff: &FileDiff) -> (usize, usize) {
@@ -316,6 +394,7 @@ impl Model {
 
         self.visible = content.visible_paths();
         self.content = content;
+        self.highlights = HighlightCache::default();
         self.rows = build_rows(&self.visible, &self.collapsed);
         // Drop fold state for directories that no longer exist.
         self.collapsed
@@ -344,6 +423,7 @@ impl Model {
         }
         self.body_scroll = 0;
         self.body_hscroll = 0;
+        self.ensure_highlight();
     }
 
     fn nearest_visible(&self, hint: usize) -> Option<RepoPath> {
@@ -511,6 +591,7 @@ fn tree_key(key: Key, model: &mut Model) {
                 }
                 RowKind::File { path } => {
                     model.selected = Some(path);
+                    model.ensure_highlight();
                 }
             }
         }
@@ -553,17 +634,19 @@ fn move_cursor(model: &mut Model, delta: i32) {
 }
 
 fn sync_selected(model: &mut Model) {
-    let Some(row) = model.current_row() else {
-        return;
+    let path = match model.current_row() {
+        Some(TreeRow {
+            kind: RowKind::File { path },
+            ..
+        }) => path.clone(),
+        _ => return,
     };
-    if let RowKind::File { path } = &row.kind {
-        let path = path.clone();
-        if model.selected.as_ref() != Some(&path) {
-            model.body_scroll = 0;
-            model.body_hscroll = 0;
-        }
-        model.selected = Some(path);
+    if model.selected.as_ref() != Some(&path) {
+        model.body_scroll = 0;
+        model.body_hscroll = 0;
     }
+    model.selected = Some(path);
+    model.ensure_highlight();
 }
 
 fn directory_at_cursor(model: &Model) -> Option<(RepoPath, bool)> {
@@ -635,23 +718,46 @@ fn gutter_width(diff: &FileDiff) -> usize {
 ///
 /// Each side wraps independently to its own content width; the row occupies the
 /// greater height and the shorter side is padded with blank rows so later rows
-/// stay aligned. Only the first visual row carries line numbers.
-fn layout_diff(diff: &FileDiff, old_width: usize, new_width: usize) -> Vec<VisualRow> {
+/// stay aligned. Only the first visual row carries line numbers. Changed rows
+/// also get delta-style intra-line emphasis on the bytes that differ.
+fn layout_diff(
+    diff: &FileDiff,
+    old_width: usize,
+    new_width: usize,
+    old_highlight: &[StyledLine],
+    new_highlight: &[StyledLine],
+) -> Vec<VisualRow> {
     let old_text = diff.old.as_ref().map_or("", ProjectedFile::canonical_text);
     let new_text = diff.new.as_ref().map_or("", ProjectedFile::canonical_text);
 
     let mut visual = Vec::new();
     for row in aligned_rows(old_text, new_text) {
+        let (old_emphasis, new_emphasis) = match (row.old, row.new, row.kind) {
+            (Some(old), Some(new), DiffRowKind::Change) => {
+                highlight::emphasis_ranges(old.text, new.text)
+            }
+            _ => (Vec::new(), Vec::new()),
+        };
+
         let old_segments = row
             .old
-            .map(|line| wrap_line(line.text, old_width))
+            .map(|line| {
+                let runs = styled_line(old_highlight, line.number, line.text);
+                let runs =
+                    highlight::apply_emphasis(&runs, &old_emphasis, highlight::DELETE_EMPH_BG);
+                highlight::wrap_runs(&runs, old_width)
+            })
             .unwrap_or_default();
         let new_segments = row
             .new
-            .map(|line| wrap_line(line.text, new_width))
+            .map(|line| {
+                let runs = styled_line(new_highlight, line.number, line.text);
+                let runs = highlight::apply_emphasis(&runs, &new_emphasis, highlight::ADD_EMPH_BG);
+                highlight::wrap_runs(&runs, new_width)
+            })
             .unwrap_or_default();
-        let height = old_segments.len().max(new_segments.len()).max(1);
 
+        let height = old_segments.len().max(new_segments.len()).max(1);
         for index in 0..height {
             visual.push(VisualRow {
                 kind: row.kind,
@@ -665,8 +771,8 @@ fn layout_diff(diff: &FileDiff, old_width: usize, new_width: usize) -> Vec<Visua
                 } else {
                     None
                 },
-                old_text: old_segments.get(index).cloned().unwrap_or_default(),
-                new_text: new_segments.get(index).cloned().unwrap_or_default(),
+                old_runs: old_segments.get(index).cloned().unwrap_or_default(),
+                new_runs: new_segments.get(index).cloned().unwrap_or_default(),
                 continuation: index > 0,
             });
         }
@@ -674,30 +780,16 @@ fn layout_diff(diff: &FileDiff, old_width: usize, new_width: usize) -> Vec<Visua
     visual
 }
 
-/// Splits `line` into display-width segments, never splitting a code point.
-///
-/// A wide character wider than `width` is emitted alone rather than dropped;
-/// the renderer clips it to the pane.
-fn wrap_line(line: &str, width: usize) -> Vec<String> {
-    let expanded = expand_tabs(line);
-    if width == 0 {
-        return vec![String::new()];
+/// The highlighted runs for one aligned diff line, falling back to a single
+/// plain run when highlighting is unavailable.
+fn styled_line(highlight: &[StyledLine], number: usize, text: &str) -> StyledLine {
+    match highlight.get(number.saturating_sub(1)) {
+        Some(line) if !line.is_empty() => line.clone(),
+        _ => vec![Run {
+            style: Style::default(),
+            text: text.to_owned(),
+        }],
     }
-
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut cells = 0usize;
-    for character in expanded.chars() {
-        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-        if cells > 0 && cells + character_width > width {
-            segments.push(std::mem::take(&mut current));
-            cells = 0;
-        }
-        current.push(character);
-        cells += character_width;
-    }
-    segments.push(current);
-    segments
 }
 
 fn expand_tabs(line: &str) -> String {
@@ -893,8 +985,22 @@ fn render_show_body(model: &Model, frame: &mut Frame, area: Rect, focused: bool)
     let skip = model.body_scroll as usize;
     let hscroll = model.body_hscroll as usize;
     let mut lines = Vec::new();
-    for line in text.lines().skip(skip).take(height) {
-        lines.push(Line::from(clip_line(line, hscroll, width)));
+    match model.active_show_lines() {
+        Some(styled) => {
+            for line in styled.iter().skip(skip).take(height) {
+                let runs = highlight::clip_runs(line, hscroll, width);
+                lines.push(Line::from(
+                    runs.into_iter()
+                        .map(|run| Span::styled(run.text, run.style))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+        }
+        None => {
+            for line in text.lines().skip(skip).take(height) {
+                lines.push(Line::from(clip_line(line, hscroll, width)));
+            }
+        }
     }
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -935,14 +1041,14 @@ fn render_diff_pane(
 
     let mut lines = Vec::new();
     for row in rows.iter().skip(skip).take(height) {
-        let (number, text) = match side {
-            Side::Old => (row.old_number, row.old_text.as_str()),
-            Side::New => (row.new_number, row.new_text.as_str()),
+        let (number, runs) = match side {
+            Side::Old => (row.old_number, row.old_runs.as_slice()),
+            Side::New => (row.new_number, row.new_runs.as_slice()),
         };
         lines.push(diff_line(
             number,
             row.continuation,
-            text,
+            runs,
             row.kind,
             side,
             gutter,
@@ -955,7 +1061,7 @@ fn render_diff_pane(
 fn diff_line(
     number: Option<usize>,
     continuation: bool,
-    text: &str,
+    runs: &[Run],
     kind: DiffRowKind,
     side: Side,
     gutter: usize,
@@ -967,20 +1073,45 @@ fn diff_line(
         None if continuation => format!("{:>field$}", "…"),
         None => " ".repeat(field),
     };
-    let body = clip_line(text, 0, width);
-    let style = match kind {
-        DiffRowKind::Equal => Style::default(),
-        DiffRowKind::Add => Style::default().fg(Color::Green),
-        DiffRowKind::Delete => Style::default().fg(Color::Red),
-        DiffRowKind::Change => match side {
-            Side::Old => Style::default().fg(Color::Red),
-            Side::New => Style::default().fg(Color::Green),
-        },
-    };
-    Line::from(vec![
-        Span::styled(format!("{marker} "), Style::default().fg(Color::DarkGray)),
-        Span::styled(body, style),
-    ])
+
+    // Delta-style full-line background; the intra-line emphasis is already
+    // baked into the run styles, so a run's own background wins over the base.
+    let base = line_background(kind, side);
+    let mut marker_style = Style::default().fg(Color::DarkGray);
+    if marker_style.bg.is_none() {
+        marker_style.bg = base.bg;
+    }
+    let mut spans = vec![Span::styled(format!("{marker} "), marker_style)];
+    let mut used = 0usize;
+    for run in runs {
+        used += UnicodeWidthStr::width(run.text.as_str());
+        let mut style = run.style;
+        if style.bg.is_none() {
+            style.bg = base.bg;
+        }
+        spans.push(Span::styled(run.text.clone(), style));
+    }
+    let padding = width.saturating_sub(used);
+    if padding > 0 {
+        spans.push(Span::styled(" ".repeat(padding), base));
+    }
+    Line::from(spans)
+}
+
+/// The delta-style full-line background for a diff row.
+fn line_background(kind: DiffRowKind, side: Side) -> Style {
+    if !highlight::colors_enabled() {
+        return Style::default();
+    }
+    match (kind, side) {
+        (DiffRowKind::Add, _) | (DiffRowKind::Change, Side::New) => {
+            Style::default().bg(highlight::ADD_BG)
+        }
+        (DiffRowKind::Delete, _) | (DiffRowKind::Change, Side::Old) => {
+            Style::default().bg(highlight::DELETE_BG)
+        }
+        _ => Style::default(),
+    }
 }
 
 fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
@@ -1529,15 +1660,8 @@ mod tests {
     // diff layout
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn wrap_line_never_splits_a_code_point() {
-        assert_eq!(wrap_line("abcdef", 3), vec!["abc", "def"]);
-        assert_eq!(wrap_line("abc", 3), vec!["abc"]);
-        assert_eq!(wrap_line("", 5), vec![""]);
-        assert_eq!(wrap_line("日本", 2), vec!["日", "本"]);
-        // A wide character wider than the pane is kept whole.
-        assert_eq!(wrap_line("日", 1), vec!["日"]);
-        assert_eq!(wrap_line("a\tb", 10), vec!["a    b"]);
+    fn runs_text(runs: &[Run]) -> String {
+        runs.iter().map(|run| run.text.as_str()).collect()
     }
 
     #[test]
@@ -1547,7 +1671,7 @@ mod tests {
             Some(&format!("{}\nsecond\n", "x".repeat(25))),
             Some("short\nsecond\n"),
         );
-        let rows = layout_diff(&diff, 10, 10);
+        let rows = layout_diff(&diff, 10, 10, &[], &[]);
 
         // The long old line wraps into 3 segments, so that logical row is 3
         // visual rows; the second logical row adds one more.
@@ -1560,14 +1684,14 @@ mod tests {
             "continuations carry no number"
         );
         // The new side is padded so the second logical row stays aligned.
-        assert_eq!(rows[1].new_text, "");
+        assert_eq!(runs_text(&rows[1].new_runs), "");
         assert!(rows[3].old_number.is_some() && rows[3].new_number.is_some());
     }
 
     #[test]
     fn layout_diff_handles_an_added_file_with_a_missing_old_side() {
         let diff = file_diff("a.rs", None, Some("one\ntwo\n"));
-        let rows = layout_diff(&diff, 20, 20);
+        let rows = layout_diff(&diff, 20, 20, &[], &[]);
 
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row.kind == DiffRowKind::Add));
@@ -1579,7 +1703,7 @@ mod tests {
     #[test]
     fn layout_diff_handles_a_deleted_file() {
         let diff = file_diff("a.rs", Some("one\n"), None);
-        let rows = layout_diff(&diff, 20, 20);
+        let rows = layout_diff(&diff, 20, 20, &[], &[]);
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, DiffRowKind::Delete);
@@ -1704,6 +1828,131 @@ mod tests {
         // marker rather than repeating the source line number.
         assert!(text.contains('…'), "expected continuation markers: {text}");
         assert!(!text.contains(&long), "the long line must be wrapped");
+    }
+
+    #[test]
+    fn the_show_pane_carries_syntax_colors() {
+        if !highlight::colors_enabled() {
+            return;
+        }
+        let model = model_with(vec![projected("a.rs", "pub struct User;\n")]);
+        let buffer = render(&model, 100, 20);
+
+        let colored = (0..buffer.area.height).any(|y| {
+            (0..buffer.area.width).any(|x| {
+                buffer
+                    .cell((x, y))
+                    .is_some_and(|cell| cell.fg != Color::Reset)
+            })
+        });
+        assert!(colored, "expected a syntax foreground in the show pane");
+    }
+
+    #[test]
+    fn a_changed_diff_row_gets_delta_backgrounds() {
+        if !highlight::colors_enabled() {
+            return;
+        }
+        let model = diff_model(vec![file_diff(
+            "a.rs",
+            Some("pub id: u32;\n"),
+            Some("pub id: u64;\n"),
+        )]);
+        let buffer = render(&model, 120, 20);
+
+        let mut delete = false;
+        let mut add = false;
+        let mut emphasis = false;
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                if let Some(cell) = buffer.cell((x, y)) {
+                    delete |= cell.bg == highlight::DELETE_BG;
+                    add |= cell.bg == highlight::ADD_BG;
+                    emphasis |=
+                        cell.bg == highlight::ADD_EMPH_BG || cell.bg == highlight::DELETE_EMPH_BG;
+                }
+            }
+        }
+        assert!(delete, "expected a removed-line background");
+        assert!(add, "expected an added-line background");
+        assert!(emphasis, "expected intra-line emphasis");
+    }
+
+    /// Renders a diff and prints it with ANSI color, plus writes an HTML preview
+    /// to the system temporary directory. Run with `--ignored --nocapture`.
+    #[test]
+    #[ignore = "prints a colored preview"]
+    fn preview_delta_colors() {
+        let model = diff_model(vec![file_diff(
+            "src/lib.rs",
+            Some("pub struct User {\n    pub id: u32,\n    pub name: String,\n}\n"),
+            Some("pub struct User {\n    pub id: u64,\n    pub name: String,\n}\n"),
+        )]);
+        let buffer = render(&model, 110, 14);
+        print!("{}", ansi_preview(&buffer));
+
+        let path = std::env::temp_dir().join("ownai-delta-preview.html");
+        if std::fs::write(&path, html_preview(&buffer)).is_ok() {
+            println!("\nHTML preview: {}", path.display());
+        }
+    }
+
+    fn ansi_preview(buffer: &ratatui::buffer::Buffer) -> String {
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            let mut current: Option<(Color, Color)> = None;
+            for x in 0..buffer.area.width {
+                let Some(cell) = buffer.cell((x, y)) else {
+                    continue;
+                };
+                if current != Some((cell.fg, cell.bg)) {
+                    out.push_str("\u{1b}[0m");
+                    if let Color::Rgb(r, g, b) = cell.fg {
+                        out.push_str(&format!("\u{1b}[38;2;{r};{g};{b}m"));
+                    }
+                    if let Color::Rgb(r, g, b) = cell.bg {
+                        out.push_str(&format!("\u{1b}[48;2;{r};{g};{b}m"));
+                    }
+                    current = Some((cell.fg, cell.bg));
+                }
+                out.push_str(cell.symbol());
+            }
+            out.push_str("\u{1b}[0m\n");
+        }
+        out
+    }
+
+    fn html_preview(buffer: &ratatui::buffer::Buffer) -> String {
+        let mut html = String::from(
+            "<!doctype html><meta charset=utf-8><pre style=\"font:14px ui-monospace,Menlo,monospace;background:#1e1f1c;padding:12px\">",
+        );
+        for y in 0..buffer.area.height {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                let Some(cell) = buffer.cell((x, y)) else {
+                    continue;
+                };
+                let symbol = match cell.symbol() {
+                    "<" => "&lt;".to_owned(),
+                    ">" => "&gt;".to_owned(),
+                    "&" => "&amp;".to_owned(),
+                    other => other.to_owned(),
+                };
+                let fg = match cell.fg {
+                    Color::Rgb(r, g, b) => format!("color:#{r:02x}{g:02x}{b:02x}"),
+                    _ => "color:#d8dee9".to_owned(),
+                };
+                let bg = match cell.bg {
+                    Color::Rgb(r, g, b) => format!(";background:#{r:02x}{g:02x}{b:02x}"),
+                    _ => String::new(),
+                };
+                line.push_str(&format!("<span style=\"{fg}{bg}\">{symbol}</span>"));
+            }
+            html.push_str(&line);
+            html.push('\n');
+        }
+        html.push_str("</pre>");
+        html
     }
 
     #[test]
