@@ -120,6 +120,27 @@ Both MVP modes accept a repeatable path selection that narrows a view or diff to
 
 A path that names nothing in the projected revision is an error. A path that exists but contains no supported files is valid and produces empty output. Scoping changes which files are considered, never how they are projected: implementation bodies stay hidden exactly as they are without a path selection.
 
+### Named areas
+
+A repository may define named path groups in a configuration file, so a project can share a recurring selection such as a package or subsystem instead of repeating paths. Both MVP modes accept a repeatable `--area`/`-a` selection that narrows a view or diff to one or more named areas.
+
+- Areas are defined in `.ownai.toml` at the repository root, under an `[areas]` table that maps each name to a list of paths:
+
+  ```toml
+  [areas]
+  frontend = ["apps/web", "packages/ui"]
+  backend  = ["services/api"]
+  ```
+
+- Area paths are relative to the repository root, not the current directory.
+- An area holds literal paths, and repeating `--area` selects the union of the named areas.
+- An area names paths only; it carries no projection mode, so areas combine freely with Types and Signatures.
+- `--area` and `--path` cannot be combined in one command.
+
+An area is valid when at least one of its paths names something in the projected revision; in a diff, either side may satisfy it. A missing or malformed configuration file, or an area name the configuration does not define, is an error.
+
+Area configuration is declarative data. It defines names and paths only and is never executed. Areas hold literal repository paths: they do not use glob patterns and do not expand environment variables or other substitutions.
+
 ### MVP exclusions
 
 The first MVP does not include:
@@ -175,12 +196,6 @@ Focused diffs may later compare:
 - A commit and the working tree.
 - Staged and unstaged changes.
 - Branches, tags, and other Git references.
-
-### Named areas
-
-A repository configuration may define a named area: a name mapped to a list of repository paths. A named area can be selected alongside the projection mode, so a project can share recurring selections such as a package or subsystem instead of repeating paths.
-
-Area configuration is declarative data. It defines names and paths only and is never executed. Areas hold literal repository paths: they do not use glob patterns and do not expand environment variables or other substitutions.
 
 ### Additional languages
 

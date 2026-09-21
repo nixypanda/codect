@@ -73,6 +73,7 @@ crates/
       main.rs
       args.rs
       command.rs
+      config.rs
       output.rs
       pathspec.rs
 fixtures/
@@ -123,7 +124,13 @@ miette = { version = "7", features = ["fancy"] }
 bstr = "1"
 anstream = "1.0"
 anstyle = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 ```
+
+`serde` and `toml` parse the CLI's own `.ownai.toml` (section 14.1); they are
+not a serialization dependency of `gix`, whose `serde` feature stays disabled
+(section 4.1).
 
 Use current compatible releases for test-only dependencies:
 
@@ -292,7 +299,7 @@ Nested items remain in `items` so that stable keys and later per-declaration com
 
 The variants make named areas and literal paths mutually exclusive by construction. `PathSelection::resolve` turns a selection into a `PathScope`; `All` and an empty literal list both match everything.
 
-`Area` is a named list of repository paths, and `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. Resolution reports an undefined name as `PathSelectionError::UnknownArea` and an area with no paths as `PathSelectionError::EmptyArea`. Areas are data only: area resolution exists as a seam, but the MVP reads no configuration, so the CLI resolves every selection against an empty `AreaSet` and only `All` and literal paths are reachable. A later repository configuration will supply areas.
+`Area` is a named list of repository paths, and `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. Resolution reports an undefined name as `PathSelectionError::UnknownArea` and an area with no paths as `PathSelectionError::EmptyArea`. Areas are data only and core stays file-format-free: the CLI loads them from `.ownai.toml` (section 14.1) and passes the resulting `AreaSet` to `PathSelection::resolve`, so `All`, literal paths, and named areas are all reachable at the CLI boundary.
 
 ## 6. Language adapter interface
 
@@ -677,8 +684,8 @@ The binary name is `ownai`.
 Commands:
 
 ```text
-ownai show --mode <types|signatures> [--path <PATH>]... [REVISION]
-ownai diff --mode <types|signatures> [--path <PATH>]... <BASE> <TARGET>
+ownai show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+ownai diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 Rules:
@@ -686,10 +693,14 @@ Rules:
 - `show` defaults `REVISION` to `HEAD`.
 - `--mode` is required; do not introduce a default before product validation.
 - Both diff revisions are required.
-- `--path`/`-p` is repeatable and narrows the projection to the named files or directories; a directory includes every file beneath it, and multiple paths form a union. Matching is byte-exact and boundary-aware.
+- `--path`/`-p` and `--area`/`-a` are mutually exclusive; passing both is a usage error that exits `2` through `clap`. Each is individually repeatable, and a repeated option forms a union of its selections.
+- `--path`/`-p` narrows the projection to the named files or directories; a directory includes every file beneath it. Matching is byte-exact and boundary-aware.
 - Paths resolve relative to the current directory. An absolute path must be inside the repository, `..` may climb but may not leave it, and in a bare repository relative paths resolve against the repository root. Resolution is lexical and never consults the filesystem.
+- `--area`/`-a` selects named areas defined at the repository root (section 14.1). Area paths are repository-root-relative, so `--area` ignores the current directory.
 - A selected path that names nothing in the projected revision exits `1` with empty stdout; for `diff`, a path named by either the base or the target is valid.
 - A selected path that exists but contains no supported files exits `0` with empty output.
+- An area is satisfied when any one of its paths names something in the projected revision, or in either side of a diff; otherwise it exits `1` with empty stdout and a diagnostic naming the area.
+- A missing, unreadable, oversized, or malformed config, or an `--area` name the config does not define, exits `1` with empty stdout. Config errors never affect `--path` or unscoped runs.
 - Support `--color <auto|always|never>` with `auto` as the default.
 - `--help` must describe that implementation-only changes are invisible.
 - Successful commands exit `0`, including a diff with projected changes.
@@ -700,6 +711,30 @@ Rules:
 - Do not add progress output in the MVP.
 
 The CLI constructs the two projectors, opens `ownai-git`, and implements the Git-aware pipeline in `command.rs`, composing `ownai-git`'s snapshot reads with `ownai-core`'s pure `show` and `diff` rendering. `ownai-core` stays Git-free (section 3). Business rules do not belong in `main.rs`.
+
+### 14.1 `.ownai.toml` and named areas
+
+A named area is a repository-defined group of paths, selected with `--area`. It lets a project share a recurring selection without repeating `--path` arguments.
+
+The config file is `.ownai.toml` at the repository root: the worktree root for a normal repository or linked worktree, and the bare repository root for a bare repository. It maps area names to lists of repository-root-relative paths:
+
+```toml
+[areas]
+frontend = ["apps/web", "packages/ui"]
+backend  = ["services/api"]
+```
+
+Rules:
+
+- The file is read lazily, only when `--area` is present. It is read at most once per command, and it never affects `--path` or unscoped runs.
+- The on-disk shape is a single `[areas]` table of `name = [paths]`. Unknown keys are rejected, so a typo cannot silently drop the area it was meant to define.
+- Area paths are repository-root-relative. Unlike `--path`, they do not depend on the current directory.
+- Parsing lives in `crates/ownai-cli/src/config.rs`. `ownai-core` stays free of file formats: the CLI turns TOML into an `AreaSet` and passes it to core's `PathSelection::resolve` (section 5.4).
+- The config is untrusted input. It is size-bounded to 1 MiB, a symlinked config is rejected rather than followed, and an empty or whitespace-only area name or an empty path list is rejected.
+- A path that is absolute, contains `..`, or is otherwise unusable is rejected. `.`, repeated slashes, and a trailing slash are normalized leniently; normalization is lexical and never consults the filesystem.
+- `--area` and `--path` are mutually exclusive: the `PathSelection` variants make the two selections disjoint by construction, and `clap` rejects a command that passes both with a usage error (exit `2`).
+- An area is satisfied when any one of its paths names something in the projected revision, or in either side of a diff. A group that matches nothing is fatal; a group that exists but contains no Elm or Rust files succeeds with empty output.
+- A missing, unreadable, oversized, or malformed config is fatal (exit `1`, empty stdout). An unknown area name is likewise fatal and its diagnostic lists the known names.
 
 ## 15. Diagnostics and failure behavior
 
@@ -717,6 +752,9 @@ Fatal cases include:
 - No repository found.
 - Revision not found, ambiguous, a range, or not peelable to a commit.
 - A selected path that names nothing in the projected revision, or in either side of a diff.
+- `--area` selection with a missing, unreadable, oversized, or malformed `.ownai.toml`.
+- `--area` naming an area the config does not define; the diagnostic lists the known names.
+- An empty area (no paths) or an area path that is absolute or contains `..`.
 - Git object missing or corrupt.
 - Supported source blob is not UTF-8.
 - Tree-sitter cannot parse a supported source file without error nodes.
@@ -835,12 +873,17 @@ Assert stdout, stderr, and exit status for every command form. Snapshot plain ou
 
 Path scoping has its own end-to-end coverage over temporary repositories: scoping to a directory, to a single file, and to a union of paths; `.` inside a subdirectory; an absolute path inside the repository; rejection of a path that would leave the repository; added and deleted files in a scoped diff; and a runtime capability check that skips the non-UTF-8 committed-path case when the environment cannot create one.
 
+Named areas have end-to-end coverage over temporary repositories: selecting an area and matching the scoped output, resolving an area from a subdirectory to prove paths are repository-root-relative, repeating `--area` for a union, an unknown area exiting `1` with the known names, a missing and a malformed config exiting `1` only when areas are selected, the `--area` + `--path` usage error exiting `2`, and area-level existence where any one existing path satisfies the group.
+
+`config.rs` unit tests cover the schema: a valid file, a missing file, malformed TOML, an unknown top-level key, a duplicate area key, an empty area name, an empty path list, an absolute path, a `..` path, lenient `.`/trailing-slash normalization, a file with no `[areas]` table, an oversized file, and a symlinked file.
+
 ## 17. Performance constraints
 
 Correctness and stable output take priority over concurrency in the MVP.
 
 Initial performance rules:
 
+- Read `.ownai.toml` at most once per command and only when `--area` is present, so unscoped and `--path` runs never touch it.
 - Filter entries by path scope before reading blobs, so scoping bounds the number of blobs read and projected.
 - Skip files with identical blob IDs before reading them during diff.
 - Read each needed blob at most once per command.
@@ -973,6 +1016,7 @@ The MVP implementation is complete when:
 - Mixed-language, added-file, and deleted-file comparisons work.
 - Invalid revisions and unprojectable supported files fail clearly without partial output.
 - Path scoping on both commands behaves as documented, including the fatal absent-path case.
+- Named areas load from `.ownai.toml` only for `--area`, scope both commands by repository-root-relative paths, and fail clearly on a missing or malformed config or an unknown area.
 - Output is deterministic across repeated runs and independent of terminal width.
 - All required tests and snapshots pass.
 - Only the approved `gix` features are enabled.
