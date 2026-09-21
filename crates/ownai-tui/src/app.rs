@@ -139,6 +139,9 @@ pub enum Overlay {
         input: TextInput,
     },
     Scope(ScopeChooser),
+    Mode {
+        cursor: usize,
+    },
 }
 
 /// The scope chooser's state.
@@ -824,14 +827,12 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
             cmds.push(Cmd::LoadAreas);
         }
         Key::Char('m') => {
-            let mode = match model.mode {
-                ProjectionMode::Types => ProjectionMode::Signatures,
-                ProjectionMode::Signatures => ProjectionMode::Types,
-            };
-            // The mode is only changed when the replacement arrives.
-            cmds.push(Cmd::Load {
-                request: model.request.with_mode(mode),
-            });
+            let modes = available_modes();
+            let cursor = modes
+                .iter()
+                .position(|mode| *mode == model.mode)
+                .unwrap_or(0);
+            model.overlay = Some(Overlay::Mode { cursor });
         }
         Key::Tab | Key::BackTab => cycle_focus(model, key == Key::Tab),
         _ => match model.focus {
@@ -995,6 +996,38 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                 model.overlay = Some(Overlay::Scope(chooser));
             }
         }
+        Overlay::Mode { mut cursor } => {
+            let mut reopen = true;
+            let modes = available_modes();
+            match key {
+                Key::Esc => reopen = false,
+                Key::Up | Key::Char('k') => cursor = cursor.saturating_sub(1),
+                Key::Down | Key::Char('j') => cursor = (cursor + 1).min(modes.len() - 1),
+                Key::Enter => {
+                    reopen = false;
+                    let mode = modes[cursor.min(modes.len() - 1)];
+                    cmds.push(Cmd::Load {
+                        request: model.request.with_mode(mode),
+                    });
+                }
+                _ => {}
+            }
+            if reopen {
+                model.overlay = Some(Overlay::Mode { cursor });
+            }
+        }
+    }
+}
+
+/// The projection modes the frontend can select.
+fn available_modes() -> [ProjectionMode; 2] {
+    [ProjectionMode::Types, ProjectionMode::Signatures]
+}
+
+fn mode_label(mode: ProjectionMode) -> &'static str {
+    match mode {
+        ProjectionMode::Types => "types",
+        ProjectionMode::Signatures => "signatures",
     }
 }
 
@@ -1382,8 +1415,45 @@ fn render_overlay(model: &Model, frame: &mut Frame, area: Rect) {
         Some(Overlay::Help) => render_help(frame, area),
         Some(Overlay::Revision { field, input }) => render_revision(frame, area, *field, input),
         Some(Overlay::Scope(chooser)) => render_scope(frame, area, chooser),
+        Some(Overlay::Mode { cursor }) => render_mode(frame, area, *cursor, model.mode),
         None => {}
     }
+}
+
+fn render_mode(frame: &mut Frame, area: Rect, cursor: usize, current: ProjectionMode) {
+    let modes = available_modes();
+    let width = area.width.saturating_sub(4).min(40);
+    let height = (modes.len() + 3).min(area.height as usize) as u16;
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" mode ");
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = Vec::new();
+    for (index, mode) in modes.iter().enumerate() {
+        let mut style = Style::default();
+        if index == cursor {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        let marker = if *mode == current { "•" } else { " " };
+        lines.push(Line::from(Span::styled(
+            format!("  {marker} {}", mode_label(*mode)),
+            style,
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_scope(frame: &mut Frame, area: Rect, chooser: &ScopeChooser) {
@@ -1686,10 +1756,7 @@ fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
         .selected
         .as_ref()
         .map_or_else(|| "-".to_owned(), |path| path.to_string());
-    let mode = match model.mode {
-        ProjectionMode::Types => "types",
-        ProjectionMode::Signatures => "signatures",
-    };
+    let mode = mode_label(model.mode);
     let revision = match &model.request {
         LoadRequest::Show { revision, .. } => revision.clone(),
         LoadRequest::Diff { base, target, .. } => format!("{base}..{target}"),
@@ -1973,12 +2040,20 @@ mod tests {
     }
 
     #[test]
-    fn mode_key_emits_a_cmd_and_defers_the_mode_change() {
+    fn mode_picker_defers_the_mode_change_until_selection() {
         let model = two_files();
-        let (next, cmds) = update(Msg::Key(Key::Char('m')), &model);
+        let (opened, cmds) = update(Msg::Key(Key::Char('m')), &model);
+        assert!(cmds.is_empty());
+        assert!(matches!(opened.overlay, Some(Overlay::Mode { .. })));
+
+        // The cursor starts on the current mode (types, index 0); move to
+        // signatures and confirm.
+        let (down, _) = update(Msg::Key(Key::Down), &opened);
+        let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
 
         assert_eq!(model.mode, ProjectionMode::Types);
-        assert_eq!(next.mode, ProjectionMode::Types, "mode changes on Loaded");
+        assert_eq!(chosen.mode, ProjectionMode::Types, "mode changes on Loaded");
+        assert_eq!(chosen.overlay, None);
         assert_eq!(
             cmds,
             vec![Cmd::Load {
@@ -1988,9 +2063,11 @@ mod tests {
     }
 
     #[test]
-    fn mode_key_on_a_diff_keeps_the_diff_shape() {
+    fn mode_picker_on_a_diff_keeps_the_diff_shape() {
         let model = diff_model(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
-        let (_, cmds) = update(Msg::Key(Key::Char('m')), &model);
+        let (opened, _) = update(Msg::Key(Key::Char('m')), &model);
+        let (down, _) = update(Msg::Key(Key::Down), &opened);
+        let (_, cmds) = update(Msg::Key(Key::Enter), &down);
 
         assert_eq!(
             cmds,
@@ -1998,6 +2075,15 @@ mod tests {
                 request: diff_request().with_mode(ProjectionMode::Signatures),
             }]
         );
+    }
+
+    #[test]
+    fn the_mode_picker_lists_the_modes() {
+        let mut model = two_files();
+        model.overlay = Some(Overlay::Mode { cursor: 0 });
+        let text = buffer_text(&render(&model, 100, 20));
+        assert!(text.contains("types"), "{text}");
+        assert!(text.contains("signatures"), "{text}");
     }
 
     #[test]
