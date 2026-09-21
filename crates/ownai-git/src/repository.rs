@@ -100,6 +100,13 @@ pub trait SnapshotRepository {
     /// repository path bytes.
     fn source_entries(&self, revision: &Revision) -> Result<Vec<SourceEntry>, GitError>;
 
+    /// Reports whether `path` names a tree or blob in `revision`'s tree.
+    fn path_exists(
+        &self,
+        revision: &Revision,
+        path: &ownai_core::RepoPath,
+    ) -> Result<bool, GitError>;
+
     /// Reads the exact bytes of the blob `id`.
     fn read_blob(&self, id: &ObjectId) -> Result<Vec<u8>, GitError>;
 }
@@ -159,6 +166,14 @@ impl SnapshotRepository for GitRepository {
 
     fn source_entries(&self, revision: &Revision) -> Result<Vec<SourceEntry>, GitError> {
         crate::tree::source_entries(self, revision)
+    }
+
+    fn path_exists(
+        &self,
+        revision: &Revision,
+        path: &ownai_core::RepoPath,
+    ) -> Result<bool, GitError> {
+        crate::tree::path_exists(self, revision, path)
     }
 
     fn read_blob(&self, id: &ObjectId) -> Result<Vec<u8>, GitError> {

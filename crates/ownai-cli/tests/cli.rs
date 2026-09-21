@@ -187,6 +187,21 @@ fn show_empty_supported_file_set_is_empty_and_successful() {
         .stderr(predicates::str::is_empty());
 }
 
+#[test]
+fn show_path_with_no_supported_files_is_empty_and_successful() {
+    let repo = TestRepo::init();
+    repo.write("docs/readme.md", "not a supported source file\n");
+    repo.commit("docs");
+
+    // The directory exists in the revision, so the empty result is real rather
+    // than a mistyped `--path`.
+    ownai_in(&repo, &["show", "--mode", "types", "--path", "docs"])
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty())
+        .stderr(predicates::str::is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // diff
 // ---------------------------------------------------------------------------
@@ -311,6 +326,221 @@ fn type_change_appears_in_both_modes() {
     }
 }
 
+#[test]
+fn diff_path_deleted_in_target_still_succeeds() {
+    let repo = TestRepo::init();
+    repo.write("src/gone.rs", RUST_BASE);
+    repo.commit("base");
+    repo.remove("src/gone.rs");
+    repo.commit("remove");
+
+    // The path exists only in the base revision; the target's deletion is the
+    // change being projected, so the scope must not be rejected.
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "types",
+            "--path",
+            "src/gone.rs",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        output.stderr.is_empty(),
+        "successful diff must not write diagnostics"
+    );
+    assert!(
+        stdout(&output).contains("diff --ownai a/src/gone.rs b/src/gone.rs"),
+        "deleted file block missing: {:?}",
+        stdout(&output)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// named areas
+// ---------------------------------------------------------------------------
+
+/// A repository with a committed `.ownai.toml` and one Elm file per area.
+fn repo_with_areas() -> TestRepo {
+    let repo = TestRepo::init();
+    repo.write(
+        "apps/web/src/App.elm",
+        &fixture("elm/type-aliases/input.elm"),
+    );
+    repo.write(
+        "libs/ui/src/Widget.elm",
+        &fixture("elm/normal-module/input.elm"),
+    );
+    repo.write("services/api/src/lib.rs", RUST_BASE);
+    repo.write(
+        ".ownai.toml",
+        "[areas]\nfrontend = [\"apps/web\", \"libs/ui\"]\nbackend = [\"services/api\"]\n",
+    );
+    repo.commit("base");
+    repo
+}
+
+#[test]
+fn show_with_an_area_scopes_to_its_paths() {
+    let repo = repo_with_areas();
+
+    let expected = format!(
+        "== apps/web/src/App.elm ==\n{}\n== libs/ui/src/Widget.elm ==\n{}",
+        fixture("elm/type-aliases/types.txt"),
+        fixture("elm/normal-module/types.txt")
+    );
+
+    ownai_in(&repo, &["show", "--mode", "types", "--area", "frontend"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(expected))
+        .stderr(predicates::str::is_empty());
+}
+
+#[test]
+fn repeated_areas_are_a_union() {
+    let repo = repo_with_areas();
+
+    let document = run(
+        &repo,
+        &["show", "--mode", "types", "-a", "frontend", "-a", "backend"],
+    );
+    assert!(document.status.success(), "stderr: {}", stderr(&document));
+
+    let document = stdout(&document);
+    assert!(
+        document.contains("== apps/web/src/App.elm =="),
+        "{document:?}"
+    );
+    assert!(
+        document.contains("== services/api/src/lib.rs =="),
+        "{document:?}"
+    );
+}
+
+#[test]
+fn area_paths_are_relative_to_the_repository_root_from_a_subdirectory() {
+    let repo = repo_with_areas();
+
+    // Run from inside the area itself: a working-directory-relative `--path`
+    // would resolve to `apps/web/apps/web` and fail, so this proves `--area`
+    // ignores the working directory.
+    let output = ownai()
+        .current_dir(repo.path().join("apps/web"))
+        .args(["show", "--mode", "types", "-a", "frontend"])
+        .output()
+        .expect("run ownai");
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("== apps/web/src/App.elm =="),
+        "{:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn an_area_is_satisfied_when_any_of_its_paths_exists() {
+    let repo = TestRepo::init();
+    repo.write(
+        "apps/web/src/App.elm",
+        &fixture("elm/type-aliases/input.elm"),
+    );
+    repo.write(
+        ".ownai.toml",
+        "[areas]\nfrontend = [\"apps/web\", \"gone\"]\n",
+    );
+    repo.commit("base");
+
+    ownai_in(&repo, &["show", "--mode", "types", "-a", "frontend"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("== apps/web/src/App.elm =="));
+}
+
+#[test]
+fn an_unknown_area_exits_one_and_lists_the_known_names() {
+    let repo = repo_with_areas();
+
+    let output = run(&repo, &["show", "--mode", "types", "-a", "ghost"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
+
+    let diagnostic = stderr(&output);
+    assert!(diagnostic.contains("ghost"), "diagnostic: {diagnostic}");
+    assert!(diagnostic.contains("frontend"), "diagnostic: {diagnostic}");
+    assert!(diagnostic.contains("backend"), "diagnostic: {diagnostic}");
+}
+
+#[test]
+fn an_area_absent_from_the_revision_exits_one() {
+    let repo = TestRepo::init();
+    repo.write("src/User.elm", &fixture("elm/type-aliases/input.elm"));
+    repo.write(".ownai.toml", "[areas]\nfrontend = [\"apps/web\"]\n");
+    repo.commit("base");
+
+    // `frontend` is defined, but none of its paths exist in the revision, so
+    // the group is unsatisfied and the diagnostic names the area.
+    let output = run(&repo, &["show", "--mode", "types", "-a", "frontend"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
+    assert!(
+        stderr(&output).contains("area: frontend"),
+        "diagnostic: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_missing_config_exits_one() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+
+    let output = run(&repo, &["show", "--mode", "types", "-a", "frontend"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains(".ownai.toml"),
+        "diagnostic: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_malformed_config_exits_one_only_for_area_selection() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.write(".ownai.toml", "this is not toml\n");
+    repo.commit("base");
+
+    let output = run(&repo, &["show", "--mode", "types", "-a", "frontend"]);
+    assert_eq!(output.status.code(), Some(1));
+
+    // A malformed config must not affect `--path` or an unscoped run.
+    ownai_in(&repo, &["show", "--mode", "types", "--path", "src/lib.rs"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("== src/lib.rs =="));
+    ownai_in(&repo, &["show", "--mode", "types"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn area_and_path_together_are_a_usage_error() {
+    let repo = repo_with_areas();
+
+    ownai_in(
+        &repo,
+        &["show", "--mode", "types", "-a", "frontend", "-p", "src"],
+    )
+    .assert()
+    .code(2);
+}
+
 // ---------------------------------------------------------------------------
 // bare repositories
 // ---------------------------------------------------------------------------
@@ -352,6 +582,50 @@ fn invalid_revision_exits_one_with_a_diagnostic_and_empty_stdout() {
     assert!(
         stderr(&output).contains("no-such-revision"),
         "diagnostic missing the revision: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn show_path_absent_from_the_revision_exits_one() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+
+    let output = run(
+        &repo,
+        &["show", "--mode", "types", "--path", "src/missing.rs"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
+    assert!(
+        stderr(&output).contains("src/missing.rs"),
+        "diagnostic missing the path: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn diff_path_absent_from_both_revisions_exits_one() {
+    let repo = repo_with_type_change();
+
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "types",
+            "--path",
+            "src/missing.rs",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
+    assert!(
+        stderr(&output).contains("src/missing.rs"),
+        "diagnostic missing the path: {}",
         stderr(&output)
     );
 }

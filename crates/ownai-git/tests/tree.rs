@@ -5,6 +5,7 @@ mod support;
 
 use std::collections::BTreeMap;
 
+use ownai_core::RepoPath;
 use ownai_git::repository::{GitRepository, HashKind, SnapshotRepository, SourceEntry};
 use support::TestRepo;
 
@@ -296,6 +297,50 @@ fn sorts_invalid_utf8_paths_by_raw_bytes() {
         assert!(
             window[0].path.as_bytes() <= window[1].path.as_bytes(),
             "entries are not sorted by raw path bytes"
+        );
+    }
+}
+
+#[test]
+fn reports_existing_file_and_directory_paths() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", "pub fn lib() {}\n");
+    repo.write("src/nested/deep.rs", "pub fn deep() {}\n");
+    repo.commit("initial");
+
+    let discovered = GitRepository::discover(repo.path()).expect("discover");
+    let revision = discovered.resolve_commit("HEAD").expect("HEAD");
+
+    for raw in ["src/lib.rs", "src", "src/nested", "src/nested/deep.rs"] {
+        let path = RepoPath::new(raw).expect("valid repository path");
+        assert!(
+            discovered.path_exists(&revision, &path).expect("lookup"),
+            "`{raw}` should exist"
+        );
+    }
+}
+
+#[test]
+fn rejects_missing_and_shared_prefix_paths() {
+    let repo = TestRepo::init();
+    repo.write("src2/other.rs", "pub fn other() {}\n");
+    repo.commit("initial");
+
+    let discovered = GitRepository::discover(repo.path()).expect("discover");
+    let revision = discovered.resolve_commit("HEAD").expect("HEAD");
+
+    // `src` is absent even though the sibling `src2` exists, and a component
+    // below a blob cannot resolve.
+    for raw in [
+        "src",
+        "src/missing.rs",
+        "src2/missing.rs",
+        "src2/other.rs/deep",
+    ] {
+        let path = RepoPath::new(raw).expect("valid repository path");
+        assert!(
+            !discovered.path_exists(&revision, &path).expect("lookup"),
+            "`{raw}` should not exist"
         );
     }
 }

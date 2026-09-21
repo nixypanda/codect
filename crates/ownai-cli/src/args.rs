@@ -47,6 +47,16 @@ pub enum Command {
         /// Revision to project (branch, tag, or object id); defaults to HEAD.
         #[arg(value_name = "REVISION", default_value = "HEAD")]
         revision: String,
+
+        /// Limit the projection to these paths. Repeatable. A directory includes
+        /// everything beneath it, and paths are relative to the current directory.
+        #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
+        paths: Vec<std::ffi::OsString>,
+
+        /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+        /// exclusive with `--path`.
+        #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
+        areas: Vec<String>,
     },
 
     /// Show a focused projection diff between two revisions.
@@ -63,6 +73,16 @@ pub enum Command {
         /// Target revision.
         #[arg(value_name = "TARGET")]
         target: String,
+
+        /// Limit the projection to these paths. Repeatable. A directory includes
+        /// everything beneath it, and paths are relative to the current directory.
+        #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
+        paths: Vec<std::ffi::OsString>,
+
+        /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+        /// exclusive with `--path`.
+        #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
+        areas: Vec<String>,
     },
 }
 
