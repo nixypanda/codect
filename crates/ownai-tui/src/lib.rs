@@ -29,9 +29,13 @@ use ratatui::backend::CrosstermBackend;
 
 mod app;
 mod highlight;
+mod theme;
+mod view;
 
 pub use app::LoadRequest;
-use app::{Cmd, Content, Key, Model, Msg, update, view};
+use app::{Cmd, Content, Key, Model, Msg, update};
+use theme::Theme;
+use view::view;
 
 /// Everything `run` needs beyond the engine, built by the caller.
 ///
@@ -88,6 +92,7 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
         options.scope_label,
         width,
         height,
+        Theme::detect(),
     );
 
     // The initial projection is the startup effect. Unlike a later reload, a

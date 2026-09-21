@@ -15,23 +15,16 @@ use std::sync::OnceLock;
 use ownai_core::Language;
 use ratatui::style::{Color, Modifier, Style};
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, Style as SynStyle, Theme};
+use syntect::highlighting::{FontStyle, Style as SynStyle, Theme as SynTheme};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 use two_face::theme::EmbeddedThemeName;
 use unicode_width::UnicodeWidthChar;
 
+use crate::theme::{Capability, Flavor, Rgb, Theme};
+
 /// Columns a tab expands to, matching the projection renderer.
 const TAB_WIDTH: usize = 4;
-
-/// Delta's default removed-line background.
-pub const DELETE_BG: Color = Color::Rgb(0x34, 0x00, 0x01);
-/// Delta's default added-line background.
-pub const ADD_BG: Color = Color::Rgb(0x01, 0x28, 0x00);
-/// Delta's default removed intra-line emphasis background.
-pub const DELETE_EMPH_BG: Color = Color::Rgb(0x64, 0x00, 0x09);
-/// Delta's default added intra-line emphasis background.
-pub const ADD_EMPH_BG: Color = Color::Rgb(0x00, 0x60, 0x00);
 
 /// One styled run of text within a rendered line.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,17 +36,10 @@ pub struct Run {
 /// A rendered line as a sequence of styled runs.
 pub type StyledLine = Vec<Run>;
 
-/// Whether ANSI color should be emitted at all.
-///
-/// The `NO_COLOR` convention disables all styling; the text is still rendered
-/// with diff markers and line numbers so structure survives.
-pub fn colors_enabled() -> bool {
-    std::env::var_os("NO_COLOR").is_none()
-}
-
 struct Assets {
     syntaxes: SyntaxSet,
-    theme: Theme,
+    dark: SynTheme,
+    light: SynTheme,
 }
 
 fn assets() -> &'static Assets {
@@ -61,9 +47,19 @@ fn assets() -> &'static Assets {
     ASSETS.get_or_init(|| {
         let syntaxes = two_face::syntax::extra_newlines();
         let themes = two_face::theme::extra();
-        let theme = themes[EmbeddedThemeName::MonokaiExtended].clone();
-        Assets { syntaxes, theme }
+        Assets {
+            syntaxes,
+            dark: themes[EmbeddedThemeName::MonokaiExtended].clone(),
+            light: themes[EmbeddedThemeName::MonokaiExtendedLight].clone(),
+        }
     })
+}
+
+fn syntect_theme(assets: &Assets, flavor: Flavor) -> &SynTheme {
+    match flavor {
+        Flavor::Dark => &assets.dark,
+        Flavor::Light => &assets.light,
+    }
 }
 
 fn syntax_for(syntaxes: &SyntaxSet, language: Language) -> &SyntaxReference {
@@ -76,12 +72,13 @@ fn syntax_for(syntaxes: &SyntaxSet, language: Language) -> &SyntaxReference {
         .unwrap_or_else(|| syntaxes.find_syntax_plain_text())
 }
 
-fn convert(style: SynStyle) -> Style {
-    let mut out = Style::default().fg(Color::Rgb(
+fn convert(style: SynStyle, capability: Capability) -> Style {
+    let foreground = Rgb(
         style.foreground.r,
         style.foreground.g,
         style.foreground.b,
-    ));
+    );
+    let mut out = Style::default().fg(foreground.to_color(capability));
     if style.font_style.contains(FontStyle::BOLD) {
         out = out.add_modifier(Modifier::BOLD);
     }
@@ -104,16 +101,18 @@ fn plain_line(line: &str) -> StyledLine {
 /// Highlights `text` into one [`StyledLine`] per source line.
 ///
 /// The result has exactly `text.lines().count()` entries, so a caller can index
-/// it by one-based source line number minus one. When color is disabled, or a
-/// line fails to highlight, a single default-styled run is produced.
-pub fn highlight(text: &str, language: Language) -> Vec<StyledLine> {
-    if !colors_enabled() {
+/// it by one-based source line number minus one. The `theme` selects the syntax
+/// flavor and resolves token colors for the terminal's capability. When color is
+/// disabled, or a line fails to highlight, a single default-styled run is
+/// produced.
+pub fn highlight(text: &str, language: Language, theme: &Theme) -> Vec<StyledLine> {
+    if !theme.colors_enabled() {
         return text.lines().map(plain_line).collect();
     }
 
     let assets = assets();
     let syntax = syntax_for(&assets.syntaxes, language);
-    let mut highlighter = HighlightLines::new(syntax, &assets.theme);
+    let mut highlighter = HighlightLines::new(syntax, syntect_theme(assets, theme.flavor));
 
     let mut lines = Vec::new();
     for line in LinesWithEndings::from(text) {
@@ -126,7 +125,7 @@ pub fn highlight(text: &str, language: Language) -> Vec<StyledLine> {
                     if piece.is_empty() {
                         continue;
                     }
-                    push_run(&mut runs, convert(style), piece);
+                    push_run(&mut runs, convert(style, theme.capability), piece);
                 }
                 if runs.is_empty() {
                     runs.push(Run {
@@ -390,10 +389,13 @@ fn push_run(runs: &mut StyledLine, style: Style, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn rust_keywords_get_a_foreground_color() {
-        let lines = highlight("pub struct User {\n    id: u32,\n}\n", Language::Rust);
+        let lines = highlight(
+            "pub struct User {\n    id: u32,\n}\n",
+            Language::Rust,
+            &Theme::dark(),
+        );
         assert_eq!(lines.len(), 3, "one styled line per source line");
 
         // `pub` is a keyword and must not be default-styled.
@@ -410,7 +412,7 @@ mod tests {
     fn line_count_matches_str_lines() {
         for text in ["", "\n", "a", "a\n", "a\n\nb\n", "a\nb"] {
             assert_eq!(
-                highlight(text, Language::Rust).len(),
+                highlight(text, Language::Rust, &Theme::dark()).len(),
                 text.lines().count(),
                 "text = {text:?}"
             );
@@ -440,11 +442,11 @@ mod tests {
             style: Style::default().fg(Color::White),
             text: "abcde".to_owned(),
         }];
-        let out = apply_emphasis(&runs, &[(1, 3)], DELETE_EMPH_BG);
+        let out = apply_emphasis(&runs, &[(1, 3)], Color::Rgb(0x64, 0x00, 0x09));
         let text: String = out.iter().map(|run| run.text.as_str()).collect();
         assert_eq!(text, "abcde");
         assert_eq!(out[0].style.bg, None);
-        assert_eq!(out[1].style.bg, Some(DELETE_EMPH_BG));
+        assert_eq!(out[1].style.bg, Some(Color::Rgb(0x64, 0x00, 0x09)));
         assert_eq!(out[2].style.bg, None);
     }
 

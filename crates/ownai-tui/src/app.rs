@@ -1,42 +1,35 @@
-//! The pure TEA core: `Model`, `Msg`, `Cmd`, `update`, and `view`.
+//! The pure TEA core: `Model`, `Msg`, `Cmd`, and `update`.
 //!
 //! Nothing here performs I/O. `update` turns a message and the current model
-//! into a replacement model plus a list of effects to run; `view` renders a
-//! model into a frame. Engine calls only ever leave this module as a [`Cmd`],
-//! which the runtime interprets.
+//! into a replacement model plus a list of effects to run. Engine calls only
+//! ever leave this module as a [`Cmd`], which the runtime interprets. The pure
+//! `view` lives in [`crate::view`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use ownai_core::{
-    AlignedRow, AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath,
-    aligned_rows,
-};
+use ownai_core::{AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath};
 use ownai_engine::{EngineError, FileDiff, Selection, SelectionGroup};
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
-use crate::highlight::{self, Run, StyledLine};
+use crate::highlight::{self, StyledLine};
+use crate::theme::Theme;
+use crate::view::diff::layout_diff;
+use crate::view::geom::{frame_chunks, gutter_width, pane_block, split_diff_columns};
 
 /// At or above this width the tree and content render side by side.
-const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
+pub(crate) const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
 
 /// Below this width, or below [`MIN_HEIGHT`] rows, the terminal is too small.
-const SINGLE_PANE_MIN_WIDTH: u16 = 40;
-const MIN_HEIGHT: u16 = 8;
+pub(crate) const SINGLE_PANE_MIN_WIDTH: u16 = 40;
+pub(crate) const MIN_HEIGHT: u16 = 8;
 
 /// The file-tree pane width, as a percentage of the terminal, and its bounds.
 const TREE_DEFAULT_PERCENT: u16 = 30;
 const TREE_MIN_PERCENT: u16 = 15;
 const TREE_MAX_PERCENT: u16 = 60;
 const TREE_STEP: u16 = 5;
-
-/// Columns a tab expands to, so display width stays deterministic.
-const TAB_WIDTH: usize = 4;
 
 /// Which region currently has focus.
 ///
@@ -173,7 +166,7 @@ impl ScopeChooser {
     }
 
     /// `all`, each area name, then the literal-path entry.
-    fn options(&self) -> Vec<String> {
+    pub(crate) fn options(&self) -> Vec<String> {
         let mut options = vec!["all".to_owned()];
         if let Some(areas) = &self.areas {
             options.extend(areas.names().map(str::to_owned));
@@ -418,6 +411,14 @@ pub enum VisualRowKind {
     Hunk,
 }
 
+/// How a file changed in a focused diff, for tree badges.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
 /// One visual row of a wrapped side-by-side diff.
 ///
 /// A logical aligned row with a wrapped side expands into several `VisualRow`s;
@@ -503,6 +504,8 @@ pub struct Model {
     derived: Arc<Derived>,
     pub width: u16,
     pub height: u16,
+    /// The resolved design tokens; view code never names a raw color.
+    pub theme: Theme,
     pub quit: bool,
 }
 
@@ -514,6 +517,7 @@ impl Model {
         scope_label: String,
         width: u16,
         height: u16,
+        theme: Theme,
     ) -> Self {
         let mode = request.mode();
         Self {
@@ -538,6 +542,7 @@ impl Model {
             derived: Arc::new(Derived::default()),
             width,
             height,
+            theme,
             quit: false,
         }
     }
@@ -565,15 +570,33 @@ impl Model {
     }
 
     /// The syntax-highlighted lines of the selected `show` file, if computed.
-    fn active_show_lines(&self) -> Option<&[StyledLine]> {
+    pub(crate) fn active_show_lines(&self) -> Option<&[StyledLine]> {
         let path = self.selected.as_ref()?;
         self.highlights.show.get(path).map(|lines| lines.as_slice())
     }
 
     /// The syntax-highlighted lines of the selected diff, if computed.
-    fn active_diff_highlight(&self) -> Option<&DiffHighlight> {
+    pub(crate) fn active_diff_highlight(&self) -> Option<&DiffHighlight> {
         let path = self.selected.as_ref()?;
         self.highlights.diff.get(path).map(|lines| lines.as_ref())
+    }
+
+    /// The wrapped visual rows of the active diff.
+    pub(crate) fn diff_rows(&self) -> &[VisualRow] {
+        self.derived.diff_rows.as_slice()
+    }
+
+    /// The change kind of a path in the active diff, for tree badges.
+    pub(crate) fn change_kind(&self, path: &RepoPath) -> Option<ChangeKind> {
+        let Content::Diff(diffs) = &self.content else {
+            return None;
+        };
+        let diff = diffs.iter().find(|diff| &diff.path == path)?;
+        Some(match (&diff.old, &diff.new) {
+            (None, Some(_)) => ChangeKind::Added,
+            (Some(_), None) => ChangeKind::Deleted,
+            _ => ChangeKind::Modified,
+        })
     }
 
     /// Computes and caches highlighting for the selected file when missing.
@@ -589,7 +612,7 @@ impl Model {
                 let Some(file) = files.iter().find(|file| file.path() == &path) else {
                     return;
                 };
-                let lines = highlight::highlight(file.canonical_text(), file.language());
+                let lines = highlight::highlight(file.canonical_text(), file.language(), &self.theme);
                 self.highlights.show.insert(path, Arc::new(lines));
             }
             Content::Diff(diffs) => {
@@ -605,10 +628,10 @@ impl Model {
                     .or(diff.new.as_ref())
                     .map_or(Language::Rust, ProjectedFile::language);
                 let old = diff.old.as_ref().map_or_else(Vec::new, |file| {
-                    highlight::highlight(file.canonical_text(), language)
+                    highlight::highlight(file.canonical_text(), language, &self.theme)
                 });
                 let new = diff.new.as_ref().map_or_else(Vec::new, |file| {
-                    highlight::highlight(file.canonical_text(), language)
+                    highlight::highlight(file.canonical_text(), language, &self.theme)
                 });
                 self.highlights
                     .diff
@@ -617,7 +640,7 @@ impl Model {
         }
     }
 
-    fn line_count(&self) -> usize {
+    pub(crate) fn line_count(&self) -> usize {
         self.active_text().map_or(0, |text| text.lines().count())
     }
 
@@ -659,7 +682,14 @@ impl Model {
         let (old_width, new_width) = self.diff_side_widths(content, diff);
         let empty = DiffHighlight::default();
         let highlights = self.active_diff_highlight().unwrap_or(&empty);
-        layout_diff(diff, old_width, new_width, &highlights.old, &highlights.new)
+        layout_diff(
+            diff,
+            old_width,
+            new_width,
+            &highlights.old,
+            &highlights.new,
+            &self.theme,
+        )
     }
 
     fn diff_side_widths(&self, content: Rect, diff: &FileDiff) -> (usize, usize) {
@@ -669,14 +699,14 @@ impl Model {
                 let (_, old, new) = split_diff_columns(content, self.tree_percent);
                 (old, new)
             };
-            let old_inner = pane_block("", false).inner(old);
-            let new_inner = pane_block("", false).inner(new);
+            let old_inner = pane_block("", false, &self.theme).inner(old);
+            let new_inner = pane_block("", false, &self.theme).inner(new);
             (
                 (old_inner.width as usize).saturating_sub(gutter),
                 (new_inner.width as usize).saturating_sub(gutter),
             )
         } else {
-            let inner = pane_block("", false).inner(content);
+            let inner = pane_block("", false, &self.theme).inner(content);
             let width = (inner.width as usize).saturating_sub(gutter);
             (width, width)
         }
@@ -1047,11 +1077,11 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
 }
 
 /// The projection modes the frontend can select.
-fn available_modes() -> [ProjectionMode; 2] {
+pub(crate) fn available_modes() -> [ProjectionMode; 2] {
     [ProjectionMode::Types, ProjectionMode::Signatures]
 }
 
-fn mode_label(mode: ProjectionMode) -> &'static str {
+pub(crate) fn mode_label(mode: ProjectionMode) -> &'static str {
     match mode {
         ProjectionMode::Types => "types",
         ProjectionMode::Signatures => "signatures",
@@ -1244,818 +1274,6 @@ fn clamp_view(model: &mut Model) {
     model.body_hscroll = model.body_hscroll.min(max_hscroll(model));
 }
 
-// ---------------------------------------------------------------------------
-// Diff layout
-// ---------------------------------------------------------------------------
-
-/// The width of the line-number gutter, including its trailing space.
-fn gutter_width(diff: &FileDiff) -> usize {
-    let lines = |file: &Option<ProjectedFile>| {
-        file.as_ref()
-            .map_or(0, |file| file.canonical_text().lines().count())
-    };
-    lines(&diff.old)
-        .max(lines(&diff.new))
-        .max(1)
-        .to_string()
-        .len()
-        + 1
-}
-
-/// Wraps one logical aligned row into visual rows for both panes.
-///
-/// Each side wraps independently to its own content width; the row occupies the
-/// greater height and the shorter side is padded with blank rows so later rows
-/// stay aligned. Only the first visual row carries line numbers. Changed rows
-/// also get delta-style intra-line emphasis on the bytes that differ.
-fn layout_diff(
-    diff: &FileDiff,
-    old_width: usize,
-    new_width: usize,
-    old_highlight: &[StyledLine],
-    new_highlight: &[StyledLine],
-) -> Vec<VisualRow> {
-    let old_text = diff.old.as_ref().map_or("", ProjectedFile::canonical_text);
-    let new_text = diff.new.as_ref().map_or("", ProjectedFile::canonical_text);
-    let rows = aligned_rows(old_text, new_text);
-
-    let mut visual = Vec::new();
-    for (start, end) in context_windows(&rows) {
-        visual.push(hunk_header(&rows, start, end));
-        for row in &rows[start..=end] {
-            let (old_emphasis, new_emphasis) = match (row.old, row.new, row.kind) {
-                (Some(old), Some(new), DiffRowKind::Change) => {
-                    highlight::emphasis_ranges(old.text, new.text)
-                }
-                _ => (Vec::new(), Vec::new()),
-            };
-
-            let old_segments = row
-                .old
-                .map(|line| {
-                    let runs = styled_line(old_highlight, line.number, line.text);
-                    let runs =
-                        highlight::apply_emphasis(&runs, &old_emphasis, highlight::DELETE_EMPH_BG);
-                    highlight::wrap_runs(&runs, old_width)
-                })
-                .unwrap_or_default();
-            let new_segments = row
-                .new
-                .map(|line| {
-                    let runs = styled_line(new_highlight, line.number, line.text);
-                    let runs =
-                        highlight::apply_emphasis(&runs, &new_emphasis, highlight::ADD_EMPH_BG);
-                    highlight::wrap_runs(&runs, new_width)
-                })
-                .unwrap_or_default();
-
-            let height = old_segments.len().max(new_segments.len()).max(1);
-            for index in 0..height {
-                visual.push(VisualRow {
-                    kind: VisualRowKind::Diff(row.kind),
-                    old_number: if index == 0 {
-                        row.old.map(|line| line.number)
-                    } else {
-                        None
-                    },
-                    new_number: if index == 0 {
-                        row.new.map(|line| line.number)
-                    } else {
-                        None
-                    },
-                    old_runs: old_segments.get(index).cloned().unwrap_or_default(),
-                    new_runs: new_segments.get(index).cloned().unwrap_or_default(),
-                    continuation: index > 0,
-                });
-            }
-        }
-    }
-    visual
-}
-
-/// Context lines kept around each change, matching the core diff engine.
-const CONTEXT_RADIUS: usize = 3;
-
-/// The inclusive index ranges of aligned rows to display, one per hunk.
-///
-/// Each change pulls in [`CONTEXT_RADIUS`] rows of surrounding context; ranges
-/// that touch or overlap merge, and the gaps between them become hunk headers.
-fn context_windows(rows: &[AlignedRow<'_>]) -> Vec<(usize, usize)> {
-    let changes: Vec<usize> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| row.kind != DiffRowKind::Equal)
-        .map(|(index, _)| index)
-        .collect();
-
-    if changes.is_empty() {
-        return if rows.is_empty() {
-            Vec::new()
-        } else {
-            vec![(0, rows.len() - 1)]
-        };
-    }
-
-    let mut windows: Vec<(usize, usize)> = Vec::new();
-    for index in changes {
-        let start = index.saturating_sub(CONTEXT_RADIUS);
-        let end = (index + CONTEXT_RADIUS).min(rows.len() - 1);
-        match windows.last_mut() {
-            Some(last) if start <= last.1 + 1 => last.1 = last.1.max(end),
-            _ => windows.push((start, end)),
-        }
-    }
-    windows
-}
-
-/// A synthetic header describing the line ranges covered by one hunk.
-fn hunk_header(rows: &[AlignedRow<'_>], start: usize, end: usize) -> VisualRow {
-    let slice = &rows[start..=end];
-    let old_numbers: Vec<usize> = slice
-        .iter()
-        .filter_map(|row| row.old.map(|line| line.number))
-        .collect();
-    let new_numbers: Vec<usize> = slice
-        .iter()
-        .filter_map(|row| row.new.map(|line| line.number))
-        .collect();
-    let old_start = old_numbers.first().copied().unwrap_or(0);
-    let new_start = new_numbers.first().copied().unwrap_or(0);
-    let text = format!(
-        "@@ -{old_start},{} +{new_start},{} @@",
-        old_numbers.len(),
-        new_numbers.len()
-    );
-    let run = Run {
-        style: Style::default(),
-        text,
-    };
-    VisualRow {
-        kind: VisualRowKind::Hunk,
-        old_number: None,
-        new_number: None,
-        old_runs: vec![run.clone()],
-        new_runs: vec![run],
-        continuation: false,
-    }
-}
-
-/// The highlighted runs for one aligned diff line, falling back to a single
-/// plain run when highlighting is unavailable.
-fn styled_line(highlight: &[StyledLine], number: usize, text: &str) -> StyledLine {
-    match highlight.get(number.saturating_sub(1)) {
-        Some(line) if !line.is_empty() => line.clone(),
-        _ => vec![Run {
-            style: Style::default(),
-            text: text.to_owned(),
-        }],
-    }
-}
-
-fn expand_tabs(line: &str) -> String {
-    if line.contains('\t') {
-        line.replace('\t', &" ".repeat(TAB_WIDTH))
-    } else {
-        line.to_owned()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Layout
-// ---------------------------------------------------------------------------
-
-/// Splits a terminal of `width` × `height` into content and status. Pure, so
-/// `update` and `view` agree.
-fn frame_chunks(width: u16, height: u16) -> (Rect, Rect) {
-    let area = Rect::new(0, 0, width, height);
-    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
-    (chunks[0], chunks[1])
-}
-
-fn split_show_columns(content: Rect, tree_percent: u16) -> (Rect, Rect) {
-    let columns = Layout::horizontal([
-        Constraint::Percentage(tree_percent),
-        Constraint::Percentage(100 - tree_percent),
-    ])
-    .split(content);
-    (columns[0], columns[1])
-}
-
-fn split_diff_columns(content: Rect, tree_percent: u16) -> (Rect, Rect, Rect) {
-    let rest = 100 - tree_percent;
-    let side = rest / 2;
-    let columns = Layout::horizontal([
-        Constraint::Percentage(tree_percent),
-        Constraint::Percentage(side),
-        Constraint::Percentage(rest - side),
-    ])
-    .split(content);
-    (columns[0], columns[1], columns[2])
-}
-
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
-
-/// Renders the whole model. Pure: it reads the model and writes to the frame.
-pub fn view(model: &Model, frame: &mut Frame) {
-    let area = frame.area();
-
-    if area.width < SINGLE_PANE_MIN_WIDTH || area.height < MIN_HEIGHT {
-        render_too_small(frame, area);
-        render_overlay(model, frame, area);
-        return;
-    }
-
-    let (content, status) = frame_chunks(area.width, area.height);
-    let side_by_side = area.width >= SIDE_BY_SIDE_MIN_WIDTH;
-
-    match &model.content {
-        Content::Show(_) => {
-            if side_by_side {
-                let (tree, body) = split_show_columns(content, model.tree_percent);
-                render_tree(model, frame, tree, model.focus == Pane::Tree);
-                render_show_body(model, frame, body, model.focus == Pane::Body);
-            } else if model.focus == Pane::Tree {
-                render_tree(model, frame, content, true);
-            } else {
-                render_show_body(model, frame, content, true);
-            }
-        }
-        Content::Diff(_) => {
-            let rows = model.derived.diff_rows.as_slice();
-            let diff_focused = model.focus == Pane::Diff;
-            if side_by_side {
-                let (tree, old, new) = split_diff_columns(content, model.tree_percent);
-                render_tree(model, frame, tree, model.focus == Pane::Tree);
-                render_diff_pane(model, frame, old, Side::Old, diff_focused, rows);
-                render_diff_pane(model, frame, new, Side::New, diff_focused, rows);
-            } else {
-                match model.focus {
-                    Pane::Tree => render_tree(model, frame, content, true),
-                    Pane::Diff => {
-                        // Too narrow for side by side: stack old over new; both
-                        // halves stay synchronized on the same aligned rows.
-                        let halves = Layout::vertical([
-                            Constraint::Percentage(50),
-                            Constraint::Percentage(50),
-                        ])
-                        .split(content);
-                        render_diff_pane(model, frame, halves[0], Side::Old, true, rows);
-                        render_diff_pane(model, frame, halves[1], Side::New, true, rows);
-                    }
-                    Pane::Body => {}
-                }
-            }
-        }
-    }
-
-    render_status(model, frame, status);
-    render_diagnostic(model, frame, area);
-    render_overlay(model, frame, area);
-}
-
-/// Renders the active overlay, if any.
-fn render_overlay(model: &Model, frame: &mut Frame, area: Rect) {
-    match &model.overlay {
-        Some(Overlay::Help) => render_help(frame, area),
-        Some(Overlay::Revision { field, input }) => render_revision(frame, area, *field, input),
-        Some(Overlay::Scope(chooser)) => render_scope(frame, area, chooser),
-        Some(Overlay::Mode { cursor }) => render_mode(frame, area, *cursor, model.mode),
-        None => {}
-    }
-}
-
-fn render_mode(frame: &mut Frame, area: Rect, cursor: usize, current: ProjectionMode) {
-    let modes = available_modes();
-    let width = area.width.saturating_sub(4).min(40);
-    let height = (modes.len() + 3).min(area.height as usize) as u16;
-    if width == 0 || height == 0 {
-        return;
-    }
-    let popup = Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
-        width,
-        height,
-    };
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" mode ");
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let mut lines = Vec::new();
-    for (index, mode) in modes.iter().enumerate() {
-        let mut style = Style::default();
-        if index == cursor {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
-        let marker = if *mode == current { "•" } else { " " };
-        lines.push(Line::from(Span::styled(
-            format!("  {marker} {}", mode_label(*mode)),
-            style,
-        )));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn render_scope(frame: &mut Frame, area: Rect, chooser: &ScopeChooser) {
-    let options = chooser.options();
-    let extra = 4 + usize::from(chooser.input.is_some()) * 2 + usize::from(chooser.error.is_some());
-    let width = area.width.saturating_sub(4).min(60);
-    let height = (options.len() + extra).min(area.height as usize) as u16;
-    if width == 0 || height == 0 {
-        return;
-    }
-    let popup = Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
-        width,
-        height,
-    };
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" scope ");
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let mut lines = Vec::new();
-    if chooser.areas.is_none() && chooser.error.is_none() {
-        lines.push(Line::from("  loading areas…"));
-    }
-    for (index, option) in options.iter().enumerate() {
-        let selected = index == chooser.cursor && chooser.input.is_none();
-        let style = if selected {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
-        lines.push(Line::from(Span::styled(format!("  {option}"), style)));
-    }
-    if let Some(input) = &chooser.input {
-        lines.push(Line::from(""));
-        lines.push(Line::from(format!("  path: {}", input.text)));
-    }
-    if let Some(error) = &chooser.error {
-        lines.push(Line::from(Span::styled(
-            format!("  {error}"),
-            Style::default().fg(Color::Red),
-        )));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn render_revision(frame: &mut Frame, area: Rect, field: RevisionField, input: &TextInput) {
-    let label = match field {
-        RevisionField::Show => " revision ",
-        RevisionField::Base => " base ",
-        RevisionField::Target => " target ",
-    };
-    let width = area.width.saturating_sub(4).min(70);
-    let height = 3.min(area.height);
-    if width == 0 || height == 0 {
-        return;
-    }
-    let popup = Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + area.height.saturating_sub(height + 1),
-        width,
-        height,
-    };
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(label);
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let before = &input.text[..input.cursor];
-    let after = &input.text[input.cursor..];
-    let cursor_style = Style::default().add_modifier(Modifier::REVERSED);
-    let mut spans = vec![Span::raw(before.to_owned())];
-    match after.chars().next() {
-        Some(character) => {
-            spans.push(Span::styled(character.to_string(), cursor_style));
-            spans.push(Span::raw(after[character.len_utf8()..].to_owned()));
-        }
-        None => spans.push(Span::styled(" ", cursor_style)),
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Side {
-    Old,
-    New,
-}
-
-fn pane_block(title: &str, focused: bool) -> Block<'static> {
-    let border = if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default()
-    };
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(border)
-        .title(title.to_owned())
-}
-
-fn render_tree(model: &Model, frame: &mut Frame, area: Rect, focused: bool) {
-    let block = pane_block(" Files ", focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if model.rows.is_empty() {
-        let empty = match model.content {
-            Content::Show(_) => "no projected files",
-            Content::Diff(_) => "no projected changes",
-        };
-        frame.render_widget(Paragraph::new(empty), inner);
-        return;
-    }
-
-    let height = inner.height as usize;
-    let offset = window_offset(model.cursor, model.rows.len(), height);
-    let mut lines = Vec::new();
-    for (index, row) in model.rows.iter().enumerate().skip(offset).take(height) {
-        let selected = index == model.cursor;
-        let indent = "  ".repeat(row.depth);
-        let marker = match &row.kind {
-            RowKind::Directory { expanded: true, .. } => "▾ ",
-            RowKind::Directory {
-                expanded: false, ..
-            } => "▸ ",
-            RowKind::File { .. } => "  ",
-        };
-        let style = if selected && focused {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else if selected {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        lines.push(Line::from(Span::styled(
-            format!("{indent}{marker}{}", row.label),
-            style,
-        )));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn render_show_body(model: &Model, frame: &mut Frame, area: Rect, focused: bool) {
-    let title = model
-        .selected
-        .as_ref()
-        .map_or_else(|| " Projection ".to_owned(), |path| format!(" {path} "));
-    let block = pane_block(&title, focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let Some(text) = model.active_text() else {
-        frame.render_widget(Paragraph::new("no projected files"), inner);
-        return;
-    };
-
-    let width = inner.width as usize;
-    let height = inner.height as usize;
-    let skip = model.body_scroll as usize;
-    let hscroll = model.body_hscroll as usize;
-    let mut lines = Vec::new();
-    match model.active_show_lines() {
-        Some(styled) => {
-            for line in styled.iter().skip(skip).take(height) {
-                let runs = highlight::clip_runs(line, hscroll, width);
-                lines.push(Line::from(
-                    runs.into_iter()
-                        .map(|run| Span::styled(run.text, run.style))
-                        .collect::<Vec<_>>(),
-                ));
-            }
-        }
-        None => {
-            for line in text.lines().skip(skip).take(height) {
-                lines.push(Line::from(clip_line(line, hscroll, width)));
-            }
-        }
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn render_diff_pane(
-    model: &Model,
-    frame: &mut Frame,
-    area: Rect,
-    side: Side,
-    focused: bool,
-    rows: &[VisualRow],
-) {
-    let revision = match side {
-        Side::Old => match &model.request {
-            LoadRequest::Diff { base, .. } => base.as_str(),
-            LoadRequest::Show { revision, .. } => revision.as_str(),
-        },
-        Side::New => match &model.request {
-            LoadRequest::Diff { target, .. } => target.as_str(),
-            LoadRequest::Show { revision, .. } => revision.as_str(),
-        },
-    };
-    let title = model.selected.as_ref().map_or_else(
-        || format!(" {revision} "),
-        |path| format!(" {revision} · {path} "),
-    );
-    let block = pane_block(&title, focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let Some(diff) = model.active_diff() else {
-        return;
-    };
-    let gutter = gutter_width(diff);
-    let content_width = (inner.width as usize).saturating_sub(gutter);
-    let height = inner.height as usize;
-    let skip = model.body_scroll as usize;
-
-    let mut lines = Vec::new();
-    for row in rows.iter().skip(skip).take(height) {
-        let (number, runs) = match side {
-            Side::Old => (row.old_number, row.old_runs.as_slice()),
-            Side::New => (row.new_number, row.new_runs.as_slice()),
-        };
-        lines.push(diff_line(
-            number,
-            row.continuation,
-            runs,
-            row.kind,
-            side,
-            gutter,
-            content_width,
-        ));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn diff_line(
-    number: Option<usize>,
-    continuation: bool,
-    runs: &[Run],
-    kind: VisualRowKind,
-    side: Side,
-    gutter: usize,
-    width: usize,
-) -> Line<'static> {
-    let VisualRowKind::Diff(kind) = kind else {
-        // A hunk header spans the whole pane with a distinct style.
-        let text: String = runs.iter().map(|run| run.text.as_str()).collect();
-        let full = gutter + width;
-        let mut padded = text;
-        let used = UnicodeWidthStr::width(padded.as_str());
-        if used < full {
-            padded.push_str(&" ".repeat(full - used));
-        }
-        return Line::from(Span::styled(
-            padded,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-    };
-
-    let field = gutter.saturating_sub(1);
-    let marker = match number {
-        Some(number) => format!("{number:>field$}"),
-        None if continuation => format!("{:>field$}", "…"),
-        None => " ".repeat(field),
-    };
-
-    // Delta-style full-line background; the intra-line emphasis is already
-    // baked into the run styles, so a run's own background wins over the base.
-    let base = line_background(kind, side);
-    let mut marker_style = Style::default().fg(Color::DarkGray);
-    if marker_style.bg.is_none() {
-        marker_style.bg = base.bg;
-    }
-    let mut spans = vec![Span::styled(format!("{marker} "), marker_style)];
-    let mut used = 0usize;
-    for run in runs {
-        used += UnicodeWidthStr::width(run.text.as_str());
-        let mut style = run.style;
-        if style.bg.is_none() {
-            style.bg = base.bg;
-        }
-        spans.push(Span::styled(run.text.clone(), style));
-    }
-    let padding = width.saturating_sub(used);
-    if padding > 0 {
-        spans.push(Span::styled(" ".repeat(padding), base));
-    }
-    Line::from(spans)
-}
-
-/// The delta-style full-line background for a diff row.
-fn line_background(kind: DiffRowKind, side: Side) -> Style {
-    if !highlight::colors_enabled() {
-        return Style::default();
-    }
-    match (kind, side) {
-        (DiffRowKind::Add, _) | (DiffRowKind::Change, Side::New) => {
-            Style::default().bg(highlight::ADD_BG)
-        }
-        (DiffRowKind::Delete, _) | (DiffRowKind::Change, Side::Old) => {
-            Style::default().bg(highlight::DELETE_BG)
-        }
-        _ => Style::default(),
-    }
-}
-
-fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
-    let revision = match &model.request {
-        LoadRequest::Show { revision, .. } => revision.clone(),
-        LoadRequest::Diff { base, target, .. } => format!("{base}..{target}"),
-    };
-    let selected = model
-        .selected
-        .as_ref()
-        .map_or_else(|| "-".to_owned(), |path| path.to_string());
-
-    let mut spans = vec![
-        Span::styled(
-            format!(" {} ", model.root),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            format!(" {} ", mode_label(model.mode)),
-            Style::default().fg(Color::Black).bg(Color::Cyan),
-        ),
-        Span::styled(format!("  {revision}  "), Style::default().fg(Color::Gray)),
-        Span::styled(
-            format!("scope: {}  ", model.scope_label),
-            Style::default().fg(Color::Gray),
-        ),
-        Span::styled(selected, Style::default().fg(Color::White)),
-    ];
-
-    if let Some((added, removed)) = diff_stats(model) {
-        spans.push(Span::styled(
-            format!("  +{added}"),
-            Style::default().fg(Color::Green),
-        ));
-        spans.push(Span::styled(
-            format!(" −{removed}"),
-            Style::default().fg(Color::Red),
-        ));
-    }
-
-    let left_width: usize = spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum();
-    let hints = " ? help   m mode   s scope   r rev   [ ] tree ";
-    let hints_width = UnicodeWidthStr::width(hints);
-    if area.width as usize >= left_width + hints_width + 2 {
-        spans.push(Span::raw(
-            " ".repeat(area.width as usize - left_width - hints_width),
-        ));
-        spans.push(Span::styled(hints, Style::default().fg(Color::DarkGray)));
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-/// Added and removed logical-line counts for the selected diff.
-fn diff_stats(model: &Model) -> Option<(usize, usize)> {
-    if !matches!(model.content, Content::Diff(_)) {
-        return None;
-    }
-    let mut added = 0;
-    let mut removed = 0;
-    for row in &model.derived.diff_rows {
-        if row.continuation {
-            continue;
-        }
-        match row.kind {
-            VisualRowKind::Diff(DiffRowKind::Add) => added += 1,
-            VisualRowKind::Diff(DiffRowKind::Delete) => removed += 1,
-            VisualRowKind::Diff(DiffRowKind::Change) => {
-                added += 1;
-                removed += 1;
-            }
-            VisualRowKind::Diff(DiffRowKind::Equal) | VisualRowKind::Hunk => {}
-        }
-    }
-    Some((added, removed))
-}
-
-fn render_diagnostic(model: &Model, frame: &mut Frame, area: Rect) {
-    let Some(text) = &model.diagnostic else {
-        return;
-    };
-    let width = area.width.saturating_sub(4).min(90);
-    if width == 0 || area.height < 2 {
-        return;
-    }
-    let popup = Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + area.height - 2,
-        width,
-        height: 1,
-    };
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(clip_line(text, 0, width as usize))
-            .style(Style::default().fg(Color::White).bg(Color::Red)),
-        popup,
-    );
-}
-
-fn render_help(frame: &mut Frame, area: Rect) {
-    let popup = centered(area, 48, 10);
-    frame.render_widget(Clear, popup);
-    let lines = vec![
-        Line::from("  q / Ctrl-C    quit"),
-        Line::from("  ↑ ↓ / k j     move or scroll"),
-        Line::from("  ← → / h l     fold or scroll sideways"),
-        Line::from("  Tab           switch tree/content"),
-        Line::from("  Enter         open or fold"),
-        Line::from("  m             switch mode"),
-        Line::from("  s             change scope"),
-        Line::from("  r / b / t     edit revision"),
-        Line::from("  [ / ]         resize tree"),
-        Line::from("  Esc           close help or dismiss"),
-    ];
-    let block = Block::default().borders(Borders::ALL).title(" Help ");
-    frame.render_widget(Paragraph::new(lines).block(block), popup);
-}
-
-fn render_too_small(frame: &mut Frame, area: Rect) {
-    frame.render_widget(Paragraph::new("terminal too small"), area);
-}
-
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
-        width,
-        height,
-    }
-}
-
-fn window_offset(cursor: usize, len: usize, height: usize) -> usize {
-    if height == 0 || len <= height || cursor < height {
-        0
-    } else {
-        (cursor + 1).saturating_sub(height)
-    }
-}
-
-/// A display-width slice of one line, expanded tabs included.
-///
-/// It never splits a code point: a wide character that straddles the cut is
-/// dropped whole. Combining marks are kept with the base character they follow.
-fn clip_line(line: &str, skip: usize, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    let expanded = expand_tabs(line);
-
-    let mut out = String::new();
-    let mut column = 0usize;
-    let mut taken = 0usize;
-    for character in expanded.chars() {
-        let cells = UnicodeWidthChar::width(character).unwrap_or(0);
-        if cells == 0 {
-            if column >= skip {
-                out.push(character);
-            }
-            continue;
-        }
-        if column + cells <= skip {
-            column += cells;
-            continue;
-        }
-        if column < skip {
-            // The character straddles the cut; drop it rather than split it.
-            column += cells;
-            continue;
-        }
-        if taken + cells > width {
-            break;
-        }
-        out.push(character);
-        taken += cells;
-        column += cells;
-    }
-    out
-}
-
 /// Derives the visible tree rows from the visible files.
 ///
 /// Files arrive in raw path-byte order, so a directory's descendants form a
@@ -2151,8 +1369,13 @@ fn is_within(path: &[u8], directory: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::highlight::Run;
+    use crate::view::geom::{centered, window_offset};
+    use crate::view::text::clip_line;
+    use crate::view::view;
     use ownai_core::{Area, ItemKind, Language, ProjectedItem, SourceSpan};
     use ownai_engine::SelectionError;
+    use ratatui::style::Color;
 
     fn item(text: &str) -> ProjectedItem {
         ProjectedItem {
@@ -2212,6 +1435,7 @@ mod tests {
             "all".to_owned(),
             100,
             30,
+            Theme::dark(),
         );
         model.install(Content::Show(files.into()), false);
         model
@@ -2224,6 +1448,7 @@ mod tests {
             "all".to_owned(),
             100,
             30,
+            Theme::dark(),
         );
         model.install(Content::Diff(diffs.into()), false);
         model
@@ -2799,7 +2024,7 @@ mod tests {
             Some(&format!("{}\nsecond\n", "x".repeat(25))),
             Some("short\nsecond\n"),
         );
-        let all = layout_diff(&diff, 10, 10, &[], &[]);
+        let all = layout_diff(&diff, 10, 10, &[], &[], &Theme::dark());
         let rows: Vec<&VisualRow> = all
             .iter()
             .filter(|row| row.kind != VisualRowKind::Hunk)
@@ -2823,7 +2048,7 @@ mod tests {
     #[test]
     fn layout_diff_handles_an_added_file_with_a_missing_old_side() {
         let diff = file_diff("a.rs", None, Some("one\ntwo\n"));
-        let all = layout_diff(&diff, 20, 20, &[], &[]);
+        let all = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
         let rows: Vec<&VisualRow> = all
             .iter()
             .filter(|row| row.kind != VisualRowKind::Hunk)
@@ -2842,7 +2067,7 @@ mod tests {
     #[test]
     fn layout_diff_handles_a_deleted_file() {
         let diff = file_diff("a.rs", Some("one\n"), None);
-        let all = layout_diff(&diff, 20, 20, &[], &[]);
+        let all = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
         let rows: Vec<&VisualRow> = all
             .iter()
             .filter(|row| row.kind != VisualRowKind::Hunk)
@@ -2856,7 +2081,7 @@ mod tests {
     #[test]
     fn layout_diff_emits_a_hunk_header_with_line_ranges() {
         let diff = file_diff("a.rs", Some("one\ntwo\n"), Some("one\n2\n"));
-        let rows = layout_diff(&diff, 20, 20, &[], &[]);
+        let rows = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
 
         assert_eq!(rows[0].kind, VisualRowKind::Hunk);
         assert_eq!(runs_text(&rows[0].old_runs), "@@ -1,2 +1,2 @@");
@@ -2875,7 +2100,7 @@ mod tests {
         let new = changed.join("\n") + "\n";
 
         let diff = file_diff("a.rs", Some(&old), Some(&new));
-        let rows = layout_diff(&diff, 20, 20, &[], &[]);
+        let rows = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
 
         let hunks = rows
             .iter()
@@ -2960,7 +2185,7 @@ mod tests {
         let mut model = two_files();
         model.overlay = Some(Overlay::Help);
         let text = buffer_text(&render(&model, 100, 20));
-        assert!(text.contains("Help"), "{text}");
+        assert!(text.contains("help"), "{text}");
         assert!(text.contains("quit"), "{text}");
     }
 
@@ -3007,7 +2232,7 @@ mod tests {
 
     #[test]
     fn the_show_pane_carries_syntax_colors() {
-        if !highlight::colors_enabled() {
+        if !crate::theme::colors_enabled() {
             return;
         }
         let model = model_with(vec![projected("a.rs", "pub struct User;\n")]);
@@ -3025,7 +2250,7 @@ mod tests {
 
     #[test]
     fn a_changed_diff_row_gets_delta_backgrounds() {
-        if !highlight::colors_enabled() {
+        if !crate::theme::colors_enabled() {
             return;
         }
         let model = diff_model(vec![file_diff(
@@ -3035,16 +2260,20 @@ mod tests {
         )]);
         let buffer = render(&model, 120, 20);
 
+        let theme = &model.theme;
+        let delete_bg = theme.color(theme.palette.del_bg);
+        let add_bg = theme.color(theme.palette.add_bg);
+        let add_emph = theme.color(theme.palette.add_emph);
+        let del_emph = theme.color(theme.palette.del_emph);
         let mut delete = false;
         let mut add = false;
         let mut emphasis = false;
         for y in 0..buffer.area.height {
             for x in 0..buffer.area.width {
                 if let Some(cell) = buffer.cell((x, y)) {
-                    delete |= cell.bg == highlight::DELETE_BG;
-                    add |= cell.bg == highlight::ADD_BG;
-                    emphasis |=
-                        cell.bg == highlight::ADD_EMPH_BG || cell.bg == highlight::DELETE_EMPH_BG;
+                    delete |= cell.bg == delete_bg;
+                    add |= cell.bg == add_bg;
+                    emphasis |= cell.bg == add_emph || cell.bg == del_emph;
                 }
             }
         }
