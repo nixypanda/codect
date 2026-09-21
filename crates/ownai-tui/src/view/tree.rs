@@ -12,11 +12,11 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{ChangeKind, Content, Model, RowKind, TreeRow};
 use crate::theme::Theme;
 
-use super::geom::{pane_block, window_offset};
+use super::geom::{Edge, pane_block, window_offset};
 use super::text::truncate_ellipsis;
 
-pub(crate) fn render_tree(model: &Model, frame: &mut Frame, area: Rect, focused: bool) {
-    let block = pane_block(" Files ", focused, &model.theme);
+pub(crate) fn render_tree(model: &Model, frame: &mut Frame, area: Rect, focused: bool, edge: Edge) {
+    let block = pane_block(" Files ", focused, &model.theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

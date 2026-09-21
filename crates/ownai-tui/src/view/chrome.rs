@@ -90,6 +90,16 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
     let base = theme.bg(theme.palette.surface);
 
     let mut left: Vec<Span<'static>> = Vec::new();
+    if model.pending.is_some() {
+        left.push(Span::styled(
+            format!("{} ", spinner_frame(model.spinner)),
+            theme.fg(theme.palette.accent),
+        ));
+        left.push(Span::styled(
+            "projecting… ".to_owned(),
+            theme.fg(theme.palette.text_dim),
+        ));
+    }
     if let Some(path) = &model.selected {
         left.push(Span::styled(
             format!(" {} ", path),
@@ -172,10 +182,18 @@ pub(crate) fn diff_stats(model: &Model) -> Option<(usize, usize)> {
                 removed += 1;
             }
             crate::app::VisualRowKind::Diff(ownai_core::DiffRowKind::Equal)
-            | crate::app::VisualRowKind::Hunk => {}
+            | crate::app::VisualRowKind::Hunk
+            | crate::app::VisualRowKind::Collapse(_) => {}
         }
     }
     Some((added, removed))
+}
+
+/// The spinner glyphs, advanced by the model's tick counter.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+fn spinner_frame(frame: u8) -> &'static str {
+    SPINNER[frame as usize % SPINNER.len()]
 }
 
 /// Renders a transient diagnostic as a dismissible toast above the footer.

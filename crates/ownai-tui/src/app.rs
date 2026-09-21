@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::highlight::{self, StyledLine};
 use crate::theme::Theme;
 use crate::view::diff::layout_diff;
-use crate::view::geom::{frame_chunks, gutter_width, pane_block, split_diff_columns};
+use crate::view::geom::{Edge, frame_chunks, gutter_width, pane_block, split_with_dividers};
 
 /// At or above this width the tree and content render side by side.
 pub(crate) const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
@@ -364,6 +364,8 @@ pub enum Msg {
     Key(Key),
     /// The terminal changed size.
     Resize { width: u16, height: u16 },
+    /// A periodic tick, used to animate the spinner and expire a diagnostic.
+    Tick,
     /// A projection effect finished. The request it ran for is echoed back.
     Loaded {
         request: LoadRequest,
@@ -409,6 +411,8 @@ pub struct TreeRow {
 pub enum VisualRowKind {
     Diff(DiffRowKind),
     Hunk,
+    /// A gap between hunks: a count of unchanged rows that were collapsed.
+    Collapse(usize),
 }
 
 /// How a file changed in a focused diff, for tree badges.
@@ -506,6 +510,12 @@ pub struct Model {
     pub height: u16,
     /// The resolved design tokens; view code never names a raw color.
     pub theme: Theme,
+    /// A load in flight, so the view can show a spinner.
+    pub pending: Option<LoadRequest>,
+    /// The spinner animation frame, advanced by [`Msg::Tick`].
+    pub spinner: u8,
+    /// Ticks remaining before the diagnostic expires.
+    pub diagnostic_ttl: u8,
     pub quit: bool,
 }
 
@@ -522,6 +532,7 @@ impl Model {
         let mode = request.mode();
         Self {
             root,
+            pending: Some(request.clone()),
             request,
             mode,
             scope_label,
@@ -543,6 +554,8 @@ impl Model {
             width,
             height,
             theme,
+            spinner: 0,
+            diagnostic_ttl: 0,
             quit: false,
         }
     }
@@ -695,18 +708,18 @@ impl Model {
     fn diff_side_widths(&self, content: Rect, diff: &FileDiff) -> (usize, usize) {
         let gutter = gutter_width(diff);
         if self.width >= SIDE_BY_SIDE_MIN_WIDTH {
-            let (old, new) = {
-                let (_, old, new) = split_diff_columns(content, self.tree_percent);
-                (old, new)
-            };
-            let old_inner = pane_block("", false, &self.theme).inner(old);
-            let new_inner = pane_block("", false, &self.theme).inner(new);
+            let rest = 100 - self.tree_percent;
+            let side = rest / 2;
+            let (columns, _) =
+                split_with_dividers(content, &[self.tree_percent, side, rest - side]);
+            let old_inner = pane_block("", false, &self.theme, Edge::Middle).inner(columns[1]);
+            let new_inner = pane_block("", false, &self.theme, Edge::Right).inner(columns[2]);
             (
                 (old_inner.width as usize).saturating_sub(gutter),
                 (new_inner.width as usize).saturating_sub(gutter),
             )
         } else {
-            let inner = pane_block("", false, &self.theme).inner(content);
+            let inner = pane_block("", false, &self.theme, Edge::Solo).inner(content);
             let width = (inner.width as usize).saturating_sub(gutter);
             (width, width)
         }
@@ -718,6 +731,7 @@ impl Model {
         let previous = self.selected.clone();
         let hint = self.cursor;
 
+        self.pending = None;
         self.visible = Arc::from(content.visible_paths());
         self.content = content;
         self.generation = self.generation.wrapping_add(1);
@@ -797,6 +811,9 @@ fn focus_order(model: &Model) -> &'static [Pane] {
     }
 }
 
+/// How many ticks a diagnostic stays visible before it fades out.
+const DIAGNOSTIC_TICKS: u8 = 40;
+
 /// The pure update function. It performs no I/O and reads no external state.
 pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
     let mut next = model.clone();
@@ -810,17 +827,33 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
             next.refresh_derived();
             clamp_view(&mut next);
         }
-        Msg::Loaded { request, result } => match result {
-            Ok(content) => {
-                next.mode = request.mode();
-                next.scope_label = request.scope_label();
-                next.request = request;
-                next.install(content, true);
-                next.diagnostic = None;
+        Msg::Tick => {
+            next.spinner = next.spinner.wrapping_add(1);
+            if next.diagnostic.is_some() {
+                next.diagnostic_ttl = next.diagnostic_ttl.saturating_sub(1);
+                if next.diagnostic_ttl == 0 {
+                    next.diagnostic = None;
+                }
             }
-            // A failed replacement leaves the previous model untouched.
-            Err(error) => next.diagnostic = Some(error.to_string()),
-        },
+        }
+        Msg::Loaded { request, result } => {
+            next.pending = None;
+            match result {
+                Ok(content) => {
+                    next.mode = request.mode();
+                    next.scope_label = request.scope_label();
+                    next.request = request;
+                    next.install(content, true);
+                    next.diagnostic = None;
+                    next.diagnostic_ttl = 0;
+                }
+                // A failed replacement leaves the previous model untouched.
+                Err(error) => {
+                    next.diagnostic = Some(error.to_string());
+                    next.diagnostic_ttl = DIAGNOSTIC_TICKS;
+                }
+            }
+        }
         Msg::AreasLoaded(result) => {
             if let Some(Overlay::Scope(chooser)) = &mut next.overlay {
                 match result {
@@ -833,6 +866,11 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
                 }
             }
         }
+    }
+
+    // A newly emitted load marks the model busy so the view can spin.
+    if let Some(Cmd::Load { request }) = cmds.iter().find(|cmd| matches!(cmd, Cmd::Load { .. })) {
+        next.pending = Some(request.clone());
     }
 
     next.refresh_derived();
@@ -850,7 +888,10 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
     }
     match key {
         Key::Char('?') => model.overlay = Some(Overlay::Help),
-        Key::Esc => model.diagnostic = None,
+        Key::Esc => {
+            model.diagnostic = None;
+            model.diagnostic_ttl = 0;
+        }
         Key::Char('r') if matches!(model.content, Content::Show(_)) => {
             model.overlay = Some(Overlay::Revision {
                 field: RevisionField::Show,
@@ -1567,6 +1608,63 @@ mod tests {
     }
 
     #[test]
+    fn a_load_marks_the_model_busy_until_it_completes() {
+        let model = two_files();
+        assert!(model.pending.is_none(), "an installed model is idle");
+
+        let (opened, cmds) = update(Msg::Key(Key::Char('m')), &model);
+        assert!(cmds.is_empty(), "opening the picker emits no effect");
+        let (down, _) = update(Msg::Key(Key::Down), &opened);
+        let (loading, cmds) = update(Msg::Key(Key::Enter), &down);
+        assert!(!cmds.is_empty());
+        assert!(loading.pending.is_some(), "an emitted load is busy");
+
+        let (done, _) = update(
+            Msg::Loaded {
+                request: show_request().with_mode(ProjectionMode::Signatures),
+                result: Ok(Content::Show(
+                    vec![projected("a.rs", "a\n"), projected("b.rs", "b\n")].into(),
+                )),
+            },
+            &loading,
+        );
+        assert!(done.pending.is_none(), "completion clears the busy state");
+    }
+
+    #[test]
+    fn a_tick_advances_the_spinner_and_expires_a_diagnostic() {
+        let mut model = two_files();
+        let error = EngineError::Selection(SelectionError::EmptyGroup {
+            label: "x".to_owned(),
+        });
+        let (failed, _) = update(
+            Msg::Loaded {
+                request: show_request(),
+                result: Err(Box::new(error)),
+            },
+            &model,
+        );
+        assert!(failed.diagnostic.is_some());
+
+        model = failed;
+        let before = model.spinner;
+        for _ in 0..DIAGNOSTIC_TICKS {
+            let (next, _) = update(Msg::Tick, &model);
+            model = next;
+        }
+        assert_eq!(model.spinner, before.wrapping_add(DIAGNOSTIC_TICKS));
+        assert!(model.diagnostic.is_none(), "the toast expires on its own");
+    }
+
+    #[test]
+    fn a_busy_model_shows_a_spinner_in_the_footer() {
+        let mut model = two_files();
+        model.pending = Some(show_request());
+        let text = buffer_text(&render(&model, 120, 20));
+        assert!(text.contains("projecting"), "{text}");
+    }
+
+    #[test]
     fn a_loaded_result_installs_files_and_preserves_the_selection() {
         let model = two_files();
         let (next, _) = update(
@@ -2108,6 +2206,32 @@ mod tests {
             .count();
         assert_eq!(hunks, 2, "two separated changes produce two hunks");
         assert!(rows.len() < 40, "the middle context is collapsed");
+    }
+
+    #[test]
+    fn layout_diff_marks_the_collapsed_gap() {
+        let old = (0..40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let mut changed: Vec<String> = (0..40).map(|index| format!("line {index}")).collect();
+        changed[0] = "changed".to_owned();
+        changed[39] = "changed too".to_owned();
+        let new = changed.join("\n") + "\n";
+
+        let diff = file_diff("a.rs", Some(&old), Some(&new));
+        let rows = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
+
+        let hidden: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row.kind {
+                VisualRowKind::Collapse(count) => Some(count),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hidden.len(), 1, "one gap between the two hunks");
+        assert!(hidden[0] > 0);
     }
 
     // -----------------------------------------------------------------------

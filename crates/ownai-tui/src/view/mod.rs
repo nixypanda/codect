@@ -20,7 +20,7 @@ use crate::app::{
 };
 
 use diff::Side;
-use geom::{split_diff_columns, split_show_columns};
+use geom::{Edge, render_divider, split_with_dividers};
 
 /// Renders the whole model. Pure: it reads the model and writes to the frame.
 pub(crate) fn view(model: &Model, frame: &mut Frame) {
@@ -52,26 +52,51 @@ fn render_body(model: &Model, frame: &mut Frame, content: Rect) {
     match &model.content {
         Content::Show(_) => {
             if side_by_side {
-                let (tree, body) = split_show_columns(content, model.tree_percent);
-                tree::render_tree(model, frame, tree, model.focus == Pane::Tree);
-                show::render_show_body(model, frame, body, model.focus == Pane::Body);
+                let (columns, dividers) = split_with_dividers(
+                    content,
+                    &[model.tree_percent, 100 - model.tree_percent],
+                );
+                tree::render_tree(model, frame, columns[0], model.focus == Pane::Tree, Edge::Left);
+                render_divider(frame, dividers[0], &model.theme);
+                show::render_show_body(model, frame, columns[1], model.focus == Pane::Body, Edge::Right);
             } else if model.focus == Pane::Tree {
-                tree::render_tree(model, frame, content, true);
+                tree::render_tree(model, frame, content, true, Edge::Solo);
             } else {
-                show::render_show_body(model, frame, content, true);
+                show::render_show_body(model, frame, content, true, Edge::Solo);
             }
         }
         Content::Diff(_) => {
             let rows = model.diff_rows();
             let diff_focused = model.focus == Pane::Diff;
             if side_by_side {
-                let (tree, old, new) = split_diff_columns(content, model.tree_percent);
-                tree::render_tree(model, frame, tree, model.focus == Pane::Tree);
-                diff::render_diff_pane(model, frame, old, Side::Old, diff_focused, rows);
-                diff::render_diff_pane(model, frame, new, Side::New, diff_focused, rows);
+                let rest = 100 - model.tree_percent;
+                let side = rest / 2;
+                let (columns, dividers) =
+                    split_with_dividers(content, &[model.tree_percent, side, rest - side]);
+                tree::render_tree(model, frame, columns[0], model.focus == Pane::Tree, Edge::Left);
+                render_divider(frame, dividers[0], &model.theme);
+                diff::render_diff_pane(
+                    model,
+                    frame,
+                    columns[1],
+                    Side::Old,
+                    diff_focused,
+                    rows,
+                    Edge::Middle,
+                );
+                render_divider(frame, dividers[1], &model.theme);
+                diff::render_diff_pane(
+                    model,
+                    frame,
+                    columns[2],
+                    Side::New,
+                    diff_focused,
+                    rows,
+                    Edge::Right,
+                );
             } else {
                 match model.focus {
-                    Pane::Tree => tree::render_tree(model, frame, content, true),
+                    Pane::Tree => tree::render_tree(model, frame, content, true, Edge::Solo),
                     Pane::Diff => {
                         // Too narrow for side by side: stack old over new; both
                         // halves stay synchronized on the same aligned rows.
@@ -80,8 +105,24 @@ fn render_body(model: &Model, frame: &mut Frame, content: Rect) {
                             Constraint::Percentage(50),
                         ])
                         .split(content);
-                        diff::render_diff_pane(model, frame, halves[0], Side::Old, true, rows);
-                        diff::render_diff_pane(model, frame, halves[1], Side::New, true, rows);
+                        diff::render_diff_pane(
+                            model,
+                            frame,
+                            halves[0],
+                            Side::Old,
+                            true,
+                            rows,
+                            Edge::Solo,
+                        );
+                        diff::render_diff_pane(
+                            model,
+                            frame,
+                            halves[1],
+                            Side::New,
+                            true,
+                            rows,
+                            Edge::Solo,
+                        );
                     }
                     Pane::Body => {}
                 }

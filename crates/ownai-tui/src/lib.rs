@@ -16,6 +16,7 @@
 
 use std::io::{IsTerminal, Stdout};
 use std::sync::Once;
+use std::time::Duration;
 
 use crossterm::cursor;
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
@@ -36,6 +37,10 @@ pub use app::LoadRequest;
 use app::{Cmd, Content, Key, Model, Msg, update};
 use theme::Theme;
 use view::view;
+
+/// How long the driver waits for input before emitting a tick, which drives the
+/// spinner and lets a diagnostic expire without another keypress.
+const TICK_INTERVAL: Duration = Duration::from_millis(150);
 
 /// Everything `run` needs beyond the engine, built by the caller.
 ///
@@ -97,6 +102,8 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
 
     // The initial projection is the startup effect. Unlike a later reload, a
     // failure here is fatal: there is no previous screen to keep.
+    // Draw the busy state first so the spinner is visible while it runs.
+    session.driver().draw(&model)?;
     let startup = interpret(
         &engine,
         Cmd::Load {
@@ -121,16 +128,30 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
     };
     model = initial;
 
+    // The frame is redrawn only when something changed or is animating.
+    let mut dirty = true;
     loop {
-        session.driver().draw(&model)?;
+        if dirty {
+            session.driver().draw(&model)?;
+        }
         let msg = session.driver().read_msg()?;
+        // An idle tick has nothing to animate, so it neither updates nor redraws.
+        if matches!(msg, Msg::Tick) && model.pending.is_none() && model.diagnostic.is_none() {
+            dirty = false;
+            continue;
+        }
         let (mut next, cmds) = update(msg, &model);
+        if !cmds.is_empty() {
+            // Draw the busy state before a blocking effect runs.
+            session.driver().draw(&next)?;
+        }
         for cmd in cmds {
             let completed = interpret(&engine, cmd);
             let (updated, _) = update(completed, &next);
             next = updated;
         }
         model = next;
+        dirty = true;
         if model.quit {
             break;
         }
@@ -270,6 +291,10 @@ impl Driver for CrosstermDriver {
 
     fn read_msg(&mut self) -> Result<Msg, TuiError> {
         loop {
+            // Wait for an event, or emit a tick so the view can animate.
+            if !event::poll(TICK_INTERVAL).map_err(TuiError::Terminal)? {
+                return Ok(Msg::Tick);
+            }
             match event::read().map_err(TuiError::Terminal)? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
                     if let Some(msg) = translate(key) {

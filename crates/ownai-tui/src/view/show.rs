@@ -11,15 +11,21 @@ use crate::app::Model;
 use crate::highlight;
 use crate::theme::Theme;
 
-use super::geom::pane_block;
+use super::geom::{Edge, pane_block};
 use super::text::clip_line;
 
-pub(crate) fn render_show_body(model: &Model, frame: &mut Frame, area: Rect, focused: bool) {
+pub(crate) fn render_show_body(
+    model: &Model,
+    frame: &mut Frame,
+    area: Rect,
+    focused: bool,
+    edge: Edge,
+) {
     let title = model
         .selected
         .as_ref()
         .map_or_else(|| " Projection ".to_owned(), |path| format!(" {path} "));
-    let block = pane_block(&title, focused, &model.theme);
+    let block = pane_block(&title, focused, &model.theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

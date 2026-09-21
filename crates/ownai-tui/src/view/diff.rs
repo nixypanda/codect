@@ -14,7 +14,7 @@ use crate::app::{LoadRequest, Model, VisualRow, VisualRowKind};
 use crate::highlight::{self, Run, StyledLine};
 use crate::theme::Theme;
 
-use super::geom::{gutter_width, pane_block};
+use super::geom::{Edge, gutter_width, pane_block};
 
 /// Context lines kept around each change, matching the core diff engine.
 const CONTEXT_RADIUS: usize = 3;
@@ -32,6 +32,7 @@ pub(crate) fn render_diff_pane(
     side: Side,
     focused: bool,
     rows: &[VisualRow],
+    edge: Edge,
 ) {
     let revision = match side {
         Side::Old => match &model.request {
@@ -47,7 +48,7 @@ pub(crate) fn render_diff_pane(
         || format!(" {revision} "),
         |path| format!(" {revision} · {path} "),
     );
-    let block = pane_block(&title, focused, &model.theme);
+    let block = pane_block(&title, focused, &model.theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -91,7 +92,7 @@ fn diff_line(
     theme: &Theme,
 ) -> Line<'static> {
     let VisualRowKind::Diff(kind) = kind else {
-        // A hunk header spans the whole pane with a distinct style.
+        // Hunk headers and collapse indicators span the whole pane.
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let full = gutter + width;
         let mut padded = text;
@@ -99,27 +100,38 @@ fn diff_line(
         if used < full {
             padded.push_str(&" ".repeat(full - used));
         }
-        return Line::from(Span::styled(
-            padded,
-            theme.fg(theme.palette.hunk).add_modifier(Modifier::BOLD),
-        ));
-    };
-
-    let field = gutter.saturating_sub(1);
-    let marker = match number {
-        Some(number) => format!("{number:>field$}"),
-        None if continuation => format!("{:>field$}", "…"),
-        None => " ".repeat(field),
+        let style = match kind {
+            VisualRowKind::Hunk => theme.fg(theme.palette.hunk).add_modifier(Modifier::BOLD),
+            _ => theme.fg(theme.palette.text_muted),
+        };
+        return Line::from(Span::styled(padded, style));
     };
 
     // Delta-style full-line background; the intra-line emphasis is already
     // baked into the run styles, so a run's own background wins over the base.
     let base = line_background(kind, side, theme);
-    let mut marker_style = theme.fg(theme.palette.gutter);
+
+    let field = gutter.saturating_sub(2);
+    let sign = match (kind, side) {
+        (DiffRowKind::Add, Side::New) | (DiffRowKind::Change, Side::New) => "+",
+        (DiffRowKind::Delete, Side::Old) | (DiffRowKind::Change, Side::Old) => "-",
+        _ => " ",
+    };
+    let number = match number {
+        Some(number) => format!("{number:>field$}"),
+        None if continuation => format!("{:>field$}", "…"),
+        None => " ".repeat(field),
+    };
+    let sign_color = match sign {
+        "+" => theme.palette.add_fg,
+        "-" => theme.palette.del_fg,
+        _ => theme.palette.gutter,
+    };
+    let mut marker_style = theme.fg(sign_color);
     if marker_style.bg.is_none() {
         marker_style.bg = base.bg;
     }
-    let mut spans = vec![Span::styled(format!("{marker} "), marker_style)];
+    let mut spans = vec![Span::styled(format!("{sign}{number} "), marker_style)];
     let mut used = 0usize;
     for run in runs {
         used += UnicodeWidthStr::width(run.text.as_str());
@@ -171,7 +183,14 @@ pub(crate) fn layout_diff(
     let rows = ownai_core::aligned_rows(old_text, new_text);
 
     let mut visual = Vec::new();
+    let mut previous_end: Option<usize> = None;
     for (start, end) in context_windows(&rows) {
+        if let Some(previous_end) = previous_end {
+            let hidden = start.saturating_sub(previous_end + 1);
+            if hidden > 0 {
+                visual.push(collapse_row(hidden));
+            }
+        }
         visual.push(hunk_header(&rows, start, end));
         for row in &rows[start..=end] {
             let (old_emphasis, new_emphasis) = match (row.old, row.new, row.kind) {
@@ -226,8 +245,26 @@ pub(crate) fn layout_diff(
                 });
             }
         }
+        previous_end = Some(end);
     }
     visual
+}
+
+/// A dim row marking unchanged aligned rows hidden between two hunks.
+fn collapse_row(hidden: usize) -> VisualRow {
+    let text = format!("⋯ {hidden} unchanged lines");
+    let run = Run {
+        style: Style::default(),
+        text,
+    };
+    VisualRow {
+        kind: VisualRowKind::Collapse(hidden),
+        old_number: None,
+        new_number: None,
+        old_runs: vec![run.clone()],
+        new_runs: vec![run],
+        continuation: false,
+    }
 }
 
 /// The inclusive index ranges of aligned rows to display, one per hunk.

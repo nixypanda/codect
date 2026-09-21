@@ -78,16 +78,8 @@ pub struct Palette {
     pub text_muted: Rgb,
     /// The primary accent.
     pub accent: Rgb,
-    /// A secondary accent.
-    pub accent_alt: Rgb,
-    /// A positive status.
-    pub success: Rgb,
-    /// A cautionary status.
-    pub warning: Rgb,
     /// A negative status.
     pub danger: Rgb,
-    /// An informational status.
-    pub info: Rgb,
     /// The selected-row background.
     pub selection_bg: Rgb,
     /// Text on the selected-row background.
@@ -142,11 +134,7 @@ const DARK: Palette = Palette {
     text_dim: Rgb(0xa6, 0xa6, 0x9c),
     text_muted: Rgb(0x75, 0x71, 0x5e),
     accent: Rgb(0x66, 0xd9, 0xef),
-    accent_alt: Rgb(0xa6, 0xe2, 0x2e),
-    success: Rgb(0xa6, 0xe2, 0x2e),
-    warning: Rgb(0xe6, 0xdb, 0x74),
     danger: Rgb(0xf9, 0x26, 0x72),
-    info: Rgb(0x66, 0xd9, 0xef),
     selection_bg: Rgb(0x3e, 0x3d, 0x32),
     selection_fg: Rgb(0xf8, 0xf8, 0xf2),
     selection_bar: Rgb(0xa6, 0xe2, 0x2e),
@@ -179,11 +167,7 @@ const LIGHT: Palette = Palette {
     text_dim: Rgb(0x6f, 0x6f, 0x66),
     text_muted: Rgb(0x90, 0x90, 0x88),
     accent: Rgb(0x00, 0x87, 0xaf),
-    accent_alt: Rgb(0x4f, 0x8f, 0x00),
-    success: Rgb(0x4f, 0x8f, 0x00),
-    warning: Rgb(0xa0, 0x80, 0x00),
     danger: Rgb(0xc7, 0x25, 0x4e),
-    info: Rgb(0x00, 0x87, 0xaf),
     selection_bg: Rgb(0xcf, 0xe3, 0xff),
     selection_fg: Rgb(0x10, 0x10, 0x10),
     selection_bar: Rgb(0x00, 0x87, 0xaf),
@@ -215,6 +199,7 @@ pub struct Theme {
 
 impl Theme {
     /// The dark theme at full truecolor, used by tests and previews.
+    #[cfg(test)]
     pub fn dark() -> Self {
         Self {
             flavor: Flavor::Dark,
