@@ -35,6 +35,10 @@ mod icons;
 mod theme;
 mod view;
 
+#[cfg(feature = "bench")]
+#[doc(hidden)]
+pub mod bench;
+
 pub use app::LoadRequest;
 use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, update};
 pub use icons::IconStyle;

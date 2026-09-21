@@ -468,6 +468,13 @@ consults the worktree, invokes `$EDITOR`, or creates an editable temporary file.
 
 ### 6.6 Performance work
 
+> **Partially done** on `feat/tui-frame-benchmark`: a criterion benchmark measures
+> a single rendered frame and its seams (`just bench-tui`), split into warm and
+> cold frames plus `update`, `highlight`, `layout_diff`, and the ratatui surface
+> diff. It shows highlighting dominates a cold interaction and that ratatui's
+> full-surface scan is a large share of a warm frame. It uses `TestBackend` and
+> does not yet cover real terminal writes or a PTY end-to-end measurement.
+
 Keep operations synchronous while they remain responsive. Measure input-to-
 redraw latency on the existing representative repositories and a larger
 synthetic repository. Record best/median/p95, host, build profile, file count,

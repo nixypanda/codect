@@ -17,6 +17,9 @@ build: build-workspace
 # Run all tests.
 test: test-workspace
 
+# Run the terminal frontend frame benchmarks.
+bench: bench-tui
+
 # Format all source files in place.
 format: format-workspace format-nix
 
@@ -34,12 +37,21 @@ build-workspace:
 test-workspace:
     cargo test --workspace
 
+# Benchmark one rendered frame and its per-part seams (criterion).
+bench-tui:
+    cargo bench -p ownai-tui --features bench --bench frame
+
+# Lint the benchmark target, which `clippy --all-targets` skips without the
+# feature. Kept in `check-workspace` so the benchmark cannot bit-rot.
+check-bench-tui:
+    cargo clippy -p ownai-tui --features bench --all-targets -- -D warnings
+
 # Format Rust sources.
 format-workspace:
     cargo fmt --all
 
 # Run all workspace checks (TECHNICAL_DESIGN.md 18.1).
-check-workspace: check-workspace-format check-workspace-clippy test-workspace build-workspace check-workspace-features check-workspace-nodefault
+check-workspace: check-workspace-format check-workspace-clippy check-bench-tui test-workspace build-workspace check-workspace-features check-workspace-nodefault
 
 check-workspace-format:
     cargo fmt --all --check

@@ -843,8 +843,8 @@ impl Model {
         });
     }
 
-    /// The wrapped visual rows of the active diff.
-    fn compute_diff_rows(&self) -> Vec<VisualRow> {
+    /// The wrapped visual rows of the active diff, recomputed without the cache.
+    pub(crate) fn compute_diff_rows(&self) -> Vec<VisualRow> {
         let Some(diff) = self.active_diff() else {
             return Vec::new();
         };

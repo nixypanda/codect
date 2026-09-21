@@ -1019,6 +1019,72 @@ The synthetic repository is packed (`git repack -a -d` plus
 `git prune-packed`) and carries a 100-commit front-loaded history. No threads,
 persistent caches, or broader `gix` features were added to obtain these numbers.
 
+### Frame rendering benchmark
+
+`ownai-tui` carries a criterion benchmark for a single rendered frame. It sits
+behind the `bench` feature, which exposes a `#[doc(hidden)]` façade, so
+`criterion` never enters a normal build or the `--no-default-features` CLI build:
+
+```text
+just bench-tui
+# or: cargo bench -p ownai-tui --features bench --bench frame
+```
+
+It reports per-frame totals and the seams they are made of:
+
+- `frame/warm/*` reuses one terminal, so ratatui's surface diff is small: an
+  idle frame or a small scroll.
+- `frame/cold/*` builds a fresh terminal per iteration, so every cell is written:
+  the frame after a load or a large jump.
+- `update/*` measures message handling, where syntax highlighting and the wrapped
+  diff layout are recomputed when the selection or size changes.
+- `parts/*` measures each seam alone: `highlight`, `layout_diff`, and ratatui's
+  full-surface diff scan (`buffer_diff`).
+
+A warm frame is approximately `view` assembly plus `parts/buffer_diff`; a cold
+interaction adds the matching `update/*` cost. Criterion writes an HTML report
+under `target/criterion/`.
+
+Measured 2026-09-22 with rustc 1.98.1 (`48a229cea 2026-09-01`) and cargo 1.98.1
+on an Apple Silicon macOS host. The host was busy during the run (load average
+about 4.6), which moves the few-hundred-microsecond frame numbers by tens of
+percent between runs; the slower seams are stable and carry the signal. Times
+are the median of 30 samples after a one-second warm-up, optimized (`bench`)
+profile.
+
+| Benchmark | Median |
+|---|---|
+| `frame/warm/show_two_files` | 0.42 ms |
+| `frame/warm/show_long_file` | 0.84 ms |
+| `frame/warm/diff_single` | 0.89 ms |
+| `frame/warm/show_tiny` | 0.01 ms |
+| `frame/cold/diff_single` | 1.30 ms |
+| `update/show_next_file` (20-line file) | 1.90 ms |
+| `update/diff_next_file` | 0.93 ms |
+| `update/diff_resize` (800-line diff) | 2.93 ms |
+| `update/load_show_300_files` | 2.29 ms |
+| `parts/highlight_rust` (23 lines) | 2.02 ms |
+| `parts/highlight_rust_long` (4000 lines) | 343 ms |
+| `parts/layout_diff` (800-line diff) | 3.16 ms |
+| `parts/buffer_diff` (140x40 surface) | 0.16 ms |
+
+Attribution from the same run:
+
+- A warm 140x40 frame is roughly 60% `view` assembly and 40% ratatui's
+  full-surface diff scan. The scan is proportional to cells, not to how much
+  changed, so a nearly static frame still pays it.
+- A cold interaction is dominated by syntax highlighting: syntect costs about
+  86 microseconds per Rust line and 39 per Elm line here, so the first view of a
+  1200-line Rust file exceeds the 100 ms median budget on highlighting alone.
+  Per-file caching means this is paid once per file, not per frame.
+- Wrapped diff layout (`aligned_rows` plus emphasis, wrapping, and run cloning)
+  is about 3 ms for an 800-line diff and is cached by generation, size,
+  selection, and tree width.
+
+This does not measure escape-sequence encoding or writes to a real terminal;
+`TestBackend` replaces them with an in-memory surface. A PTY-based end-to-end
+input-to-redraw measurement remains open (plan §6.6).
+
 ## 18. Security and robustness
 
 - Treat repositories and source files as untrusted input.
@@ -1045,6 +1111,7 @@ The repository must provide one documented command, task, or script that runs th
 ```text
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p ownai-tui --features bench --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
 cargo tree -e features -p ownai-git
