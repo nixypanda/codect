@@ -1,0 +1,8 @@
+module Shapes exposing (Shape(..))
+
+
+type Shape
+    = Unit
+    | Point Float Float
+    | Pair ( Int, Int )
+    | Box { width : Float, height : Float }

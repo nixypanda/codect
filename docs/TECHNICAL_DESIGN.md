@@ -489,6 +489,10 @@ Include:
 - `type alias` declarations with type parameters and the complete aliased type.
 - Record alias fields in source order.
 
+A record renders in block form, one field per indented line, when it is the
+complete right-hand side of a `type alias`. A record nested inside another type
+expression renders inline as `{ name : Type, ... }`.
+
 Render examples:
 
 ```elm

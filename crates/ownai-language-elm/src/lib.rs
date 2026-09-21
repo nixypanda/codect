@@ -6,3 +6,31 @@
 pub mod extract;
 pub mod render;
 pub mod syntax;
+
+use ownai_core::{
+    Language, LanguageProjector, ProjectedFile, ProjectionError, ProjectionInput, RepoPath,
+};
+
+/// Projects Elm source files into the shared projection model.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ElmProjector;
+
+impl ElmProjector {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl LanguageProjector for ElmProjector {
+    fn language(&self) -> Language {
+        Language::Elm
+    }
+
+    fn supports_path(&self, path: &RepoPath) -> bool {
+        path.is_elm()
+    }
+
+    fn project(&self, input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
+        extract::project_file(input)
+    }
+}
