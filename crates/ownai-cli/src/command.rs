@@ -127,7 +127,7 @@ fn split_diff(diffs: Vec<FileDiff>) -> (Vec<ProjectedFile>, Vec<ProjectedFile>) 
 /// Runs the terminal frontend for one `tui` subcommand.
 #[cfg(feature = "tui")]
 fn run_tui(engine: Engine, command: &TuiCommand, start: &Path) -> Result<(), CliError> {
-    match command {
+    let (request, scope_label) = match command {
         TuiCommand::Show {
             mode,
             revision,
@@ -135,16 +135,42 @@ fn run_tui(engine: Engine, command: &TuiCommand, start: &Path) -> Result<(), Cli
             areas,
         } => {
             let selection = selection_for(paths, areas, start, &engine)?;
-            let scope_label = scope_label(&selection);
-            let options = ownai_tui::TuiOptions {
-                revision: revision.clone(),
-                mode: (*mode).into(),
-                selection,
-                scope_label,
-            };
-            ownai_tui::run(engine, options).map_err(tui_failure)
+            let label = scope_label(&selection);
+            (
+                ownai_tui::LoadRequest::Show {
+                    revision: revision.clone(),
+                    mode: (*mode).into(),
+                    selection,
+                },
+                label,
+            )
         }
-    }
+        TuiCommand::Diff {
+            mode,
+            base,
+            target,
+            paths,
+            areas,
+        } => {
+            let selection = selection_for(paths, areas, start, &engine)?;
+            let label = scope_label(&selection);
+            (
+                ownai_tui::LoadRequest::Diff {
+                    base: base.clone(),
+                    target: target.clone(),
+                    mode: (*mode).into(),
+                    selection,
+                },
+                label,
+            )
+        }
+    };
+
+    let options = ownai_tui::TuiOptions {
+        request,
+        scope_label,
+    };
+    ownai_tui::run(engine, options).map_err(tui_failure)
 }
 
 /// A short label for the initial scope, shown in the status bar.

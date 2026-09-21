@@ -27,6 +27,14 @@ fn repo() -> TestRepo {
     repo
 }
 
+/// A repository whose `HEAD` differs from its parent.
+fn repo_with_change() -> TestRepo {
+    let repo = repo();
+    repo.write("src/lib.rs", "pub struct User {\n    pub id: u64,\n}\n");
+    repo.commit("change");
+    repo
+}
+
 #[test]
 fn tui_show_without_a_terminal_exits_one_with_a_clean_stdout() {
     let repo = repo();
@@ -87,4 +95,38 @@ fn the_top_level_help_lists_the_tui_command() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("help is UTF-8");
     assert!(help.contains("tui"), "help must list `tui`: {help}");
+}
+
+#[test]
+fn tui_diff_without_revisions_is_a_usage_error() {
+    let repo = repo_with_change();
+    ownai_in(&repo, &["tui", "diff", "--mode", "types"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn tui_diff_without_a_mode_is_a_usage_error() {
+    let repo = repo_with_change();
+    ownai_in(&repo, &["tui", "diff", "HEAD~1", "HEAD"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn tui_diff_without_a_terminal_exits_one_with_a_clean_stdout() {
+    let repo = repo_with_change();
+
+    let output = run(&repo, &["tui", "diff", "--mode", "types", "HEAD~1", "HEAD"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must stay empty, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("terminal"),
+        "expected a terminal diagnostic, got: {diagnostic}"
+    );
 }

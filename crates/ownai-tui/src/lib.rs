@@ -23,14 +23,14 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ownai_core::ProjectionMode;
-use ownai_engine::{Engine, EngineError, Selection};
+use ownai_engine::{Engine, EngineError};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 mod app;
 
-use app::{Cmd, Key, Model, Msg, update, view};
+pub use app::LoadRequest;
+use app::{Cmd, Content, Key, Model, Msg, update, view};
 
 /// Everything `run` needs beyond the engine, built by the caller.
 ///
@@ -38,12 +38,8 @@ use app::{Cmd, Key, Model, Msg, update, view};
 /// selection, so the frontend never parses an argument or resolves an area.
 #[derive(Clone, Debug)]
 pub struct TuiOptions {
-    /// The revision to project.
-    pub revision: String,
-    /// The projection mode to open with.
-    pub mode: ProjectionMode,
-    /// The initial normalized selection.
-    pub selection: Selection,
+    /// The projection to open with; `m` re-runs it in the other mode.
+    pub request: LoadRequest,
     /// A short label for the initial scope, shown in the status bar.
     pub scope_label: String,
 }
@@ -87,10 +83,8 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
     let (width, height) = session.driver().size()?;
     let mut model = Model::new(
         engine.root().display().to_string(),
-        options.revision.clone(),
-        options.mode,
+        options.request.clone(),
         options.scope_label,
-        options.selection,
         width,
         height,
     );
@@ -99,31 +93,27 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
     // failure here is fatal: there is no previous screen to keep.
     let startup = interpret(
         &engine,
-        Cmd::LoadShow {
-            revision: model.revision.clone(),
-            mode: model.mode,
-            selection: model.selection.clone(),
+        Cmd::Load {
+            request: options.request,
         },
     );
-    match startup {
+    let (initial, _) = match startup {
         Msg::Loaded {
-            mode,
-            result: Ok(files),
-        } => {
-            let (updated, _) = update(
-                Msg::Loaded {
-                    mode,
-                    result: Ok(files),
-                },
-                &model,
-            );
-            model = updated;
-        }
+            request,
+            result: Ok(content),
+        } => update(
+            Msg::Loaded {
+                request,
+                result: Ok(content),
+            },
+            &model,
+        ),
         Msg::Loaded {
             result: Err(error), ..
-        } => return Err(TuiError::Engine(error)),
+        } => return Err(TuiError::Engine(*error)),
         _ => unreachable!("the startup effect always produces Loaded"),
-    }
+    };
+    model = initial;
 
     loop {
         session.driver().draw(&model)?;
@@ -147,14 +137,25 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
 /// Runs one effect and reports its completion as a message.
 fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
     match cmd {
-        Cmd::LoadShow {
-            revision,
-            mode,
-            selection,
-        } => Msg::Loaded {
-            mode,
-            result: engine.show(&revision, mode, &selection),
-        },
+        Cmd::Load { request } => {
+            let result = match &request {
+                LoadRequest::Show {
+                    revision,
+                    mode,
+                    selection,
+                } => engine.show(revision, *mode, selection).map(Content::Show),
+                LoadRequest::Diff {
+                    base,
+                    target,
+                    mode,
+                    selection,
+                } => engine
+                    .diff(base, target, *mode, selection)
+                    .map(Content::Diff),
+            }
+            .map_err(Box::new);
+            Msg::Loaded { request, result }
+        }
     }
 }
 
@@ -325,6 +326,9 @@ mod tests {
     use std::collections::VecDeque;
     use std::rc::Rc;
 
+    use ownai_core::ProjectionMode;
+    use ownai_engine::Selection;
+
     use super::*;
 
     #[derive(Default)]
@@ -424,9 +428,11 @@ mod tests {
         let driver = MockDriver::new(None, log.clone(), messages);
 
         let options = TuiOptions {
-            revision: "HEAD".to_owned(),
-            mode: ProjectionMode::Types,
-            selection: Selection::all(),
+            request: LoadRequest::Show {
+                revision: "HEAD".to_owned(),
+                mode: ProjectionMode::Types,
+                selection: Selection::all(),
+            },
             scope_label: "all".to_owned(),
         };
         run_with(engine, options, driver).expect("run");
@@ -449,9 +455,11 @@ mod tests {
 
         let options = TuiOptions {
             // There is no such revision in an empty repository.
-            revision: "no-such-revision".to_owned(),
-            mode: ProjectionMode::Types,
-            selection: Selection::all(),
+            request: LoadRequest::Show {
+                revision: "no-such-revision".to_owned(),
+                mode: ProjectionMode::Types,
+                selection: Selection::all(),
+            },
             scope_label: "all".to_owned(),
         };
         let error = run_with(engine, options, driver).expect_err("startup failure");
