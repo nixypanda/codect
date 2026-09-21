@@ -1,0 +1,11 @@
+impl<T: Clone> Iterator for Users<T>
+where T: Send
+{
+    type Item = User<T>;
+}
+
+impl Display for User {}
+
+impl Clone for User {}
+
+unsafe impl Send for User {}

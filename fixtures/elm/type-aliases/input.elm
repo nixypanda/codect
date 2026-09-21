@@ -1,0 +1,19 @@
+module Aliases exposing (..)
+
+
+type alias Name =
+    String
+
+
+type alias Handler a =
+    a -> Int -> List a
+
+
+type alias Pair =
+    ( String, Int )
+
+
+type alias Profile =
+    { name : String
+    , email : Email
+    }

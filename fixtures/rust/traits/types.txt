@@ -1,0 +1,15 @@
+pub trait Repository<T>: Send + Sync
+where T: Clone
+{
+    type Error: std::error::Error;
+    type Output = Vec<T>;
+}
+
+pub trait Marker {}
+
+unsafe trait Unsafe: Send {}
+
+trait WithGenerics<'a, const N: usize> {
+    type Item<'b>: Clone
+    where 'b: 'a;
+}

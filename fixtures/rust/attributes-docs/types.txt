@@ -1,0 +1,16 @@
+#[derive(Debug, Clone)]
+#[repr(C)]
+#[cfg(feature = "serde")]
+pub struct Documented {
+    #[serde(rename = "id")]
+    pub id: u32,
+    #[cfg(test)]
+    hidden: String,
+}
+
+#[non_exhaustive]
+pub enum Flag {
+    #[deprecated]
+    On,
+    Off,
+}

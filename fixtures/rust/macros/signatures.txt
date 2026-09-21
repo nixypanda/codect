@@ -1,0 +1,5 @@
+#[derive(Clone)]
+#[my_attribute(option = "value")]
+pub struct Real;
+
+pub fn uses_macro();

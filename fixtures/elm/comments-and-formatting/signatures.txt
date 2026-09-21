@@ -1,0 +1,8 @@
+module Commented
+
+type alias Thing =
+    { one : String
+    , two : Int
+    }
+
+f : <missing type annotation>

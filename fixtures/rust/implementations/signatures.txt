@@ -1,0 +1,19 @@
+impl User {
+    pub const fn id(&self) -> Id;
+    fn private(&mut self);
+}
+
+impl<T: Clone> Iterator for Users<T>
+where T: Send
+{
+    type Item = User<T>;
+    fn next(&mut self) -> Option<Self::Item>;
+}
+
+impl Display for User {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result;
+}
+
+impl Clone for User {}
+
+unsafe impl Send for User {}

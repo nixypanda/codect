@@ -1,0 +1,5 @@
+module Values
+
+answer : Int
+
+greeting : <missing type annotation>

@@ -1,0 +1,4 @@
+pub struct Spaced {
+    pub id: u32,
+    name: String,
+}

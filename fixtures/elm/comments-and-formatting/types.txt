@@ -1,0 +1,6 @@
+module Commented
+
+type alias Thing =
+    { one : String
+    , two : Int
+    }

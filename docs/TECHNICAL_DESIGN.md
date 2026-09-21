@@ -75,8 +75,11 @@ crates/
 fixtures/
   elm/
   rust/
-tests/
 ```
+
+Unit tests live beside the code they cover, and each crate may add a `tests/`
+directory for integration tests; expected projection output lives under
+`fixtures/` (section 16.2).
 
 Dependency direction is one-way:
 
@@ -121,10 +124,13 @@ anstyle = "1"
 
 Use current compatible releases for test-only dependencies:
 
-- `insta` for projection and diff snapshots.
 - `assert_cmd` for CLI tests.
 - `predicates` for CLI assertions.
 - `tempfile` for temporary repositories.
+
+Projection and diff expected output is stored as plain fixture text and compared
+directly (section 16.2), which is easier to review than opaque snapshots, so no
+snapshot crate is required.
 
 Do not add an async runtime. All MVP work is local and synchronous.
 
@@ -257,6 +263,18 @@ Stable keys identify declarations inside a projected file. They are not global d
 - Rust associated item: implementation or trait key plus item kind and name.
 
 If two declarations produce the same key, append a deterministic source-order ordinal. Never include byte offsets in the primary key because harmless edits before a declaration would destabilize it.
+
+### 5.3 Canonical text assembly
+
+`ProjectedFile::canonical_text` is derived from `items` by the constructor and is never independently mutable. Emission is determined solely by an item's `parent_key`:
+
+1. Only items whose `parent_key` is `None` are emitted. Their `canonical_text` fragments are joined by exactly one blank line, and the result ends with exactly one trailing newline. A file with no top-level items has empty canonical text.
+2. An item whose `parent_key` is `Some(_)` is an index-only entry. Its text is already contained in the fragment of the ancestor that owns it. It is never emitted as its own top-level block.
+3. Every item's `canonical_text` is a self-contained fragment. A top-level fragment includes the canonical rendering of its nested members, indented four spaces per nesting level (section 10). A nested item's text appears exactly once in the file text, inside its ancestor.
+4. The `parent_key` relationship is independent of the container naming used in stable keys (section 5.2). Naming a container in a stable key does not suppress emission; only `parent_key == Some(_)` does. An adapter marks each declaration it wants emitted as top-level.
+5. Every nested item must have a top-level ancestor, and an adapter must not produce an item whose `parent_key` refers to a non-existent item. This is a documented adapter obligation; core does not validate it at runtime.
+
+Nested items remain in `items` so that stable keys and later per-declaration comparisons can address them, even though their text is emitted through an ancestor.
 
 ## 6. Language adapter interface
 
@@ -421,7 +439,7 @@ Do not implement adaptive line wrapping. Terminal width must never change output
 - One simple declaration or signature per line.
 - One union constructor, enum variant, struct field, or record field per indented line when a declaration has a body.
 - One trait or implementation member per indented block.
-- Blank line between top-level projected declarations.
+- Blank line between top-level projected declarations (see section 5.3 for how top-level items assemble into file text).
 - Four spaces per nesting level.
 - Exactly one trailing newline per projected file.
 
@@ -459,6 +477,13 @@ diff --ownai a/src/User.elm b/src/User.elm
 
 Use `/dev/null` for the absent side of an added or deleted file. Diff headers use escaped display paths when raw paths are not UTF-8.
 
+Multi-file document policy (pinned so it cannot drift):
+
+- `show` sections are separated by exactly one blank line.
+- `diff` blocks are concatenated with no blank line between them, and only files whose projections differ are emitted.
+- A non-empty document ends with exactly one trailing newline; a document with no emitted files is empty.
+- The `diff --ownai` line keeps `a/` and `b/` labels even for an added or deleted file, while the absent `---`/`+++` side uses `/dev/null`.
+
 ## 11. Elm projection
 
 ### 11.1 General rules
@@ -476,6 +501,10 @@ Include:
 - Constructor argument types.
 - `type alias` declarations with type parameters and the complete aliased type.
 - Record alias fields in source order.
+
+A record renders in block form, one field per indented line, when it is the
+complete right-hand side of a `type alias`. A record nested inside another type
+expression renders inline as `{ name : Type, ... }`.
 
 Render examples:
 
@@ -640,7 +669,7 @@ Rules:
 - Write diagnostics to stderr.
 - Do not add progress output in the MVP.
 
-The CLI constructs the two projectors, opens `ownai-git`, and calls orchestration functions in `ownai-core`. Business rules do not belong in `main.rs`.
+The CLI constructs the two projectors, opens `ownai-git`, and implements the Git-aware pipeline in `command.rs`, composing `ownai-git`'s snapshot reads with `ownai-core`'s pure `show` and `diff` rendering. `ownai-core` stays Git-free (section 3). Business rules do not belong in `main.rs`.
 
 ## 15. Diagnostics and failure behavior
 
@@ -723,6 +752,15 @@ Required Rust cases:
 - Macro definitions and invocations that must be excluded.
 - Comments and formatting variations.
 
+Fixture and test file location:
+
+- Unit tests live beside the code they cover.
+- Integration tests live under `crates/<crate>/tests/` and may share helpers
+  through a `tests/support/` module that each test target includes with
+  `mod support;`.
+- Repository-level language fixtures stay under the top-level `fixtures/`
+  directory.
+
 ### 16.3 Invariance tests
 
 For both languages, prove:
@@ -750,6 +788,16 @@ Create real temporary repositories and commits. Test:
 - Bare repository operation.
 - Invalid and ambiguous revisions.
 
+Create the temporary repositories with the `git` executable. This is the only
+place the test suite may invoke Git: test setup may create commits, tags,
+branches, worktrees, and bare clones, while library and CLI code must never
+invoke the Git executable. Isolate every invocation from host configuration and
+the network by pointing `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` at
+`/dev/null`, setting `GIT_CONFIG_NOSYSTEM`, disabling commit and tag signing,
+and supplying fixed author, committer, and date values. After fixtures exist,
+exercise only `ownai-git`. SHA-256 cases must perform a runtime capability check
+and skip cleanly when the environment's Git cannot create a SHA-256 repository.
+
 ### 16.5 End-to-end CLI tests
 
 Assert stdout, stderr, and exit status for every command form. Snapshot plain output with color disabled. Add a focused assertion that redirected or `--color=never` output has no escape bytes.
@@ -768,6 +816,24 @@ Initial performance rules:
 - Do not enable parallel projection until deterministic tests and profiling exist.
 
 Add benchmarks for large synthetic trees and representative real Elm/Rust repositories before adding threads, persistent caches, or broader `gix` features.
+
+### Performance baseline
+
+Measured 2026-09-21 with rustc 1.98.1 (`48a229cea 2026-09-01`) and cargo 1.98.1,
+running `target/release/ownai` on an Apple Silicon macOS host. Times are wall
+clock for `--mode signatures`, best and median of ten warm runs. These are a
+baseline for later comparison, not a target.
+
+| Command | Repository | Supported files | Elapsed (best / median) |
+|---|---|---|---|
+| `show --mode signatures HEAD` | synthetic, 150 Elm + 150 Rust | 300 | 33 ms / 34 ms |
+| `diff --mode signatures <base> <target>` | synthetic, every file changed | 300 | 53 ms / 55 ms |
+| `show --mode signatures HEAD` | OwnAI itself | 67 | 70 ms / 76 ms |
+| `diff --mode signatures acf05df a0d42f5` | OwnAI itself | 67 changed | 74 ms / 85 ms |
+
+The synthetic repository is packed (`git repack -a -d` plus
+`git prune-packed`) and carries a 100-commit front-loaded history. No threads,
+persistent caches, or broader `gix` features were added to obtain these numbers.
 
 ## 18. Security and robustness
 

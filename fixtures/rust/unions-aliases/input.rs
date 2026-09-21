@@ -1,0 +1,19 @@
+//! Unions and type aliases, including aliases with a `where` clause.
+
+pub union Number {
+    integer: i64,
+    float: f64,
+}
+
+type Pair<T> = (T, T);
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+pub type Callback = fn(i32) -> i32;
+
+type Handler<'a> = &'a dyn Fn(i32) -> i32;
+
+type Generic<T>
+where
+    T: Clone,
+= Vec<T>;
