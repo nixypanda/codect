@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use criterion::measurement::WallTime;
 use criterion::{
-    BatchSize, BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main,
+    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
 };
 use ownai_core::{Language, ProjectedFile};
 use ownai_engine::FileDiff;
@@ -372,6 +372,57 @@ fn update_benchmarks(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Tree scrolling
+// ---------------------------------------------------------------------------
+
+/// Rows to scroll through when measuring a burst of tree navigation.
+const SCROLL_SIZES: [usize; 4] = [1, 10, 100, 300];
+
+fn scroll_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scroll");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(5));
+    group.warm_up_time(Duration::from_secs(1));
+
+    let model = show_large_tree(WIDE.0, WIDE.1);
+
+    for n in SCROLL_SIZES {
+        // Pure message handling: how much work `update` does per row as the
+        // cursor passes over the tree. This is where eager highlighting shows.
+        group.bench_with_input(BenchmarkId::new("updates_only", n), &n, |b, &n| {
+            b.iter_batched(
+                || model.clone(),
+                |mut current| {
+                    for _ in 0..n {
+                        current = bench::update(Msg::Key(Key::Down), &current).0;
+                    }
+                    black_box(current)
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        // The run loop as it stands: every row is updated and drawn.
+        group.bench_with_input(BenchmarkId::new("per_key", n), &n, |b, &n| {
+            let mut terminal = bench::terminal(WIDE.0, WIDE.1);
+            b.iter_batched(
+                || model.clone(),
+                |mut current| {
+                    for _ in 0..n {
+                        current = bench::update(Msg::Key(Key::Down), &current).0;
+                        bench::draw(&current, &mut terminal);
+                    }
+                    black_box(current)
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Per-part seams
 // ---------------------------------------------------------------------------
 
@@ -420,6 +471,7 @@ criterion_group!(
     frame_benchmarks,
     cold_benchmarks,
     update_benchmarks,
+    scroll_benchmarks,
     parts_benchmarks
 );
 criterion_main!(frame);
