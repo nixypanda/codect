@@ -84,6 +84,39 @@ pub enum Command {
         #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
         areas: Vec<String>,
     },
+
+    /// Browse projections in the terminal.
+    #[cfg(feature = "tui")]
+    Tui {
+        #[command(subcommand)]
+        command: TuiCommand,
+    },
+}
+
+/// Terminal frontend subcommands. Each form starts from an unambiguous state.
+#[cfg(feature = "tui")]
+#[derive(Debug, Subcommand)]
+pub enum TuiCommand {
+    /// Browse one projected revision.
+    Show {
+        /// Projection mode to render.
+        #[arg(long, value_enum)]
+        mode: Mode,
+
+        /// Revision to project (branch, tag, or object id); defaults to HEAD.
+        #[arg(value_name = "REVISION", default_value = "HEAD")]
+        revision: String,
+
+        /// Limit the projection to these paths. Repeatable. A directory includes
+        /// everything beneath it, and paths are relative to the current directory.
+        #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
+        paths: Vec<std::ffi::OsString>,
+
+        /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+        /// exclusive with `--path`.
+        #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
+        areas: Vec<String>,
+    },
 }
 
 /// The two projection modes exposed on the command line.

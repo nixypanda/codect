@@ -39,7 +39,7 @@ format-workspace:
     cargo fmt --all
 
 # Run all workspace checks (TECHNICAL_DESIGN.md 18.1).
-check-workspace: check-workspace-format check-workspace-clippy test-workspace build-workspace check-workspace-features
+check-workspace: check-workspace-format check-workspace-clippy test-workspace build-workspace check-workspace-features check-workspace-nodefault
 
 check-workspace-format:
     cargo fmt --all --check
@@ -50,6 +50,15 @@ check-workspace-clippy:
 # Audit the enabled gix feature set (TECHNICAL_DESIGN.md 4.1).
 check-workspace-features:
     cargo tree -e features -p ownai-git
+
+# The terminal frontend is a default-on optional feature; building without
+# defaults must neither fail nor pull ratatui or crossterm into the graph.
+check-workspace-nodefault:
+    cargo build -p ownai-cli --no-default-features
+    @if cargo tree -p ownai-cli --no-default-features | grep -Eq '(ratatui|crossterm)'; then \
+        echo "error: ratatui/crossterm leaked into the no-default-features build" >&2; \
+        exit 1; \
+    fi
 
 # Run workspace coverage.
 coverage-workspace:

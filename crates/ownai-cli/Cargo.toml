@@ -9,20 +9,24 @@ publish.workspace = true
 name = "ownai"
 path = "src/main.rs"
 
+[features]
+default = ["tui"]
+tui = ["dep:ownai-tui"]
+
 [dependencies]
 ownai-core.workspace = true
 ownai-git.workspace = true
-ownai-language-elm.workspace = true
-ownai-language-rust.workspace = true
+ownai-engine.workspace = true
+ownai-tui = { workspace = true, optional = true }
 anstream.workspace = true
 anstyle.workspace = true
 clap.workspace = true
 miette.workspace = true
 thiserror.workspace = true
-serde.workspace = true
-toml.workspace = true
 
 [dev-dependencies]
+ownai-language-elm.workspace = true
+ownai-language-rust.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true

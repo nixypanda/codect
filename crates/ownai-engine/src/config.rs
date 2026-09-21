@@ -1,10 +1,10 @@
 //! Loading of the repository's named-area definitions.
 //!
-//! `.ownai.toml` is repository-controlled, so it is the one config file the CLI
+//! `.ownai.toml` is repository-controlled, so it is the one config file OwnAI
 //! reads and the only one it must treat as hostile: bounded in size, never
-//! followed through a symlink, and only ever consulted when `--area` is used.
-//! Core stays file-format-free, so the conversion from TOML to [`AreaSet`]
-//! lives here (TECHNICAL_DESIGN.md sections 3, 5.4).
+//! followed through a symlink, and only ever consulted when an area is
+//! selected. Core stays file-format-free, so the conversion from TOML to
+//! [`AreaSet`] lives here.
 
 use std::collections::BTreeMap;
 use std::io;
