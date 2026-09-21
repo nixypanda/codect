@@ -28,6 +28,12 @@ const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
 const SINGLE_PANE_MIN_WIDTH: u16 = 40;
 const MIN_HEIGHT: u16 = 8;
 
+/// The file-tree pane width, as a percentage of the terminal, and its bounds.
+const TREE_DEFAULT_PERCENT: u16 = 30;
+const TREE_MIN_PERCENT: u16 = 15;
+const TREE_MAX_PERCENT: u16 = 60;
+const TREE_STEP: u16 = 5;
+
 /// Columns a tab expands to, so display width stays deterministic.
 const TAB_WIDTH: usize = 4;
 
@@ -442,6 +448,7 @@ struct DerivedKey {
     width: u16,
     height: u16,
     selected: Option<RepoPath>,
+    tree_percent: u16,
     diagnostic: bool,
 }
 
@@ -477,6 +484,8 @@ pub struct Model {
     pub focus: Pane,
     pub body_scroll: u16,
     pub body_hscroll: u16,
+    /// The file-tree pane width as a percentage of the terminal.
+    pub tree_percent: u16,
     /// The active modal overlay, if any. It captures keys until it closes.
     pub overlay: Option<Overlay>,
     pub diagnostic: Option<String>,
@@ -514,6 +523,7 @@ impl Model {
             focus: Pane::Tree,
             body_scroll: 0,
             body_hscroll: 0,
+            tree_percent: TREE_DEFAULT_PERCENT,
             overlay: None,
             diagnostic: None,
             highlights: HighlightCache::default(),
@@ -621,6 +631,7 @@ impl Model {
             width: self.width,
             height: self.height,
             selected: self.selected.clone(),
+            tree_percent: self.tree_percent,
             diagnostic: self.diagnostic.is_some(),
         };
         if self.derived.key.as_ref() == Some(&key) {
@@ -649,7 +660,7 @@ impl Model {
         let gutter = gutter_width(diff);
         if self.width >= SIDE_BY_SIDE_MIN_WIDTH {
             let (old, new) = {
-                let (_, old, new) = split_diff_columns(content);
+                let (_, old, new) = split_diff_columns(content, self.tree_percent);
                 (old, new)
             };
             let old_inner = pane_block("", false).inner(old);
@@ -822,6 +833,16 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                 input: TextInput::new(current_target(model)),
             });
         }
+        Key::Char('[') => {
+            model.tree_percent = model
+                .tree_percent
+                .saturating_sub(TREE_STEP)
+                .max(TREE_MIN_PERCENT);
+        }
+        Key::Char(']') => {
+            model.tree_percent = (model.tree_percent + TREE_STEP).min(TREE_MAX_PERCENT);
+        }
+        Key::Char('\\') => model.tree_percent = TREE_DEFAULT_PERCENT,
         Key::Char('s') => {
             model.overlay = Some(Overlay::Scope(ScopeChooser::loading()));
             cmds.push(Cmd::LoadAreas);
@@ -1339,17 +1360,22 @@ fn frame_chunks(width: u16, height: u16, diagnostic: bool) -> (Rect, Rect, Optio
     (chunks[0], chunks[chunks.len() - 1], diagnostic_area)
 }
 
-fn split_show_columns(content: Rect) -> (Rect, Rect) {
-    let columns =
-        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).split(content);
+fn split_show_columns(content: Rect, tree_percent: u16) -> (Rect, Rect) {
+    let columns = Layout::horizontal([
+        Constraint::Percentage(tree_percent),
+        Constraint::Percentage(100 - tree_percent),
+    ])
+    .split(content);
     (columns[0], columns[1])
 }
 
-fn split_diff_columns(content: Rect) -> (Rect, Rect, Rect) {
+fn split_diff_columns(content: Rect, tree_percent: u16) -> (Rect, Rect, Rect) {
+    let rest = 100 - tree_percent;
+    let side = rest / 2;
     let columns = Layout::horizontal([
-        Constraint::Percentage(26),
-        Constraint::Percentage(37),
-        Constraint::Percentage(37),
+        Constraint::Percentage(tree_percent),
+        Constraint::Percentage(side),
+        Constraint::Percentage(rest - side),
     ])
     .split(content);
     (columns[0], columns[1], columns[2])
@@ -1376,7 +1402,7 @@ pub fn view(model: &Model, frame: &mut Frame) {
     match &model.content {
         Content::Show(_) => {
             if side_by_side {
-                let (tree, body) = split_show_columns(content);
+                let (tree, body) = split_show_columns(content, model.tree_percent);
                 render_tree(model, frame, tree, model.focus == Pane::Tree);
                 render_show_body(model, frame, body, model.focus == Pane::Body);
             } else if model.focus == Pane::Tree {
@@ -1388,7 +1414,7 @@ pub fn view(model: &Model, frame: &mut Frame) {
         Content::Diff(_) => {
             let rows = model.derived.diff_rows.as_slice();
             if side_by_side {
-                let (tree, old, new) = split_diff_columns(content);
+                let (tree, old, new) = split_diff_columns(content, model.tree_percent);
                 render_tree(model, frame, tree, model.focus == Pane::Tree);
                 render_diff_pane(model, frame, old, Side::Old, model.focus == Pane::Old, rows);
                 render_diff_pane(model, frame, new, Side::New, model.focus == Pane::New, rows);
@@ -1793,6 +1819,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
         Line::from("  m             switch mode"),
         Line::from("  s             change scope"),
         Line::from("  r / b / t     edit revision"),
+        Line::from("  [ / ]         resize tree"),
         Line::from("  Esc           close help or dismiss"),
     ];
     let block = Block::default().borders(Borders::ALL).title(" Help ");
@@ -2084,6 +2111,38 @@ mod tests {
         let text = buffer_text(&render(&model, 100, 20));
         assert!(text.contains("types"), "{text}");
         assert!(text.contains("signatures"), "{text}");
+    }
+
+    #[test]
+    fn tree_resize_keys_step_clamp_and_reset() {
+        let model = two_files();
+        let (grow, _) = update(Msg::Key(Key::Char(']')), &model);
+        assert_eq!(grow.tree_percent, TREE_DEFAULT_PERCENT + TREE_STEP);
+        let (shrink, _) = update(Msg::Key(Key::Char('[')), &grow);
+        assert_eq!(shrink.tree_percent, TREE_DEFAULT_PERCENT);
+
+        let mut widest = model.clone();
+        widest.tree_percent = TREE_MAX_PERCENT;
+        let (widest, _) = update(Msg::Key(Key::Char(']')), &widest);
+        assert_eq!(widest.tree_percent, TREE_MAX_PERCENT);
+
+        let mut narrowest = model.clone();
+        narrowest.tree_percent = TREE_MIN_PERCENT;
+        let (narrowest, _) = update(Msg::Key(Key::Char('[')), &narrowest);
+        assert_eq!(narrowest.tree_percent, TREE_MIN_PERCENT);
+
+        let (reset, _) = update(Msg::Key(Key::Char('\\')), &grow);
+        assert_eq!(reset.tree_percent, TREE_DEFAULT_PERCENT);
+    }
+
+    #[test]
+    fn a_wider_tree_still_leaves_a_usable_body() {
+        let model = model_with(vec![projected("a.rs", "pub fn a();\n")]);
+        let mut wide_tree = model.clone();
+        wide_tree.tree_percent = TREE_MAX_PERCENT;
+        let text = buffer_text(&render(&wide_tree, 100, 20));
+        assert!(text.contains("Files"), "{text}");
+        assert!(text.contains("pub fn a();"), "{text}");
     }
 
     #[test]
