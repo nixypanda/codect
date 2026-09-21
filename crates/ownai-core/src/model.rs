@@ -232,6 +232,14 @@ impl RepoPath {
             None
         }
     }
+
+    /// True when `self` is `dir` itself or a descendant path under it. The check
+    /// is byte-exact and boundary-aware, so `src` does not contain `src2/x.rs`.
+    pub fn is_within(&self, dir: &RepoPath) -> bool {
+        let path = self.as_bytes();
+        let dir = dir.as_bytes();
+        path == dir || (path.len() > dir.len() && path[dir.len()] == b'/' && path.starts_with(dir))
+    }
 }
 
 impl fmt::Display for RepoPath {
@@ -364,6 +372,37 @@ mod tests {
         assert_eq!(path.to_string(), "src/hello world.rs");
         let unicode = RepoPath::new("src/☃.rs").unwrap();
         assert_eq!(unicode.to_string(), "src/☃.rs");
+    }
+
+    #[test]
+    fn repository_path_is_within_includes_itself() {
+        let dir = RepoPath::new("src").unwrap();
+        assert!(dir.is_within(&dir));
+    }
+
+    #[test]
+    fn repository_path_is_within_includes_descendants() {
+        let dir = RepoPath::new("src").unwrap();
+        assert!(RepoPath::new("src/lib.rs").unwrap().is_within(&dir));
+        assert!(
+            RepoPath::new("src/nested/deep/lib.rs")
+                .unwrap()
+                .is_within(&dir)
+        );
+    }
+
+    #[test]
+    fn repository_path_is_within_respects_component_boundaries() {
+        let dir = RepoPath::new("src").unwrap();
+        assert!(!RepoPath::new("src2/x.rs").unwrap().is_within(&dir));
+        assert!(!RepoPath::new("srclib.rs").unwrap().is_within(&dir));
+    }
+
+    #[test]
+    fn repository_path_is_within_is_direction_sensitive() {
+        let dir = RepoPath::new("src").unwrap();
+        let descendant = RepoPath::new("src/lib.rs").unwrap();
+        assert!(!dir.is_within(&descendant));
     }
 
     #[test]
