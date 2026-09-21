@@ -117,6 +117,31 @@ pub enum TuiCommand {
         #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
         areas: Vec<String>,
     },
+
+    /// Browse a focused projection diff between two revisions.
+    Diff {
+        /// Projection mode to compare.
+        #[arg(long, value_enum)]
+        mode: Mode,
+
+        /// Base revision.
+        #[arg(value_name = "BASE")]
+        base: String,
+
+        /// Target revision.
+        #[arg(value_name = "TARGET")]
+        target: String,
+
+        /// Limit the projection to these paths. Repeatable. A directory includes
+        /// everything beneath it, and paths are relative to the current directory.
+        #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
+        paths: Vec<std::ffi::OsString>,
+
+        /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+        /// exclusive with `--path`.
+        #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
+        areas: Vec<String>,
+    },
 }
 
 /// The two projection modes exposed on the command line.

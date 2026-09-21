@@ -3,12 +3,141 @@
 //! The diff engine compares projection text rather than syntax trees; output is
 //! plain and deterministic, with ANSI styling applied only in the CLI.
 
-use similar::{Algorithm, TextDiff};
+use similar::{Algorithm, DiffOp, DiffableStr, TextDiff};
 
 /// Context lines emitted around each change. Three is the conventional default
 /// and keeps focused diffs readable without depending on terminal width
 /// (TECHNICAL_DESIGN.md section 13).
 const CONTEXT_RADIUS: usize = 3;
+
+/// How one aligned row relates the two sides.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiffRowKind {
+    /// Both sides are present and identical.
+    Equal,
+    /// Only the new side is present.
+    Add,
+    /// Only the old side is present.
+    Delete,
+    /// Both sides are present and differ.
+    Change,
+}
+
+/// One side of an [`AlignedRow`].
+///
+/// `number` is the one-based source line number and `text` is the line without
+/// its terminator, which is what a display consumer wants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiffLine<'a> {
+    pub number: usize,
+    pub text: &'a str,
+}
+
+/// One ordered row of a side-by-side alignment of two projection texts.
+///
+/// A missing side (`None`) is an addition or a deletion rather than an empty
+/// line, which is what lets a caller render added and deleted files cleanly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AlignedRow<'a> {
+    pub kind: DiffRowKind,
+    pub old: Option<DiffLine<'a>>,
+    pub new: Option<DiffLine<'a>>,
+}
+
+/// Aligns two canonical projection texts into ordered rows.
+///
+/// The alignment shares [`unified_hunks`]'s patience-diff configuration and
+/// line tokenization, so the two always identify the same changed lines. A
+/// replacement pairs as many old and new lines as it can into [`DiffRowKind::Change`]
+/// rows and emits the remainder as [`DiffRowKind::Delete`] or [`DiffRowKind::Add`].
+///
+/// Empty text is treated as zero lines, matching the core invariant that a
+/// projection with no items has empty canonical text.
+pub fn aligned_rows<'a>(old: &'a str, new: &'a str) -> Vec<AlignedRow<'a>> {
+    let old_lines = old.tokenize_lines();
+    let new_lines = new.tokenize_lines();
+    let diff = TextDiff::configure()
+        .algorithm(Algorithm::Patience)
+        .diff_slices(&old_lines, &new_lines);
+
+    let mut rows = Vec::new();
+    for operation in diff.ops() {
+        match *operation {
+            DiffOp::Equal {
+                old_index,
+                new_index,
+                len,
+            } => {
+                for offset in 0..len {
+                    rows.push(AlignedRow {
+                        kind: DiffRowKind::Equal,
+                        old: Some(line(&old_lines, old_index + offset)),
+                        new: Some(line(&new_lines, new_index + offset)),
+                    });
+                }
+            }
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => {
+                for offset in 0..old_len {
+                    rows.push(AlignedRow {
+                        kind: DiffRowKind::Delete,
+                        old: Some(line(&old_lines, old_index + offset)),
+                        new: None,
+                    });
+                }
+            }
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => {
+                for offset in 0..new_len {
+                    rows.push(AlignedRow {
+                        kind: DiffRowKind::Add,
+                        old: None,
+                        new: Some(line(&new_lines, new_index + offset)),
+                    });
+                }
+            }
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                let paired = old_len.min(new_len);
+                for offset in 0..paired {
+                    rows.push(AlignedRow {
+                        kind: DiffRowKind::Change,
+                        old: Some(line(&old_lines, old_index + offset)),
+                        new: Some(line(&new_lines, new_index + offset)),
+                    });
+                }
+                for offset in paired..old_len {
+                    rows.push(AlignedRow {
+                        kind: DiffRowKind::Delete,
+                        old: Some(line(&old_lines, old_index + offset)),
+                        new: None,
+                    });
+                }
+                for offset in paired..new_len {
+                    rows.push(AlignedRow {
+                        kind: DiffRowKind::Add,
+                        old: None,
+                        new: Some(line(&new_lines, new_index + offset)),
+                    });
+                }
+            }
+        }
+    }
+    rows
+}
+
+fn line<'a>(lines: &[&'a str], index: usize) -> DiffLine<'a> {
+    DiffLine {
+        number: index + 1,
+        text: lines[index].trim_end_matches(['\r', '\n']),
+    }
+}
 
 /// The unified hunks comparing two canonical projection texts.
 ///
@@ -104,5 +233,165 @@ mod tests {
     fn output_never_contains_escape_bytes() {
         let hunks = unified_hunks("a\n", "b\n");
         assert!(!hunks.contains('\u{1b}'), "core output must be plain text");
+    }
+
+    #[test]
+    fn aligned_rows_of_equal_texts_are_all_equal() {
+        let rows = aligned_rows("a\nb\n", "a\nb\n");
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.kind == DiffRowKind::Equal));
+        assert_eq!(rows[0].old.unwrap().number, 1);
+        assert_eq!(rows[1].new.unwrap().number, 2);
+        assert_eq!(rows[1].new.unwrap().text, "b");
+    }
+
+    #[test]
+    fn aligned_rows_of_empty_texts_is_empty() {
+        assert!(aligned_rows("", "").is_empty());
+    }
+
+    #[test]
+    fn aligned_rows_marks_an_insertion() {
+        let rows = aligned_rows("a\nc\n", "a\nb\nc\n");
+        assert_eq!(
+            rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
+            vec![DiffRowKind::Equal, DiffRowKind::Add, DiffRowKind::Equal]
+        );
+        assert!(rows[1].old.is_none());
+        assert_eq!(rows[1].new.unwrap().number, 2);
+        assert_eq!(rows[1].new.unwrap().text, "b");
+    }
+
+    #[test]
+    fn aligned_rows_marks_a_deletion() {
+        let rows = aligned_rows("a\nb\nc\n", "a\nc\n");
+        assert_eq!(rows[1].kind, DiffRowKind::Delete);
+        assert!(rows[1].new.is_none());
+        assert_eq!(rows[1].old.unwrap().text, "b");
+    }
+
+    #[test]
+    fn aligned_rows_marks_a_replacement_as_change() {
+        let rows = aligned_rows("a\nb\nc\n", "a\nB\nc\n");
+        assert_eq!(rows[1].kind, DiffRowKind::Change);
+        assert_eq!(rows[1].old.unwrap().text, "b");
+        assert_eq!(rows[1].new.unwrap().text, "B");
+    }
+
+    #[test]
+    fn aligned_rows_pads_an_uneven_replacement() {
+        let rows = aligned_rows("a\nb\nc\nd\n", "a\nX\n");
+        let kinds: Vec<DiffRowKind> = rows.iter().map(|row| row.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DiffRowKind::Equal,
+                DiffRowKind::Change,
+                DiffRowKind::Delete,
+                DiffRowKind::Delete
+            ]
+        );
+        assert_eq!(rows[1].old.unwrap().text, "b");
+        assert_eq!(rows[1].new.unwrap().text, "X");
+    }
+
+    #[test]
+    fn aligned_rows_handles_missing_sides() {
+        let added = aligned_rows("", "x\n");
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].kind, DiffRowKind::Add);
+        assert!(added[0].old.is_none());
+
+        let deleted = aligned_rows("x\n", "");
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].kind, DiffRowKind::Delete);
+        assert!(deleted[0].new.is_none());
+    }
+
+    #[test]
+    fn aligned_rows_agree_with_unified_hunks_on_changed_lines() {
+        let cases = [
+            ("", ""),
+            ("", "a\n"),
+            ("a\n", ""),
+            ("a\nb\nc\n", "a\nb\nc\n"),
+            ("a\nb\nc\n", "a\nc\n"),
+            ("a\nc\n", "a\nb\nc\n"),
+            ("a\nb\nc\n", "a\nB\nc\n"),
+            ("a\nb\nc\nd\n", "a\nX\n"),
+            ("a\nX\n", "a\nb\nc\nd\n"),
+            ("one\ntwo\n", "one\nTWO\nthree\n"),
+        ];
+
+        for (old, new) in cases {
+            let rows = aligned_rows(old, new);
+            let old_changed: Vec<usize> = rows
+                .iter()
+                .filter_map(|row| match row.kind {
+                    DiffRowKind::Delete | DiffRowKind::Change => row.old.map(|line| line.number),
+                    _ => None,
+                })
+                .collect();
+            let new_changed: Vec<usize> = rows
+                .iter()
+                .filter_map(|row| match row.kind {
+                    DiffRowKind::Add | DiffRowKind::Change => row.new.map(|line| line.number),
+                    _ => None,
+                })
+                .collect();
+
+            let (unified_old, unified_new) = unified_changed_lines(&unified_hunks(old, new));
+            assert_eq!(
+                old_changed, unified_old,
+                "old side differs for {old:?} -> {new:?}"
+            );
+            assert_eq!(
+                new_changed, unified_new,
+                "new side differs for {old:?} -> {new:?}"
+            );
+        }
+    }
+
+    /// The one-based old/new line numbers `unified_hunks` marks as changed.
+    fn unified_changed_lines(hunks: &str) -> (Vec<usize>, Vec<usize>) {
+        let mut old_changed = Vec::new();
+        let mut new_changed = Vec::new();
+        let mut old_line = 0;
+        let mut new_line = 0;
+
+        for line in hunks.lines() {
+            if let Some(header) = line.strip_prefix("@@ ") {
+                let header = header.trim_end_matches(" @@");
+                let mut ranges = header.split(' ');
+                old_line = ranges
+                    .next()
+                    .and_then(|range| range.trim_start_matches('-').split(',').next())
+                    .and_then(|start| start.parse().ok())
+                    .unwrap_or(0);
+                new_line = ranges
+                    .next()
+                    .and_then(|range| range.trim_start_matches('+').split(',').next())
+                    .and_then(|start| start.parse().ok())
+                    .unwrap_or(0);
+                continue;
+            }
+            match line.as_bytes().first() {
+                Some(b' ') => {
+                    old_line += 1;
+                    new_line += 1;
+                }
+                Some(b'-') => {
+                    old_changed.push(old_line);
+                    old_line += 1;
+                }
+                Some(b'+') => {
+                    new_changed.push(new_line);
+                    new_line += 1;
+                }
+                _ => {}
+            }
+        }
+
+        (old_changed, new_changed)
     }
 }

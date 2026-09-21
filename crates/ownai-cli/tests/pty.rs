@@ -1,8 +1,8 @@
-//! A PTY smoke test for the real crossterm path.
+//! PTY smoke tests for the real crossterm path.
 //!
 //! The rest of the frontend is covered with an injected driver and
-//! `TestBackend`; this is the only test that drives an actual terminal. It is
-//! skipped on platforms without a PTY, which is why it is gated to Unix.
+//! `TestBackend`; these are the only tests that drive an actual terminal. They
+//! are skipped on platforms without a PTY, which is why they are gated to Unix.
 
 #![cfg(unix)]
 
@@ -20,12 +20,14 @@ pub struct User {
 }
 ";
 
-#[test]
-fn tui_show_starts_and_quits_in_a_pty() {
-    let repo = TestRepo::init();
-    repo.write("src/lib.rs", RUST_BASE);
-    repo.commit("base");
+const RUST_TYPE_VARIANT: &str = "\
+pub struct User {
+    pub id: u64,
+}
+";
 
+/// Runs `ownai <args>` in an 80×24 PTY, presses `q`, and returns its exit code.
+fn run_in_pty(repo: &TestRepo, args: &[&str]) -> u32 {
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -38,7 +40,7 @@ fn tui_show_starts_and_quits_in_a_pty() {
 
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_ownai"));
     command.cwd(repo.path());
-    command.args(["tui", "show", "--mode", "types"]);
+    command.args(args);
 
     let mut child = pair.slave.spawn_command(command).expect("spawn ownai");
     let mut reader = pair.master.try_clone_reader().expect("pty reader");
@@ -53,18 +55,39 @@ fn tui_show_starts_and_quits_in_a_pty() {
     });
 
     // Give the frontend time to enter the alternate screen and start reading;
-    // a `q` written earlier is buffered by the pty and read when it is ready.
+    // a key written earlier is buffered by the pty and read when it is ready.
     std::thread::sleep(Duration::from_millis(800));
     writer.write_all(b"q").expect("write quit key");
     let _ = writer.flush();
 
     let status = child.wait().expect("wait for ownai");
     let output = drain.join().unwrap_or_default();
+    assert!(
+        !output.is_empty(),
+        "the frontend should have drawn something before quitting"
+    );
+    status.exit_code()
+}
+
+#[test]
+fn tui_show_starts_and_quits_in_a_pty() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+
+    assert_eq!(run_in_pty(&repo, &["tui", "show", "--mode", "types"]), 0);
+}
+
+#[test]
+fn tui_diff_starts_and_quits_in_a_pty() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+    repo.write("src/lib.rs", RUST_TYPE_VARIANT);
+    repo.commit("type change");
 
     assert_eq!(
-        status.exit_code(),
-        0,
-        "`ownai tui show` should quit cleanly; output was:\n{}",
-        String::from_utf8_lossy(&output)
+        run_in_pty(&repo, &["tui", "diff", "--mode", "types", "HEAD~1", "HEAD"]),
+        0
     );
 }
