@@ -5,6 +5,8 @@ members = [
     "crates/ownai-git",
     "crates/ownai-language-elm",
     "crates/ownai-language-rust",
+    "crates/ownai-engine",
+    "crates/ownai-tui",
     "crates/ownai-cli",
 ]
 
@@ -20,6 +22,8 @@ ownai-core = { path = "crates/ownai-core" }
 ownai-git = { path = "crates/ownai-git" }
 ownai-language-elm = { path = "crates/ownai-language-elm" }
 ownai-language-rust = { path = "crates/ownai-language-rust" }
+ownai-engine = { path = "crates/ownai-engine" }
+ownai-tui = { path = "crates/ownai-tui" }
 
 # Runtime dependencies.
 tree-sitter = "0.27"
@@ -42,7 +46,15 @@ anstyle = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 
+# Terminal frontend dependencies. `ratatui` is built without its default
+# feature bundle so the enabled feature set stays auditable; the crossterm
+# backend is the only backend.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+unicode-width = "0.2"
+
 # Test-only dependencies.
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+portable-pty = "0.9"

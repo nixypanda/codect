@@ -1,37 +1,29 @@
-//! The Git-aware pipeline.
+//! The thin command layer.
 //!
-//! Phase 5 kept `ownai-core` Git-free: core only renders projections it is
-//! given. Composing `ownai-git`'s snapshot reads with those pure rendering
-//! functions therefore belongs here, not in `main.rs` and not in core
-//! (TECHNICAL_DESIGN.md sections 3, 7).
+//! Everything Git-aware lives in `ownai-engine`; this module only builds a
+//! selection from `argv`, invokes the engine, and renders the result or a
+//! diagnostic. Keeping the shared pipeline in the engine is what lets the
+//! terminal frontend reuse it without duplicating behavior.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
 
 use ownai_core::{
-    AreaSet, DiagnosticContext, Language, LanguageProjector, PathScope, PathSelection,
-    PathSelectionError, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
-    ProjectionMode, RepoPath, SourceSpan, decode_source, diff_document, select_projector,
-    show_document,
+    AreaSet, DiagnosticContext, PathSelection, PathSelectionError, ProjectedFile, ProjectionError,
+    SourceSpan, diff_document, show_document,
 };
-use ownai_git::{GitError, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
-use ownai_language_elm::ElmProjector;
-use ownai_language_rust::RustProjector;
+use ownai_engine::config::ConfigError;
+use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_git::GitError;
 
+#[cfg(feature = "tui")]
+use crate::args::TuiCommand;
 use crate::args::{Cli, Command as CliCommand};
-use crate::config::{self, ConfigError};
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
-
-// ZST projectors are shared as statics so the pipeline never has to own them
-// or negotiate a borrow of a longer-lived value.
-static ELM_PROJECTOR: ElmProjector = ElmProjector;
-static RUST_PROJECTOR: RustProjector = RustProjector;
 
 /// A fatal CLI failure with structured context and an underlying cause.
 ///
@@ -80,12 +72,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         help: None,
         source: Box::new(source),
     })?;
-    let repository = GitRepository::discover(&start).map_err(git_failure)?;
-    // A bare repository has no worktree, so relative paths resolve against its
-    // root; `gix` reports the bare root as the Git directory.
-    let repo_root = repository
-        .work_dir()
-        .unwrap_or_else(|| repository.git_dir());
+    let engine = Engine::discover(&start).map_err(engine_failure)?;
 
     match &cli.command {
         CliCommand::Show {
@@ -94,9 +81,12 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             paths,
             areas,
         } => {
-            let projection_scope = scope_for(paths, areas, &start, repo_root)?;
-            let document = show(&repository, revision, (*mode).into(), &projection_scope)?;
-            output::write_document(DocumentKind::Show, &document, cli.color).map_err(output_failure)
+            let selection = selection_for(paths, areas, &start, &engine)?;
+            let files = engine
+                .show(revision, (*mode).into(), &selection)
+                .map_err(engine_failure)?;
+            output::write_document(DocumentKind::Show, &show_document(&files), cli.color)
+                .map_err(output_failure)
         }
         CliCommand::Diff {
             mode,
@@ -105,398 +95,160 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             paths,
             areas,
         } => {
-            let projection_scope = scope_for(paths, areas, &start, repo_root)?;
-            let document = diff(&repository, base, target, (*mode).into(), &projection_scope)?;
-            output::write_document(DocumentKind::Diff, &document, cli.color).map_err(output_failure)
+            let selection = selection_for(paths, areas, &start, &engine)?;
+            let diffs = engine
+                .diff(base, target, (*mode).into(), &selection)
+                .map_err(engine_failure)?;
+            let (old, new) = split_diff(diffs);
+            output::write_document(DocumentKind::Diff, &diff_document(&old, &new), cli.color)
+                .map_err(output_failure)
+        }
+        #[cfg(feature = "tui")]
+        CliCommand::Tui { command } => run_tui(engine, command, &start),
+    }
+}
+
+/// Splits engine diffs into the two projection slices the document renderer
+/// consumes. `diff_document` re-sorts by path, so only the path set matters.
+fn split_diff(diffs: Vec<FileDiff>) -> (Vec<ProjectedFile>, Vec<ProjectedFile>) {
+    let mut old = Vec::new();
+    let mut new = Vec::new();
+    for diff in diffs {
+        if let Some(file) = diff.old {
+            old.push(file);
+        }
+        if let Some(file) = diff.new {
+            new.push(file);
+        }
+    }
+    (old, new)
+}
+
+/// Runs the terminal frontend for one `tui` subcommand.
+#[cfg(feature = "tui")]
+fn run_tui(engine: Engine, command: &TuiCommand, start: &Path) -> Result<(), CliError> {
+    match command {
+        TuiCommand::Show {
+            mode,
+            revision,
+            paths,
+            areas,
+        } => {
+            let selection = selection_for(paths, areas, start, &engine)?;
+            let scope_label = scope_label(&selection);
+            let options = ownai_tui::TuiOptions {
+                revision: revision.clone(),
+                mode: (*mode).into(),
+                selection,
+                scope_label,
+            };
+            ownai_tui::run(engine, options).map_err(tui_failure)
         }
     }
 }
 
-/// How a projection is narrowed, plus the labels its existence diagnostics use.
-///
-/// `--path` collapses each literal to a one-path group, so both selections share
-/// one per-group existence rule without changing literal behavior.
-struct ProjectionScope {
-    scope: PathScope,
-    groups: Vec<ScopeGroup>,
+/// A short label for the initial scope, shown in the status bar.
+#[cfg(feature = "tui")]
+fn scope_label(selection: &Selection) -> String {
+    if selection.groups().is_empty() {
+        return "all".to_owned();
+    }
+    selection
+        .groups()
+        .iter()
+        .map(SelectionGroup::label)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
-#[derive(Clone, Copy, Debug)]
-enum ScopeKind {
-    Path,
-    Area,
-}
-
-#[derive(Clone, Debug)]
-struct ScopeGroup {
-    kind: ScopeKind,
-    label: String,
-    paths: Vec<RepoPath>,
-}
-
-/// Resolves a command's `--path`/`--area` arguments into the scope its
+/// Resolves a command's `--path`/`--area` arguments into the selection its
 /// projection will use.
-fn scope_for(
+///
+/// Only an `--area` invocation may touch `.ownai.toml`, so a malformed config
+/// can never break `--path` or unscoped runs.
+fn selection_for(
     paths: &[OsString],
     areas: &[String],
     cwd: &Path,
-    repo_root: &Path,
-) -> Result<ProjectionScope, CliError> {
+    engine: &Engine,
+) -> Result<Selection, CliError> {
     if !areas.is_empty() {
-        // Only an `--area` invocation may touch `.ownai.toml`, so a malformed
-        // config can never break `--path` or unscoped runs.
-        let config = config::Config::load(repo_root).map_err(config_failure)?;
-        let selection = PathSelection::Areas(areas.to_vec());
-        let scope = selection
-            .resolve(config.areas())
-            .map_err(|error| path_selection_failure(error, config.areas()))?;
+        let area_set = engine.load_areas().map_err(engine_failure)?;
+        // Resolve first so an unknown or empty area produces the same
+        // diagnostic as before, then keep the structured groups for existence
+        // checking.
+        PathSelection::Areas(areas.to_vec())
+            .resolve(&area_set)
+            .map_err(|error| path_selection_failure(error, &area_set))?;
 
         let mut groups = Vec::with_capacity(areas.len());
         for name in areas {
-            // Resolution already rejected unknown names, so a miss cannot occur.
-            let Some(area) = config.areas().get(name) else {
+            let Some(area) = area_set.get(name) else {
                 continue;
             };
-            groups.push(ScopeGroup {
-                kind: ScopeKind::Area,
-                label: name.clone(),
+            groups.push(SelectionGroup::Area {
+                name: name.clone(),
                 paths: area.paths.clone(),
             });
         }
-        return Ok(ProjectionScope { scope, groups });
+        return Selection::new(groups).map_err(|error| engine_failure(error.into()));
     }
 
-    let selection = pathspec::build_selection(paths, cwd, repo_root).map_err(path_arg_failure)?;
-    let scope = selection
+    let path_selection =
+        pathspec::build_selection(paths, cwd, engine.root()).map_err(path_arg_failure)?;
+    let scope = path_selection
         .resolve(&AreaSet::default())
         .map_err(|error| path_selection_failure(error, &AreaSet::default()))?;
     let groups = scope
         .paths()
         .iter()
-        .map(|path| ScopeGroup {
-            kind: ScopeKind::Path,
+        .map(|path| SelectionGroup::Path {
             label: path.to_string(),
-            paths: vec![path.clone()],
+            path: path.clone(),
         })
         .collect();
-    Ok(ProjectionScope { scope, groups })
+    Selection::new(groups).map_err(|error| engine_failure(error.into()))
 }
 
-/// Renders the `show` document for `spec` (section 7.1).
-fn show(
-    repository: &GitRepository,
-    spec: &str,
-    mode: ProjectionMode,
-    projection_scope: &ProjectionScope,
-) -> Result<String, CliError> {
-    let revision = repository.resolve_commit(spec).map_err(git_failure)?;
-    ensure_groups_in_revision(repository, &revision, spec, &projection_scope.groups)?;
-    let entries = repository
-        .source_entries(&revision)
-        .map_err(|error| git_failure_for(error, Some(spec)))?;
-
-    let projectors: [&dyn LanguageProjector; 2] = [&ELM_PROJECTOR, &RUST_PROJECTOR];
-    let mut caches = Caches::default();
-    let mut files = Vec::new();
-    for entry in &entries {
-        if !projection_scope.scope.matches(&entry.path) {
-            continue;
-        }
-        if let Some(file) = project_entry(repository, &projectors, &mut caches, spec, entry, mode)?
-        {
-            files.push(file);
-        }
-    }
-
-    Ok(show_document(&files))
-}
-
-/// Renders the focused `diff` document between `base_spec` and `target_spec`
-/// (section 7.2).
-fn diff(
-    repository: &GitRepository,
-    base_spec: &str,
-    target_spec: &str,
-    mode: ProjectionMode,
-    projection_scope: &ProjectionScope,
-) -> Result<String, CliError> {
-    let base = repository.resolve_commit(base_spec).map_err(git_failure)?;
-    let target = repository
-        .resolve_commit(target_spec)
-        .map_err(git_failure)?;
-    ensure_groups_in_diff(
-        repository,
-        &base,
-        &target,
-        base_spec,
-        target_spec,
-        &projection_scope.groups,
-    )?;
-    let base_entries = repository
-        .source_entries(&base)
-        .map_err(|error| git_failure_for(error, Some(base_spec)))?;
-    let target_entries = repository
-        .source_entries(&target)
-        .map_err(|error| git_failure_for(error, Some(target_spec)))?;
-
-    let base_map: BTreeMap<&RepoPath, &SourceEntry> = base_entries
-        .iter()
-        .map(|entry| (&entry.path, entry))
-        .collect();
-    let target_map: BTreeMap<&RepoPath, &SourceEntry> = target_entries
-        .iter()
-        .map(|entry| (&entry.path, entry))
-        .collect();
-
-    // A `BTreeSet` merges the two sides in raw path byte order, which is the
-    // order the document will use (sections 7.2, 13).
-    let mut paths: BTreeSet<&RepoPath> = base_map.keys().copied().collect();
-    paths.extend(target_map.keys().copied());
-
-    let projectors: [&dyn LanguageProjector; 2] = [&ELM_PROJECTOR, &RUST_PROJECTOR];
-    let mut caches = Caches::default();
-    let mut old_files = Vec::new();
-    let mut new_files = Vec::new();
-
-    for path in paths {
-        if !projection_scope.scope.matches(path) {
-            continue;
-        }
-        let old = base_map.get(path).copied();
-        let new = target_map.get(path).copied();
-
-        // Skip identical blobs before reading or projecting either side. This
-        // is the main performance rule of section 17 and is also what makes an
-        // unchanged file invisible.
-        if let (Some(old), Some(new)) = (old, new)
-            && old.blob_id == new.blob_id
-        {
-            continue;
-        }
-
-        if let Some(entry) = old
-            && let Some(file) =
-                project_entry(repository, &projectors, &mut caches, base_spec, entry, mode)?
-        {
-            old_files.push(file);
-        }
-        if let Some(entry) = new
-            && let Some(file) = project_entry(
-                repository,
-                &projectors,
-                &mut caches,
-                target_spec,
-                entry,
-                mode,
-            )?
-        {
-            new_files.push(file);
-        }
-    }
-
-    Ok(diff_document(&old_files, &new_files))
-}
-
-/// Fails when a selected group names nothing in `revision`, before any blob is
-/// read, so a mistyped `--path` or `--area` cannot masquerade as an empty
-/// projection. An area is satisfied by any one of its paths existing.
-fn ensure_groups_in_revision(
-    repository: &GitRepository,
-    revision: &Revision,
-    revision_spec: &str,
-    groups: &[ScopeGroup],
-) -> Result<(), CliError> {
-    let mut missing = Vec::new();
-    for group in groups {
-        if !group_in_revision(repository, revision, revision_spec, group)? {
-            missing.push(group.clone());
-        }
-    }
-
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(missing_paths_failure(
-            missing,
-            &format!("`{revision_spec}`"),
-        ))
-    }
-}
-
-/// Fails when a selected group is absent from both revisions, before any blob
-/// is read. A path deleted by the target still belongs to the diff, so a group
-/// counts as present wherever either side names it.
-fn ensure_groups_in_diff(
-    repository: &GitRepository,
-    base: &Revision,
-    target: &Revision,
-    base_spec: &str,
-    target_spec: &str,
-    groups: &[ScopeGroup],
-) -> Result<(), CliError> {
-    let mut missing = Vec::new();
-    for group in groups {
-        // Short-circuiting means the target is only consulted when the base
-        // does not already satisfy the group.
-        let present = group_in_revision(repository, base, base_spec, group)?
-            || group_in_revision(repository, target, target_spec, group)?;
-        if !present {
-            missing.push(group.clone());
-        }
-    }
-
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        let revisions = format!("`{base_spec}` or `{target_spec}`");
-        Err(missing_paths_failure(missing, &revisions))
-    }
-}
-
-fn group_in_revision(
-    repository: &GitRepository,
-    revision: &Revision,
-    revision_spec: &str,
-    group: &ScopeGroup,
-) -> Result<bool, CliError> {
-    for path in &group.paths {
-        let exists = repository
-            .path_exists(revision, path)
-            .map_err(|error| git_failure_for(error, Some(revision_spec)))?;
-        if exists {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Per-command caches; never persisted (section 17).
-#[derive(Default)]
-struct Caches {
-    blobs: HashMap<ObjectId, Arc<[u8]>>,
-    projections: HashMap<ObjectId, Vec<CachedProjection>>,
-}
-
-struct CachedProjection {
-    language: Language,
-    mode: ProjectionMode,
-    items: Vec<ProjectedItem>,
-}
-
-/// Reads, decodes, and projects one entry, reusing the caches.
+/// Converts an engine failure into the CLI's reportable error.
 ///
-/// Returns `None` for an unsupported path, which is an exclusion rather than a
-/// failure (section 15).
-fn project_entry(
-    repository: &GitRepository,
-    projectors: &[&dyn LanguageProjector],
-    caches: &mut Caches,
-    revision_spec: &str,
-    entry: &SourceEntry,
-    mode: ProjectionMode,
-) -> Result<Option<ProjectedFile>, CliError> {
-    let Some(projector) = select_projector(projectors, &entry.path) else {
-        return Ok(None);
-    };
-    let language = projector.language();
-
-    if let Some(items) = lookup_projection(caches, &entry.blob_id, language, mode) {
-        // The cache key intentionally excludes the path (section 17). Reusing
-        // the items for another path is safe because stable keys and spans are
-        // never rendered; only `canonical_text` reaches the document.
-        return Ok(Some(ProjectedFile::new(
-            entry.path.clone(),
-            language,
-            items,
-        )));
+/// The underlying error is unwrapped rather than nested so the diagnostic's
+/// cause chain is identical to the one produced before the engine extraction.
+fn engine_failure(error: EngineError) -> CliError {
+    match error {
+        EngineError::Git { source, revision } => git_failure_for(source, revision.as_deref()),
+        EngineError::Config(source) => config_failure(source),
+        EngineError::Projection { context, source } => projection_failure(source, *context),
+        EngineError::UnsatisfiedSelection { revisions, missing } => {
+            let error = MissingPaths { missing };
+            let help = error.help(&revisions);
+            CliError {
+                message: error.to_string(),
+                help: Some(help),
+                source: Box::new(error),
+            }
+        }
+        EngineError::Selection(source) => CliError {
+            message: source.to_string(),
+            help: None,
+            source: Box::new(source),
+        },
     }
-
-    let bytes = read_blob(repository, caches, &entry.blob_id, revision_spec)?;
-    let source = decode_source(&entry.path, language, &bytes)
-        .map_err(|error| projection_failure(error, repository, revision_spec))?;
-    let projected = projector
-        .project(ProjectionInput {
-            path: &entry.path,
-            source,
-            mode,
-        })
-        .map_err(|error| projection_failure(error, repository, revision_spec))?;
-
-    let items = projected.items().to_vec();
-    caches
-        .projections
-        .entry(entry.blob_id.clone())
-        .or_default()
-        .push(CachedProjection {
-            language,
-            mode,
-            items: items.clone(),
-        });
-    Ok(Some(ProjectedFile::new(
-        entry.path.clone(),
-        language,
-        items,
-    )))
 }
 
-fn lookup_projection(
-    caches: &Caches,
-    id: &ObjectId,
-    language: Language,
-    mode: ProjectionMode,
-) -> Option<Vec<ProjectedItem>> {
-    caches.projections.get(id).and_then(|entries| {
-        entries
-            .iter()
-            .find(|entry| entry.language == language && entry.mode == mode)
-            .map(|entry| entry.items.clone())
-    })
-}
-
-/// Reads each blob at most once per command, sharing it via `Arc` so callers
-/// can borrow the bytes while the cache stays mutable for later reads.
-fn read_blob(
-    repository: &GitRepository,
-    caches: &mut Caches,
-    id: &ObjectId,
-    revision_spec: &str,
-) -> Result<Arc<[u8]>, CliError> {
-    if let Some(bytes) = caches.blobs.get(id) {
-        return Ok(Arc::clone(bytes));
-    }
-    let bytes: Arc<[u8]> = repository
-        .read_blob(id)
-        .map_err(|error| git_failure_for(error, Some(revision_spec)))?
-        .into();
-    caches.blobs.insert(id.clone(), Arc::clone(&bytes));
-    Ok(bytes)
-}
-
-fn projection_failure(
-    error: ProjectionError,
-    repository: &GitRepository,
-    revision_spec: &str,
-) -> CliError {
-    let context = DiagnosticContext {
-        repository: Some(repository.git_dir().to_path_buf()),
-        revision: Some(revision_spec.to_owned()),
-        path: Some(error.path().clone()),
-        language: Some(error.language()),
-        range: error.range().cloned(),
-    };
-    let help = context_help(&context);
+#[cfg(feature = "tui")]
+fn tui_failure<T>(error: T) -> CliError
+where
+    T: Error + Send + Sync + 'static,
+{
     CliError {
-        message: "a supported source file could not be projected".to_owned(),
-        help,
+        message: error.to_string(),
+        help: None,
         source: Box::new(error),
     }
 }
 
-fn git_failure(error: GitError) -> CliError {
-    git_failure_for(error, None)
-}
-
-/// Like [`git_failure`] but fills in the user revision when the underlying
+/// Formats a Git failure, filling in the user revision when the underlying
 /// error does not already name it (for example a blob read or tree traversal).
 fn git_failure_for(error: GitError, revision: Option<&str>) -> CliError {
     let mut context = git_context(&error);
@@ -535,7 +287,7 @@ fn path_arg_failure(error: PathArgError) -> CliError {
 #[derive(Debug, thiserror::Error)]
 #[error("a selected path or area does not exist in the projected revision")]
 struct MissingPaths {
-    missing: Vec<ScopeGroup>,
+    missing: Vec<SelectionGroup>,
 }
 
 impl MissingPaths {
@@ -545,22 +297,17 @@ impl MissingPaths {
         let mut lines = Vec::with_capacity(self.missing.len() + 1);
         lines.push(format!("revision: {revisions}"));
         for group in &self.missing {
-            let key = match group.kind {
-                ScopeKind::Path => "path",
-                ScopeKind::Area => "area",
-            };
-            lines.push(format!("{key}: {}", group.label));
+            lines.push(format!("{}: {}", group.kind_label(), group.label()));
         }
         lines.join("\n")
     }
 }
 
-fn missing_paths_failure(missing: Vec<ScopeGroup>, revisions: &str) -> CliError {
-    let error = MissingPaths { missing };
-    let help = error.help(revisions);
+fn projection_failure(error: ProjectionError, context: DiagnosticContext) -> CliError {
+    let help = context_help(&context);
     CliError {
-        message: error.to_string(),
-        help: Some(help),
+        message: "a supported source file could not be projected".to_owned(),
+        help,
         source: Box::new(error),
     }
 }

@@ -6,7 +6,6 @@
 
 mod args;
 mod command;
-mod config;
 mod output;
 mod pathspec;
 
