@@ -10,3 +10,6 @@ ownai-core.workspace = true
 bstr.workspace = true
 gix.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

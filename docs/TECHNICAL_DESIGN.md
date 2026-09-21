@@ -735,6 +735,15 @@ Required Rust cases:
 - Macro definitions and invocations that must be excluded.
 - Comments and formatting variations.
 
+Fixture and test file location:
+
+- Unit tests live beside the code they cover.
+- Integration tests live under `crates/<crate>/tests/` and may share helpers
+  through a `tests/support/` module that each test target includes with
+  `mod support;`.
+- Repository-level language fixtures stay under the top-level `fixtures/`
+  directory.
+
 ### 16.3 Invariance tests
 
 For both languages, prove:
@@ -761,6 +770,16 @@ Create real temporary repositories and commits. Test:
 - Symlink and submodule entries ignored.
 - Bare repository operation.
 - Invalid and ambiguous revisions.
+
+Create the temporary repositories with the `git` executable. This is the only
+place the test suite may invoke Git: test setup may create commits, tags,
+branches, worktrees, and bare clones, while library and CLI code must never
+invoke the Git executable. Isolate every invocation from host configuration and
+the network by pointing `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` at
+`/dev/null`, setting `GIT_CONFIG_NOSYSTEM`, disabling commit and tag signing,
+and supplying fixed author, committer, and date values. After fixtures exist,
+exercise only `ownai-git`. SHA-256 cases must perform a runtime capability check
+and skip cleanly when the environment's Git cannot create a SHA-256 repository.
 
 ### 16.5 End-to-end CLI tests
 
