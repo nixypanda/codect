@@ -1,9 +1,9 @@
 //! The terminal frontend.
 //!
 //! This crate is the only layer that touches the terminal. It owns the run
-//! loop, terminal lifecycle, and the interpretation of effects, and it follows
-//! The Elm Architecture: `Model`, `Msg`, `Cmd`, `update`, and `view` are pure
-//! and live in `app.rs` once the Show implementation lands.
+//! loop, the terminal lifecycle, and the interpretation of effects, and it
+//! follows The Elm Architecture: the pure `Model`, `Msg`, `Cmd`, `update`, and
+//! `view` live in [`app`], while this module is the only imperative part.
 //!
 //! # Boundaries
 //!
@@ -11,14 +11,26 @@
 //!   the command line.
 //! - The crate never discovers a repository or reads `.ownai.toml`; it receives
 //!   an [`Engine`] and a fully-built [`Selection`].
-//!
-//! The Show implementation — the TEA core, rendering, and the terminal driver
-//! seam — is delivered on top of this scaffold.
+//! - Engine calls are effects: they are described by a [`app::Cmd`] and only
+//!   ever run here, never inside `update` or `view`.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Stdout};
+use std::sync::Once;
 
+use crossterm::cursor;
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ownai_core::ProjectionMode;
 use ownai_engine::{Engine, EngineError, Selection};
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+
+mod app;
+
+use app::{Cmd, Key, Model, Msg, update, view};
 
 /// Everything `run` needs beyond the engine, built by the caller.
 ///
@@ -36,7 +48,7 @@ pub struct TuiOptions {
     pub scope_label: String,
 }
 
-/// A failure that prevents the frontend from starting.
+/// A failure that prevents the frontend from starting or continuing.
 #[derive(Debug, thiserror::Error)]
 pub enum TuiError {
     /// Standard input or output is not a terminal, so no control sequence may
@@ -44,12 +56,11 @@ pub enum TuiError {
     #[error("standard input and standard output must be terminals")]
     NotATerminal,
 
-    /// The Show implementation has not been delivered yet. This remains until
-    /// the TEA core and terminal runtime land.
-    #[error("the terminal frontend is not implemented yet")]
-    Unimplemented,
+    /// The terminal could not be set up, read, or drawn.
+    #[error("the terminal could not be used")]
+    Terminal(#[source] std::io::Error),
 
-    /// The initial projection could not be produced. A terminal is restored
+    /// The initial projection could not be produced. The terminal is restored
     /// before this reaches the caller.
     #[error(transparent)]
     Engine(#[from] EngineError),
@@ -59,10 +70,440 @@ pub enum TuiError {
 ///
 /// Verifies the terminal before emitting any control sequence; a non-terminal
 /// invocation returns [`TuiError::NotATerminal`] without touching the screen.
-pub fn run(_engine: Engine, _options: TuiOptions) -> Result<(), TuiError> {
+pub fn run(engine: Engine, options: TuiOptions) -> Result<(), TuiError> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(TuiError::NotATerminal);
     }
+    install_panic_hook();
+    run_with(engine, options, CrosstermDriver::default())
+}
 
-    Err(TuiError::Unimplemented)
+/// The imperative seam: terminal lifecycle, event reading, and effect
+/// interpretation. Generic over the driver so tests can inject one.
+fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result<(), TuiError> {
+    let mut session = Session::new(driver);
+    session.setup()?;
+
+    let (width, height) = session.driver().size()?;
+    let mut model = Model::new(
+        engine.root().display().to_string(),
+        options.revision.clone(),
+        options.mode,
+        options.scope_label,
+        options.selection,
+        width,
+        height,
+    );
+
+    // The initial projection is the startup effect. Unlike a later reload, a
+    // failure here is fatal: there is no previous screen to keep.
+    let startup = interpret(
+        &engine,
+        Cmd::LoadShow {
+            revision: model.revision.clone(),
+            mode: model.mode,
+            selection: model.selection.clone(),
+        },
+    );
+    match startup {
+        Msg::Loaded {
+            mode,
+            result: Ok(files),
+        } => {
+            let (updated, _) = update(
+                Msg::Loaded {
+                    mode,
+                    result: Ok(files),
+                },
+                &model,
+            );
+            model = updated;
+        }
+        Msg::Loaded {
+            result: Err(error), ..
+        } => return Err(TuiError::Engine(error)),
+        _ => unreachable!("the startup effect always produces Loaded"),
+    }
+
+    loop {
+        session.driver().draw(&model)?;
+        let msg = session.driver().read_msg()?;
+        let (mut next, cmds) = update(msg, &model);
+        for cmd in cmds {
+            let completed = interpret(&engine, cmd);
+            let (updated, _) = update(completed, &next);
+            next = updated;
+        }
+        model = next;
+        if model.quit {
+            break;
+        }
+    }
+
+    // `Session`'s drop restores the terminal, on this path and on any error.
+    Ok(())
+}
+
+/// Runs one effect and reports its completion as a message.
+fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
+    match cmd {
+        Cmd::LoadShow {
+            revision,
+            mode,
+            selection,
+        } => Msg::Loaded {
+            mode,
+            result: engine.show(&revision, mode, &selection),
+        },
+    }
+}
+
+/// The terminal operations the runtime needs. Implemented by the real
+/// crossterm driver and by test doubles.
+trait Driver {
+    /// Stages terminal setup. On failure, the steps that succeeded are undone
+    /// by [`Driver::teardown`].
+    fn setup(&mut self) -> Result<(), TuiError>;
+    /// Undoes exactly the steps that succeeded, in reverse order. Best-effort.
+    fn teardown(&mut self);
+    fn size(&mut self) -> Result<(u16, u16), TuiError>;
+    fn draw(&mut self, model: &Model) -> Result<(), TuiError>;
+    fn read_msg(&mut self) -> Result<Msg, TuiError>;
+}
+
+/// Owns a driver and guarantees its teardown on drop, whether the runtime
+/// returns normally, returns an error, or unwinds.
+struct Session<D: Driver> {
+    driver: D,
+    attempted: bool,
+}
+
+impl<D: Driver> Session<D> {
+    fn new(driver: D) -> Self {
+        Self {
+            driver,
+            attempted: false,
+        }
+    }
+
+    fn setup(&mut self) -> Result<(), TuiError> {
+        // Marked before the attempt so a partial setup is still cleaned up.
+        self.attempted = true;
+        self.driver.setup()
+    }
+
+    fn driver(&mut self) -> &mut D {
+        &mut self.driver
+    }
+}
+
+impl<D: Driver> Drop for Session<D> {
+    fn drop(&mut self) {
+        if self.attempted {
+            self.driver.teardown();
+        }
+    }
+}
+
+/// The real driver: raw mode, the alternate screen, and a crossterm backend.
+#[derive(Default)]
+struct CrosstermDriver {
+    terminal: Option<Terminal<CrosstermBackend<Stdout>>>,
+    raw: bool,
+    alternate: bool,
+    hidden: bool,
+}
+
+impl Driver for CrosstermDriver {
+    fn setup(&mut self) -> Result<(), TuiError> {
+        enable_raw_mode().map_err(TuiError::Terminal)?;
+        self.raw = true;
+
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnterAlternateScreen).map_err(TuiError::Terminal)?;
+        self.alternate = true;
+
+        execute!(stdout, cursor::Hide).map_err(TuiError::Terminal)?;
+        self.hidden = true;
+
+        let backend = CrosstermBackend::new(std::io::stdout());
+        self.terminal = Some(Terminal::new(backend).map_err(TuiError::Terminal)?);
+        Ok(())
+    }
+
+    fn teardown(&mut self) {
+        self.terminal = None;
+        let mut stdout = std::io::stdout();
+        if self.hidden {
+            let _ = execute!(stdout, cursor::Show);
+            self.hidden = false;
+        }
+        if self.alternate {
+            let _ = execute!(stdout, LeaveAlternateScreen);
+            self.alternate = false;
+        }
+        if self.raw {
+            let _ = disable_raw_mode();
+            self.raw = false;
+        }
+    }
+
+    fn size(&mut self) -> Result<(u16, u16), TuiError> {
+        crossterm::terminal::size().map_err(TuiError::Terminal)
+    }
+
+    fn draw(&mut self, model: &Model) -> Result<(), TuiError> {
+        let terminal = self.terminal.as_mut().ok_or_else(not_a_terminal)?;
+        terminal
+            .draw(|frame| view(model, frame))
+            .map(|_| ())
+            .map_err(TuiError::Terminal)
+    }
+
+    fn read_msg(&mut self) -> Result<Msg, TuiError> {
+        loop {
+            match event::read().map_err(TuiError::Terminal)? {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    if let Some(msg) = translate(key) {
+                        return Ok(msg);
+                    }
+                }
+                Event::Resize(width, height) => return Ok(Msg::Resize { width, height }),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn not_a_terminal() -> TuiError {
+    TuiError::Terminal(std::io::Error::other("the terminal is not set up"))
+}
+
+fn translate(key: KeyEvent) -> Option<Msg> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let key = match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::CtrlC,
+        KeyCode::Char(character) => Key::Char(character),
+        KeyCode::Up => Key::Up,
+        KeyCode::Down => Key::Down,
+        KeyCode::Left => Key::Left,
+        KeyCode::Right => Key::Right,
+        KeyCode::Tab => Key::Tab,
+        KeyCode::BackTab => Key::BackTab,
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Esc => Key::Esc,
+        _ => return None,
+    };
+    Some(Msg::Key(key))
+}
+
+/// Installs a panic hook that restores the terminal before the panic message
+/// is printed, so a crash does not leave the alternate screen active.
+fn install_panic_hook() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            restore_terminal();
+            previous(info);
+        }));
+    });
+}
+
+/// Best-effort terminal restoration that never panics.
+fn restore_terminal() {
+    let mut stdout = std::io::stdout();
+    let _ = execute!(stdout, cursor::Show);
+    let _ = execute!(stdout, LeaveAlternateScreen);
+    let _ = disable_raw_mode();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct Log {
+        setup: Vec<&'static str>,
+        teardown: Vec<&'static str>,
+        draws: usize,
+    }
+
+    struct MockDriver {
+        fail_at: Option<usize>,
+        log: Rc<RefCell<Log>>,
+        messages: VecDeque<Msg>,
+    }
+
+    impl MockDriver {
+        fn new(fail_at: Option<usize>, log: Rc<RefCell<Log>>, messages: VecDeque<Msg>) -> Self {
+            Self {
+                fail_at,
+                log,
+                messages,
+            }
+        }
+    }
+
+    impl Driver for MockDriver {
+        fn setup(&mut self) -> Result<(), TuiError> {
+            for (index, step) in ["raw", "alternate", "hidden"].into_iter().enumerate() {
+                if self.fail_at == Some(index) {
+                    return Err(TuiError::Terminal(std::io::Error::other("setup failed")));
+                }
+                self.log.borrow_mut().setup.push(step);
+            }
+            Ok(())
+        }
+
+        fn teardown(&mut self) {
+            let mut log = self.log.borrow_mut();
+            // Undo in reverse order, matching the real driver.
+            if log.setup.contains(&"hidden") {
+                log.teardown.push("show_cursor");
+            }
+            if log.setup.contains(&"alternate") {
+                log.teardown.push("leave_alternate");
+            }
+            if log.setup.contains(&"raw") {
+                log.teardown.push("disable_raw");
+            }
+        }
+
+        fn size(&mut self) -> Result<(u16, u16), TuiError> {
+            Ok((100, 30))
+        }
+
+        fn draw(&mut self, _model: &Model) -> Result<(), TuiError> {
+            self.log.borrow_mut().draws += 1;
+            Ok(())
+        }
+
+        fn read_msg(&mut self) -> Result<Msg, TuiError> {
+            Ok(self
+                .messages
+                .pop_front()
+                .unwrap_or(Msg::Key(Key::Char('q'))))
+        }
+    }
+
+    fn log() -> Rc<RefCell<Log>> {
+        Rc::new(RefCell::new(Log::default()))
+    }
+
+    #[test]
+    fn a_setup_failure_tears_down_every_step_that_succeeded() {
+        let cases: [(Option<usize>, Vec<&str>); 4] = [
+            (Some(0), vec![]),
+            (Some(1), vec!["disable_raw"]),
+            (Some(2), vec!["leave_alternate", "disable_raw"]),
+            (None, vec!["show_cursor", "leave_alternate", "disable_raw"]),
+        ];
+
+        for (fail_at, expected) in cases {
+            let log = log();
+            let mut session = Session::new(MockDriver::new(fail_at, log.clone(), VecDeque::new()));
+            let result = session.setup();
+            assert_eq!(result.is_err(), fail_at.is_some());
+            drop(session);
+            assert_eq!(log.borrow().teardown, expected, "fail_at = {fail_at:?}");
+        }
+    }
+
+    #[test]
+    fn a_run_quits_on_q_and_restores_the_terminal() {
+        let repo = TestRepo::new();
+        let engine = Engine::discover(repo.path()).expect("discover");
+        let log = log();
+        let messages = VecDeque::from([Msg::Key(Key::Char('q'))]);
+        let driver = MockDriver::new(None, log.clone(), messages);
+
+        let options = TuiOptions {
+            revision: "HEAD".to_owned(),
+            mode: ProjectionMode::Types,
+            selection: Selection::all(),
+            scope_label: "all".to_owned(),
+        };
+        run_with(engine, options, driver).expect("run");
+
+        let log = log.borrow();
+        assert_eq!(log.setup, vec!["raw", "alternate", "hidden"]);
+        assert_eq!(
+            log.teardown,
+            vec!["show_cursor", "leave_alternate", "disable_raw"]
+        );
+        assert!(log.draws >= 1, "the model must be drawn at least once");
+    }
+
+    #[test]
+    fn a_failing_initial_projection_restores_the_terminal_and_errors() {
+        let repo = TestRepo::new();
+        let engine = Engine::discover(repo.path()).expect("discover");
+        let log = log();
+        let driver = MockDriver::new(None, log.clone(), VecDeque::new());
+
+        let options = TuiOptions {
+            // There is no such revision in an empty repository.
+            revision: "no-such-revision".to_owned(),
+            mode: ProjectionMode::Types,
+            selection: Selection::all(),
+            scope_label: "all".to_owned(),
+        };
+        let error = run_with(engine, options, driver).expect_err("startup failure");
+        assert!(matches!(error, TuiError::Engine(_)), "got {error:?}");
+        assert_eq!(
+            log.borrow().teardown,
+            vec!["show_cursor", "leave_alternate", "disable_raw"]
+        );
+    }
+
+    /// A minimal temporary repository with one empty commit.
+    struct TestRepo {
+        dir: tempfile::TempDir,
+    }
+
+    impl TestRepo {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("temporary directory");
+            run_git(dir.path(), &["init", "-q"]);
+            run_git(dir.path(), &["commit", "-q", "--allow-empty", "-m", "init"]);
+            Self { dir }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            self.dir.path()
+        }
+    }
+
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=OwnAI Test",
+                "-c",
+                "user.email=ownai@example.invalid",
+                "-c",
+                "init.defaultBranch=main",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_DATE", "2020-01-01T00:00:00+0000")
+            .env("GIT_COMMITTER_DATE", "2020-01-01T00:00:00+0000")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?} failed");
+    }
 }

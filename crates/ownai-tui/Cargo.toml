@@ -14,5 +14,4 @@ unicode-width.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-portable-pty.workspace = true
 tempfile.workspace = true

@@ -30,3 +30,4 @@ ownai-language-rust.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
+portable-pty.workspace = true
