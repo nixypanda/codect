@@ -295,6 +295,10 @@ fn translate(key: KeyEvent) -> Option<Msg> {
         KeyCode::BackTab => Key::BackTab,
         KeyCode::Enter => Key::Enter,
         KeyCode::Esc => Key::Esc,
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Delete => Key::Delete,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
         _ => return None,
     };
     Some(Msg::Key(key))

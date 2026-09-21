@@ -54,7 +54,88 @@ pub enum Key {
     BackTab,
     Enter,
     Esc,
+    Backspace,
+    Delete,
+    Home,
+    End,
     CtrlC,
+}
+
+/// A single-line editable field.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextInput {
+    pub text: String,
+    /// A byte offset into `text`, always on a character boundary.
+    pub cursor: usize,
+}
+
+impl TextInput {
+    pub fn new(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let cursor = text.len();
+        Self { text, cursor }
+    }
+
+    pub fn insert(&mut self, character: char) {
+        self.text.insert(self.cursor, character);
+        self.cursor += character.len_utf8();
+    }
+
+    pub fn backspace(&mut self) {
+        if let Some((index, _)) = self.text[..self.cursor].char_indices().last() {
+            self.text.remove(index);
+            self.cursor = index;
+        }
+    }
+
+    pub fn delete(&mut self) {
+        if self.cursor < self.text.len() {
+            self.text.remove(self.cursor);
+        }
+    }
+
+    pub fn left(&mut self) {
+        if let Some((index, _)) = self.text[..self.cursor].char_indices().last() {
+            self.cursor = index;
+        }
+    }
+
+    pub fn right(&mut self) {
+        if let Some(character) = self.text[self.cursor..].chars().next() {
+            self.cursor += character.len_utf8();
+        }
+    }
+
+    pub fn home(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn end(&mut self) {
+        self.cursor = self.text.len();
+    }
+
+    /// The trimmed value to apply.
+    pub fn value(&self) -> String {
+        self.text.trim().to_owned()
+    }
+}
+
+/// Which revision a revision prompt edits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RevisionField {
+    Show,
+    Base,
+    Target,
+}
+
+/// A modal interaction that captures keys until it closes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Overlay {
+    Help,
+    Revision {
+        field: RevisionField,
+        input: TextInput,
+    },
 }
 
 /// What to project, kept so `m` can re-run the same request in the other mode
@@ -103,6 +184,56 @@ impl LoadRequest {
                 mode,
                 selection: selection.clone(),
             },
+        }
+    }
+
+    /// Replaces the `show` revision.
+    pub fn with_revision(&self, revision: String) -> Self {
+        match self {
+            Self::Show {
+                mode, selection, ..
+            } => Self::Show {
+                revision,
+                mode: *mode,
+                selection: selection.clone(),
+            },
+            Self::Diff { .. } => self.clone(),
+        }
+    }
+
+    /// Replaces the diff base revision.
+    pub fn with_base(&self, base: String) -> Self {
+        match self {
+            Self::Diff {
+                target,
+                mode,
+                selection,
+                ..
+            } => Self::Diff {
+                base,
+                target: target.clone(),
+                mode: *mode,
+                selection: selection.clone(),
+            },
+            Self::Show { .. } => self.clone(),
+        }
+    }
+
+    /// Replaces the diff target revision.
+    pub fn with_target(&self, target: String) -> Self {
+        match self {
+            Self::Diff {
+                base,
+                mode,
+                selection,
+                ..
+            } => Self::Diff {
+                base: base.clone(),
+                target,
+                mode: *mode,
+                selection: selection.clone(),
+            },
+            Self::Show { .. } => self.clone(),
         }
     }
 }
@@ -260,7 +391,8 @@ pub struct Model {
     pub focus: Pane,
     pub body_scroll: u16,
     pub body_hscroll: u16,
-    pub help: bool,
+    /// The active modal overlay, if any. It captures keys until it closes.
+    pub overlay: Option<Overlay>,
     pub diagnostic: Option<String>,
     /// Lazily computed syntax highlighting for the selected file.
     highlights: HighlightCache,
@@ -296,7 +428,7 @@ impl Model {
             focus: Pane::Tree,
             body_scroll: 0,
             body_hscroll: 0,
-            help: false,
+            overlay: None,
             diagnostic: None,
             highlights: HighlightCache::default(),
             generation: 0,
@@ -566,41 +698,112 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
         model.quit = true;
         return;
     }
-    if key == Key::Char('?') {
-        model.help = !model.help;
+    if model.overlay.is_some() {
+        overlay_key(key, model, cmds);
         return;
     }
-    if key == Key::Esc {
-        if model.help {
-            model.help = false;
-        } else {
-            model.diagnostic = None;
+    match key {
+        Key::Char('?') => model.overlay = Some(Overlay::Help),
+        Key::Esc => model.diagnostic = None,
+        Key::Char('r') if matches!(model.content, Content::Show(_)) => {
+            model.overlay = Some(Overlay::Revision {
+                field: RevisionField::Show,
+                input: TextInput::new(current_revision(model)),
+            });
         }
-        return;
+        Key::Char('b') if matches!(model.content, Content::Diff(_)) => {
+            model.overlay = Some(Overlay::Revision {
+                field: RevisionField::Base,
+                input: TextInput::new(current_base(model)),
+            });
+        }
+        Key::Char('t') if matches!(model.content, Content::Diff(_)) => {
+            model.overlay = Some(Overlay::Revision {
+                field: RevisionField::Target,
+                input: TextInput::new(current_target(model)),
+            });
+        }
+        Key::Char('m') => {
+            let mode = match model.mode {
+                ProjectionMode::Types => ProjectionMode::Signatures,
+                ProjectionMode::Signatures => ProjectionMode::Types,
+            };
+            // The mode is only changed when the replacement arrives.
+            cmds.push(Cmd::Load {
+                request: model.request.with_mode(mode),
+            });
+        }
+        Key::Tab | Key::BackTab => cycle_focus(model, key == Key::Tab),
+        _ => match model.focus {
+            Pane::Tree => tree_key(key, model),
+            Pane::Body | Pane::Old | Pane::New => body_key(key, model),
+        },
     }
-    // The help overlay swallows the rest until it is dismissed.
-    if model.help {
-        return;
-    }
-    if key == Key::Tab || key == Key::BackTab {
-        cycle_focus(model, key == Key::Tab);
-        return;
-    }
-    if key == Key::Char('m') {
-        let mode = match model.mode {
-            ProjectionMode::Types => ProjectionMode::Signatures,
-            ProjectionMode::Signatures => ProjectionMode::Types,
-        };
-        // The mode is only changed when the replacement arrives.
-        cmds.push(Cmd::Load {
-            request: model.request.with_mode(mode),
-        });
-        return;
-    }
+}
 
-    match model.focus {
-        Pane::Tree => tree_key(key, model),
-        Pane::Body | Pane::Old | Pane::New => body_key(key, model),
+/// Routes a key to the active overlay. The overlay is taken and reinserted so
+/// its owned editor state can be mutated.
+fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
+    let Some(overlay) = model.overlay.take() else {
+        return;
+    };
+    match overlay {
+        Overlay::Help => {
+            // A dismissal key closes help; every other key is swallowed.
+            if key != Key::Esc && key != Key::Char('?') {
+                model.overlay = Some(Overlay::Help);
+            }
+        }
+        Overlay::Revision { field, mut input } => {
+            let mut reopen = true;
+            match key {
+                Key::Esc => reopen = false,
+                Key::Enter => {
+                    reopen = false;
+                    let value = input.value();
+                    if !value.is_empty() {
+                        let request = match field {
+                            RevisionField::Show => model.request.with_revision(value),
+                            RevisionField::Base => model.request.with_base(value),
+                            RevisionField::Target => model.request.with_target(value),
+                        };
+                        cmds.push(Cmd::Load { request });
+                    }
+                }
+                Key::Char(character) => input.insert(character),
+                Key::Backspace => input.backspace(),
+                Key::Delete => input.delete(),
+                Key::Left => input.left(),
+                Key::Right => input.right(),
+                Key::Home => input.home(),
+                Key::End => input.end(),
+                _ => {}
+            }
+            if reopen {
+                model.overlay = Some(Overlay::Revision { field, input });
+            }
+        }
+    }
+}
+
+fn current_revision(model: &Model) -> String {
+    match &model.request {
+        LoadRequest::Show { revision, .. } => revision.clone(),
+        LoadRequest::Diff { .. } => "HEAD".to_owned(),
+    }
+}
+
+fn current_base(model: &Model) -> String {
+    match &model.request {
+        LoadRequest::Diff { base, .. } => base.clone(),
+        LoadRequest::Show { .. } => String::new(),
+    }
+}
+
+fn current_target(model: &Model) -> String {
+    match &model.request {
+        LoadRequest::Diff { target, .. } => target.clone(),
+        LoadRequest::Show { .. } => String::new(),
     }
 }
 
@@ -909,9 +1112,7 @@ pub fn view(model: &Model, frame: &mut Frame) {
 
     if area.width < SINGLE_PANE_MIN_WIDTH || area.height < MIN_HEIGHT {
         render_too_small(frame, area);
-        if model.help {
-            render_help(frame, area);
-        }
+        render_overlay(model, frame, area);
         return;
     }
 
@@ -952,9 +1153,55 @@ pub fn view(model: &Model, frame: &mut Frame) {
     if let Some(area) = diagnostic {
         render_diagnostic(model, frame, area);
     }
-    if model.help {
-        render_help(frame, area);
+    render_overlay(model, frame, area);
+}
+
+/// Renders the active overlay, if any.
+fn render_overlay(model: &Model, frame: &mut Frame, area: Rect) {
+    match &model.overlay {
+        Some(Overlay::Help) => render_help(frame, area),
+        Some(Overlay::Revision { field, input }) => render_revision(frame, area, *field, input),
+        None => {}
     }
+}
+
+fn render_revision(frame: &mut Frame, area: Rect, field: RevisionField, input: &TextInput) {
+    let label = match field {
+        RevisionField::Show => " revision ",
+        RevisionField::Base => " base ",
+        RevisionField::Target => " target ",
+    };
+    let width = area.width.saturating_sub(4).min(70);
+    let height = 3.min(area.height);
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + area.height.saturating_sub(height + 1),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(label);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let before = &input.text[..input.cursor];
+    let after = &input.text[input.cursor..];
+    let cursor_style = Style::default().add_modifier(Modifier::REVERSED);
+    let mut spans = vec![Span::raw(before.to_owned())];
+    match after.chars().next() {
+        Some(character) => {
+            spans.push(Span::styled(character.to_string(), cursor_style));
+            spans.push(Span::raw(after[character.len_utf8()..].to_owned()));
+        }
+        None => spans.push(Span::styled(" ", cursor_style)),
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1208,6 +1455,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
         Line::from("  Tab           switch pane"),
         Line::from("  Enter         open or fold"),
         Line::from("  m             switch mode"),
+        Line::from("  r / b / t     edit revision"),
         Line::from("  Esc           close help or dismiss"),
     ];
     let block = Block::default().borders(Borders::ALL).title(" Help ");
@@ -1677,13 +1925,111 @@ mod tests {
     fn help_toggles_and_swallows_navigation() {
         let model = two_files();
         let (help, _) = update(Msg::Key(Key::Char('?')), &model);
-        assert!(help.help);
+        assert_eq!(help.overlay, Some(Overlay::Help));
 
         let (still, _) = update(Msg::Key(Key::Char('j')), &help);
         assert_eq!(still.cursor, help.cursor);
+        assert_eq!(still.overlay, Some(Overlay::Help));
 
         let (closed, _) = update(Msg::Key(Key::Esc), &help);
-        assert!(!closed.help);
+        assert_eq!(closed.overlay, None);
+    }
+
+    #[test]
+    fn text_input_edits_on_char_boundaries() {
+        let mut input = TextInput::new("héllo");
+        input.backspace();
+        assert_eq!(input.text, "héll");
+        input.home();
+        input.delete();
+        assert_eq!(input.text, "éll");
+        input.insert('x');
+        assert_eq!(input.text, "xéll");
+        assert_eq!(input.cursor, 1);
+        input.right();
+        assert_eq!(input.cursor, 3);
+        input.end();
+        assert_eq!(input.cursor, input.text.len());
+    }
+
+    #[test]
+    fn revision_prompt_prefills_the_current_revision() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::Char('r')), &model);
+        match opened.overlay {
+            Some(Overlay::Revision { field, input }) => {
+                assert_eq!(field, RevisionField::Show);
+                assert_eq!(input.text, "HEAD");
+                assert_eq!(input.cursor, 4);
+            }
+            other => panic!("expected a revision overlay, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confirming_a_revision_emits_a_load_with_that_revision() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::Char('r')), &model);
+        let mut state = opened;
+        for _ in 0.."HEAD".len() {
+            let (next, _) = update(Msg::Key(Key::Backspace), &state);
+            state = next;
+        }
+        for character in "HEAD~2".chars() {
+            let (next, _) = update(Msg::Key(Key::Char(character)), &state);
+            state = next;
+        }
+
+        let (applied, cmds) = update(Msg::Key(Key::Enter), &state);
+        assert_eq!(applied.overlay, None);
+        assert_eq!(
+            cmds,
+            vec![Cmd::Load {
+                request: show_request().with_revision("HEAD~2".to_owned()),
+            }]
+        );
+    }
+
+    #[test]
+    fn escaping_a_revision_prompt_emits_nothing() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::Char('r')), &model);
+        let (closed, cmds) = update(Msg::Key(Key::Esc), &opened);
+        assert_eq!(closed.overlay, None);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn diff_revision_keys_target_base_and_target_fields() {
+        let model = diff_model(vec![file_diff("a.rs", Some("a\n"), Some("b\n"))]);
+        let (base, _) = update(Msg::Key(Key::Char('b')), &model);
+        assert!(matches!(
+            base.overlay,
+            Some(Overlay::Revision {
+                field: RevisionField::Base,
+                ..
+            })
+        ));
+        let (target, _) = update(Msg::Key(Key::Char('t')), &model);
+        assert!(matches!(
+            target.overlay,
+            Some(Overlay::Revision {
+                field: RevisionField::Target,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn the_revision_prompt_renders_its_label_and_text() {
+        let mut model = two_files();
+        model.overlay = Some(Overlay::Revision {
+            field: RevisionField::Show,
+            input: TextInput::new("HEAD~2"),
+        });
+        let text = buffer_text(&render(&model, 100, 20));
+        assert!(text.contains("revision"), "{text}");
+        assert!(text.contains("HEAD~2"), "{text}");
     }
 
     #[test]
@@ -1832,7 +2178,7 @@ mod tests {
     #[test]
     fn the_help_overlay_lists_the_keys() {
         let mut model = two_files();
-        model.help = true;
+        model.overlay = Some(Overlay::Help);
         let text = buffer_text(&render(&model, 100, 20));
         assert!(text.contains("Help"), "{text}");
         assert!(text.contains("quit"), "{text}");
