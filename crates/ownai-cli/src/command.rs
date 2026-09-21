@@ -14,15 +14,17 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ownai_core::{
-    AreaSet, DiagnosticContext, Language, LanguageProjector, PathScope, PathSelectionError,
-    ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
-    SourceSpan, decode_source, diff_document, select_projector, show_document,
+    AreaSet, DiagnosticContext, Language, LanguageProjector, PathScope, PathSelection,
+    PathSelectionError, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
+    ProjectionMode, RepoPath, SourceSpan, decode_source, diff_document, select_projector,
+    show_document,
 };
 use ownai_git::{GitError, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
 use ownai_language_rust::RustProjector;
 
 use crate::args::{Cli, Command as CliCommand};
+use crate::config::{self, ConfigError};
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
 
@@ -90,9 +92,10 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             mode,
             revision,
             paths,
+            areas,
         } => {
-            let scope = scope_for(paths, &start, repo_root)?;
-            let document = show(&repository, revision, (*mode).into(), &scope)?;
+            let projection_scope = scope_for(paths, areas, &start, repo_root)?;
+            let document = show(&repository, revision, (*mode).into(), &projection_scope)?;
             output::write_document(DocumentKind::Show, &document, cli.color).map_err(output_failure)
         }
         CliCommand::Diff {
@@ -100,20 +103,83 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             base,
             target,
             paths,
+            areas,
         } => {
-            let scope = scope_for(paths, &start, repo_root)?;
-            let document = diff(&repository, base, target, (*mode).into(), &scope)?;
+            let projection_scope = scope_for(paths, areas, &start, repo_root)?;
+            let document = diff(&repository, base, target, (*mode).into(), &projection_scope)?;
             output::write_document(DocumentKind::Diff, &document, cli.color).map_err(output_failure)
         }
     }
 }
 
-/// Resolves a command's path arguments into the scope its projection will use.
-fn scope_for(paths: &[OsString], cwd: &Path, repo_root: &Path) -> Result<PathScope, CliError> {
+/// How a projection is narrowed, plus the labels its existence diagnostics use.
+///
+/// `--path` collapses each literal to a one-path group, so both selections share
+/// one per-group existence rule without changing literal behavior.
+struct ProjectionScope {
+    scope: PathScope,
+    groups: Vec<ScopeGroup>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ScopeKind {
+    Path,
+    Area,
+}
+
+#[derive(Clone, Debug)]
+struct ScopeGroup {
+    kind: ScopeKind,
+    label: String,
+    paths: Vec<RepoPath>,
+}
+
+/// Resolves a command's `--path`/`--area` arguments into the scope its
+/// projection will use.
+fn scope_for(
+    paths: &[OsString],
+    areas: &[String],
+    cwd: &Path,
+    repo_root: &Path,
+) -> Result<ProjectionScope, CliError> {
+    if !areas.is_empty() {
+        // Only an `--area` invocation may touch `.ownai.toml`, so a malformed
+        // config can never break `--path` or unscoped runs.
+        let config = config::Config::load(repo_root).map_err(config_failure)?;
+        let selection = PathSelection::Areas(areas.to_vec());
+        let scope = selection
+            .resolve(config.areas())
+            .map_err(|error| path_selection_failure(error, config.areas()))?;
+
+        let mut groups = Vec::with_capacity(areas.len());
+        for name in areas {
+            // Resolution already rejected unknown names, so a miss cannot occur.
+            let Some(area) = config.areas().get(name) else {
+                continue;
+            };
+            groups.push(ScopeGroup {
+                kind: ScopeKind::Area,
+                label: name.clone(),
+                paths: area.paths.clone(),
+            });
+        }
+        return Ok(ProjectionScope { scope, groups });
+    }
+
     let selection = pathspec::build_selection(paths, cwd, repo_root).map_err(path_arg_failure)?;
-    selection
+    let scope = selection
         .resolve(&AreaSet::default())
-        .map_err(path_selection_failure)
+        .map_err(|error| path_selection_failure(error, &AreaSet::default()))?;
+    let groups = scope
+        .paths()
+        .iter()
+        .map(|path| ScopeGroup {
+            kind: ScopeKind::Path,
+            label: path.to_string(),
+            paths: vec![path.clone()],
+        })
+        .collect();
+    Ok(ProjectionScope { scope, groups })
 }
 
 /// Renders the `show` document for `spec` (section 7.1).
@@ -121,10 +187,10 @@ fn show(
     repository: &GitRepository,
     spec: &str,
     mode: ProjectionMode,
-    scope: &PathScope,
+    projection_scope: &ProjectionScope,
 ) -> Result<String, CliError> {
     let revision = repository.resolve_commit(spec).map_err(git_failure)?;
-    ensure_paths_in_revision(repository, &revision, spec, scope)?;
+    ensure_groups_in_revision(repository, &revision, spec, &projection_scope.groups)?;
     let entries = repository
         .source_entries(&revision)
         .map_err(|error| git_failure_for(error, Some(spec)))?;
@@ -133,7 +199,7 @@ fn show(
     let mut caches = Caches::default();
     let mut files = Vec::new();
     for entry in &entries {
-        if !scope.matches(&entry.path) {
+        if !projection_scope.scope.matches(&entry.path) {
             continue;
         }
         if let Some(file) = project_entry(repository, &projectors, &mut caches, spec, entry, mode)?
@@ -152,13 +218,20 @@ fn diff(
     base_spec: &str,
     target_spec: &str,
     mode: ProjectionMode,
-    scope: &PathScope,
+    projection_scope: &ProjectionScope,
 ) -> Result<String, CliError> {
     let base = repository.resolve_commit(base_spec).map_err(git_failure)?;
     let target = repository
         .resolve_commit(target_spec)
         .map_err(git_failure)?;
-    ensure_diff_paths(repository, &base, &target, base_spec, target_spec, scope)?;
+    ensure_groups_in_diff(
+        repository,
+        &base,
+        &target,
+        base_spec,
+        target_spec,
+        &projection_scope.groups,
+    )?;
     let base_entries = repository
         .source_entries(&base)
         .map_err(|error| git_failure_for(error, Some(base_spec)))?;
@@ -186,7 +259,7 @@ fn diff(
     let mut new_files = Vec::new();
 
     for path in paths {
-        if !scope.matches(path) {
+        if !projection_scope.scope.matches(path) {
             continue;
         }
         let old = base_map.get(path).copied();
@@ -224,25 +297,19 @@ fn diff(
     Ok(diff_document(&old_files, &new_files))
 }
 
-/// Fails when a literal in `scope` names nothing in `revision`, before any blob
-/// is read, so a mistyped `--path` cannot masquerade as an empty projection.
-fn ensure_paths_in_revision(
+/// Fails when a selected group names nothing in `revision`, before any blob is
+/// read, so a mistyped `--path` or `--area` cannot masquerade as an empty
+/// projection. An area is satisfied by any one of its paths existing.
+fn ensure_groups_in_revision(
     repository: &GitRepository,
     revision: &Revision,
     revision_spec: &str,
-    scope: &PathScope,
+    groups: &[ScopeGroup],
 ) -> Result<(), CliError> {
-    if scope.is_match_all() {
-        return Ok(());
-    }
-
     let mut missing = Vec::new();
-    for path in scope.paths() {
-        let exists = repository
-            .path_exists(revision, path)
-            .map_err(|error| git_failure_for(error, Some(revision_spec)))?;
-        if !exists {
-            missing.push(path.clone());
+    for group in groups {
+        if !group_in_revision(repository, revision, revision_spec, group)? {
+            missing.push(group.clone());
         }
     }
 
@@ -256,33 +323,25 @@ fn ensure_paths_in_revision(
     }
 }
 
-/// Fails when a literal in `scope` is absent from both revisions, before any
-/// blob is read. A path deleted by the target still belongs to the diff, so it
+/// Fails when a selected group is absent from both revisions, before any blob
+/// is read. A path deleted by the target still belongs to the diff, so a group
 /// counts as present wherever either side names it.
-fn ensure_diff_paths(
+fn ensure_groups_in_diff(
     repository: &GitRepository,
     base: &Revision,
     target: &Revision,
     base_spec: &str,
     target_spec: &str,
-    scope: &PathScope,
+    groups: &[ScopeGroup],
 ) -> Result<(), CliError> {
-    if scope.is_match_all() {
-        return Ok(());
-    }
-
     let mut missing = Vec::new();
-    for path in scope.paths() {
-        let in_base = repository
-            .path_exists(base, path)
-            .map_err(|error| git_failure_for(error, Some(base_spec)))?;
-        if !in_base {
-            let in_target = repository
-                .path_exists(target, path)
-                .map_err(|error| git_failure_for(error, Some(target_spec)))?;
-            if !in_target {
-                missing.push(path.clone());
-            }
+    for group in groups {
+        // Short-circuiting means the target is only consulted when the base
+        // does not already satisfy the group.
+        let present = group_in_revision(repository, base, base_spec, group)?
+            || group_in_revision(repository, target, target_spec, group)?;
+        if !present {
+            missing.push(group.clone());
         }
     }
 
@@ -292,6 +351,23 @@ fn ensure_diff_paths(
         let revisions = format!("`{base_spec}` or `{target_spec}`");
         Err(missing_paths_failure(missing, &revisions))
     }
+}
+
+fn group_in_revision(
+    repository: &GitRepository,
+    revision: &Revision,
+    revision_spec: &str,
+    group: &ScopeGroup,
+) -> Result<bool, CliError> {
+    for path in &group.paths {
+        let exists = repository
+            .path_exists(revision, path)
+            .map_err(|error| git_failure_for(error, Some(revision_spec)))?;
+        if exists {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Per-command caches; never persisted (section 17).
@@ -451,30 +527,35 @@ fn path_arg_failure(error: PathArgError) -> CliError {
     }
 }
 
-/// `--path` literals that name nothing in the revision(s) being projected.
+/// Selected paths or areas that name nothing in the revision(s) being
+/// projected.
 ///
-/// Reported together so one invocation lists every path that must be fixed,
+/// Reported together so one invocation lists every group that must be fixed,
 /// rather than making the user correct them one failure at a time.
 #[derive(Debug, thiserror::Error)]
-#[error("a selected path does not exist in the projected revision")]
+#[error("a selected path or area does not exist in the projected revision")]
 struct MissingPaths {
-    missing: Vec<RepoPath>,
+    missing: Vec<ScopeGroup>,
 }
 
 impl MissingPaths {
-    /// The structured help body: the revision label followed by one `path:`
-    /// line per missing literal.
+    /// The structured help body: the revision label followed by one
+    /// `path:`/`area:` line per missing group.
     fn help(&self, revisions: &str) -> String {
         let mut lines = Vec::with_capacity(self.missing.len() + 1);
         lines.push(format!("revision: {revisions}"));
-        for path in &self.missing {
-            lines.push(format!("path: {path}"));
+        for group in &self.missing {
+            let key = match group.kind {
+                ScopeKind::Path => "path",
+                ScopeKind::Area => "area",
+            };
+            lines.push(format!("{key}: {}", group.label));
         }
         lines.join("\n")
     }
 }
 
-fn missing_paths_failure(missing: Vec<RepoPath>, revisions: &str) -> CliError {
+fn missing_paths_failure(missing: Vec<ScopeGroup>, revisions: &str) -> CliError {
     let error = MissingPaths { missing };
     let help = error.help(revisions);
     CliError {
@@ -484,12 +565,31 @@ fn missing_paths_failure(missing: Vec<RepoPath>, revisions: &str) -> CliError {
     }
 }
 
-/// The area seam is only reachable once configuration exists; mapping it now
-/// keeps the CLI honest about resolving through [`PathSelection`].
-fn path_selection_failure(error: PathSelectionError) -> CliError {
+fn config_failure(error: ConfigError) -> CliError {
     CliError {
         message: error.to_string(),
         help: None,
+        source: Box::new(error),
+    }
+}
+
+/// The area seam is reachable through `--area`; an unknown name lists the
+/// defined areas so a typo is correctable without opening the config file.
+fn path_selection_failure(error: PathSelectionError, areas: &AreaSet) -> CliError {
+    let help = match &error {
+        PathSelectionError::UnknownArea { .. } => {
+            let names: Vec<&str> = areas.names().collect();
+            if names.is_empty() {
+                Some("no areas are defined in `.ownai.toml`".to_owned())
+            } else {
+                Some(format!("known areas: {}", names.join(", ")))
+            }
+        }
+        PathSelectionError::EmptyArea { .. } => None,
+    };
+    CliError {
+        message: error.to_string(),
+        help,
         source: Box::new(error),
     }
 }
