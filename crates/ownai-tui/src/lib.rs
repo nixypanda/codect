@@ -144,7 +144,7 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                     revision,
                     mode,
                     selection,
-                } => engine.show(revision, *mode, selection).map(Content::Show),
+                } => engine.show(revision, *mode, selection).map(Content::from),
                 LoadRequest::Diff {
                     base,
                     target,
@@ -152,7 +152,7 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                     selection,
                 } => engine
                     .diff(base, target, *mode, selection)
-                    .map(Content::Diff),
+                    .map(Content::from),
             }
             .map_err(Box::new);
             Msg::Loaded { request, result }

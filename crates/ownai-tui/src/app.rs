@@ -108,10 +108,25 @@ impl LoadRequest {
 }
 
 /// The loaded projection, either a single revision or a two-revision diff.
+///
+/// The payloads sit behind an `Arc` so cloning a `Model` is O(1) regardless of
+/// how many files or bytes a projection holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Content {
-    Show(Vec<ProjectedFile>),
-    Diff(Vec<FileDiff>),
+    Show(Arc<[ProjectedFile]>),
+    Diff(Arc<[FileDiff]>),
+}
+
+impl From<Vec<ProjectedFile>> for Content {
+    fn from(files: Vec<ProjectedFile>) -> Self {
+        Self::Show(files.into())
+    }
+}
+
+impl From<Vec<FileDiff>> for Content {
+    fn from(diffs: Vec<FileDiff>) -> Self {
+        Self::Diff(diffs.into())
+    }
 }
 
 impl Content {
@@ -203,8 +218,30 @@ struct HighlightCache {
     diff: BTreeMap<RepoPath, Arc<DiffHighlight>>,
 }
 
+/// The inputs a cached diff layout depends on.
+#[derive(Clone, PartialEq, Eq)]
+struct DerivedKey {
+    generation: u64,
+    width: u16,
+    height: u16,
+    selected: Option<RepoPath>,
+    diagnostic: bool,
+}
+
+/// Expensive rendering state derived from the model, cached so a frame or a
+/// scroll key does not recompute it. Held behind an `Arc`, so cloning a `Model`
+/// never clones the layout.
+#[derive(Clone, Default)]
+struct Derived {
+    key: Option<DerivedKey>,
+    diff_rows: Vec<VisualRow>,
+}
+
 /// The entire UI state. It is replaced wholesale by `update`, never edited in
 /// place by anything else.
+///
+/// Every large collection sits behind an `Arc`, so a clone is O(1); the only
+/// deep data is small (fold state, highlight-cache entries).
 #[derive(Clone)]
 pub struct Model {
     pub root: String,
@@ -214,10 +251,10 @@ pub struct Model {
     pub scope_label: String,
     pub content: Content,
     /// Paths the tree shows, in raw path-byte order.
-    pub visible: Vec<RepoPath>,
+    pub visible: Arc<[RepoPath]>,
     /// Directories the user folded. Everything is expanded by default.
     pub collapsed: BTreeSet<RepoPath>,
-    pub rows: Vec<TreeRow>,
+    pub rows: Arc<[TreeRow]>,
     pub cursor: usize,
     pub selected: Option<RepoPath>,
     pub focus: Pane,
@@ -227,6 +264,9 @@ pub struct Model {
     pub diagnostic: Option<String>,
     /// Lazily computed syntax highlighting for the selected file.
     highlights: HighlightCache,
+    /// Bumped whenever `content` is replaced, invalidating [`Derived`].
+    generation: u64,
+    derived: Arc<Derived>,
     pub width: u16,
     pub height: u16,
     pub quit: bool,
@@ -247,10 +287,10 @@ impl Model {
             request,
             mode,
             scope_label,
-            content: Content::Show(Vec::new()),
-            visible: Vec::new(),
+            content: Content::Show(Arc::from(Vec::new())),
+            visible: Arc::from(Vec::new()),
             collapsed: BTreeSet::new(),
-            rows: Vec::new(),
+            rows: Arc::from(Vec::new()),
             cursor: 0,
             selected: None,
             focus: Pane::Tree,
@@ -259,6 +299,8 @@ impl Model {
             help: false,
             diagnostic: None,
             highlights: HighlightCache::default(),
+            generation: 0,
+            derived: Arc::new(Derived::default()),
             width,
             height,
             quit: false,
@@ -354,8 +396,27 @@ impl Model {
         self.rows.get(self.cursor)
     }
 
-    /// The wrapped visual rows of the active diff, recomputed from the model.
-    fn diff_layout(&self) -> Vec<VisualRow> {
+    /// Recomputes the cached diff layout when its inputs changed.
+    fn refresh_derived(&mut self) {
+        let key = DerivedKey {
+            generation: self.generation,
+            width: self.width,
+            height: self.height,
+            selected: self.selected.clone(),
+            diagnostic: self.diagnostic.is_some(),
+        };
+        if self.derived.key.as_ref() == Some(&key) {
+            return;
+        }
+        let diff_rows = self.compute_diff_rows();
+        self.derived = Arc::new(Derived {
+            key: Some(key),
+            diff_rows,
+        });
+    }
+
+    /// The wrapped visual rows of the active diff.
+    fn compute_diff_rows(&self) -> Vec<VisualRow> {
         let Some(diff) = self.active_diff() else {
             return Vec::new();
         };
@@ -392,10 +453,11 @@ impl Model {
         let previous = self.selected.clone();
         let hint = self.cursor;
 
-        self.visible = content.visible_paths();
+        self.visible = Arc::from(content.visible_paths());
         self.content = content;
+        self.generation = self.generation.wrapping_add(1);
         self.highlights = HighlightCache::default();
-        self.rows = build_rows(&self.visible, &self.collapsed);
+        self.rows = Arc::from(build_rows(&self.visible, &self.collapsed));
         // Drop fold state for directories that no longer exist.
         self.collapsed
             .retain(|path| self.rows.iter().any(|row| row.kind.path() == path));
@@ -424,6 +486,7 @@ impl Model {
         self.body_scroll = 0;
         self.body_hscroll = 0;
         self.ensure_highlight();
+        self.refresh_derived();
     }
 
     fn nearest_visible(&self, hint: usize) -> Option<RepoPath> {
@@ -479,6 +542,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
         Msg::Resize { width, height } => {
             next.width = width;
             next.height = height;
+            next.refresh_derived();
             clamp_view(&mut next);
         }
         Msg::Loaded { request, result } => match result {
@@ -493,6 +557,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
         },
     }
 
+    next.refresh_derived();
     (next, cmds)
 }
 
@@ -663,7 +728,7 @@ fn set_collapsed(model: &mut Model, path: RepoPath, collapsed: bool) {
     } else {
         model.collapsed.remove(&path);
     }
-    model.rows = build_rows(&model.visible, &model.collapsed);
+    model.rows = Arc::from(build_rows(&model.visible, &model.collapsed));
     model.cursor = model.row_of_directory(&path).unwrap_or(0);
 }
 
@@ -682,7 +747,7 @@ fn move_to_parent(model: &mut Model, path: &RepoPath) {
 fn max_scroll(model: &Model) -> u16 {
     let count = match &model.content {
         Content::Show(_) => model.line_count(),
-        Content::Diff(_) => model.diff_layout().len(),
+        Content::Diff(_) => model.derived.diff_rows.len(),
     };
     count.saturating_sub(1) as u16
 }
@@ -867,30 +932,16 @@ pub fn view(model: &Model, frame: &mut Frame) {
             }
         }
         Content::Diff(_) => {
-            let rows = model.diff_layout();
+            let rows = model.derived.diff_rows.as_slice();
             if side_by_side {
                 let (tree, old, new) = split_diff_columns(content);
                 render_tree(model, frame, tree, model.focus == Pane::Tree);
-                render_diff_pane(
-                    model,
-                    frame,
-                    old,
-                    Side::Old,
-                    model.focus == Pane::Old,
-                    &rows,
-                );
-                render_diff_pane(
-                    model,
-                    frame,
-                    new,
-                    Side::New,
-                    model.focus == Pane::New,
-                    &rows,
-                );
+                render_diff_pane(model, frame, old, Side::Old, model.focus == Pane::Old, rows);
+                render_diff_pane(model, frame, new, Side::New, model.focus == Pane::New, rows);
             } else {
                 match model.focus {
-                    Pane::Old => render_diff_pane(model, frame, content, Side::Old, true, &rows),
-                    Pane::New => render_diff_pane(model, frame, content, Side::New, true, &rows),
+                    Pane::Old => render_diff_pane(model, frame, content, Side::Old, true, rows),
+                    Pane::New => render_diff_pane(model, frame, content, Side::New, true, rows),
                     _ => render_tree(model, frame, content, true),
                 }
             }
@@ -1383,7 +1434,7 @@ mod tests {
             100,
             30,
         );
-        model.install(Content::Show(files), false);
+        model.install(Content::Show(files.into()), false);
         model
     }
 
@@ -1395,7 +1446,7 @@ mod tests {
             100,
             30,
         );
-        model.install(Content::Diff(diffs), false);
+        model.install(Content::Diff(diffs.into()), false);
         model
     }
 
@@ -1437,10 +1488,9 @@ mod tests {
         let (next, _) = update(
             Msg::Loaded {
                 request: show_request().with_mode(ProjectionMode::Signatures),
-                result: Ok(Content::Show(vec![
-                    projected("a.rs", "A\n"),
-                    projected("b.rs", "B\n"),
-                ])),
+                result: Ok(Content::Show(
+                    vec![projected("a.rs", "A\n"), projected("b.rs", "B\n")].into(),
+                )),
             },
             &model,
         );
@@ -1466,10 +1516,9 @@ mod tests {
         let (next, _) = update(
             Msg::Loaded {
                 request: show_request(),
-                result: Ok(Content::Show(vec![
-                    projected("a.rs", "a\n"),
-                    projected("c.rs", "c\n"),
-                ])),
+                result: Ok(Content::Show(
+                    vec![projected("a.rs", "a\n"), projected("c.rs", "c\n")].into(),
+                )),
             },
             &model,
         );
