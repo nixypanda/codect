@@ -1,0 +1,11 @@
+pub struct Wrapper<'a, T: Clone + Send, const N: usize, U = u8>
+where T: 'a, U: Default + core::fmt::Debug
+{
+    pub item: &'a T,
+    pub size: [U; N],
+}
+
+pub type Mapper<F> = F
+where F: Fn(i32) -> i32;
+
+trait Bounds<T: ?Sized>: for<'a> Fn(&'a T) + Send {}

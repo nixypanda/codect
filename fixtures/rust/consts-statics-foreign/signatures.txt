@@ -1,0 +1,24 @@
+pub const MAX: usize;
+
+const PRIVATE: u8;
+
+pub static VERSION: &str;
+
+pub static mut COUNTER: u64;
+
+static INTERNAL: i32;
+
+impl Limits {
+    pub const DEFAULT: u32;
+    static LIMIT: i32;
+}
+
+trait Config {
+    const TIMEOUT: u64;
+}
+
+extern "C" {
+    pub fn strlen(s: *const c_char) -> usize;
+    static mut GLOBAL: i32;
+    pub static REGISTRY: u32;
+}

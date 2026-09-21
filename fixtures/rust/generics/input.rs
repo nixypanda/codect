@@ -1,0 +1,30 @@
+//! Generic parameters, const generics, lifetimes, and where clauses.
+
+pub struct Wrapper<'a, T: Clone + Send, const N: usize, U = u8>
+where
+    T: 'a,
+    U: Default + core::fmt::Debug,
+{
+    pub item: &'a T,
+    pub size: [U; N],
+}
+
+pub fn borrow<'a, 'b: 'a, T>(first: &'a T, second: &'b T) -> &'a T
+where
+    'b: 'a,
+{
+    first
+}
+
+pub type Mapper<F> = F
+where
+    F: Fn(i32) -> i32;
+
+trait Bounds<T: ?Sized>: for<'a> Fn(&'a T) + Send {}
+
+fn hrtb<F>(f: F) -> F
+where
+    F: for<'a> Fn(&'a str) -> &'a str,
+{
+    f
+}

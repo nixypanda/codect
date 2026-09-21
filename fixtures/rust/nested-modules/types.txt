@@ -1,0 +1,10 @@
+pub mod outer {
+    pub mod inner {
+        pub struct Deep {
+            pub value: u32,
+        }
+    }
+    pub enum Level {
+        Top,
+    }
+}

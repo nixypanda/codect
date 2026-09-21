@@ -1,0 +1,10 @@
+pub async fn load<T>(id: Id, source: &T) -> Result<User, T::Error>
+where T: Repository<User>;
+
+impl User {
+    pub const fn id(&self) -> Id;
+}
+
+impl Display for User {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result;
+}

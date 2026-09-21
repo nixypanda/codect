@@ -1,0 +1,12 @@
+pub fn free(a: u32) -> u32;
+
+async fn load<T>(value: T) -> Result<T, Error>
+where T: Clone;
+
+pub const fn constant() -> u8;
+
+unsafe fn danger();
+
+pub extern "C" fn c_abi();
+
+pub fn with_patterns((a, b): (u32, u32), Point { x, y }: Point, mut z: i32) -> i32;
