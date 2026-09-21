@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{LoadRequest, Model, VisualRow, VisualRowKind};
+use crate::app::{LoadRequest, Model, SearchSide, VisualRow, VisualRowKind};
 use crate::highlight::{self, Run, StyledLine};
 use crate::theme::Theme;
 
@@ -66,6 +66,13 @@ pub(crate) fn render_diff_pane(
             Side::Old => (row.old_number, row.old_runs.as_slice()),
             Side::New => (row.new_number, row.new_runs.as_slice()),
         };
+        let ranges = if row.continuation {
+            Vec::new()
+        } else {
+            number.map_or_else(Vec::new, |line| {
+                model.search_ranges(search_side(side), line)
+            })
+        };
         lines.push(diff_line(
             number,
             row.continuation,
@@ -75,9 +82,17 @@ pub(crate) fn render_diff_pane(
             gutter,
             content_width,
             &model.theme,
+            &ranges,
         ));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn search_side(side: Side) -> SearchSide {
+    match side {
+        Side::Old => SearchSide::Old,
+        Side::New => SearchSide::New,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -90,6 +105,7 @@ fn diff_line(
     gutter: usize,
     width: usize,
     theme: &Theme,
+    search: &[(usize, usize, bool)],
 ) -> Line<'static> {
     let VisualRowKind::Diff(kind) = kind else {
         // Hunk headers and collapse indicators span the whole pane.
@@ -110,6 +126,24 @@ fn diff_line(
     // Delta-style full-line background; the intra-line emphasis is already
     // baked into the run styles, so a run's own background wins over the base.
     let base = line_background(kind, side, theme);
+
+    // Search matches are recolored on top of the diff emphasis.
+    let owned;
+    let runs: &[Run] = if search.is_empty() {
+        runs
+    } else {
+        let mut styled = runs.to_vec();
+        for (start, end, current) in search {
+            let color = if *current {
+                theme.color(theme.palette.match_current_bg)
+            } else {
+                theme.color(theme.palette.match_bg)
+            };
+            styled = highlight::apply_emphasis(&styled, &[(*start, *end)], color);
+        }
+        owned = styled;
+        &owned
+    };
 
     let field = gutter.saturating_sub(2);
     let sign = match (kind, side) {

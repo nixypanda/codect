@@ -128,6 +128,15 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
         ));
     }
 
+    if let Some(search) = &model.search {
+        let total = search.matches.len();
+        let current = if total == 0 { 0 } else { search.cursor + 1 };
+        left.push(Span::styled(
+            format!("/{} {current}/{total} ", search.needle),
+            theme.fg(theme.palette.match_current_bg),
+        ));
+    }
+
     let hints = hints(model);
     let hints_style = theme.fg(theme.palette.text_muted);
     let left_width: usize = left
@@ -154,11 +163,15 @@ fn hints(model: &Model) -> String {
         Some(Overlay::Revision { .. }) => "Enter apply   Esc cancel ".to_owned(),
         Some(Overlay::Scope(_)) => "↑↓ choose   Enter select   Esc close ".to_owned(),
         Some(Overlay::Mode { .. }) => "↑↓ choose   Enter apply   Esc close ".to_owned(),
+        Some(Overlay::Palette(_)) | Some(Overlay::Finder(_)) => {
+            "type to filter   ↑↓ choose   Enter open   Esc close ".to_owned()
+        }
+        Some(Overlay::Search(_)) => "type to search   Enter next   Esc cancel ".to_owned(),
         Some(Overlay::Help) => "Esc close ".to_owned(),
         None => match (model.focus, &model.content) {
-            (Pane::Tree, _) => "↵ open   Tab content   m mode   s scope   ? help ".to_owned(),
-            (Pane::Body, _) => "j/k scroll   h/l pan   Tab tree   ? help ".to_owned(),
-            (Pane::Diff, _) => "j/k scroll   Tab tree   ? help ".to_owned(),
+            (Pane::Tree, _) => "Ctrl-P commands   Ctrl-F find   ↵ open   Tab content   ? help ".to_owned(),
+            (Pane::Body, _) => "j/k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned(),
+            (Pane::Diff, _) => "j/k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned(),
         },
     }
 }

@@ -17,6 +17,7 @@ use crate::highlight::{self, StyledLine};
 use crate::theme::Theme;
 use crate::view::diff::layout_diff;
 use crate::view::geom::{Edge, frame_chunks, gutter_width, pane_block, split_with_dividers};
+use crate::fuzzy;
 
 /// At or above this width the tree and content render side by side.
 pub(crate) const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
@@ -59,7 +60,13 @@ pub enum Key {
     Delete,
     Home,
     End,
+    PageUp,
+    PageDown,
     CtrlC,
+    CtrlD,
+    CtrlF,
+    CtrlP,
+    CtrlU,
 }
 
 /// A single-line editable field.
@@ -129,6 +136,33 @@ pub enum RevisionField {
     Target,
 }
 
+/// A semantic command. Keys and the command palette both produce these, so a
+/// binding and its palette entry can never drift apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Action {
+    Quit,
+    Help,
+    Scope,
+    Mode,
+    EditShowRevision,
+    EditBaseRevision,
+    EditTargetRevision,
+    NextPane,
+    PreviousPane,
+    TreeWider,
+    TreeNarrower,
+    TreeReset,
+    Top,
+    Bottom,
+    PageUp,
+    PageDown,
+    Palette,
+    Finder,
+    Search,
+    NextMatch,
+    PreviousMatch,
+}
+
 /// A modal interaction that captures keys until it closes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Overlay {
@@ -141,6 +175,68 @@ pub enum Overlay {
     Mode {
         cursor: usize,
     },
+    Palette(PaletteState),
+    Finder(FinderState),
+    Search(SearchState),
+}
+
+/// One ranked palette or finder result: an index into the source list, a fuzzy
+/// score, and the byte offsets that matched for highlighting.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Ranked {
+    pub index: usize,
+    pub score: i32,
+    pub positions: Vec<usize>,
+}
+
+/// The command palette: a fuzzy list of actions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaletteState {
+    pub input: TextInput,
+    pub matches: Vec<Ranked>,
+    pub cursor: usize,
+}
+
+/// The fuzzy file finder: a fuzzy list of visible paths.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FinderState {
+    pub input: TextInput,
+    pub matches: Vec<Ranked>,
+    pub cursor: usize,
+}
+
+/// The search input. Live matches are written straight to [`Model::search`] so
+/// the view previews them while the user types.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SearchState {
+    pub input: TextInput,
+}
+
+/// Which projection a search match belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchSide {
+    Show,
+    Old,
+    New,
+}
+
+/// One occurrence of the search needle on a line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SearchMatch {
+    pub side: SearchSide,
+    /// One-based line number.
+    pub line: usize,
+    /// Byte range within the line.
+    pub start: usize,
+    pub end: usize,
+}
+
+/// A committed search: highlights persist after the input closes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Search {
+    pub needle: String,
+    pub matches: Vec<SearchMatch>,
+    pub cursor: usize,
 }
 
 /// The scope chooser's state.
@@ -500,6 +596,8 @@ pub struct Model {
     pub tree_percent: u16,
     /// The active modal overlay, if any. It captures keys until it closes.
     pub overlay: Option<Overlay>,
+    /// A committed in-pane search whose highlights persist.
+    pub search: Option<Search>,
     pub diagnostic: Option<String>,
     /// Lazily computed syntax highlighting for the selected file.
     highlights: HighlightCache,
@@ -547,6 +645,7 @@ impl Model {
             body_hscroll: 0,
             tree_percent: TREE_DEFAULT_PERCENT,
             overlay: None,
+            search: None,
             diagnostic: None,
             highlights: HighlightCache::default(),
             generation: 0,
@@ -610,6 +709,20 @@ impl Model {
             (Some(_), None) => ChangeKind::Deleted,
             _ => ChangeKind::Modified,
         })
+    }
+
+    /// The search ranges on one line, each tagged as the current match or not.
+    pub(crate) fn search_ranges(&self, side: SearchSide, line: usize) -> Vec<(usize, usize, bool)> {
+        let Some(search) = &self.search else {
+            return Vec::new();
+        };
+        search
+            .matches
+            .iter()
+            .enumerate()
+            .filter(|(_, matched)| matched.side == side && matched.line == line)
+            .map(|(index, matched)| (matched.start, matched.end, index == search.cursor))
+            .collect()
     }
 
     /// Computes and caches highlighting for the selected file when missing.
@@ -878,7 +991,13 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
 }
 
 fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
-    if key == Key::Char('q') || key == Key::CtrlC {
+    // Ctrl-C always quits; `q` quits except while an input overlay is capturing.
+    if key == Key::CtrlC {
+        model.quit = true;
+        return;
+    }
+    let quit_with_q = matches!(model.overlay, None | Some(Overlay::Help));
+    if key == Key::Char('q') && quit_with_q {
         model.quit = true;
         return;
     }
@@ -886,45 +1005,63 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
         overlay_key(key, model, cmds);
         return;
     }
+    if let Some(action) = command_for(key, model) {
+        apply_action(action, model, cmds);
+        return;
+    }
     match key {
-        Key::Char('?') => model.overlay = Some(Overlay::Help),
         Key::Esc => {
             model.diagnostic = None;
             model.diagnostic_ttl = 0;
+            model.search = None;
         }
-        Key::Char('r') if matches!(model.content, Content::Show(_)) => {
-            model.overlay = Some(Overlay::Revision {
-                field: RevisionField::Show,
-                input: TextInput::new(current_revision(model)),
-            });
-        }
-        Key::Char('b') if matches!(model.content, Content::Diff(_)) => {
-            model.overlay = Some(Overlay::Revision {
-                field: RevisionField::Base,
-                input: TextInput::new(current_base(model)),
-            });
-        }
-        Key::Char('t') if matches!(model.content, Content::Diff(_)) => {
-            model.overlay = Some(Overlay::Revision {
-                field: RevisionField::Target,
-                input: TextInput::new(current_target(model)),
-            });
-        }
-        Key::Char('[') => {
-            model.tree_percent = model
-                .tree_percent
-                .saturating_sub(TREE_STEP)
-                .max(TREE_MIN_PERCENT);
-        }
-        Key::Char(']') => {
-            model.tree_percent = (model.tree_percent + TREE_STEP).min(TREE_MAX_PERCENT);
-        }
-        Key::Char('\\') => model.tree_percent = TREE_DEFAULT_PERCENT,
-        Key::Char('s') => {
+        _ => match model.focus {
+            Pane::Tree => tree_key(key, model),
+            Pane::Body | Pane::Diff => body_key(key, model),
+        },
+    }
+}
+
+/// The semantic command a key produces outside an overlay, if any. Navigation
+/// keys are handled separately so they stay context sensitive.
+fn command_for(key: Key, model: &Model) -> Option<Action> {
+    let show = matches!(model.content, Content::Show(_));
+    let diff = matches!(model.content, Content::Diff(_));
+    match key {
+        Key::Char('?') => Some(Action::Help),
+        Key::Char('s') => Some(Action::Scope),
+        Key::Char('m') => Some(Action::Mode),
+        Key::Char('r') if show => Some(Action::EditShowRevision),
+        Key::Char('b') if diff => Some(Action::EditBaseRevision),
+        Key::Char('t') if diff => Some(Action::EditTargetRevision),
+        Key::Char('[') => Some(Action::TreeNarrower),
+        Key::Char(']') => Some(Action::TreeWider),
+        Key::Char('\\') => Some(Action::TreeReset),
+        Key::Tab => Some(Action::NextPane),
+        Key::BackTab => Some(Action::PreviousPane),
+        Key::Char('g') => Some(Action::Top),
+        Key::Char('G') => Some(Action::Bottom),
+        Key::Char('n') => Some(Action::NextMatch),
+        Key::Char('N') => Some(Action::PreviousMatch),
+        Key::CtrlP => Some(Action::Palette),
+        Key::CtrlF => Some(Action::Finder),
+        Key::Char('/') => Some(Action::Search),
+        Key::PageDown | Key::CtrlD => Some(Action::PageDown),
+        Key::PageUp | Key::CtrlU => Some(Action::PageUp),
+        _ => None,
+    }
+}
+
+/// Performs a semantic command. Shared by keys and the command palette.
+fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
+    match action {
+        Action::Quit => model.quit = true,
+        Action::Help => model.overlay = Some(Overlay::Help),
+        Action::Scope => {
             model.overlay = Some(Overlay::Scope(ScopeChooser::loading()));
             cmds.push(Cmd::LoadAreas);
         }
-        Key::Char('m') => {
+        Action::Mode => {
             let modes = available_modes();
             let cursor = modes
                 .iter()
@@ -932,11 +1069,336 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                 .unwrap_or(0);
             model.overlay = Some(Overlay::Mode { cursor });
         }
-        Key::Tab | Key::BackTab => cycle_focus(model, key == Key::Tab),
-        _ => match model.focus {
-            Pane::Tree => tree_key(key, model),
-            Pane::Body | Pane::Diff => body_key(key, model),
-        },
+        Action::EditShowRevision if matches!(model.content, Content::Show(_)) => {
+            model.overlay = Some(Overlay::Revision {
+                field: RevisionField::Show,
+                input: TextInput::new(current_revision(model)),
+            });
+        }
+        Action::EditBaseRevision if matches!(model.content, Content::Diff(_)) => {
+            model.overlay = Some(Overlay::Revision {
+                field: RevisionField::Base,
+                input: TextInput::new(current_base(model)),
+            });
+        }
+        Action::EditTargetRevision if matches!(model.content, Content::Diff(_)) => {
+            model.overlay = Some(Overlay::Revision {
+                field: RevisionField::Target,
+                input: TextInput::new(current_target(model)),
+            });
+        }
+        Action::NextPane => cycle_focus(model, true),
+        Action::PreviousPane => cycle_focus(model, false),
+        Action::TreeWider => {
+            model.tree_percent = (model.tree_percent + TREE_STEP).min(TREE_MAX_PERCENT);
+        }
+        Action::TreeNarrower => {
+            model.tree_percent = model
+                .tree_percent
+                .saturating_sub(TREE_STEP)
+                .max(TREE_MIN_PERCENT);
+        }
+        Action::TreeReset => model.tree_percent = TREE_DEFAULT_PERCENT,
+        Action::Top => {
+            if model.focus == Pane::Tree {
+                move_cursor_to(model, 0);
+            } else {
+                model.body_scroll = 0;
+            }
+        }
+        Action::Bottom => {
+            if model.focus == Pane::Tree {
+                let last = model.rows.len().saturating_sub(1);
+                move_cursor_to(model, last);
+            } else {
+                model.body_scroll = max_scroll(model);
+            }
+        }
+        Action::PageUp => {
+            let step = page_step(model);
+            if model.focus == Pane::Tree {
+                move_cursor(model, -i32::from(step));
+            } else {
+                model.body_scroll = model.body_scroll.saturating_sub(step);
+            }
+        }
+        Action::PageDown => {
+            let step = page_step(model);
+            if model.focus == Pane::Tree {
+                move_cursor(model, i32::from(step));
+            } else {
+                model.body_scroll = model.body_scroll.saturating_add(step).min(max_scroll(model));
+            }
+        }
+        Action::Palette => model.overlay = Some(Overlay::Palette(PaletteState::new(model))),
+        Action::Finder => model.overlay = Some(Overlay::Finder(FinderState::new(model))),
+        Action::Search => model.overlay = Some(Overlay::Search(SearchState::new())),
+        Action::NextMatch => step_search(model, true),
+        Action::PreviousMatch => step_search(model, false),
+        // Revision actions are ignored when the content does not support them.
+        Action::EditShowRevision | Action::EditBaseRevision | Action::EditTargetRevision => {}
+    }
+}
+
+/// A half-page scroll step.
+fn page_step(model: &Model) -> u16 {
+    (model.height.saturating_sub(3) / 2).max(1)
+}
+
+fn move_cursor_to(model: &mut Model, index: usize) {
+    if model.rows.is_empty() {
+        return;
+    }
+    model.cursor = index.min(model.rows.len() - 1);
+    sync_selected(model);
+}
+
+// ---------------------------------------------------------------------------
+// Palette, finder, and search
+// ---------------------------------------------------------------------------
+
+/// The palette's actions, in display order, with a key hint.
+pub(crate) fn palette_entries(model: &Model) -> Vec<(Action, &'static str, &'static str)> {
+    let mut entries = vec![
+        (Action::Mode, "Switch Types / Signatures", "m"),
+        (Action::Scope, "Change scope", "s"),
+    ];
+    match &model.content {
+        Content::Show(_) => entries.push((Action::EditShowRevision, "Edit revision", "r")),
+        Content::Diff(_) => {
+            entries.push((Action::EditBaseRevision, "Edit base revision", "b"));
+            entries.push((Action::EditTargetRevision, "Edit target revision", "t"));
+        }
+    }
+    entries.extend([
+        (Action::Finder, "Find file", "Ctrl-F"),
+        (Action::Search, "Search in view", "/"),
+        (Action::NextPane, "Switch pane", "Tab"),
+        (Action::TreeWider, "Widen file tree", "]"),
+        (Action::TreeNarrower, "Narrow file tree", "["),
+        (Action::TreeReset, "Reset file tree", "\\"),
+        (Action::Top, "Jump to top", "g"),
+        (Action::Bottom, "Jump to bottom", "G"),
+        (Action::Help, "Help", "?"),
+        (Action::Quit, "Quit", "q"),
+    ]);
+    entries
+}
+
+impl PaletteState {
+    fn new(model: &Model) -> Self {
+        let mut state = Self {
+            input: TextInput::new(""),
+            matches: Vec::new(),
+            cursor: 0,
+        };
+        state.refresh(model);
+        state
+    }
+
+    fn refresh(&mut self, model: &Model) {
+        let needle = self.input.text.clone();
+        let entries = palette_entries(model);
+        let mut matches: Vec<Ranked> = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, label, _))| {
+                fuzzy::fuzzy(&needle, label).map(|matched| Ranked {
+                    index,
+                    score: matched.score,
+                    positions: matched.positions,
+                })
+            })
+            .collect();
+        matches.sort_by(|a, b| b.score.cmp(&a.score).then(a.index.cmp(&b.index)));
+        self.matches = matches;
+        self.cursor = self.cursor.min(self.matches.len().saturating_sub(1));
+    }
+}
+
+impl FinderState {
+    fn new(model: &Model) -> Self {
+        let mut state = Self {
+            input: TextInput::new(""),
+            matches: Vec::new(),
+            cursor: 0,
+        };
+        state.refresh(model);
+        state
+    }
+
+    fn refresh(&mut self, model: &Model) {
+        let needle = self.input.text.clone();
+        let mut matches: Vec<Ranked> = model
+            .visible
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                let text = path.to_string();
+                fuzzy::fuzzy(&needle, &text).map(|matched| Ranked {
+                    index,
+                    score: matched.score,
+                    positions: matched.positions,
+                })
+            })
+            .collect();
+        matches.sort_by(|a, b| b.score.cmp(&a.score).then(a.index.cmp(&b.index)));
+        matches.truncate(200);
+        self.matches = matches;
+        self.cursor = self.cursor.min(self.matches.len().saturating_sub(1));
+    }
+}
+
+impl SearchState {
+    fn new() -> Self {
+        Self {
+            input: TextInput::new(""),
+        }
+    }
+}
+
+/// Recomputes the committed search from the input text.
+fn refresh_search(model: &mut Model, needle: &str) {
+    if needle.is_empty() {
+        model.search = None;
+        return;
+    }
+    let matches = search_matches(model, needle);
+    model.search = Some(Search {
+        needle: needle.to_owned(),
+        matches,
+        cursor: 0,
+    });
+}
+
+fn search_matches(model: &Model, needle: &str) -> Vec<SearchMatch> {
+    let needle_lower = needle.to_lowercase();
+    if needle_lower.is_empty() {
+        return Vec::new();
+    }
+    let mut matches = Vec::new();
+    match &model.content {
+        Content::Show(_) => {
+            if let Some(file) = model.active_file() {
+                collect_matches(
+                    file.canonical_text(),
+                    &needle_lower,
+                    SearchSide::Show,
+                    &mut matches,
+                );
+            }
+        }
+        Content::Diff(_) => {
+            if let Some(diff) = model.active_diff() {
+                if let Some(old) = &diff.old {
+                    collect_matches(
+                        old.canonical_text(),
+                        &needle_lower,
+                        SearchSide::Old,
+                        &mut matches,
+                    );
+                }
+                if let Some(new) = &diff.new {
+                    collect_matches(
+                        new.canonical_text(),
+                        &needle_lower,
+                        SearchSide::New,
+                        &mut matches,
+                    );
+                }
+            }
+        }
+    }
+    matches
+}
+
+fn collect_matches(text: &str, needle_lower: &str, side: SearchSide, out: &mut Vec<SearchMatch>) {
+    let needle: Vec<char> = needle_lower.chars().collect();
+    if needle.is_empty() {
+        return;
+    }
+    for (index, line) in text.lines().enumerate() {
+        let hay: Vec<(usize, char)> = line.char_indices().collect();
+        let mut i = 0;
+        while i + needle.len() <= hay.len() {
+            let matched = (0..needle.len()).all(|k| {
+                hay[i + k]
+                    .1
+                    .to_lowercase()
+                    .next()
+                    .unwrap_or(hay[i + k].1)
+                    == needle[k]
+            });
+            if matched {
+                let start = hay[i].0;
+                let end = hay.get(i + needle.len()).map_or(line.len(), |&(byte, _)| byte);
+                out.push(SearchMatch {
+                    side,
+                    line: index + 1,
+                    start,
+                    end,
+                });
+                i += needle.len();
+            } else {
+                i += 1;
+            }
+        }
+    }
+}
+
+/// Scrolls to the currently selected match without changing it.
+fn focus_current_match(model: &mut Model) {
+    if let Some(search) = &model.search
+        && let Some(matched) = search.matches.get(search.cursor)
+    {
+        let matched = matched.clone();
+        scroll_to_match(model, &matched);
+    }
+}
+
+/// Moves to the next or previous match and scrolls it into view.
+fn step_search(model: &mut Model, forward: bool) {
+    let matched = match &model.search {
+        Some(search) if !search.matches.is_empty() => {
+            let len = search.matches.len();
+            let cursor = if forward {
+                (search.cursor + 1) % len
+            } else {
+                (search.cursor + len - 1) % len
+            };
+            (cursor, search.matches[cursor].clone())
+        }
+        _ => return,
+    };
+    if let Some(search) = &mut model.search {
+        search.cursor = matched.0;
+    }
+    scroll_to_match(model, &matched.1);
+}
+
+/// Scrolls the body so a search match is visible.
+fn scroll_to_match(model: &mut Model, matched: &SearchMatch) {
+    let height = model.height.saturating_sub(4) as usize;
+    let index = match model.content {
+        Content::Show(_) => matched.line.saturating_sub(1),
+        Content::Diff(_) => {
+            let side = matched.side;
+            model
+                .diff_rows()
+                .iter()
+                .position(|row| match side {
+                    SearchSide::Old => row.old_number == Some(matched.line),
+                    SearchSide::New => row.new_number == Some(matched.line),
+                    SearchSide::Show => false,
+                })
+                .unwrap_or(0)
+        }
+    };
+    let scroll = model.body_scroll as usize;
+    if index < scroll {
+        model.body_scroll = index as u16;
+    } else if height > 0 && index >= scroll + height {
+        model.body_scroll = (index + 1 - height) as u16;
     }
 }
 
@@ -1112,6 +1574,105 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
             }
             if reopen {
                 model.overlay = Some(Overlay::Mode { cursor });
+            }
+        }
+        Overlay::Palette(mut state) => {
+            let mut reopen = true;
+            match key {
+                Key::Esc => reopen = false,
+                Key::Up => state.cursor = state.cursor.saturating_sub(1),
+                Key::Down => {
+                    state.cursor = (state.cursor + 1).min(state.matches.len().saturating_sub(1));
+                }
+                Key::Enter => {
+                    reopen = false;
+                    if let Some(ranked) = state.matches.get(state.cursor) {
+                        let entries = palette_entries(model);
+                        if let Some((action, _, _)) = entries.get(ranked.index) {
+                            let action = *action;
+                            model.overlay = None;
+                            apply_action(action, model, cmds);
+                        }
+                    }
+                }
+                Key::Char(character) => {
+                    state.input.insert(character);
+                    state.cursor = 0;
+                    state.refresh(model);
+                }
+                Key::Backspace => {
+                    state.input.backspace();
+                    state.cursor = 0;
+                    state.refresh(model);
+                }
+                _ => {}
+            }
+            if reopen {
+                model.overlay = Some(Overlay::Palette(state));
+            }
+        }
+        Overlay::Finder(mut state) => {
+            let mut reopen = true;
+            match key {
+                Key::Esc => reopen = false,
+                Key::Up => state.cursor = state.cursor.saturating_sub(1),
+                Key::Down => {
+                    state.cursor = (state.cursor + 1).min(state.matches.len().saturating_sub(1));
+                }
+                Key::Enter => {
+                    reopen = false;
+                    if let Some(ranked) = state.matches.get(state.cursor)
+                        && let Some(path) = model.visible.get(ranked.index).cloned()
+                    {
+                        model.cursor = model.row_of_file(&path).unwrap_or(model.cursor);
+                        model.selected = Some(path);
+                        model.body_scroll = 0;
+                        model.body_hscroll = 0;
+                        model.overlay = None;
+                        model.ensure_highlight();
+                    }
+                }
+                Key::Char(character) => {
+                    state.input.insert(character);
+                    state.cursor = 0;
+                    state.refresh(model);
+                }
+                Key::Backspace => {
+                    state.input.backspace();
+                    state.cursor = 0;
+                    state.refresh(model);
+                }
+                _ => {}
+            }
+            if reopen {
+                model.overlay = Some(Overlay::Finder(state));
+            }
+        }
+        Overlay::Search(mut state) => {
+            let mut reopen = true;
+            match key {
+                Key::Esc => {
+                    reopen = false;
+                    model.search = None;
+                }
+                Key::Enter => {
+                    reopen = false;
+                    focus_current_match(model);
+                }
+                Key::Char(character) => {
+                    state.input.insert(character);
+                    let needle = state.input.value();
+                    refresh_search(model, &needle);
+                }
+                Key::Backspace => {
+                    state.input.backspace();
+                    let needle = state.input.value();
+                    refresh_search(model, &needle);
+                }
+                _ => {}
+            }
+            if reopen {
+                model.overlay = Some(Overlay::Search(state));
             }
         }
     }
@@ -1662,6 +2223,105 @@ mod tests {
         model.pending = Some(show_request());
         let text = buffer_text(&render(&model, 120, 20));
         assert!(text.contains("projecting"), "{text}");
+    }
+
+    #[test]
+    fn ctrl_p_opens_the_palette_and_filters_to_an_action() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::CtrlP), &model);
+        assert!(matches!(opened.overlay, Some(Overlay::Palette(_))));
+
+        let mut state = opened;
+        for character in "help".chars() {
+            let (next, _) = update(Msg::Key(Key::Char(character)), &state);
+            state = next;
+        }
+        let Some(Overlay::Palette(palette)) = &state.overlay else {
+            panic!("expected the palette");
+        };
+        let entries = palette_entries(&state);
+        assert_eq!(entries[palette.matches[0].index].0, Action::Help);
+
+        let (applied, _) = update(Msg::Key(Key::Enter), &state);
+        assert_eq!(applied.overlay, Some(Overlay::Help));
+    }
+
+    #[test]
+    fn the_finder_selects_a_file() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::CtrlF), &model);
+        assert!(matches!(opened.overlay, Some(Overlay::Finder(_))));
+
+        let (typed, _) = update(Msg::Key(Key::Char('b')), &opened);
+        let (chosen, _) = update(Msg::Key(Key::Enter), &typed);
+        assert_eq!(
+            chosen.selected.as_ref().map(ToString::to_string),
+            Some("b.rs".to_owned())
+        );
+        assert_eq!(chosen.overlay, None);
+    }
+
+    #[test]
+    fn search_finds_matches_and_steps_them() {
+        let model = model_with(vec![projected("a.rs", "alpha\nbeta\nalpha again\n")]);
+        let (opened, _) = update(Msg::Key(Key::Char('/')), &model);
+        assert!(matches!(opened.overlay, Some(Overlay::Search(_))));
+
+        let mut state = opened;
+        for character in "alpha".chars() {
+            let (next, _) = update(Msg::Key(Key::Char(character)), &state);
+            state = next;
+        }
+        assert_eq!(state.search.as_ref().expect("live search").matches.len(), 2);
+
+        let (committed, _) = update(Msg::Key(Key::Enter), &state);
+        assert_eq!(committed.overlay, None);
+        let (stepped, _) = update(Msg::Key(Key::Char('n')), &committed);
+        assert_eq!(stepped.search.as_ref().unwrap().cursor, 1);
+        let (back, _) = update(Msg::Key(Key::Char('N')), &stepped);
+        assert_eq!(back.search.as_ref().unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn q_types_into_a_search_input_instead_of_quitting() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::Char('/')), &model);
+        let (typed, _) = update(Msg::Key(Key::Char('q')), &opened);
+        assert!(!typed.quit);
+        match &typed.overlay {
+            Some(Overlay::Search(state)) => assert_eq!(state.input.text, "q"),
+            other => panic!("expected a search overlay, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_palette_and_finder_render_their_lists() {
+        let mut model = two_files();
+        model.overlay = Some(Overlay::Palette(PaletteState::new(&model)));
+        let text = buffer_text(&render(&model, 100, 20));
+        assert!(text.contains("commands"), "{text}");
+        assert!(text.contains("Switch Types"), "{text}");
+
+        let mut model = two_files();
+        model.overlay = Some(Overlay::Finder(FinderState::new(&model)));
+        let text = buffer_text(&render(&model, 100, 20));
+        assert!(text.contains("find file"), "{text}");
+        assert!(text.contains("a.rs"), "{text}");
+    }
+
+    #[test]
+    fn page_keys_move_the_cursor_in_the_tree_and_scroll_the_body() {
+        let model = model_with(vec![
+            projected("a.rs", "one\ntwo\nthree\nfour\nfive\n"),
+            projected("b.rs", "x\n"),
+        ]);
+        let (down, _) = update(Msg::Key(Key::PageDown), &model);
+        assert!(down.cursor > model.cursor);
+
+        let mut body = model.clone();
+        body.focus = Pane::Body;
+        let (scrolled, _) = update(Msg::Key(Key::PageDown), &body);
+        assert!(scrolled.body_scroll > 0);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use ratatui::widgets::{
     Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::app::Model;
+use crate::app::{Model, SearchSide};
 use crate::highlight;
 use crate::theme::Theme;
 
@@ -53,7 +53,9 @@ pub(crate) fn render_show_body(
         Some(styled) => {
             for (offset, runs) in styled.iter().skip(skip).take(height).enumerate() {
                 let number = skip + offset + 1;
-                let clipped = highlight::clip_runs(runs, hscroll, width);
+                let ranges = model.search_ranges(SearchSide::Show, number);
+                let runs = highlight_search(runs, &ranges, theme);
+                let clipped = highlight::clip_runs(&runs, hscroll, width);
                 let mut spans = vec![gutter_span(number, gutter, theme)];
                 spans.extend(
                     clipped
@@ -95,6 +97,20 @@ pub(crate) fn render_show_body(
 
 fn gutter_width(total: usize) -> usize {
     total.max(1).to_string().len() + 1
+}
+
+/// Recolors search matches on a line, the current match more brightly.
+fn highlight_search(runs: &[highlight::Run], ranges: &[(usize, usize, bool)], theme: &Theme) -> Vec<highlight::Run> {
+    let mut styled = runs.to_vec();
+    for (start, end, current) in ranges {
+        let color = if *current {
+            theme.color(theme.palette.match_current_bg)
+        } else {
+            theme.color(theme.palette.match_bg)
+        };
+        styled = highlight::apply_emphasis(&styled, &[(*start, *end)], color);
+    }
+    styled
 }
 
 fn gutter_span(number: usize, gutter: usize, theme: &Theme) -> Span<'static> {

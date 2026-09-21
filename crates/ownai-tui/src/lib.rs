@@ -29,6 +29,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 mod app;
+mod fuzzy;
 mod highlight;
 mod theme;
 mod view;
@@ -315,8 +316,13 @@ fn not_a_terminal() -> TuiError {
 fn translate(key: KeyEvent) -> Option<Msg> {
     use crossterm::event::{KeyCode, KeyModifiers};
 
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
     let key = match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::CtrlC,
+        KeyCode::Char('c') if control => Key::CtrlC,
+        KeyCode::Char('d') if control => Key::CtrlD,
+        KeyCode::Char('f') if control => Key::CtrlF,
+        KeyCode::Char('p') if control => Key::CtrlP,
+        KeyCode::Char('u') if control => Key::CtrlU,
         KeyCode::Char(character) => Key::Char(character),
         KeyCode::Up => Key::Up,
         KeyCode::Down => Key::Down,
@@ -330,6 +336,8 @@ fn translate(key: KeyEvent) -> Option<Msg> {
         KeyCode::Delete => Key::Delete,
         KeyCode::Home => Key::Home,
         KeyCode::End => Key::End,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::PageDown => Key::PageDown,
         _ => return None,
     };
     Some(Msg::Key(key))
@@ -453,6 +461,38 @@ mod tests {
             drop(session);
             assert_eq!(log.borrow().teardown, expected, "fail_at = {fail_at:?}");
         }
+    }
+
+    #[test]
+    fn control_keys_translate_to_distinct_messages() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('p'))),
+            Some(Msg::Key(Key::CtrlP))
+        ));
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('f'))),
+            Some(Msg::Key(Key::CtrlF))
+        ));
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('d'))),
+            Some(Msg::Key(Key::CtrlD))
+        ));
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('u'))),
+            Some(Msg::Key(Key::CtrlU))
+        ));
+        assert!(matches!(
+            translate(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+            Some(Msg::Key(Key::PageDown))
+        ));
+        // A plain character is not a control key.
+        assert!(matches!(
+            translate(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Some(Msg::Key(Key::Char('p')))
+        ));
     }
 
     #[test]
