@@ -115,7 +115,7 @@ clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 miette = { version = "7", features = ["fancy"] }
 bstr = "1"
-anstream = "0.6"
+anstream = "1.0"
 anstyle = "1"
 ```
 

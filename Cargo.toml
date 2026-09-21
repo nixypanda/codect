@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ownai-core",
+    "crates/ownai-git",
+    "crates/ownai-language-elm",
+    "crates/ownai-language-rust",
+    "crates/ownai-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace.dependencies]
+# First-party crates.
+ownai-core = { path = "crates/ownai-core" }
+ownai-git = { path = "crates/ownai-git" }
+ownai-language-elm = { path = "crates/ownai-language-elm" }
+ownai-language-rust = { path = "crates/ownai-language-rust" }
+
+# Runtime dependencies.
+tree-sitter = "0.27"
+tree-sitter-elm = "5.9"
+tree-sitter-rust = "0.24"
+gix = { version = "0.87", default-features = false, features = [
+    "auto-chain-error",
+    "revision",
+    "sha1",
+    "sha256",
+    "pack-cache-lru-static",
+] }
+similar = "3.2"
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+miette = { version = "7", features = ["fancy"] }
+bstr = "1"
+anstream = "1"
+anstyle = "1"
+
+# Test-only dependencies.
+insta = "1"
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"

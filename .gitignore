@@ -1,0 +1,17 @@
+# Rust build output
+/target
+
+# Nix build output
+/result
+/result-*
+
+# direnv
+/.direnv
+
+# Snapshots pending review (insta)
+*.snap.new
+*.pending-snap
+
+# Editor and OS noise
+.DS_Store
+*.rs.bk
