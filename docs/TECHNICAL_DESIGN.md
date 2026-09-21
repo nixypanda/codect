@@ -12,6 +12,7 @@ The MVP supports:
 - Types and Signatures projection modes.
 - Showing a projection for a Git commit.
 - Diffing projections from two Git commits.
+- Narrowing a projection to selected repository paths on both commands.
 
 The MVP does not perform type inference, expand macros, inspect function bodies, read the index or working tree, or implement Public and Full modes.
 
@@ -47,6 +48,7 @@ crates/
       diff.rs
       language.rs
       model.rs
+      path.rs
       render.rs
   ownai-git/
     src/
@@ -72,6 +74,7 @@ crates/
       args.rs
       command.rs
       output.rs
+      pathspec.rs
 fixtures/
   elm/
   rust/
@@ -242,6 +245,7 @@ Git paths are byte strings, not guaranteed UTF-8 operating-system paths. `RepoPa
 Requirements:
 
 - Reject absolute paths and `..` traversal.
+- Contain paths with a byte-exact, boundary-aware `RepoPath::is_within` check, so a directory contains itself and its descendants but not a sibling whose name merely shares its prefix (`src` does not contain `src2/x.rs`).
 - Sort by raw path bytes for deterministic output.
 - Detect `.elm` and `.rs` using ASCII extension bytes.
 - Escape invalid UTF-8 when displaying a path.
@@ -276,6 +280,20 @@ If two declarations produce the same key, append a deterministic source-order or
 
 Nested items remain in `items` so that stable keys and later per-declaration comparisons can address them, even though their text is emitted through an ancestor.
 
+### 5.4 Path scoping
+
+`PathScope` is a sorted, deduplicated set of repository path prefixes. An empty `PathScope` matches every path, so "no selection" needs no separate case. `PathScope::matches` accepts a path that equals a prefix or descends from one, using the `RepoPath::is_within` check of section 5.1. Scoping only filters which files are projected; it never changes projection rules.
+
+`PathSelection` is how a caller narrows a projection:
+
+- `All` matches everything.
+- `Literals(Vec<RepoPath>)` narrows to explicit paths.
+- `Areas(Vec<String>)` names repository-defined areas.
+
+The variants make named areas and literal paths mutually exclusive by construction. `PathSelection::resolve` turns a selection into a `PathScope`; `All` and an empty literal list both match everything.
+
+`Area` is a named list of repository paths, and `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. Resolution reports an undefined name as `PathSelectionError::UnknownArea` and an area with no paths as `PathSelectionError::EmptyArea`. Areas are data only: area resolution exists as a seam, but the MVP reads no configuration, so the CLI resolves every selection against an empty `AreaSet` and only `All` and literal paths are reachable. A later repository configuration will supply areas.
+
 ## 6. Language adapter interface
 
 Expose this conceptual interface from `ownai-core`:
@@ -304,12 +322,14 @@ Parsing and projection must be deterministic and must not depend on the current 
 ### 7.1 Show
 
 ```text
-repository path + revision
+repository path + revision + path selection
   → discover repository
   → resolve revision to one commit
   → traverse commit tree
   → select .elm and .rs blobs
-  → read each blob
+  → reject selected paths absent from the revision (before any blob read)
+  → keep only paths matching the path scope
+  → read each remaining blob
   → project with its language adapter
   → sort files by raw repository path
   → render file sections
@@ -319,15 +339,17 @@ repository path + revision
 ### 7.2 Diff
 
 ```text
-base revision + target revision
+base revision + target revision + path selection
   → resolve both to commits
   → traverse both trees
   → union supported paths
+  → reject selected paths absent from both revisions (before any blob read)
   → for each path in byte order:
-      unchanged blob ID → skip
-      old blob only     → project old; compare with empty
-      new blob only     → compare empty with projected new
-      both blobs        → project both; compare projections
+      path outside the scope    → skip
+      unchanged blob ID         → skip
+      old blob only             → project old; compare with empty
+      new blob only             → compare empty with projected new
+      both blobs                → project both; compare projections
   → emit only projected files with differences
 ```
 
@@ -364,9 +386,13 @@ pub trait SnapshotRepository {
     fn resolve_commit(&self, spec: &str) -> Result<Revision, GitError>;
     fn source_entries(&self, revision: &Revision)
         -> Result<Vec<SourceEntry>, GitError>;
+    fn path_exists(&self, revision: &Revision, path: &RepoPath)
+        -> Result<bool, GitError>;
     fn read_blob(&self, id: &ObjectId) -> Result<Vec<u8>, GitError>;
 }
 ```
+
+`path_exists` reports whether a path names a tree or blob in a revision. A selected path is valid for a diff when either the base or the target names it, so a file deleted by the target stays in scope.
 
 The concrete implementation wraps `gix::Repository`, but callers must not see that type.
 
@@ -651,8 +677,8 @@ The binary name is `ownai`.
 Commands:
 
 ```text
-ownai show --mode <types|signatures> [REVISION]
-ownai diff --mode <types|signatures> <BASE> <TARGET>
+ownai show --mode <types|signatures> [--path <PATH>]... [REVISION]
+ownai diff --mode <types|signatures> [--path <PATH>]... <BASE> <TARGET>
 ```
 
 Rules:
@@ -660,6 +686,10 @@ Rules:
 - `show` defaults `REVISION` to `HEAD`.
 - `--mode` is required; do not introduce a default before product validation.
 - Both diff revisions are required.
+- `--path`/`-p` is repeatable and narrows the projection to the named files or directories; a directory includes every file beneath it, and multiple paths form a union. Matching is byte-exact and boundary-aware.
+- Paths resolve relative to the current directory. An absolute path must be inside the repository, `..` may climb but may not leave it, and in a bare repository relative paths resolve against the repository root. Resolution is lexical and never consults the filesystem.
+- A selected path that names nothing in the projected revision exits `1` with empty stdout; for `diff`, a path named by either the base or the target is valid.
+- A selected path that exists but contains no supported files exits `0` with empty output.
 - Support `--color <auto|always|never>` with `auto` as the default.
 - `--help` must describe that implementation-only changes are invisible.
 - Successful commands exit `0`, including a diff with projected changes.
@@ -686,12 +716,13 @@ Fatal cases include:
 
 - No repository found.
 - Revision not found, ambiguous, a range, or not peelable to a commit.
+- A selected path that names nothing in the projected revision, or in either side of a diff.
 - Git object missing or corrupt.
 - Supported source blob is not UTF-8.
 - Tree-sitter cannot parse a supported source file without error nodes.
 - Adapter finds an AST shape that violates its invariants.
 
-Unsupported extensions, symlinks, submodules, and macro-generated declarations are exclusions, not fatal errors.
+Unsupported extensions, symlinks, submodules, and macro-generated declarations are exclusions, not fatal errors. A selected path that exists but contains no supported files is likewise an exclusion: it is valid and yields empty output rather than a diagnostic.
 
 Never silently fall back to raw source. Never emit a partial diff after a fatal projection error.
 
@@ -802,12 +833,15 @@ and skip cleanly when the environment's Git cannot create a SHA-256 repository.
 
 Assert stdout, stderr, and exit status for every command form. Snapshot plain output with color disabled. Add a focused assertion that redirected or `--color=never` output has no escape bytes.
 
+Path scoping has its own end-to-end coverage over temporary repositories: scoping to a directory, to a single file, and to a union of paths; `.` inside a subdirectory; an absolute path inside the repository; rejection of a path that would leave the repository; added and deleted files in a scoped diff; and a runtime capability check that skips the non-UTF-8 committed-path case when the environment cannot create one.
+
 ## 17. Performance constraints
 
 Correctness and stable output take priority over concurrency in the MVP.
 
 Initial performance rules:
 
+- Filter entries by path scope before reading blobs, so scoping bounds the number of blobs read and projected.
 - Skip files with identical blob IDs before reading them during diff.
 - Read each needed blob at most once per command.
 - Project each `(blob ID, language, mode)` at most once per command.
@@ -938,6 +972,7 @@ The MVP implementation is complete when:
 - Type and signature edits appear in the correct modes.
 - Mixed-language, added-file, and deleted-file comparisons work.
 - Invalid revisions and unprojectable supported files fail clearly without partial output.
+- Path scoping on both commands behaves as documented, including the fatal absent-path case.
 - Output is deterministic across repeated runs and independent of terminal width.
 - All required tests and snapshots pass.
 - Only the approved `gix` features are enabled.

@@ -48,9 +48,14 @@ Individual recipes are available as `just build`, `just test`, `just format`,
 ## Usage
 
 ```text
-ownai show --mode <types|signatures> [REVISION]
-ownai diff --mode <types|signatures> <BASE> <TARGET>
+ownai show --mode <types|signatures> [--path <PATH>]... [REVISION]
+ownai diff --mode <types|signatures> [--path <PATH>]... <BASE> <TARGET>
 ```
+
+`--path`/`-p` is repeatable and scopes a command to a file or directory (a
+directory includes everything beneath it); a path that names nothing in the
+projected revision — or in either side of a diff — is an error. Paths are
+relative to the current directory and must stay inside the repository.
 
 Focused diffs intentionally hide implementation-only changes: if a function body
 changes while its projected declaration is unchanged, the focused diff shows no
