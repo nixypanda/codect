@@ -42,9 +42,8 @@ pub fn fuzzy(needle: &str, haystack: &str) -> Option<Match> {
         if index.checked_sub(1) == previous {
             score += 25;
         }
-        let at_boundary = index == 0
-            || !hay[index - 1].1.is_alphanumeric()
-            || hay[index - 1].1.is_uppercase();
+        let at_boundary =
+            index == 0 || !hay[index - 1].1.is_alphanumeric() || hay[index - 1].1.is_uppercase();
         if at_boundary {
             score += 10;
         }

@@ -11,8 +11,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{
-    Model, Overlay, PaletteState, FinderState, SearchState, RevisionField, ScopeChooser,
-    TextInput, available_modes, mode_label, palette_entries,
+    FinderState, Model, Overlay, PaletteState, RevisionField, ScopeChooser, SearchState, TextInput,
+    available_modes, mode_label, palette_entries,
 };
 use crate::theme::Theme;
 
@@ -25,7 +25,9 @@ pub(crate) fn render_overlay(model: &Model, frame: &mut Frame, area: Rect) {
             render_revision(frame, area, *field, input, &model.theme);
         }
         Some(Overlay::Scope(chooser)) => render_scope(frame, area, chooser, &model.theme),
-        Some(Overlay::Mode { cursor }) => render_mode(frame, area, *cursor, model.mode, &model.theme),
+        Some(Overlay::Mode { cursor }) => {
+            render_mode(frame, area, *cursor, model.mode, &model.theme)
+        }
         Some(Overlay::Palette(state)) => render_palette(frame, area, model, state, &model.theme),
         Some(Overlay::Finder(state)) => render_finder(frame, area, model, state, &model.theme),
         Some(Overlay::Search(state)) => render_search(frame, area, state, model, &model.theme),
@@ -48,9 +50,7 @@ fn popup_block(title: &str, theme: &Theme) -> Block<'static> {
         .style(theme.bg(theme.palette.surface))
         .title(Span::styled(
             format!(" {title} "),
-            theme
-                .fg(theme.palette.accent)
-                .add_modifier(Modifier::BOLD),
+            theme.fg(theme.palette.accent).add_modifier(Modifier::BOLD),
         ))
 }
 
@@ -258,7 +258,13 @@ fn render_palette(
 
     let mut lines = vec![input_line("› ", &state.input, theme), Line::from("")];
     let offset = window_offset(state.cursor, state.matches.len(), list_height);
-    for (row, ranked) in state.matches.iter().enumerate().skip(offset).take(list_height) {
+    for (row, ranked) in state
+        .matches
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(list_height)
+    {
         let (label, hint) = entries
             .get(ranked.index)
             .map_or(("", ""), |(_, label, hint)| (*label, *hint));
@@ -280,13 +286,7 @@ fn render_palette(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_finder(
-    frame: &mut Frame,
-    area: Rect,
-    model: &Model,
-    state: &FinderState,
-    theme: &Theme,
-) {
+fn render_finder(frame: &mut Frame, area: Rect, model: &Model, state: &FinderState, theme: &Theme) {
     let width = area.width.saturating_sub(4).min(80);
     let list_height = state.matches.len().min(14);
     let height = (list_height + 3).min(area.height as usize) as u16;
@@ -307,7 +307,13 @@ fn render_finder(
 
     let mut lines = vec![input_line("⌕ ", &state.input, theme), Line::from("")];
     let offset = window_offset(state.cursor, state.matches.len(), list_height);
-    for (row, ranked) in state.matches.iter().enumerate().skip(offset).take(list_height) {
+    for (row, ranked) in state
+        .matches
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(list_height)
+    {
         let label = model
             .visible
             .get(ranked.index)
@@ -330,13 +336,7 @@ fn render_finder(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_search(
-    frame: &mut Frame,
-    area: Rect,
-    state: &SearchState,
-    model: &Model,
-    theme: &Theme,
-) {
+fn render_search(frame: &mut Frame, area: Rect, state: &SearchState, model: &Model, theme: &Theme) {
     let width = area.width.saturating_sub(4).min(80);
     if width == 0 || area.height < 2 {
         return;
@@ -351,7 +351,10 @@ fn render_search(
     frame.render_widget(Clear, popup);
 
     let mut spans = input_line("/ ", &state.input, theme).spans;
-    let count = model.search.as_ref().map_or(0, |search| search.matches.len());
+    let count = model
+        .search
+        .as_ref()
+        .map_or(0, |search| search.matches.len());
     let summary = if state.input.value().is_empty() {
         "  type to search".to_owned()
     } else if count == 0 {
@@ -370,8 +373,14 @@ fn input_line(prefix: &str, input: &TextInput, theme: &Theme) -> Line<'static> {
     let before = &input.text[..input.cursor];
     let after = &input.text[input.cursor..];
     let cursor_style = theme.fg_bg(theme.palette.bg, theme.palette.accent);
-    let mut spans = vec![Span::styled(prefix.to_owned(), theme.fg(theme.palette.accent))];
-    spans.push(Span::styled(before.to_owned(), theme.fg(theme.palette.text)));
+    let mut spans = vec![Span::styled(
+        prefix.to_owned(),
+        theme.fg(theme.palette.accent),
+    )];
+    spans.push(Span::styled(
+        before.to_owned(),
+        theme.fg(theme.palette.text),
+    ));
     match after.chars().next() {
         Some(character) => {
             spans.push(Span::styled(character.to_string(), cursor_style));
@@ -413,7 +422,10 @@ fn ranked_line(
         current.push(character);
     }
     if !current.is_empty() {
-        spans.push(Span::styled(current, matched_style(current_matched, selected, theme)));
+        spans.push(Span::styled(
+            current,
+            matched_style(current_matched, selected, theme),
+        ));
     }
 
     let used: usize = spans
@@ -458,9 +470,7 @@ fn matched_style(matched: bool, selected: bool, theme: &Theme) -> Style {
 fn section(title: &str, theme: &Theme) -> Span<'static> {
     Span::styled(
         format!(" {title}"),
-        theme
-            .fg(theme.palette.accent)
-            .add_modifier(Modifier::BOLD),
+        theme.fg(theme.palette.accent).add_modifier(Modifier::BOLD),
     )
 }
 

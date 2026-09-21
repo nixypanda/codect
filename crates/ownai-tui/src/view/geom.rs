@@ -42,12 +42,7 @@ fn borders_for(edge: Edge) -> Borders {
 }
 
 /// A rounded panel with a themed border. Focused panels use the accent border.
-pub(crate) fn pane_block(
-    title: &str,
-    focused: bool,
-    theme: &Theme,
-    edge: Edge,
-) -> Block<'static> {
+pub(crate) fn pane_block(title: &str, focused: bool, theme: &Theme, edge: Edge) -> Block<'static> {
     let border = if focused {
         theme.fg(theme.palette.border_focus)
     } else {
@@ -134,7 +129,10 @@ pub(crate) fn render_divider(frame: &mut Frame, column: Rect, theme: &Theme) {
             row if row + 1 == column.height => "┴",
             _ => "│",
         };
-        lines.push(ratatui::text::Line::from(Span::styled(symbol.to_owned(), style)));
+        lines.push(ratatui::text::Line::from(Span::styled(
+            symbol.to_owned(),
+            style,
+        )));
     }
     frame.render_widget(Paragraph::new(lines).style(Style::default()), column);
 }

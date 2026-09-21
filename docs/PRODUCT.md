@@ -154,6 +154,11 @@ The MVP includes an interactive terminal frontend for the same focused views.
 - The user can switch between Types and Signatures, change the scope
   (everything, a named area, or a literal path), and enter new revisions
   without leaving the frontend.
+- A command palette and a fuzzy file finder make every action reachable without
+  memorizing keys, and the current view can be searched with match
+  highlighting.
+- The interface uses a themed design system with a light and dark palette and
+  degrades to 256- or 16-color terminals; `NO_COLOR` disables styling.
 - The file tree is resizable, and the frontend adapts to the terminal size.
 
 The terminal frontend is an additional way to read the same focused views. It

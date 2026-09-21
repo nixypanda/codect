@@ -31,11 +31,11 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
     ];
 
     if let Some(path) = &model.selected {
-        spans.push(Span::styled("› ".to_owned(), theme.fg(theme.palette.text_muted)));
         spans.push(Span::styled(
-            path.to_string(),
-            theme.fg(theme.palette.text),
+            "› ".to_owned(),
+            theme.fg(theme.palette.text_muted),
         ));
+        spans.push(Span::styled(path.to_string(), theme.fg(theme.palette.text)));
     }
 
     let mut right = vec![
@@ -70,7 +70,7 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum();
     let area_width = area.width as usize;
-    if left_width + right_width + 1 <= area_width {
+    if left_width + right_width < area_width {
         spans.push(Span::styled(
             " ".repeat(area_width - left_width - right_width),
             base,
@@ -169,9 +169,15 @@ fn hints(model: &Model) -> String {
         Some(Overlay::Search(_)) => "type to search   Enter next   Esc cancel ".to_owned(),
         Some(Overlay::Help) => "Esc close ".to_owned(),
         None => match (model.focus, &model.content) {
-            (Pane::Tree, _) => "Ctrl-P commands   Ctrl-F find   ↵ open   Tab content   ? help ".to_owned(),
-            (Pane::Body, _) => "j/k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned(),
-            (Pane::Diff, _) => "j/k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned(),
+            (Pane::Tree, _) => {
+                "Ctrl-P commands   Ctrl-F find   ↵ open   Tab content   ? help ".to_owned()
+            }
+            (Pane::Body, _) => {
+                "j/k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned()
+            }
+            (Pane::Diff, _) => {
+                "j/k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned()
+            }
         },
     }
 }

@@ -73,11 +73,7 @@ fn syntax_for(syntaxes: &SyntaxSet, language: Language) -> &SyntaxReference {
 }
 
 fn convert(style: SynStyle, capability: Capability) -> Style {
-    let foreground = Rgb(
-        style.foreground.r,
-        style.foreground.g,
-        style.foreground.b,
-    );
+    let foreground = Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
     let mut out = Style::default().fg(foreground.to_color(capability));
     if style.font_style.contains(FontStyle::BOLD) {
         out = out.add_modifier(Modifier::BOLD);

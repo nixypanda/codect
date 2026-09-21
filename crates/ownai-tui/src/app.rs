@@ -13,11 +13,11 @@ use ownai_engine::{EngineError, FileDiff, Selection, SelectionGroup};
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
+use crate::fuzzy;
 use crate::highlight::{self, StyledLine};
 use crate::theme::Theme;
 use crate::view::diff::layout_diff;
 use crate::view::geom::{Edge, frame_chunks, gutter_width, pane_block, split_with_dividers};
-use crate::fuzzy;
 
 /// At or above this width the tree and content render side by side.
 pub(crate) const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
@@ -725,6 +725,19 @@ impl Model {
             .collect()
     }
 
+    /// Recomputes a committed search for the current selection, so switching
+    /// files never leaves highlights pointing at the previous file's lines.
+    fn resync_search(&mut self) {
+        let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
+            return;
+        };
+        let matches = search_matches(self, &needle);
+        if let Some(search) = &mut self.search {
+            search.matches = matches;
+            search.cursor = search.cursor.min(search.matches.len().saturating_sub(1));
+        }
+    }
+
     /// Computes and caches highlighting for the selected file when missing.
     fn ensure_highlight(&mut self) {
         let Some(path) = self.selected.clone() else {
@@ -738,7 +751,8 @@ impl Model {
                 let Some(file) = files.iter().find(|file| file.path() == &path) else {
                     return;
                 };
-                let lines = highlight::highlight(file.canonical_text(), file.language(), &self.theme);
+                let lines =
+                    highlight::highlight(file.canonical_text(), file.language(), &self.theme);
                 self.highlights.show.insert(path, Arc::new(lines));
             }
             Content::Diff(diffs) => {
@@ -878,6 +892,7 @@ impl Model {
         self.body_scroll = 0;
         self.body_hscroll = 0;
         self.ensure_highlight();
+        self.resync_search();
         self.refresh_derived();
     }
 
@@ -1127,7 +1142,10 @@ fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
             if model.focus == Pane::Tree {
                 move_cursor(model, i32::from(step));
             } else {
-                model.body_scroll = model.body_scroll.saturating_add(step).min(max_scroll(model));
+                model.body_scroll = model
+                    .body_scroll
+                    .saturating_add(step)
+                    .min(max_scroll(model));
             }
         }
         Action::Palette => model.overlay = Some(Overlay::Palette(PaletteState::new(model))),
@@ -1321,17 +1339,13 @@ fn collect_matches(text: &str, needle_lower: &str, side: SearchSide, out: &mut V
         let hay: Vec<(usize, char)> = line.char_indices().collect();
         let mut i = 0;
         while i + needle.len() <= hay.len() {
-            let matched = (0..needle.len()).all(|k| {
-                hay[i + k]
-                    .1
-                    .to_lowercase()
-                    .next()
-                    .unwrap_or(hay[i + k].1)
-                    == needle[k]
-            });
+            let matched = (0..needle.len())
+                .all(|k| hay[i + k].1.to_lowercase().next().unwrap_or(hay[i + k].1) == needle[k]);
             if matched {
                 let start = hay[i].0;
-                let end = hay.get(i + needle.len()).map_or(line.len(), |&(byte, _)| byte);
+                let end = hay
+                    .get(i + needle.len())
+                    .map_or(line.len(), |&(byte, _)| byte);
                 out.push(SearchMatch {
                     side,
                     line: index + 1,
@@ -1630,6 +1644,7 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                         model.body_hscroll = 0;
                         model.overlay = None;
                         model.ensure_highlight();
+                        model.resync_search();
                     }
                 }
                 Key::Char(character) => {
@@ -1772,6 +1787,7 @@ fn tree_key(key: Key, model: &mut Model) {
                 RowKind::File { path } => {
                     model.selected = Some(path);
                     model.ensure_highlight();
+                    model.resync_search();
                 }
             }
         }
@@ -1827,6 +1843,7 @@ fn sync_selected(model: &mut Model) {
     }
     model.selected = Some(path);
     model.ensure_highlight();
+    model.resync_search();
 }
 
 fn directory_at_cursor(model: &Model) -> Option<(RepoPath, bool)> {
@@ -2280,6 +2297,31 @@ mod tests {
         assert_eq!(stepped.search.as_ref().unwrap().cursor, 1);
         let (back, _) = update(Msg::Key(Key::Char('N')), &stepped);
         assert_eq!(back.search.as_ref().unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn switching_files_recomputes_a_committed_search() {
+        let mut model = model_with(vec![
+            projected("a.rs", "alpha\n"),
+            projected("b.rs", "beta\nalpha\n"),
+        ]);
+        model.search = Some(Search {
+            needle: "alpha".to_owned(),
+            matches: vec![SearchMatch {
+                side: SearchSide::Show,
+                line: 1,
+                start: 0,
+                end: 5,
+            }],
+            cursor: 0,
+        });
+
+        model.selected = Some(RepoPath::new("b.rs").unwrap());
+        model.resync_search();
+
+        let search = model.search.as_ref().expect("search");
+        assert_eq!(search.matches.len(), 1);
+        assert_eq!(search.matches[0].line, 2, "the match moved to the new file");
     }
 
     #[test]

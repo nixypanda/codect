@@ -3,9 +3,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-};
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::app::{Model, SearchSide};
 use crate::highlight;
@@ -42,8 +40,7 @@ pub(crate) fn render_show_body(
     let height = inner.height as usize;
     let needs_scrollbar = total > height;
     let gutter = gutter_width(total);
-    let width = (inner.width as usize)
-        .saturating_sub(gutter + usize::from(needs_scrollbar));
+    let width = (inner.width as usize).saturating_sub(gutter + usize::from(needs_scrollbar));
     let skip = model.body_scroll as usize;
     let hscroll = model.body_hscroll as usize;
     let theme = &model.theme;
@@ -100,7 +97,11 @@ fn gutter_width(total: usize) -> usize {
 }
 
 /// Recolors search matches on a line, the current match more brightly.
-fn highlight_search(runs: &[highlight::Run], ranges: &[(usize, usize, bool)], theme: &Theme) -> Vec<highlight::Run> {
+fn highlight_search(
+    runs: &[highlight::Run],
+    ranges: &[(usize, usize, bool)],
+    theme: &Theme,
+) -> Vec<highlight::Run> {
     let mut styled = runs.to_vec();
     for (start, end, current) in ranges {
         let color = if *current {
@@ -115,8 +116,5 @@ fn highlight_search(runs: &[highlight::Run], ranges: &[(usize, usize, bool)], th
 
 fn gutter_span(number: usize, gutter: usize, theme: &Theme) -> Span<'static> {
     let field = gutter.saturating_sub(1);
-    Span::styled(
-        format!("{number:>field$} "),
-        theme.fg(theme.palette.gutter),
-    )
+    Span::styled(format!("{number:>field$} "), theme.fg(theme.palette.gutter))
 }

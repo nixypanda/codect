@@ -122,7 +122,6 @@ pub struct Palette {
 
 /// Delta's default diff backgrounds are the dark theme's palette values; see
 /// [`Palette::del_bg`] and [`Palette::add_bg`].
-
 const DARK: Palette = Palette {
     bg: Rgb(0x1e, 0x1f, 0x1c),
     surface: Rgb(0x27, 0x28, 0x22),
@@ -249,9 +248,7 @@ impl Theme {
 
     /// A foreground-and-background style.
     pub fn fg_bg(&self, fg: Rgb, bg: Rgb) -> Style {
-        Style::default()
-            .fg(self.color(fg))
-            .bg(self.color(bg))
+        Style::default().fg(self.color(fg)).bg(self.color(bg))
     }
 
     /// Whether any color is emitted.
@@ -310,8 +307,7 @@ fn xterm256() -> &'static [Rgb; 256] {
         for r in 0..6usize {
             for g in 0..6usize {
                 for b in 0..6usize {
-                    palette[16 + 36 * r + 6 * g + b] =
-                        Rgb(LEVELS[r], LEVELS[g], LEVELS[b]);
+                    palette[16 + 36 * r + 6 * g + b] = Rgb(LEVELS[r], LEVELS[g], LEVELS[b]);
                 }
             }
         }
@@ -362,7 +358,10 @@ mod tests {
 
     #[test]
     fn truecolor_is_identity() {
-        assert_eq!(Rgb(1, 2, 3).to_color(Capability::TrueColor), Color::Rgb(1, 2, 3));
+        assert_eq!(
+            Rgb(1, 2, 3).to_color(Capability::TrueColor),
+            Color::Rgb(1, 2, 3)
+        );
     }
 
     #[test]
@@ -372,8 +371,14 @@ mod tests {
 
     #[test]
     fn ansi16_maps_to_a_named_color() {
-        assert_eq!(Rgb(0xff, 0x00, 0x00).to_color(Capability::Ansi16), Color::LightRed);
-        assert_eq!(Rgb(0x00, 0x00, 0x00).to_color(Capability::Ansi16), Color::Black);
+        assert_eq!(
+            Rgb(0xff, 0x00, 0x00).to_color(Capability::Ansi16),
+            Color::LightRed
+        );
+        assert_eq!(
+            Rgb(0x00, 0x00, 0x00).to_color(Capability::Ansi16),
+            Color::Black
+        );
     }
 
     #[test]

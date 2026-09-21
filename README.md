@@ -95,6 +95,11 @@ diff. The diff panes are syntax-highlighted and styled like
 full-line add/delete backgrounds, brighter intra-line emphasis on the bytes that
 changed, and `@@` hunk headers. `NO_COLOR` disables all styling.
 
+A command palette (`Ctrl-P`), a fuzzy file finder (`Ctrl-F`), and in-pane search
+(`/`) make the frontend navigable without memorizing keys. The UI is themed:
+`OWNAI_THEME=light` switches to a light palette, and colors degrade gracefully on
+terminals that only support 256 or 16 colors.
+
 Keybindings:
 
 | Key | Action |
@@ -102,15 +107,23 @@ Keybindings:
 | `q`, `Ctrl-C` | Quit |
 | `↑`/`↓` or `k`/`j` | Move in the tree, or scroll the focused content |
 | `←`/`→` or `h`/`l` | Fold/unfold the tree, or scroll the projection sideways |
+| `g` / `G` | Jump to the top or bottom |
+| `PageUp`/`PageDown`, `Ctrl-U`/`Ctrl-D` | Move or scroll a half page |
 | `Tab`, `Shift-Tab` | Switch between the tree and the content |
 | `Enter` | Open a file or fold a directory |
+| `Ctrl-P` | Open the command palette |
+| `Ctrl-F` | Find a file by name |
+| `/`, then `n`/`N` | Search the current view and step through matches |
 | `m` | Choose Types or Signatures |
 | `s` | Choose a scope: everything, a named area, or a literal path |
 | `r` | Edit the show revision |
 | `b`, `t` | Edit the diff base and target revisions |
 | `[`, `]` | Shrink or grow the file tree; `\` resets it |
 | `?` | Toggle help |
-| `Esc` | Close an overlay or dismiss a diagnostic |
+| `Esc` | Close an overlay, clear a search, or dismiss a diagnostic |
+
+Mouse capture is deliberately left off so terminal text selection and copy keep
+working.
 
 Requirements:
 

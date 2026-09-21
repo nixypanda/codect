@@ -188,9 +188,7 @@ fn line_background(kind: DiffRowKind, side: Side, theme: &Theme) -> Style {
         return Style::default();
     }
     match (kind, side) {
-        (DiffRowKind::Add, _) | (DiffRowKind::Change, Side::New) => {
-            theme.bg(theme.palette.add_bg)
-        }
+        (DiffRowKind::Add, _) | (DiffRowKind::Change, Side::New) => theme.bg(theme.palette.add_bg),
         (DiffRowKind::Delete, _) | (DiffRowKind::Change, Side::Old) => {
             theme.bg(theme.palette.del_bg)
         }

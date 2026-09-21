@@ -4,9 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-};
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{ChangeKind, Content, Model, RowKind, TreeRow};
@@ -134,11 +132,14 @@ fn tree_line(
     if let Some((label, color)) = badge {
         spans.push(Span::styled(
             format!(" {label}"),
-            theme.fg_bg(color, if selected {
-                theme.palette.selection_bg
-            } else {
-                theme.palette.bg
-            }),
+            theme.fg_bg(
+                color,
+                if selected {
+                    theme.palette.selection_bg
+                } else {
+                    theme.palette.bg
+                },
+            ),
         ));
     }
 

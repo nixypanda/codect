@@ -15,9 +15,7 @@ pub(crate) mod tree;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 
-use crate::app::{
-    Content, MIN_HEIGHT, Model, Pane, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH,
-};
+use crate::app::{Content, MIN_HEIGHT, Model, Pane, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH};
 
 use diff::Side;
 use geom::{Edge, render_divider, split_with_dividers};
@@ -52,13 +50,23 @@ fn render_body(model: &Model, frame: &mut Frame, content: Rect) {
     match &model.content {
         Content::Show(_) => {
             if side_by_side {
-                let (columns, dividers) = split_with_dividers(
-                    content,
-                    &[model.tree_percent, 100 - model.tree_percent],
+                let (columns, dividers) =
+                    split_with_dividers(content, &[model.tree_percent, 100 - model.tree_percent]);
+                tree::render_tree(
+                    model,
+                    frame,
+                    columns[0],
+                    model.focus == Pane::Tree,
+                    Edge::Left,
                 );
-                tree::render_tree(model, frame, columns[0], model.focus == Pane::Tree, Edge::Left);
                 render_divider(frame, dividers[0], &model.theme);
-                show::render_show_body(model, frame, columns[1], model.focus == Pane::Body, Edge::Right);
+                show::render_show_body(
+                    model,
+                    frame,
+                    columns[1],
+                    model.focus == Pane::Body,
+                    Edge::Right,
+                );
             } else if model.focus == Pane::Tree {
                 tree::render_tree(model, frame, content, true, Edge::Solo);
             } else {
@@ -73,7 +81,13 @@ fn render_body(model: &Model, frame: &mut Frame, content: Rect) {
                 let side = rest / 2;
                 let (columns, dividers) =
                     split_with_dividers(content, &[model.tree_percent, side, rest - side]);
-                tree::render_tree(model, frame, columns[0], model.focus == Pane::Tree, Edge::Left);
+                tree::render_tree(
+                    model,
+                    frame,
+                    columns[0],
+                    model.focus == Pane::Tree,
+                    Edge::Left,
+                );
                 render_divider(frame, dividers[0], &model.theme);
                 diff::render_diff_pane(
                     model,
