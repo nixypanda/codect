@@ -75,8 +75,11 @@ crates/
 fixtures/
   elm/
   rust/
-tests/
 ```
+
+Unit tests live beside the code they cover, and each crate may add a `tests/`
+directory for integration tests; expected projection output lives under
+`fixtures/` (section 16.2).
 
 Dependency direction is one-way:
 
@@ -121,10 +124,13 @@ anstyle = "1"
 
 Use current compatible releases for test-only dependencies:
 
-- `insta` for projection and diff snapshots.
 - `assert_cmd` for CLI tests.
 - `predicates` for CLI assertions.
 - `tempfile` for temporary repositories.
+
+Projection and diff expected output is stored as plain fixture text and compared
+directly (section 16.2), which is easier to review than opaque snapshots, so no
+snapshot crate is required.
 
 Do not add an async runtime. All MVP work is local and synchronous.
 
