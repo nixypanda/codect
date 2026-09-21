@@ -7,14 +7,16 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
+use std::ffi::OsString;
 use std::fmt;
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
 use ownai_core::{
-    DiagnosticContext, Language, LanguageProjector, ProjectedFile, ProjectedItem, ProjectionError,
-    ProjectionInput, ProjectionMode, RepoPath, SourceSpan, decode_source, diff_document,
-    select_projector, show_document,
+    AreaSet, DiagnosticContext, Language, LanguageProjector, PathScope, PathSelectionError,
+    ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
+    SourceSpan, decode_source, diff_document, select_projector, show_document,
 };
 use ownai_git::{GitError, GitRepository, ObjectId, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
@@ -22,6 +24,7 @@ use ownai_language_rust::RustProjector;
 
 use crate::args::{Cli, Command as CliCommand};
 use crate::output::{self, DocumentKind};
+use crate::pathspec::{self, PathArgError};
 
 // ZST projectors are shared as statics so the pipeline never has to own them
 // or negotiate a borrow of a longer-lived value.
@@ -76,21 +79,50 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         source: Box::new(source),
     })?;
     let repository = GitRepository::discover(&start).map_err(git_failure)?;
+    // A bare repository has no worktree, so relative paths resolve against its
+    // root; `gix` reports the bare root as the Git directory.
+    let repo_root = repository
+        .work_dir()
+        .unwrap_or_else(|| repository.git_dir());
 
     match &cli.command {
-        CliCommand::Show { mode, revision } => {
-            let document = show(&repository, revision, (*mode).into())?;
+        CliCommand::Show {
+            mode,
+            revision,
+            paths,
+        } => {
+            let scope = scope_for(paths, &start, repo_root)?;
+            let document = show(&repository, revision, (*mode).into(), &scope)?;
             output::write_document(DocumentKind::Show, &document, cli.color).map_err(output_failure)
         }
-        CliCommand::Diff { mode, base, target } => {
-            let document = diff(&repository, base, target, (*mode).into())?;
+        CliCommand::Diff {
+            mode,
+            base,
+            target,
+            paths,
+        } => {
+            let scope = scope_for(paths, &start, repo_root)?;
+            let document = diff(&repository, base, target, (*mode).into(), &scope)?;
             output::write_document(DocumentKind::Diff, &document, cli.color).map_err(output_failure)
         }
     }
 }
 
+/// Resolves a command's path arguments into the scope its projection will use.
+fn scope_for(paths: &[OsString], cwd: &Path, repo_root: &Path) -> Result<PathScope, CliError> {
+    let selection = pathspec::build_selection(paths, cwd, repo_root).map_err(path_arg_failure)?;
+    selection
+        .resolve(&AreaSet::default())
+        .map_err(path_selection_failure)
+}
+
 /// Renders the `show` document for `spec` (section 7.1).
-fn show(repository: &GitRepository, spec: &str, mode: ProjectionMode) -> Result<String, CliError> {
+fn show(
+    repository: &GitRepository,
+    spec: &str,
+    mode: ProjectionMode,
+    scope: &PathScope,
+) -> Result<String, CliError> {
     let revision = repository.resolve_commit(spec).map_err(git_failure)?;
     let entries = repository
         .source_entries(&revision)
@@ -100,6 +132,9 @@ fn show(repository: &GitRepository, spec: &str, mode: ProjectionMode) -> Result<
     let mut caches = Caches::default();
     let mut files = Vec::new();
     for entry in &entries {
+        if !scope.matches(&entry.path) {
+            continue;
+        }
         if let Some(file) = project_entry(repository, &projectors, &mut caches, spec, entry, mode)?
         {
             files.push(file);
@@ -116,6 +151,7 @@ fn diff(
     base_spec: &str,
     target_spec: &str,
     mode: ProjectionMode,
+    scope: &PathScope,
 ) -> Result<String, CliError> {
     let base = repository.resolve_commit(base_spec).map_err(git_failure)?;
     let target = repository
@@ -148,6 +184,9 @@ fn diff(
     let mut new_files = Vec::new();
 
     for path in paths {
+        if !scope.matches(path) {
+            continue;
+        }
         let old = base_map.get(path).copied();
         let new = target_map.get(path).copied();
 
@@ -329,6 +368,24 @@ fn output_failure(source: io::Error) -> CliError {
         message: "could not write output".to_owned(),
         help: None,
         source: Box::new(source),
+    }
+}
+
+fn path_arg_failure(error: PathArgError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// The area seam is only reachable once configuration exists; mapping it now
+/// keeps the CLI honest about resolving through [`PathSelection`].
+fn path_selection_failure(error: PathSelectionError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
     }
 }
 

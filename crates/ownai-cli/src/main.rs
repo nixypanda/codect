@@ -7,6 +7,7 @@
 mod args;
 mod command;
 mod output;
+mod pathspec;
 
 use std::process::ExitCode;
 
