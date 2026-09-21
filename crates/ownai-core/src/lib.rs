@@ -12,7 +12,9 @@ pub mod render;
 pub use diagnostic::{
     Diagnostic, DiagnosticContext, ProjectionError, RepoPathError, decode_source,
 };
+pub use diff::unified_hunks;
 pub use language::{LanguageProjector, ProjectionInput};
 pub use model::{
     ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath, SourceSpan,
 };
+pub use render::{diff_document, project_all, select_projector, show_document, sort_files};
