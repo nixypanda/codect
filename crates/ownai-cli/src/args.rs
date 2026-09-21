@@ -1,1 +1,96 @@
-//! Command-line argument definitions.
+//! Command-line argument definitions (TECHNICAL_DESIGN.md section 14).
+//!
+//! `--mode` has no default: the product has not validated a preferred mode, so
+//! the caller must choose explicitly.
+
+use clap::{Parser, Subcommand, ValueEnum};
+
+use ownai_core::ProjectionMode;
+
+/// Repeated on every help surface so nobody trusts a focused diff without
+/// knowing what it deliberately hides (section 14).
+const FOCUSED_DIFF_HELP: &str = "Focused diffs are semantic: implementation-only changes (function bodies, \
+     comments, whitespace) are invisible. Only changes that alter a projected \
+     declaration appear.";
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "ownai",
+    version,
+    about = "Show and diff canonical Type and Signature projections of Git revisions",
+    long_about = "OwnAI projects committed Elm and Rust source files into canonical \
+                  Type and Signature forms and diffs those projections between two \
+                  revisions.\n\nFocused diffs are semantic: implementation-only \
+                  changes such as function bodies, comments, and whitespace are \
+                  invisible. Only changes that alter a projected declaration appear.",
+    after_help = FOCUSED_DIFF_HELP,
+    after_long_help = FOCUSED_DIFF_HELP
+)]
+pub struct Cli {
+    /// Control when ANSI color is emitted.
+    #[arg(long, value_enum, default_value = "auto", global = true)]
+    pub color: ColorChoice,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Show a projection of one revision.
+    #[command(after_help = FOCUSED_DIFF_HELP, after_long_help = FOCUSED_DIFF_HELP)]
+    Show {
+        /// Projection mode to render.
+        #[arg(long, value_enum)]
+        mode: Mode,
+
+        /// Revision to project (branch, tag, or object id); defaults to HEAD.
+        #[arg(value_name = "REVISION", default_value = "HEAD")]
+        revision: String,
+    },
+
+    /// Show a focused projection diff between two revisions.
+    #[command(after_help = FOCUSED_DIFF_HELP, after_long_help = FOCUSED_DIFF_HELP)]
+    Diff {
+        /// Projection mode to compare.
+        #[arg(long, value_enum)]
+        mode: Mode,
+
+        /// Base revision.
+        #[arg(value_name = "BASE")]
+        base: String,
+
+        /// Target revision.
+        #[arg(value_name = "TARGET")]
+        target: String,
+    },
+}
+
+/// The two projection modes exposed on the command line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum Mode {
+    /// Type declarations and aliases only.
+    Types,
+    /// Types plus function, method, value, constant, and static signatures.
+    Signatures,
+}
+
+impl From<Mode> for ProjectionMode {
+    fn from(mode: Mode) -> Self {
+        match mode {
+            Mode::Types => ProjectionMode::Types,
+            Mode::Signatures => ProjectionMode::Signatures,
+        }
+    }
+}
+
+/// Color policy; `auto` defers terminal detection to the output layer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ColorChoice {
+    /// Emit ANSI color only when stdout is a terminal.
+    Auto,
+    /// Always emit ANSI color.
+    Always,
+    /// Never emit ANSI color.
+    Never,
+}

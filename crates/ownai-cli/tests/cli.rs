@@ -1,0 +1,474 @@
+//! End-to-end CLI tests over real temporary Git repositories
+//! (TECHNICAL_DESIGN.md sections 8.2, 14, 16.5).
+//!
+//! Each test asserts stdout, stderr, and the exit status for a documented
+//! command form. Repositories are created with the `git` executable by the
+//! support module; the binary under test never invokes Git.
+
+mod support;
+
+use std::process::Output;
+
+use support::{TestRepo, fixture, ownai, ownai_in, stderr, stdout};
+
+const RUST_BASE: &str = "\
+pub struct User {
+    pub id: u32,
+}
+
+pub fn greet(name: &str) -> String {
+    format!(\"hi {name}\")
+}
+";
+
+const RUST_BODY_VARIANT: &str = "\
+pub struct User {
+    pub id: u32,
+}
+
+pub fn greet(name: &str) -> String {
+    format!(\"hello {name}\")
+}
+";
+
+const RUST_SIGNATURE_VARIANT: &str = "\
+pub struct User {
+    pub id: u32,
+}
+
+pub fn greet(name: &str, excited: bool) -> String {
+    format!(\"hi {name}\")
+}
+";
+
+const RUST_TYPE_VARIANT: &str = "\
+pub struct User {
+    pub id: u64,
+}
+
+pub fn greet(name: &str, excited: bool) -> String {
+    format!(\"hi {name}\")
+}
+";
+
+const ELM_BASE: &str = "\
+module User exposing (..)
+
+greet : String -> String
+greet name =
+    \"hi \" ++ name
+";
+
+const ELM_BODY_VARIANT: &str = "\
+module User exposing (..)
+
+greet : String -> String
+greet name =
+    \"hello \" ++ name
+";
+
+fn run(repo: &TestRepo, args: &[&str]) -> Output {
+    ownai_in(repo, args).output().expect("run ownai")
+}
+
+/// A repository whose `HEAD` differs from its parent by a Rust type change.
+fn repo_with_type_change() -> TestRepo {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+    repo.write("src/lib.rs", RUST_TYPE_VARIANT);
+    repo.commit("type change");
+    repo
+}
+
+// ---------------------------------------------------------------------------
+// show
+// ---------------------------------------------------------------------------
+
+#[test]
+fn show_elm_only_defaults_to_head_in_both_modes() {
+    let repo = TestRepo::init();
+    repo.write("src/User.elm", &fixture("elm/type-aliases/input.elm"));
+    repo.commit("base");
+
+    let types = format!(
+        "== src/User.elm ==\n{}",
+        fixture("elm/type-aliases/types.txt")
+    );
+    let signatures = format!(
+        "== src/User.elm ==\n{}",
+        fixture("elm/type-aliases/signatures.txt")
+    );
+
+    ownai_in(&repo, &["show", "--mode", "types"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(types.clone()))
+        .stderr(predicates::str::is_empty());
+    ownai_in(&repo, &["show", "--mode", "signatures"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(signatures));
+    ownai_in(&repo, &["show", "--mode", "types", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(types));
+}
+
+#[test]
+fn show_rust_only_in_both_modes() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", &fixture("rust/structs/input.rs"));
+    repo.commit("base");
+
+    let types = format!("== src/lib.rs ==\n{}", fixture("rust/structs/types.txt"));
+    let signatures = format!(
+        "== src/lib.rs ==\n{}",
+        fixture("rust/structs/signatures.txt")
+    );
+
+    ownai_in(&repo, &["show", "--mode", "types"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(types));
+    ownai_in(&repo, &["show", "--mode", "signatures"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(signatures));
+}
+
+#[test]
+fn show_mixed_repository_orders_by_raw_path_bytes() {
+    let repo = TestRepo::init();
+    repo.write("src/App.elm", &fixture("elm/normal-module/input.elm"));
+    repo.write("src/lib.rs", &fixture("rust/structs/input.rs"));
+    repo.commit("base");
+
+    // "src/App.elm" sorts before "src/lib.rs" because 'A' < 'l'.
+    let expected = format!(
+        "== src/App.elm ==\n{}\n== src/lib.rs ==\n{}",
+        fixture("elm/normal-module/types.txt"),
+        fixture("rust/structs/types.txt")
+    );
+
+    ownai_in(&repo, &["show", "--mode", "types"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(expected));
+}
+
+#[test]
+fn show_accepts_an_explicit_full_object_id() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", &fixture("rust/canonical-signatures/input.rs"));
+    let id = repo.commit("base");
+
+    let expected = format!(
+        "== src/lib.rs ==\n{}",
+        fixture("rust/canonical-signatures/signatures.txt")
+    );
+
+    ownai_in(&repo, &["show", "--mode", "signatures", &id])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(expected));
+}
+
+#[test]
+fn show_empty_supported_file_set_is_empty_and_successful() {
+    let repo = TestRepo::init();
+    repo.write("README.md", "not a supported source file\n");
+    repo.commit("docs");
+
+    ownai_in(&repo, &["show", "--mode", "types"])
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty())
+        .stderr(predicates::str::is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// diff
+// ---------------------------------------------------------------------------
+
+#[test]
+fn diff_reports_added_deleted_and_modified_files_and_skips_unchanged() {
+    let repo = TestRepo::init();
+    let keep = fixture("elm/normal-module/input.elm");
+    repo.write("src/keep.elm", &keep);
+    repo.write("src/mod.elm", &fixture("elm/type-aliases/input.elm"));
+    repo.write("src/gone.rs", &fixture("rust/unions-aliases/input.rs"));
+    repo.write("README.md", "ignored\n");
+    repo.commit("base");
+
+    repo.write("src/new.rs", &fixture("rust/structs/input.rs"));
+    repo.write("src/mod.elm", &fixture("elm/canonical-types/input.elm"));
+    repo.remove("src/gone.rs");
+    repo.commit("target");
+
+    let output = run(&repo, &["diff", "--mode", "types", "HEAD~1", "HEAD"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        output.stderr.is_empty(),
+        "successful diff must not write diagnostics"
+    );
+
+    let document = stdout(&output);
+    assert!(
+        document
+            .contains("diff --ownai a/src/new.rs b/src/new.rs\n--- /dev/null\n+++ b/src/new.rs\n"),
+        "added file block missing: {document:?}"
+    );
+    assert!(
+        document.contains(
+            "diff --ownai a/src/gone.rs b/src/gone.rs\n--- a/src/gone.rs\n+++ /dev/null\n"
+        ),
+        "deleted file block missing: {document:?}"
+    );
+    assert!(
+        document.contains(
+            "diff --ownai a/src/mod.elm b/src/mod.elm\n--- a/src/mod.elm\n+++ b/src/mod.elm\n"
+        ),
+        "modified file block missing: {document:?}"
+    );
+    assert!(
+        !document.contains("a/src/keep.elm"),
+        "an unchanged projection must not appear: {document:?}"
+    );
+
+    // Blocks are emitted in raw path byte order.
+    let gone = document.find("a/src/gone.rs").expect("gone.rs block");
+    let modified = document.find("a/src/mod.elm").expect("mod.elm block");
+    let new = document.find("a/src/new.rs").expect("new.rs block");
+    assert!(gone < modified && modified < new, "order: {document:?}");
+}
+
+#[test]
+fn body_only_change_is_empty_and_successful_in_both_modes() {
+    let rust = TestRepo::init();
+    rust.write("src/lib.rs", RUST_BASE);
+    rust.commit("base");
+    rust.write("src/lib.rs", RUST_BODY_VARIANT);
+    rust.commit("body only");
+
+    let elm = TestRepo::init();
+    elm.write("src/User.elm", ELM_BASE);
+    elm.commit("base");
+    elm.write("src/User.elm", ELM_BODY_VARIANT);
+    elm.commit("body only");
+
+    for mode in ["types", "signatures"] {
+        for repo in [&rust, &elm] {
+            ownai_in(repo, &["diff", "--mode", mode, "HEAD~1", "HEAD"])
+                .assert()
+                .success()
+                .stdout(predicates::str::is_empty())
+                .stderr(predicates::str::is_empty());
+        }
+    }
+}
+
+#[test]
+fn signature_change_appears_only_in_signatures() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+    repo.write("src/lib.rs", RUST_SIGNATURE_VARIANT);
+    repo.commit("signature change");
+
+    ownai_in(&repo, &["diff", "--mode", "types", "HEAD~1", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty());
+
+    ownai_in(&repo, &["diff", "--mode", "signatures", "HEAD~1", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "-pub fn greet(name: &str) -> String;",
+        ))
+        .stdout(predicates::str::contains(
+            "+pub fn greet(name: &str, excited: bool) -> String;",
+        ));
+}
+
+#[test]
+fn type_change_appears_in_both_modes() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+    repo.write("src/lib.rs", RUST_TYPE_VARIANT);
+    repo.commit("type change");
+
+    for mode in ["types", "signatures"] {
+        let output = run(&repo, &["diff", "--mode", mode, "HEAD~1", "HEAD"]);
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+        let document = stdout(&output);
+        assert!(
+            document.contains("-    pub id: u32,") && document.contains("+    pub id: u64,"),
+            "type change missing in {mode}: {document:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// bare repositories
+// ---------------------------------------------------------------------------
+
+#[test]
+fn show_and_diff_work_in_a_bare_repository() {
+    let normal = TestRepo::init();
+    normal.write("src/User.elm", &fixture("elm/type-aliases/input.elm"));
+    normal.commit("base");
+    normal.write("src/User.elm", &fixture("elm/canonical-types/input.elm"));
+    normal.commit("change");
+
+    let bare = normal.clone_bare();
+
+    ownai_in(&bare, &["show", "--mode", "types", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("== src/User.elm =="));
+
+    ownai_in(&bare, &["diff", "--mode", "types", "HEAD~1", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("diff --ownai a/src/User.elm"));
+}
+
+// ---------------------------------------------------------------------------
+// failures and exit codes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn invalid_revision_exits_one_with_a_diagnostic_and_empty_stdout() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+
+    let output = run(&repo, &["show", "--mode", "types", "no-such-revision"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
+    assert!(
+        stderr(&output).contains("no-such-revision"),
+        "diagnostic missing the revision: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_range_passed_as_one_revision_exits_one() {
+    let repo = repo_with_type_change();
+
+    let output = run(&repo, &["diff", "--mode", "types", "HEAD~1..HEAD", "HEAD"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout must stay empty");
+    assert!(
+        stderr(&output).contains("range"),
+        "diagnostic missing range context: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn missing_mode_is_a_usage_error() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+
+    ownai_in(&repo, &["show", "HEAD"]).assert().code(2);
+    ownai_in(&repo, &["diff", "HEAD~1", "HEAD"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn missing_diff_revisions_are_usage_errors() {
+    let repo = repo_with_type_change();
+
+    ownai_in(&repo, &["diff", "--mode", "types", "HEAD"])
+        .assert()
+        .code(2);
+    ownai_in(&repo, &["diff", "--mode", "types"])
+        .assert()
+        .code(2);
+}
+
+// ---------------------------------------------------------------------------
+// color
+// ---------------------------------------------------------------------------
+
+#[test]
+fn color_never_and_redirected_output_contain_no_escape_bytes() {
+    let repo = repo_with_type_change();
+
+    let never = run(
+        &repo,
+        &["--color=never", "diff", "--mode", "types", "HEAD~1", "HEAD"],
+    );
+    assert!(never.status.success());
+    assert!(
+        !stdout(&never).contains('\u{1b}'),
+        "`--color=never` must not emit ANSI"
+    );
+
+    // Default `auto` with captured (non-terminal) stdout must also strip ANSI.
+    let auto = run(&repo, &["diff", "--mode", "types", "HEAD~1", "HEAD"]);
+    assert!(auto.status.success());
+    assert!(
+        !stdout(&auto).contains('\u{1b}'),
+        "redirected output must not emit ANSI"
+    );
+
+    let show = run(&repo, &["--color=never", "show", "--mode", "types"]);
+    assert!(show.status.success());
+    assert!(!stdout(&show).contains('\u{1b}'));
+}
+
+#[test]
+fn color_always_contains_escape_bytes() {
+    let repo = repo_with_type_change();
+
+    let diff = run(
+        &repo,
+        &[
+            "--color=always",
+            "diff",
+            "--mode",
+            "types",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+    assert!(diff.status.success());
+    assert!(
+        stdout(&diff).contains('\u{1b}'),
+        "`--color=always` must emit ANSI for a diff"
+    );
+
+    let show = run(&repo, &["--color=always", "show", "--mode", "types"]);
+    assert!(show.status.success());
+    assert!(
+        stdout(&show).contains('\u{1b}'),
+        "`--color=always` must emit ANSI for section headers"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// help
+// ---------------------------------------------------------------------------
+
+#[test]
+fn help_states_that_implementation_only_changes_are_invisible() {
+    ownai()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("implementation-only changes"));
+
+    ownai()
+        .args(["show", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("implementation-only"));
+}

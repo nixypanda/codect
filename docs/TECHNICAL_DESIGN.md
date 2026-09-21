@@ -471,6 +471,13 @@ diff --ownai a/src/User.elm b/src/User.elm
 
 Use `/dev/null` for the absent side of an added or deleted file. Diff headers use escaped display paths when raw paths are not UTF-8.
 
+Multi-file document policy (pinned so it cannot drift):
+
+- `show` sections are separated by exactly one blank line.
+- `diff` blocks are concatenated with no blank line between them, and only files whose projections differ are emitted.
+- A non-empty document ends with exactly one trailing newline; a document with no emitted files is empty.
+- The `diff --ownai` line keeps `a/` and `b/` labels even for an added or deleted file, while the absent `---`/`+++` side uses `/dev/null`.
+
 ## 11. Elm projection
 
 ### 11.1 General rules
@@ -656,7 +663,7 @@ Rules:
 - Write diagnostics to stderr.
 - Do not add progress output in the MVP.
 
-The CLI constructs the two projectors, opens `ownai-git`, and calls orchestration functions in `ownai-core`. Business rules do not belong in `main.rs`.
+The CLI constructs the two projectors, opens `ownai-git`, and implements the Git-aware pipeline in `command.rs`, composing `ownai-git`'s snapshot reads with `ownai-core`'s pure `show` and `diff` rendering. `ownai-core` stays Git-free (section 3). Business rules do not belong in `main.rs`.
 
 ## 15. Diagnostics and failure behavior
 
