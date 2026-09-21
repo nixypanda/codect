@@ -1,7 +1,4 @@
 //! Commit tree traversal and blob reads.
-//!
-//! Recursively visits a commit tree and retains regular and executable blob
-//! entries ending in `.elm` or `.rs`, sorted by raw repository path bytes.
 
 use bstr::BString;
 
@@ -102,7 +99,6 @@ pub(crate) fn read_blob(repo: &GitRepository, id: &ObjectId) -> Result<Vec<u8>, 
     Ok(blob.take_data())
 }
 
-/// Joins a directory prefix and a tree entry name with `/`.
 fn join(prefix: &[u8], name: &[u8]) -> Vec<u8> {
     let mut path = Vec::with_capacity(prefix.len() + name.len() + 1);
     if !prefix.is_empty() {

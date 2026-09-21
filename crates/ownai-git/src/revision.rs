@@ -1,7 +1,4 @@
-//! Revision resolution and commit peeling.
-//!
-//! Resolves a user-provided revision string to exactly one commit, peeling
-//! annotated tags and other commit-ish objects. Ranges are rejected.
+//! Revision resolution and commit peeling. Ranges are rejected.
 
 use std::path::Path;
 
@@ -10,7 +7,6 @@ use bstr::BStr;
 use crate::GitError;
 use crate::repository::{GitRepository, ObjectId, Revision};
 
-/// Resolves `spec` to exactly one peeled commit.
 pub(crate) fn resolve_commit(repo: &GitRepository, spec: &str) -> Result<Revision, GitError> {
     let repository = repo.location();
     let parsed = repo
@@ -34,8 +30,8 @@ pub(crate) fn resolve_commit(repo: &GitRepository, spec: &str) -> Result<Revisio
     })
 }
 
-/// Peels the resolved object to a commit, distinguishing a genuinely
-/// non-peelable object (a tree or blob) from a read failure.
+/// Distinguishes a genuinely non-peelable object (a tree or blob) from a read
+/// failure.
 fn peel_to_commit(
     repo: &GitRepository,
     repository: &Path,
@@ -73,12 +69,10 @@ fn peel_to_commit(
     }
 }
 
-/// Classifies a `gix` revision-parse failure into a distinct OwnAI error.
-///
-/// `gix` reports both "not found" and "ambiguous" as generic error chains. We
-/// inspect the retained error chain for the disambiguation marker; everything
-/// else is treated as not found. Ranges do not reach here because they parse
-/// successfully and are rejected by checking [`gix::revision::Spec::single`].
+/// `gix` reports both "not found" and "ambiguous" as generic error chains, so
+/// inspect the retained chain for the disambiguation marker; everything else is
+/// treated as not found. Ranges parse successfully and are rejected via
+/// [`gix::revision::Spec::single`].
 fn classify_parse_error(
     repository: std::path::PathBuf,
     spec: &str,

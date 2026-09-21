@@ -30,27 +30,23 @@ use tempfile::TempDir;
 /// A fixed commit date so generated commit ids are reproducible.
 const FIXED_DATE: &str = "2020-01-01T00:00:00+0000";
 
-/// A temporary directory that owns one or more repositories.
 pub struct TestRepo {
     root: TempDir,
 }
 
 impl TestRepo {
-    /// Creates an empty temporary directory.
     pub fn new() -> Self {
         Self {
             root: TempDir::new().expect("temporary directory"),
         }
     }
 
-    /// Creates a normal repository at the temporary directory root.
     pub fn init() -> Self {
         let repo = Self::new();
         repo.git_ok(&["init", "-q"]);
         repo
     }
 
-    /// Creates a bare repository at the temporary directory root.
     pub fn init_bare() -> Self {
         let repo = Self::new();
         repo.git_ok(&["init", "-q", "--bare"]);
@@ -71,77 +67,62 @@ impl TestRepo {
         (format.trim() == "sha256").then_some(repo)
     }
 
-    /// The temporary directory root.
     pub fn path(&self) -> &Path {
         self.root.path()
     }
 
-    /// A path below the temporary directory root.
     pub fn child(&self, name: &str) -> PathBuf {
         self.root.path().join(name)
     }
 
-    /// Runs `git` in the repository root.
     pub fn git(&self, args: &[&str]) -> Output {
         git(self.path(), args)
     }
 
-    /// Runs `git` in the repository root, panicking on failure and returning
-    /// trimmed stdout.
     pub fn git_ok(&self, args: &[&str]) -> String {
         git_ok(self.path(), args)
     }
 
-    /// Runs `git` with raw byte arguments in the repository root.
     pub fn git_bytes(&self, args: &[&[u8]]) -> Output {
         git_bytes(self.path(), args)
     }
 
-    /// Writes `contents` to `rel`, creating parent directories.
     pub fn write(&self, rel: &str, contents: &str) {
         write(self.path(), rel, contents.as_bytes());
     }
 
-    /// Writes raw `contents` to `rel`, creating parent directories.
     pub fn write_bytes(&self, rel: &str, contents: &[u8]) {
         write(self.path(), rel, contents);
     }
 
-    /// Stages every change.
     pub fn add_all(&self) {
         self.git_ok(&["add", "--all"]);
     }
 
-    /// Stages everything and commits, returning the new `HEAD` id.
     pub fn commit(&self, message: &str) -> String {
         self.git_ok(&["add", "--all"]);
         self.git_ok(&["commit", "-q", "--allow-empty", "-m", message]);
         self.head_id()
     }
 
-    /// Commits without staging any changes.
     pub fn commit_empty(&self, message: &str) -> String {
         self.git_ok(&["commit", "-q", "--allow-empty", "-m", message]);
         self.head_id()
     }
 
-    /// The full `HEAD` commit id.
     pub fn head_id(&self) -> String {
         self.git_ok(&["rev-parse", "HEAD"]).trim().to_owned()
     }
 
-    /// Resolves a revision with the Git executable.
     pub fn rev_parse(&self, spec: &str) -> String {
         self.git_ok(&["rev-parse", spec]).trim().to_owned()
     }
 
-    /// Creates an annotated tag at `HEAD`.
     pub fn tag_annotated(&self, name: &str, message: &str) {
         self.git_ok(&["tag", "-a", name, "-m", message]);
     }
 }
 
-/// Runs `git` in `dir` with isolated configuration.
 pub fn git(dir: &Path, args: &[&str]) -> Output {
     git_bytes(
         dir,
@@ -149,7 +130,7 @@ pub fn git(dir: &Path, args: &[&str]) -> Output {
     )
 }
 
-/// Runs `git` in `dir` with raw byte arguments and isolated configuration.
+/// Runs `git` in `dir`, isolated from host configuration and network access.
 pub fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
     let mut command = Command::new("git");
     for prefix in [
@@ -183,7 +164,6 @@ pub fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
         .expect("the `git` executable must be available for test setup")
 }
 
-/// Runs `git` in `dir`, panicking on failure and returning trimmed stdout.
 pub fn git_ok(dir: &Path, args: &[&str]) -> String {
     let output = git(dir, args);
     assert!(
@@ -196,7 +176,6 @@ pub fn git_ok(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("git stdout is UTF-8 in tests")
 }
 
-/// Writes `contents` to `rel` under `dir`, creating parent directories.
 pub fn write(dir: &Path, rel: &str, contents: &[u8]) {
     let path = dir.join(rel);
     if let Some(parent) = path.parent() {
@@ -205,8 +184,6 @@ pub fn write(dir: &Path, rel: &str, contents: &[u8]) {
     std::fs::write(&path, contents).expect("write fixture file");
 }
 
-/// Returns the first 4-hex prefix shared by two objects, if one exists.
-///
 /// Used to build a genuinely ambiguous abbreviated revision.
 pub fn find_ambiguous_prefix(dir: &Path) -> Option<String> {
     let listing = git_ok(dir, &["cat-file", "--batch-check", "--batch-all-objects"]);

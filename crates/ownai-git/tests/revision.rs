@@ -7,7 +7,6 @@ use ownai_git::GitError;
 use ownai_git::repository::{GitRepository, ObjectId, SnapshotRepository};
 use support::{TestRepo, find_ambiguous_prefix};
 
-/// Decodes a hexadecimal object id produced by the Git executable.
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
     (0..hex.len() / 2)
         .map(|index| u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).expect("valid hex"))
@@ -68,7 +67,6 @@ fn resolves_parent_and_ancestor_suffixes() {
         first
     );
 
-    // The full id of HEAD and the symbolic spec must agree.
     let head = discovered.resolve_commit("HEAD").expect("HEAD");
     let resolved = discovered
         .resolve_commit(&head.object_id.to_string())
@@ -203,7 +201,6 @@ fn reports_an_unborn_head() {
 
 #[test]
 fn resolves_identically_from_different_discovery_starting_points() {
-    // The same repository opened from two starting points resolves identically.
     let repo = TestRepo::init();
     repo.write("src/nested/lib.rs", "pub fn one() {}\n");
     let head = repo.commit("initial");

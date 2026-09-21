@@ -1,10 +1,6 @@
 //! Language-agnostic core for OwnAI.
 //!
-//! This crate owns the shared projection model, the language adapter
-//! interface, canonical rendering of project and file framing, the textual diff
-//! engine, and typed diagnostics.
-//!
-//! It must not depend on Git, a parser, a grammar, or the CLI. Language-specific
+//! Must not depend on Git, a parser, a grammar, or the CLI; language-specific
 //! Tree-sitter node names and `gix` types must never appear here.
 
 pub mod diagnostic;

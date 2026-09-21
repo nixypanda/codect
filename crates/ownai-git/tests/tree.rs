@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 use ownai_git::repository::{GitRepository, HashKind, SnapshotRepository, SourceEntry};
 use support::TestRepo;
 
-/// Maps each supported path to its blob id as lowercase hex.
 fn blob_ids(entries: &[SourceEntry]) -> BTreeMap<String, String> {
     entries
         .iter()
@@ -140,7 +139,6 @@ fn reads_packed_objects() {
         .any(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"));
     assert!(has_pack, "repack should have produced a pack file");
 
-    // No loose object files may remain inside `.git/objects/xx/`.
     let objects_dir = repo.path().join(".git/objects");
     let loose = std::fs::read_dir(&objects_dir)
         .expect("objects directory")
@@ -240,7 +238,6 @@ fn ignores_symlinks_and_gitlinks() {
     ]);
     repo.git_ok(&["commit", "-q", "-m", "add gitlink"]);
 
-    // Confirm the setup really recorded a symlink and a gitlink.
     let listing = repo.git_ok(&["ls-tree", "-r", "HEAD"]);
     assert!(
         listing.contains("120000 blob"),

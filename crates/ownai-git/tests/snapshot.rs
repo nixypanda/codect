@@ -60,8 +60,6 @@ fn enumerates_and_reads_elm_and_rust_from_two_commits() {
         vec!["src/Model.elm", "src/lib.rs", "src/main.rs"]
     );
 
-    // Read and decode every supported file from both commits without any
-    // further help from the Git executable.
     let expected = BTreeMap::from([
         (
             "src/Model.elm",
@@ -79,7 +77,6 @@ fn enumerates_and_reads_elm_and_rust_from_two_commits() {
         assert_eq!(source, expected[path.as_str()], "contents of {path}");
     }
 
-    // The unchanged file keeps its blob id between the two commits.
     let first_ids: BTreeMap<String, String> = first_entries
         .iter()
         .map(|entry| (entry.path.to_string(), entry.blob_id.to_string()))

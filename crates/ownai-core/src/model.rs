@@ -1,13 +1,7 @@
 //! The shared projection model.
 //!
-//! Defines projection modes, languages, item kinds, source spans, and projected
-//! items and files. The model describes a projection, not a universal
-//! programming-language AST.
-//!
-//! The model is deliberately free of language grammar and Git types. In
-//! particular, [`RepoPath`] owns normalized repository-relative bytes so that
-//! inspecting a committed tree never requires converting a path to an
-//! operating-system [`std::path::PathBuf`].
+//! The model describes a projection, not a universal programming-language AST,
+//! and is deliberately free of language grammar and Git types.
 
 use std::fmt;
 
@@ -15,95 +9,58 @@ use bstr::{BString, ByteSlice};
 
 use crate::diagnostic::RepoPathError;
 
-/// Selects how much of each declaration a projection retains.
-///
 /// The MVP supports only [`ProjectionMode::Types`] and
-/// [`ProjectionMode::Signatures`]. `Public` and `Full` are later product modes.
+/// [`ProjectionMode::Signatures`]; `Public` and `Full` are later product modes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProjectionMode {
-    /// Type declarations only.
     Types,
-    /// Type declarations plus named function, method, and value signatures.
     Signatures,
 }
 
-/// A source language supported by the MVP.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Language {
-    /// The Elm language.
     Elm,
-    /// The Rust language.
     Rust,
 }
 
-/// The kind of a projected declaration.
-///
-/// The set may grow while implementing fixtures, but it must never carry a
-/// language AST node, a Tree-sitter node, or a `gix` handle.
+/// Must never carry a language AST node, a Tree-sitter node, or a `gix` handle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ItemKind {
-    /// A module declaration or an inline/file module frame.
     Module,
-    /// A nominal type such as an Elm custom type or a Rust struct, enum, or union.
     Type,
-    /// A type alias.
     TypeAlias,
-    /// An Elm custom-type constructor.
     Constructor,
-    /// A struct, union, or record field.
     Field,
-    /// An enum variant.
     Variant,
-    /// A trait declaration.
     Trait,
-    /// A trait implementation header.
     TraitImplementation,
-    /// An associated type declaration or assignment.
     AssociatedType,
-    /// A free function.
     Function,
-    /// A method or associated function.
     Method,
-    /// A named top-level value.
     Value,
-    /// A constant.
     Constant,
-    /// A static.
     Static,
-    /// An Elm port.
     Port,
-    /// An operator such as an Elm infix declaration.
     Operator,
-    /// A foreign block such as a Rust `extern` block.
     ForeignBlock,
 }
 
-/// A zero-based half-open source range.
-///
-/// Byte offsets are into the decoded UTF-8 source. Line and column values are
-/// zero-based; the CLI may convert them to one-based display values.
+/// Byte offsets are into the decoded UTF-8 source; line and column values are
+/// zero-based.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceSpan {
-    /// Zero-based start byte offset, inclusive.
     pub start_byte: usize,
-    /// Zero-based end byte offset, exclusive.
     pub end_byte: usize,
-    /// Zero-based start line.
     pub start_line: usize,
-    /// Zero-based start column.
     pub start_column: usize,
-    /// Zero-based end line.
     pub end_line: usize,
-    /// Zero-based end column.
     pub end_column: usize,
 }
 
-/// One declaration in a projection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectedItem {
-    /// A stable identity for the declaration within its projected file.
-    ///
-    /// Keys must not include byte offsets; see TECHNICAL_DESIGN.md section 5.2.
+    /// A stable identity for the declaration within its projected file. Keys
+    /// must not include byte offsets (TECHNICAL_DESIGN.md section 5.2).
     pub stable_key: String,
     /// The `stable_key` of the containing top-level declaration when this item
     /// is an **index-only** nested entry.
@@ -114,13 +71,9 @@ pub struct ProjectedItem {
     /// by container naming in `stable_key`. Adapters must ensure the referenced
     /// key exists and that the item reaches a top-level ancestor.
     pub parent_key: Option<String>,
-    /// The kind of declaration.
     pub kind: ItemKind,
-    /// The declared name used for display and matching.
     pub name: String,
-    /// The source range of the declaration.
     pub span: SourceSpan,
-    /// The canonical, language-specific rendering of this declaration.
     pub canonical_text: String,
 }
 
@@ -162,14 +115,8 @@ pub struct ProjectedFile {
 }
 
 impl ProjectedFile {
-    /// Builds a projected file and derives its canonical text from `items`.
-    ///
-    /// Only top-level items (`parent_key == None`) are emitted. Their canonical
-    /// fragments are joined by exactly one blank line, and the result is
-    /// normalized to end with exactly one trailing newline. A file with no
-    /// top-level items has empty canonical text. Items with
-    /// `parent_key == Some(_)` are index-only and are not emitted separately;
-    /// see [`ProjectedFile`] for the full assembly contract.
+    /// Derives canonical text from `items`; see [`ProjectedFile`] for the
+    /// assembly contract.
     pub fn new(path: RepoPath, language: Language, items: Vec<ProjectedItem>) -> Self {
         let canonical_text = derive_canonical_text(&items);
         Self {
@@ -180,34 +127,23 @@ impl ProjectedFile {
         }
     }
 
-    /// The repository-relative path of the projected file.
     pub fn path(&self) -> &RepoPath {
         &self.path
     }
 
-    /// The language of the projected file.
     pub fn language(&self) -> Language {
         self.language
     }
 
-    /// The projected declarations, in projection order.
     pub fn items(&self) -> &[ProjectedItem] {
         &self.items
     }
 
-    /// The canonical file text derived from [`Self::items`].
     pub fn canonical_text(&self) -> &str {
         &self.canonical_text
     }
 }
 
-/// Derives canonical file text from item fragments.
-///
-/// Only top-level items (`parent_key == None`) are emitted, in item order.
-/// Fragments are trimmed of trailing newlines and joined by exactly one blank
-/// line; the result ends with exactly one trailing newline. A file with no
-/// top-level items has empty text. Nested items are index-only and contribute
-/// nothing directly; their text already lives inside an ancestor's fragment.
 fn derive_canonical_text(items: &[ProjectedItem]) -> String {
     let mut text = String::new();
     let mut emitted = false;
@@ -231,17 +167,10 @@ fn derive_canonical_text(items: &[ProjectedItem]) -> String {
 /// `RepoPath` owns the raw bytes and uses `/` as the separator. It sorts by raw
 /// path bytes for deterministic output and must not be converted to a
 /// [`std::path::PathBuf`] merely to inspect a committed tree.
-///
-/// The constructor rejects absolute paths, `..` traversal, and other paths that
-/// are not already in normalized repository form.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct RepoPath(BString);
 
 impl RepoPath {
-    /// Creates a repository path from raw bytes.
-    ///
-    /// Returns a [`RepoPathError`] when `bytes` is empty, absolute, contains a
-    /// `..` traversal component, or is not normalized.
     pub fn new(bytes: impl AsRef<[u8]>) -> Result<Self, RepoPathError> {
         let bytes = bytes.as_ref();
 
@@ -264,15 +193,12 @@ impl RepoPath {
         Ok(Self(BString::from(bytes.to_vec())))
     }
 
-    /// The raw path bytes.
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_slice()
     }
 
-    /// The file extension bytes after the final `.` in the final component.
-    ///
-    /// Returns `None` for paths without an extension, for hidden files whose
-    /// name begins with `.`, and for names that end with `.`.
+    /// The file extension bytes after the final `.` in the final component;
+    /// `None` for hidden files (leading `.`) and names ending in `.`.
     pub fn extension(&self) -> Option<&[u8]> {
         let bytes = self.0.as_slice();
         let file_name_start = bytes
@@ -288,19 +214,15 @@ impl RepoPath {
         Some(&file_name[dot + 1..])
     }
 
-    /// Whether this path has the Elm `.elm` extension.
     pub fn is_elm(&self) -> bool {
         self.extension() == Some(b"elm")
     }
 
-    /// Whether this path has the Rust `.rs` extension.
     pub fn is_rust(&self) -> bool {
         self.extension() == Some(b"rs")
     }
 
-    /// The supported language for this path, if any.
-    ///
-    /// Extension matching is case-sensitive ASCII extension bytes.
+    /// Extension matching is case-sensitive ASCII bytes.
     pub fn language(&self) -> Option<Language> {
         if self.is_elm() {
             Some(Language::Elm)
@@ -313,9 +235,8 @@ impl RepoPath {
 }
 
 impl fmt::Display for RepoPath {
-    /// Writes the path, escaping invalid UTF-8 bytes as `\xNN`.
-    ///
-    /// Valid UTF-8, including spaces, is preserved. This never panics.
+    /// Escapes invalid UTF-8 bytes as `\xNN`; valid UTF-8, including spaces, is
+    /// preserved. This never panics.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for chunk in ByteSlice::utf8_chunks(self.0.as_slice()) {
             f.write_str(chunk.valid())?;
@@ -469,11 +390,10 @@ mod tests {
             vec![top, nested],
         );
 
-        // The file text is exactly the ancestor's fragment; the nested fragment
-        // appears once, inside its ancestor, and is not emitted as its own block.
+        // The nested fragment appears once, inside its ancestor, not as its own
+        // block.
         assert_eq!(file.canonical_text(), "impl User {\n    fn id(&self);\n}\n");
         assert_eq!(file.canonical_text().matches("fn id(&self);").count(), 1);
-        // Both declarations remain indexed.
         assert_eq!(file.items().len(), 2);
     }
 
