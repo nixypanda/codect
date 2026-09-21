@@ -811,6 +811,24 @@ Initial performance rules:
 
 Add benchmarks for large synthetic trees and representative real Elm/Rust repositories before adding threads, persistent caches, or broader `gix` features.
 
+### Performance baseline
+
+Measured 2026-09-21 with rustc 1.98.1 (`48a229cea 2026-09-01`) and cargo 1.98.1,
+running `target/release/ownai` on an Apple Silicon macOS host. Times are wall
+clock for `--mode signatures`, best and median of ten warm runs. These are a
+baseline for later comparison, not a target.
+
+| Command | Repository | Supported files | Elapsed (best / median) |
+|---|---|---|---|
+| `show --mode signatures HEAD` | synthetic, 150 Elm + 150 Rust | 300 | 33 ms / 34 ms |
+| `diff --mode signatures <base> <target>` | synthetic, every file changed | 300 | 53 ms / 55 ms |
+| `show --mode signatures HEAD` | OwnAI itself | 67 | 70 ms / 76 ms |
+| `diff --mode signatures acf05df a0d42f5` | OwnAI itself | 67 changed | 74 ms / 85 ms |
+
+The synthetic repository is packed (`git repack -a -d` plus
+`git prune-packed`) and carries a 100-commit front-loaded history. No threads,
+persistent caches, or broader `gix` features were added to obtain these numbers.
+
 ## 18. Security and robustness
 
 - Treat repositories and source files as untrusted input.

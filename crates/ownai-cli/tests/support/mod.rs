@@ -41,6 +41,21 @@ impl TestRepo {
         repo
     }
 
+    /// Creates a SHA-256 repository, or `None` when the environment's Git
+    /// cannot create one. Mirrors `ownai-git`'s support helper so the CLI is
+    /// covered end to end with the same runtime capability check.
+    pub fn init_sha256() -> Option<Self> {
+        let repo = Self::new();
+        let output = repo.git(&["init", "-q", "--object-format=sha256"]);
+        if !output.status.success() {
+            return None;
+        }
+        // Confirm the repository really uses SHA-256 rather than silently
+        // falling back to SHA-1.
+        let format = repo.git_ok(&["rev-parse", "--show-object-format"]);
+        (format.trim() == "sha256").then_some(repo)
+    }
+
     pub fn path(&self) -> &Path {
         self.root.path()
     }

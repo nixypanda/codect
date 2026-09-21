@@ -55,3 +55,9 @@ ownai diff --mode <types|signatures> <BASE> <TARGET>
 Focused diffs intentionally hide implementation-only changes: if a function body
 changes while its projected declaration is unchanged, the focused diff shows no
 change for that function.
+
+## Performance baseline
+
+Wall-clock measurements for representative synthetic and real repositories are
+recorded in [docs/TECHNICAL_DESIGN.md](./docs/TECHNICAL_DESIGN.md) section 17.
+They are a baseline for comparison, not a target.
