@@ -157,6 +157,7 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
             .map_err(Box::new);
             Msg::Loaded { request, result }
         }
+        Cmd::LoadAreas => Msg::AreasLoaded(engine.load_areas().map_err(Box::new)),
     }
 }
 

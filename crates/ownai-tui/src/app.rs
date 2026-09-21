@@ -8,8 +8,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use ownai_core::{DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath, aligned_rows};
-use ownai_engine::{EngineError, FileDiff, Selection};
+use ownai_core::{
+    AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath, aligned_rows,
+};
+use ownai_engine::{EngineError, FileDiff, Selection, SelectionGroup};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -136,6 +138,44 @@ pub enum Overlay {
         field: RevisionField,
         input: TextInput,
     },
+    Scope(ScopeChooser),
+}
+
+/// The scope chooser's state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScopeChooser {
+    /// `None` while areas are still loading.
+    pub areas: Option<AreaSet>,
+    pub cursor: usize,
+    /// `Some` while the user is typing a literal path.
+    pub input: Option<TextInput>,
+    /// A chooser-local failure, such as a malformed config or bad path.
+    pub error: Option<String>,
+}
+
+impl ScopeChooser {
+    fn loading() -> Self {
+        Self {
+            areas: None,
+            cursor: 0,
+            input: None,
+            error: None,
+        }
+    }
+
+    /// `all`, each area name, then the literal-path entry.
+    fn options(&self) -> Vec<String> {
+        let mut options = vec!["all".to_owned()];
+        if let Some(areas) = &self.areas {
+            options.extend(areas.names().map(str::to_owned));
+        }
+        options.push("path…".to_owned());
+        options
+    }
+
+    fn area_count(&self) -> usize {
+        self.areas.as_ref().map_or(0, |areas| areas.names().count())
+    }
 }
 
 /// What to project, kept so `m` can re-run the same request in the other mode
@@ -236,6 +276,46 @@ impl LoadRequest {
             Self::Show { .. } => self.clone(),
         }
     }
+
+    /// Replaces the projection scope.
+    pub fn with_selection(&self, selection: Selection) -> Self {
+        match self {
+            Self::Show { revision, mode, .. } => Self::Show {
+                revision: revision.clone(),
+                mode: *mode,
+                selection,
+            },
+            Self::Diff {
+                base, target, mode, ..
+            } => Self::Diff {
+                base: base.clone(),
+                target: target.clone(),
+                mode: *mode,
+                selection,
+            },
+        }
+    }
+
+    /// The selection this request projects.
+    pub fn selection(&self) -> &Selection {
+        match self {
+            Self::Show { selection, .. } | Self::Diff { selection, .. } => selection,
+        }
+    }
+
+    /// A short label for the current scope, shown in the status bar.
+    pub fn scope_label(&self) -> String {
+        let selection = self.selection();
+        if selection.groups().is_empty() {
+            return "all".to_owned();
+        }
+        selection
+            .groups()
+            .iter()
+            .map(SelectionGroup::label)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// The loaded projection, either a single revision or a two-revision diff.
@@ -287,6 +367,8 @@ pub enum Msg {
         request: LoadRequest,
         result: Result<Content, Box<EngineError>>,
     },
+    /// The area configuration finished loading for the scope chooser.
+    AreasLoaded(Result<AreaSet, Box<EngineError>>),
 }
 
 /// An effect the runtime must interpret. I/O is data, never a side effect of
@@ -294,6 +376,7 @@ pub enum Msg {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Cmd {
     Load { request: LoadRequest },
+    LoadAreas,
 }
 
 /// A row in the visible file tree.
@@ -680,6 +763,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
         Msg::Loaded { request, result } => match result {
             Ok(content) => {
                 next.mode = request.mode();
+                next.scope_label = request.scope_label();
                 next.request = request;
                 next.install(content, true);
                 next.diagnostic = None;
@@ -687,6 +771,18 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
             // A failed replacement leaves the previous model untouched.
             Err(error) => next.diagnostic = Some(error.to_string()),
         },
+        Msg::AreasLoaded(result) => {
+            if let Some(Overlay::Scope(chooser)) = &mut next.overlay {
+                match result {
+                    Ok(areas) => {
+                        chooser.cursor = chooser.cursor.min(areas.names().count());
+                        chooser.areas = Some(areas);
+                        chooser.error = None;
+                    }
+                    Err(error) => chooser.error = Some(error.to_string()),
+                }
+            }
+        }
     }
 
     next.refresh_derived();
@@ -722,6 +818,10 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                 field: RevisionField::Target,
                 input: TextInput::new(current_target(model)),
             });
+        }
+        Key::Char('s') => {
+            model.overlay = Some(Overlay::Scope(ScopeChooser::loading()));
+            cmds.push(Cmd::LoadAreas);
         }
         Key::Char('m') => {
             let mode = match model.mode {
@@ -783,7 +883,127 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                 model.overlay = Some(Overlay::Revision { field, input });
             }
         }
+        Overlay::Scope(mut chooser) => {
+            let mut reopen = true;
+            match key {
+                Key::Esc => {
+                    if chooser.input.is_some() {
+                        chooser.input = None;
+                        chooser.error = None;
+                    } else {
+                        reopen = false;
+                    }
+                }
+                Key::Enter if chooser.input.is_some() => {
+                    if let Some(input) = chooser.input.take() {
+                        match RepoPath::new(input.value()) {
+                            Ok(path) => {
+                                let label = path.to_string();
+                                match Selection::new(vec![SelectionGroup::Path { label, path }]) {
+                                    Ok(selection) => {
+                                        apply_selection(model, cmds, selection);
+                                        reopen = false;
+                                    }
+                                    Err(error) => {
+                                        chooser.error = Some(error.to_string());
+                                        chooser.input = Some(input);
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                chooser.error = Some(error.to_string());
+                                chooser.input = Some(input);
+                            }
+                        }
+                    }
+                }
+                Key::Enter => {
+                    let area_count = chooser.area_count();
+                    let cursor = chooser.cursor.min(area_count + 1);
+                    if cursor == 0 {
+                        apply_selection(model, cmds, Selection::all());
+                        reopen = false;
+                    } else if cursor <= area_count {
+                        if let Some(area) = chooser
+                            .areas
+                            .as_ref()
+                            .and_then(|areas| areas.names().nth(cursor - 1).map(str::to_owned))
+                        {
+                            let paths = chooser
+                                .areas
+                                .as_ref()
+                                .and_then(|areas| areas.get(&area))
+                                .map(|area| area.paths.clone())
+                                .unwrap_or_default();
+                            match Selection::new(vec![SelectionGroup::Area { name: area, paths }]) {
+                                Ok(selection) => {
+                                    apply_selection(model, cmds, selection);
+                                    reopen = false;
+                                }
+                                Err(error) => chooser.error = Some(error.to_string()),
+                            }
+                        }
+                    } else {
+                        chooser.input = Some(TextInput::new(""));
+                    }
+                }
+                Key::Up | Key::Char('k') if chooser.input.is_none() => {
+                    chooser.cursor = chooser.cursor.saturating_sub(1);
+                }
+                Key::Down | Key::Char('j') if chooser.input.is_none() => {
+                    let last = chooser.options().len().saturating_sub(1);
+                    chooser.cursor = (chooser.cursor + 1).min(last);
+                }
+                Key::Char(character) if chooser.input.is_some() => {
+                    if let Some(input) = &mut chooser.input {
+                        input.insert(character);
+                    }
+                }
+                Key::Backspace if chooser.input.is_some() => {
+                    if let Some(input) = &mut chooser.input {
+                        input.backspace();
+                    }
+                }
+                Key::Delete if chooser.input.is_some() => {
+                    if let Some(input) = &mut chooser.input {
+                        input.delete();
+                    }
+                }
+                Key::Left if chooser.input.is_some() => {
+                    if let Some(input) = &mut chooser.input {
+                        input.left();
+                    }
+                }
+                Key::Right if chooser.input.is_some() => {
+                    if let Some(input) = &mut chooser.input {
+                        input.right();
+                    }
+                }
+                Key::Home if chooser.input.is_some() => {
+                    if let Some(input) = &mut chooser.input {
+                        input.home();
+                    }
+                }
+                Key::End if chooser.input.is_some() => {
+                    if let Some(input) = &mut chooser.input {
+                        input.end();
+                    }
+                }
+                _ => {}
+            }
+            if reopen {
+                model.overlay = Some(Overlay::Scope(chooser));
+            }
+        }
     }
+}
+
+/// Closes the active overlay and requests a reload with a new scope.
+fn apply_selection(model: &mut Model, cmds: &mut Vec<Cmd>, selection: Selection) {
+    model.overlay = None;
+    cmds.push(Cmd::Load {
+        request: model.request.with_selection(selection),
+    });
 }
 
 fn current_revision(model: &Model) -> String {
@@ -1161,8 +1381,57 @@ fn render_overlay(model: &Model, frame: &mut Frame, area: Rect) {
     match &model.overlay {
         Some(Overlay::Help) => render_help(frame, area),
         Some(Overlay::Revision { field, input }) => render_revision(frame, area, *field, input),
+        Some(Overlay::Scope(chooser)) => render_scope(frame, area, chooser),
         None => {}
     }
+}
+
+fn render_scope(frame: &mut Frame, area: Rect, chooser: &ScopeChooser) {
+    let options = chooser.options();
+    let extra = 4 + usize::from(chooser.input.is_some()) * 2 + usize::from(chooser.error.is_some());
+    let width = area.width.saturating_sub(4).min(60);
+    let height = (options.len() + extra).min(area.height as usize) as u16;
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" scope ");
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = Vec::new();
+    if chooser.areas.is_none() && chooser.error.is_none() {
+        lines.push(Line::from("  loading areas…"));
+    }
+    for (index, option) in options.iter().enumerate() {
+        let selected = index == chooser.cursor && chooser.input.is_none();
+        let style = if selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(format!("  {option}"), style)));
+    }
+    if let Some(input) = &chooser.input {
+        lines.push(Line::from(""));
+        lines.push(Line::from(format!("  path: {}", input.text)));
+    }
+    if let Some(error) = &chooser.error {
+        lines.push(Line::from(Span::styled(
+            format!("  {error}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_revision(frame: &mut Frame, area: Rect, field: RevisionField, input: &TextInput) {
@@ -1455,6 +1724,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
         Line::from("  Tab           switch pane"),
         Line::from("  Enter         open or fold"),
         Line::from("  m             switch mode"),
+        Line::from("  s             change scope"),
         Line::from("  r / b / t     edit revision"),
         Line::from("  Esc           close help or dismiss"),
     ];
@@ -1620,7 +1890,7 @@ fn is_within(path: &[u8], directory: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ownai_core::{ItemKind, Language, ProjectedItem, SourceSpan};
+    use ownai_core::{Area, ItemKind, Language, ProjectedItem, SourceSpan};
     use ownai_engine::SelectionError;
 
     fn item(text: &str) -> ProjectedItem {
@@ -2030,6 +2300,115 @@ mod tests {
         let text = buffer_text(&render(&model, 100, 20));
         assert!(text.contains("revision"), "{text}");
         assert!(text.contains("HEAD~2"), "{text}");
+    }
+
+    fn area_set() -> AreaSet {
+        AreaSet::new([
+            Area {
+                name: "core".to_owned(),
+                paths: vec![RepoPath::new("src/core").unwrap()],
+            },
+            Area {
+                name: "web".to_owned(),
+                paths: vec![RepoPath::new("src/web").unwrap()],
+            },
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn scope_key_opens_the_chooser_and_requests_areas() {
+        let model = two_files();
+        let (opened, cmds) = update(Msg::Key(Key::Char('s')), &model);
+        assert!(matches!(opened.overlay, Some(Overlay::Scope(_))));
+        assert_eq!(cmds, vec![Cmd::LoadAreas]);
+    }
+
+    #[test]
+    fn choosing_all_from_the_chooser_loads_everything() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::Char('s')), &model);
+        let (loaded, _) = update(Msg::AreasLoaded(Ok(area_set())), &opened);
+
+        let (chosen, cmds) = update(Msg::Key(Key::Enter), &loaded);
+        assert_eq!(chosen.overlay, None);
+        assert_eq!(
+            cmds,
+            vec![Cmd::Load {
+                request: show_request().with_selection(Selection::all()),
+            }]
+        );
+    }
+
+    #[test]
+    fn selecting_an_area_loads_that_area() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::Char('s')), &model);
+        let (loaded, _) = update(Msg::AreasLoaded(Ok(area_set())), &opened);
+        let (down, _) = update(Msg::Key(Key::Down), &loaded);
+
+        let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
+        assert_eq!(chosen.overlay, None);
+        let expected = Selection::new(vec![SelectionGroup::Area {
+            name: "core".to_owned(),
+            paths: vec![RepoPath::new("src/core").unwrap()],
+        }])
+        .unwrap();
+        assert_eq!(
+            cmds,
+            vec![Cmd::Load {
+                request: show_request().with_selection(expected),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_config_error_keeps_the_chooser_open_with_a_message() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::Char('s')), &model);
+        let error = EngineError::Selection(SelectionError::EmptyGroup {
+            label: "x".to_owned(),
+        });
+        let (loaded, _) = update(Msg::AreasLoaded(Err(Box::new(error))), &opened);
+
+        match loaded.overlay {
+            Some(Overlay::Scope(chooser)) => assert!(chooser.error.is_some()),
+            other => panic!("expected a scope chooser, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn literal_path_entry_builds_a_path_selection() {
+        let model = two_files();
+        let (opened, _) = update(Msg::Key(Key::Char('s')), &model);
+        let (loaded, _) = update(Msg::AreasLoaded(Ok(area_set())), &opened);
+
+        // all(0), core(1), web(2), path…(3)
+        let mut state = loaded;
+        for _ in 0..3 {
+            let (next, _) = update(Msg::Key(Key::Down), &state);
+            state = next;
+        }
+        let (input, _) = update(Msg::Key(Key::Enter), &state);
+        let mut typed = input;
+        for character in "src/lib.rs".chars() {
+            let (next, _) = update(Msg::Key(Key::Char(character)), &typed);
+            typed = next;
+        }
+
+        let (chosen, cmds) = update(Msg::Key(Key::Enter), &typed);
+        assert_eq!(chosen.overlay, None);
+        let expected = Selection::new(vec![SelectionGroup::Path {
+            label: "src/lib.rs".to_owned(),
+            path: RepoPath::new("src/lib.rs").unwrap(),
+        }])
+        .unwrap();
+        assert_eq!(
+            cmds,
+            vec![Cmd::Load {
+                request: show_request().with_selection(expected),
+            }]
+        );
     }
 
     #[test]
