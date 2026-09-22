@@ -16,9 +16,10 @@
 
 use std::io::{IsTerminal, Stdout};
 use std::sync::Once;
+use std::time::Duration;
 
 use crossterm::cursor;
-use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind, MouseEvent};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -28,9 +29,22 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 mod app;
+mod fuzzy;
+mod highlight;
+mod icons;
+mod theme;
+mod view;
 
 pub use app::LoadRequest;
-use app::{Cmd, Content, Key, Model, Msg, update, view};
+use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, update};
+pub use icons::IconStyle;
+use icons::Icons;
+use theme::Theme;
+use view::view;
+
+/// How long the driver waits for input before emitting a tick, which drives the
+/// spinner and lets a diagnostic expire without another keypress.
+const TICK_INTERVAL: Duration = Duration::from_millis(150);
 
 /// Everything `run` needs beyond the engine, built by the caller.
 ///
@@ -42,6 +56,8 @@ pub struct TuiOptions {
     pub request: LoadRequest,
     /// A short label for the initial scope, shown in the status bar.
     pub scope_label: String,
+    /// Whether the file tree draws Nerd Font icons.
+    pub icons: IconStyle,
 }
 
 /// A failure that prevents the frontend from starting or continuing.
@@ -87,10 +103,14 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
         options.scope_label,
         width,
         height,
+        Theme::detect(),
+        Icons::new(options.icons),
     );
 
     // The initial projection is the startup effect. Unlike a later reload, a
     // failure here is fatal: there is no previous screen to keep.
+    // Draw the busy state first so the spinner is visible while it runs.
+    session.driver().draw(&model)?;
     let startup = interpret(
         &engine,
         Cmd::Load {
@@ -115,16 +135,30 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
     };
     model = initial;
 
+    // The frame is redrawn only when something changed or is animating.
+    let mut dirty = true;
     loop {
-        session.driver().draw(&model)?;
+        if dirty {
+            session.driver().draw(&model)?;
+        }
         let msg = session.driver().read_msg()?;
+        // An idle tick has nothing to animate, so it neither updates nor redraws.
+        if matches!(msg, Msg::Tick) && model.pending.is_none() && model.diagnostic.is_none() {
+            dirty = false;
+            continue;
+        }
         let (mut next, cmds) = update(msg, &model);
+        if !cmds.is_empty() {
+            // Draw the busy state before a blocking effect runs.
+            session.driver().draw(&next)?;
+        }
         for cmd in cmds {
             let completed = interpret(&engine, cmd);
             let (updated, _) = update(completed, &next);
             next = updated;
         }
         model = next;
+        dirty = true;
         if model.quit {
             break;
         }
@@ -143,7 +177,7 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                     revision,
                     mode,
                     selection,
-                } => engine.show(revision, *mode, selection).map(Content::Show),
+                } => engine.show(revision, *mode, selection).map(Content::from),
                 LoadRequest::Diff {
                     base,
                     target,
@@ -151,11 +185,12 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                     selection,
                 } => engine
                     .diff(base, target, *mode, selection)
-                    .map(Content::Diff),
+                    .map(Content::from),
             }
             .map_err(Box::new);
             Msg::Loaded { request, result }
         }
+        Cmd::LoadAreas => Msg::AreasLoaded(engine.load_areas().map_err(Box::new)),
     }
 }
 
@@ -206,6 +241,34 @@ impl<D: Driver> Drop for Session<D> {
     }
 }
 
+/// Toggles mouse capture, reporting only button and wheel events with SGR
+/// coordinates.
+///
+/// crossterm's stock `EnableMouseCapture` also switches on all-motion tracking
+/// (`?1003h`), which floods the event loop with `Moved` events. Enabling only
+/// normal tracking (`?1000h`) plus SGR coordinates keeps the queue quiet.
+struct MouseCaptured(bool);
+
+impl crossterm::Command for MouseCaptured {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        if self.0 {
+            f.write_str("\x1b[?1000h\x1b[?1006h")
+        } else {
+            f.write_str("\x1b[?1006l\x1b[?1000l")
+        }
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        use crossterm::Command;
+        if self.0 {
+            crossterm::event::EnableMouseCapture.execute_winapi()
+        } else {
+            crossterm::event::DisableMouseCapture.execute_winapi()
+        }
+    }
+}
+
 /// The real driver: raw mode, the alternate screen, and a crossterm backend.
 #[derive(Default)]
 struct CrosstermDriver {
@@ -213,6 +276,7 @@ struct CrosstermDriver {
     raw: bool,
     alternate: bool,
     hidden: bool,
+    mouse: bool,
 }
 
 impl Driver for CrosstermDriver {
@@ -227,6 +291,9 @@ impl Driver for CrosstermDriver {
         execute!(stdout, cursor::Hide).map_err(TuiError::Terminal)?;
         self.hidden = true;
 
+        execute!(stdout, MouseCaptured(true)).map_err(TuiError::Terminal)?;
+        self.mouse = true;
+
         let backend = CrosstermBackend::new(std::io::stdout());
         self.terminal = Some(Terminal::new(backend).map_err(TuiError::Terminal)?);
         Ok(())
@@ -235,6 +302,10 @@ impl Driver for CrosstermDriver {
     fn teardown(&mut self) {
         self.terminal = None;
         let mut stdout = std::io::stdout();
+        if self.mouse {
+            let _ = execute!(stdout, MouseCaptured(false));
+            self.mouse = false;
+        }
         if self.hidden {
             let _ = execute!(stdout, cursor::Show);
             self.hidden = false;
@@ -263,9 +334,18 @@ impl Driver for CrosstermDriver {
 
     fn read_msg(&mut self) -> Result<Msg, TuiError> {
         loop {
+            // Wait for an event, or emit a tick so the view can animate.
+            if !event::poll(TICK_INTERVAL).map_err(TuiError::Terminal)? {
+                return Ok(Msg::Tick);
+            }
             match event::read().map_err(TuiError::Terminal)? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
                     if let Some(msg) = translate(key) {
+                        return Ok(msg);
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    if let Some(msg) = translate_mouse(mouse) {
                         return Ok(msg);
                     }
                 }
@@ -283,8 +363,13 @@ fn not_a_terminal() -> TuiError {
 fn translate(key: KeyEvent) -> Option<Msg> {
     use crossterm::event::{KeyCode, KeyModifiers};
 
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
     let key = match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::CtrlC,
+        KeyCode::Char('c') if control => Key::CtrlC,
+        KeyCode::Char('d') if control => Key::CtrlD,
+        KeyCode::Char('f') if control => Key::CtrlF,
+        KeyCode::Char('p') if control => Key::CtrlP,
+        KeyCode::Char('u') if control => Key::CtrlU,
         KeyCode::Char(character) => Key::Char(character),
         KeyCode::Up => Key::Up,
         KeyCode::Down => Key::Down,
@@ -294,9 +379,33 @@ fn translate(key: KeyEvent) -> Option<Msg> {
         KeyCode::BackTab => Key::BackTab,
         KeyCode::Enter => Key::Enter,
         KeyCode::Esc => Key::Esc,
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Delete => Key::Delete,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::PageDown => Key::PageDown,
         _ => return None,
     };
     Some(Msg::Key(key))
+}
+
+/// Translates a terminal mouse event, dropping motion, drag, release, and
+/// non-left buttons so they never reach the core.
+fn translate_mouse(mouse: MouseEvent) -> Option<Msg> {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let kind = match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => MouseKind::Click,
+        MouseEventKind::ScrollUp => MouseKind::ScrollUp,
+        MouseEventKind::ScrollDown => MouseKind::ScrollDown,
+        _ => return None,
+    };
+    Some(Msg::Mouse(Mouse {
+        column: mouse.column,
+        row: mouse.row,
+        kind,
+    }))
 }
 
 /// Installs a panic hook that restores the terminal before the panic message
@@ -315,6 +424,7 @@ fn install_panic_hook() {
 /// Best-effort terminal restoration that never panics.
 fn restore_terminal() {
     let mut stdout = std::io::stdout();
+    let _ = execute!(stdout, MouseCaptured(false));
     let _ = execute!(stdout, cursor::Show);
     let _ = execute!(stdout, LeaveAlternateScreen);
     let _ = disable_raw_mode();
@@ -356,7 +466,10 @@ mod tests {
 
     impl Driver for MockDriver {
         fn setup(&mut self) -> Result<(), TuiError> {
-            for (index, step) in ["raw", "alternate", "hidden"].into_iter().enumerate() {
+            for (index, step) in ["raw", "alternate", "hidden", "mouse"]
+                .into_iter()
+                .enumerate()
+            {
                 if self.fail_at == Some(index) {
                     return Err(TuiError::Terminal(std::io::Error::other("setup failed")));
                 }
@@ -368,6 +481,9 @@ mod tests {
         fn teardown(&mut self) {
             let mut log = self.log.borrow_mut();
             // Undo in reverse order, matching the real driver.
+            if log.setup.contains(&"mouse") {
+                log.teardown.push("mouse_off");
+            }
             if log.setup.contains(&"hidden") {
                 log.teardown.push("show_cursor");
             }
@@ -402,11 +518,18 @@ mod tests {
 
     #[test]
     fn a_setup_failure_tears_down_every_step_that_succeeded() {
-        let cases: [(Option<usize>, Vec<&str>); 4] = [
+        let cases: [(Option<usize>, Vec<&str>); 5] = [
             (Some(0), vec![]),
             (Some(1), vec!["disable_raw"]),
             (Some(2), vec!["leave_alternate", "disable_raw"]),
-            (None, vec!["show_cursor", "leave_alternate", "disable_raw"]),
+            (
+                Some(3),
+                vec!["show_cursor", "leave_alternate", "disable_raw"],
+            ),
+            (
+                None,
+                vec!["mouse_off", "show_cursor", "leave_alternate", "disable_raw"],
+            ),
         ];
 
         for (fail_at, expected) in cases {
@@ -417,6 +540,77 @@ mod tests {
             drop(session);
             assert_eq!(log.borrow().teardown, expected, "fail_at = {fail_at:?}");
         }
+    }
+
+    #[test]
+    fn control_keys_translate_to_distinct_messages() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('p'))),
+            Some(Msg::Key(Key::CtrlP))
+        ));
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('f'))),
+            Some(Msg::Key(Key::CtrlF))
+        ));
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('d'))),
+            Some(Msg::Key(Key::CtrlD))
+        ));
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('u'))),
+            Some(Msg::Key(Key::CtrlU))
+        ));
+        assert!(matches!(
+            translate(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+            Some(Msg::Key(Key::PageDown))
+        ));
+        // A plain character is not a control key.
+        assert!(matches!(
+            translate(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Some(Msg::Key(Key::Char('p')))
+        ));
+    }
+
+    #[test]
+    fn mouse_clicks_and_wheel_translate_but_motion_does_not() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        let at = |kind| MouseEvent {
+            kind,
+            column: 7,
+            row: 3,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+
+        assert!(matches!(
+            translate_mouse(at(MouseEventKind::Down(MouseButton::Left))),
+            Some(Msg::Mouse(Mouse {
+                column: 7,
+                row: 3,
+                kind: MouseKind::Click,
+            }))
+        ));
+        assert!(matches!(
+            translate_mouse(at(MouseEventKind::ScrollUp)),
+            Some(Msg::Mouse(Mouse {
+                kind: MouseKind::ScrollUp,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            translate_mouse(at(MouseEventKind::ScrollDown)),
+            Some(Msg::Mouse(Mouse {
+                kind: MouseKind::ScrollDown,
+                ..
+            }))
+        ));
+        // Motion, drag, release, and non-left buttons are dropped.
+        assert!(translate_mouse(at(MouseEventKind::Moved)).is_none());
+        assert!(translate_mouse(at(MouseEventKind::Up(MouseButton::Left))).is_none());
+        assert!(translate_mouse(at(MouseEventKind::Down(MouseButton::Right))).is_none());
     }
 
     #[test]
@@ -434,14 +628,15 @@ mod tests {
                 selection: Selection::all(),
             },
             scope_label: "all".to_owned(),
+            icons: IconStyle::None,
         };
         run_with(engine, options, driver).expect("run");
 
         let log = log.borrow();
-        assert_eq!(log.setup, vec!["raw", "alternate", "hidden"]);
+        assert_eq!(log.setup, vec!["raw", "alternate", "hidden", "mouse"]);
         assert_eq!(
             log.teardown,
-            vec!["show_cursor", "leave_alternate", "disable_raw"]
+            vec!["mouse_off", "show_cursor", "leave_alternate", "disable_raw"]
         );
         assert!(log.draws >= 1, "the model must be drawn at least once");
     }
@@ -461,12 +656,13 @@ mod tests {
                 selection: Selection::all(),
             },
             scope_label: "all".to_owned(),
+            icons: IconStyle::None,
         };
         let error = run_with(engine, options, driver).expect_err("startup failure");
         assert!(matches!(error, TuiError::Engine(_)), "got {error:?}");
         assert_eq!(
             log.borrow().teardown,
-            vec!["show_cursor", "leave_alternate", "disable_raw"]
+            vec!["mouse_off", "show_cursor", "leave_alternate", "disable_raw"]
         );
     }
 

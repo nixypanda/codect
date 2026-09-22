@@ -141,6 +141,31 @@ An area is valid when at least one of its paths names something in the projected
 
 Area configuration is declarative data. It defines names and paths only and is never executed. Areas hold literal repository paths: they do not use glob patterns and do not expand environment variables or other substitutions.
 
+### Terminal frontend
+
+The MVP includes an interactive terminal frontend for the same focused views.
+
+- `ownai tui show` presents a file tree beside the canonical projection of the
+  selected file.
+- `ownai tui diff` presents a changed-file tree beside a side-by-side comparison
+  of the old and new projections, with `@@` hunk headers.
+- Projections and diffs are syntax-highlighted, and diffs use full-line added and
+  removed backgrounds with intra-line emphasis on the bytes that changed.
+- The user can switch between Types and Signatures, change the scope
+  (everything, a named area, or a literal path), and enter new revisions
+  without leaving the frontend.
+- A command palette and a fuzzy file finder make every action reachable without
+  memorizing keys, and the current view can be searched with match
+  highlighting.
+- The interface uses a themed design system with a light and dark palette and
+  degrades to 256- or 16-color terminals; `NO_COLOR` disables styling.
+- The file tree is resizable, and the frontend adapts to the terminal size.
+
+The terminal frontend is an additional way to read the same focused views. It
+does not change projection or diff semantics, and it is read-only: it reads
+committed blobs and never writes the repository, worktree, or index, and it
+never opens an editor.
+
 ### MVP exclusions
 
 The first MVP does not include:
@@ -205,9 +230,10 @@ Language support may differ in whether inferred types, public visibility, or imp
 
 ### Interactive navigation
 
-Later experiences may allow users to:
+The terminal frontend already switches between Types and Signatures and changes
+the projection scope. Later experiences may add:
 
-- Switch between Types, Public, Signatures, and Full views.
+- Switch between Public and Full views as those modes are implemented.
 - Reveal the implementation of a selected declaration on demand.
 - Move directly from a projected declaration to its source location.
 - Narrow a view or diff to selected declarations.

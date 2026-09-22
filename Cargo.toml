@@ -53,6 +53,12 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm"]
 crossterm = "0.29"
 unicode-width = "0.2"
 
+# Delta-style syntax highlighting. Confined to `ownai-tui`; the pure-Rust
+# `fancy-regex` backend avoids an Oniguruma C toolchain, and `two-face` adds
+# the bat syntax/theme assets (Elm, Monokai Extended) that delta uses.
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
+
 # Test-only dependencies.
 assert_cmd = "2"
 predicates = "3"

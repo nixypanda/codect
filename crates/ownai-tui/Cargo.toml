@@ -11,6 +11,8 @@ ownai-engine.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 unicode-width.workspace = true
+syntect.workspace = true
+two-face.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
