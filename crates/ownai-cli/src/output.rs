@@ -19,8 +19,6 @@ use crate::command::CliError;
 pub enum DocumentKind {
     Show,
     Diff,
-    /// Staged for the review renderer; not yet selected by `command.rs`.
-    #[allow(dead_code)]
     Review,
 }
 

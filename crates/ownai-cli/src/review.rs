@@ -6,10 +6,6 @@
 //! the lens produced them. This module renders only; it never calls a provider,
 //! reads configuration, or applies ANSI styling (that lives in `output.rs`, so
 //! `--color=never` stays byte-for-byte plain).
-//!
-//! The public renderer is staged ahead of its command-line caller, so it is not
-//! yet reachable from `command.rs`.
-#![allow(dead_code)]
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

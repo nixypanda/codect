@@ -16,16 +16,36 @@ use ownai_core::{
     SourceSpan, diff_document, show_document,
 };
 use ownai_engine::config::ConfigError;
-use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_engine::{
+    Engine, EngineError, FileDiff, ReviewError, ReviewLens, ReviewOutcome, Selection,
+    SelectionGroup,
+};
 use ownai_git::GitError;
 
 #[cfg(feature = "tui")]
 use crate::args::IconChoice;
 #[cfg(feature = "tui")]
 use crate::args::TuiCommand;
-use crate::args::{Cli, Command as CliCommand};
+use crate::args::{Cli, ColorChoice, Command as CliCommand, DecisionProviderChoice, LensChoice};
+use crate::decision::{self, ProviderBuildError};
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
+use crate::review::{self, ReviewRenderOptions};
+
+/// The default serialized-state byte limit for one review unit.
+pub const DEFAULT_MAX_STATE_BYTES: usize = 64 * 1024;
+
+/// The successful result of a command.
+///
+/// A review document is written before the exit status is chosen, so a failed
+/// unit is signaled only by [`CommandOutcome::ReviewFailed`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandOutcome {
+    /// The command completed; a review, if any, had no failed unit.
+    Success,
+    /// The review document was written, but at least one unit failed.
+    ReviewFailed,
+}
 
 /// A fatal CLI failure with structured context and an underlying cause.
 ///
@@ -68,7 +88,7 @@ impl miette::Diagnostic for CliError {
 }
 
 /// Discovers the repository from the current directory and runs one command.
-pub fn run(cli: &Cli) -> Result<(), CliError> {
+pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
     let start = std::env::current_dir().map_err(|source| CliError {
         message: "could not determine the current directory".to_owned(),
         help: None,
@@ -88,7 +108,8 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
                 .show(revision, (*mode).into(), &selection)
                 .map_err(engine_failure)?;
             output::write_document(DocumentKind::Show, &show_document(&files), cli.color)
-                .map_err(output_failure)
+                .map_err(output_failure)?;
+            Ok(CommandOutcome::Success)
         }
         CliCommand::Diff {
             mode,
@@ -96,18 +117,87 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             target,
             paths,
             areas,
+            lens,
+            decision_provider,
+            decision_model,
+            decision_endpoint,
         } => {
             let selection = selection_for(paths, areas, &start, &engine)?;
             let diffs = engine
                 .diff(base, target, (*mode).into(), &selection)
                 .map_err(engine_failure)?;
-            let (old, new) = split_diff(diffs);
-            output::write_document(DocumentKind::Diff, &diff_document(&old, &new), cli.color)
-                .map_err(output_failure)
+
+            match lens {
+                None => {
+                    let (old, new) = split_diff(diffs);
+                    output::write_document(
+                        DocumentKind::Diff,
+                        &diff_document(&old, &new),
+                        cli.color,
+                    )
+                    .map_err(output_failure)?;
+                    Ok(CommandOutcome::Success)
+                }
+                Some(LensChoice::Review) => review_diff(
+                    diffs,
+                    *decision_provider,
+                    decision_model.as_deref(),
+                    decision_endpoint.as_deref(),
+                    cli.color,
+                ),
+            }
         }
         #[cfg(feature = "tui")]
-        CliCommand::Tui { command } => run_tui(engine, command, &start, cli.icons),
+        CliCommand::Tui { command } => {
+            run_tui(engine, command, &start, cli.icons).map(|()| CommandOutcome::Success)
+        }
     }
+}
+
+/// Runs the review lens over the engine diffs and writes the review document.
+///
+/// The canonical diff is rendered from the same projections the legacy path
+/// uses, so it appears verbatim above the annotations. Clap guarantees that
+/// `--decision-provider` accompanies `--lens`.
+fn review_diff(
+    diffs: Vec<FileDiff>,
+    provider_choice: Option<DecisionProviderChoice>,
+    model: Option<&str>,
+    endpoint: Option<&str>,
+    color: ColorChoice,
+) -> Result<CommandOutcome, CliError> {
+    let provider_choice =
+        provider_choice.expect("clap requires `--decision-provider` whenever `--lens` is present");
+    let provider =
+        decision::build_provider(provider_choice, model, endpoint).map_err(provider_failure)?;
+    let lens = ReviewLens::new(DEFAULT_MAX_STATE_BYTES).map_err(review_failure)?;
+
+    // `diff_document` consumes owned projections and re-sorts by path; the
+    // clone keeps the engine-ordered diffs for per-file review.
+    let (old, new) = split_diff(diffs.clone());
+    let canonical_diff = diff_document(&old, &new);
+
+    let mut outcomes = Vec::new();
+    for diff in &diffs {
+        outcomes.extend(lens.review_file(provider.as_ref(), diff));
+    }
+
+    let document = review::review_document(
+        provider_choice.label(),
+        &canonical_diff,
+        &outcomes,
+        &ReviewRenderOptions::default(),
+    );
+    output::write_document(DocumentKind::Review, &document, color).map_err(output_failure)?;
+
+    let failed = outcomes
+        .iter()
+        .any(|outcome| matches!(outcome, ReviewOutcome::Failed { .. }));
+    Ok(if failed {
+        CommandOutcome::ReviewFailed
+    } else {
+        CommandOutcome::Success
+    })
 }
 
 /// Splits engine diffs into the two projection slices the document renderer
@@ -316,6 +406,24 @@ fn output_failure(source: io::Error) -> CliError {
         message: "could not write output".to_owned(),
         help: None,
         source: Box::new(source),
+    }
+}
+
+/// A decision provider that could not be constructed.
+fn provider_failure(error: ProviderBuildError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// A review lens that could not be constructed or evaluated.
+fn review_failure(error: ReviewError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
     }
 }
 

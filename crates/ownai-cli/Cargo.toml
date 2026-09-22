@@ -17,6 +17,7 @@ tui = ["dep:ownai-tui"]
 ownai-core.workspace = true
 ownai-git.workspace = true
 ownai-engine.workspace = true
+ownai-decisions.workspace = true
 ownai-tui = { workspace = true, optional = true }
 anstream.workspace = true
 anstyle.workspace = true
@@ -25,11 +26,11 @@ miette.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-ownai-decisions.workspace = true
 ownai-language-elm.workspace = true
 ownai-language-haskell.workspace = true
 ownai-language-python.workspace = true
 ownai-language-rust.workspace = true
+serde_json.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true

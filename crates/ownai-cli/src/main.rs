@@ -6,6 +6,7 @@
 
 mod args;
 mod command;
+mod decision;
 mod output;
 mod pathspec;
 mod review;
@@ -21,7 +22,10 @@ fn main() -> ExitCode {
     let cli = args::Cli::parse();
 
     match command::run(&cli) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(command::CommandOutcome::Success) => ExitCode::SUCCESS,
+        // The complete review document is already on stdout; a failed unit is
+        // signaled by the exit code with no extra diagnostic.
+        Ok(command::CommandOutcome::ReviewFailed) => ExitCode::FAILURE,
         // Repository, revision, object, UTF-8, and parse failures all share
         // exit 1 (section 14); the report goes to stderr so stdout stays a
         // valid, complete document or empty.
