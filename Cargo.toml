@@ -64,3 +64,7 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 portable-pty = "0.9"
+
+# Benchmark-only dependency. Confined to `ownai-tui`'s `bench` feature via a
+# `required-features` bench target, so it never enters a normal build.
+criterion = { version = "0.8", features = ["html_reports"] }
