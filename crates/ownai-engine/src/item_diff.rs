@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ownai_core::{ItemKind, Language, ProjectedFile, ProjectedItem, RepoPath};
+use ownai_core::{ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath};
 
 use crate::engine::FileDiff;
 
@@ -26,6 +26,7 @@ pub enum ItemChangeKind {
 pub struct ItemDiff {
     pub path: RepoPath,
     pub language: Language,
+    pub mode: ProjectionMode,
     pub change: ItemChangeKind,
     pub stable_key: String,
     pub item_kind: ItemKind,
@@ -51,6 +52,7 @@ impl FileDiff {
                 build_item_diff(
                     &self.path,
                     language_of(self),
+                    self.mode,
                     old.get(stable_key).copied(),
                     new.get(stable_key).copied(),
                 )
@@ -78,6 +80,7 @@ fn language_of(diff: &FileDiff) -> Language {
 fn build_item_diff(
     path: &RepoPath,
     language: Language,
+    mode: ProjectionMode,
     old: Option<&ProjectedItem>,
     new: Option<&ProjectedItem>,
 ) -> Option<ItemDiff> {
@@ -94,6 +97,7 @@ fn build_item_diff(
     Some(ItemDiff {
         path: path.clone(),
         language,
+        mode,
         change,
         stable_key: item.stable_key.clone(),
         item_kind: item.kind,
@@ -143,6 +147,7 @@ mod tests {
     fn diff(old: Option<ProjectedFile>, new: Option<ProjectedFile>) -> FileDiff {
         FileDiff {
             path: path(),
+            mode: ProjectionMode::Types,
             old,
             new,
         }

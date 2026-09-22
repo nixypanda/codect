@@ -2162,12 +2162,14 @@ name = "ownai-engine"
 version = "0.1.0"
 dependencies = [
  "ownai-core",
+ "ownai-decisions",
  "ownai-git",
  "ownai-language-elm",
  "ownai-language-haskell",
  "ownai-language-python",
  "ownai-language-rust",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "toml",

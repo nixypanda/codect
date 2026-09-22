@@ -46,6 +46,7 @@ const PROJECTORS: [&dyn LanguageProjector; 4] = [
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiff {
     pub path: RepoPath,
+    pub mode: ProjectionMode,
     pub old: Option<ProjectedFile>,
     pub new: Option<ProjectedFile>,
 }
@@ -194,6 +195,7 @@ impl Engine {
             }
             diffs.push(FileDiff {
                 path: path.clone(),
+                mode,
                 old,
                 new,
             });

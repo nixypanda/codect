@@ -18,9 +18,14 @@ pub mod config;
 pub mod engine;
 pub mod error;
 pub mod item_diff;
+pub mod review;
 pub mod selection;
 
 pub use engine::{Engine, FileDiff};
 pub use error::EngineError;
 pub use item_diff::{ItemChangeKind, ItemDiff};
+pub use review::{
+    ChoiceJudgment, REVIEW_STATE_SCHEMA, ReviewError, ReviewJudgment, ReviewLens, ReviewOutcome,
+    ReviewedItemDiff, ScoreJudgment,
+};
 pub use selection::{Selection, SelectionError, SelectionGroup};
