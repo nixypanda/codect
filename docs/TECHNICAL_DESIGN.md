@@ -1046,44 +1046,82 @@ interaction adds the matching `update/*` cost. Criterion writes an HTML report
 under `target/criterion/`.
 
 Measured 2026-09-22 with rustc 1.98.1 (`48a229cea 2026-09-01`) and cargo 1.98.1
-on an Apple Silicon macOS host. The host was busy during the run (load average
-about 4.6), which moves the few-hundred-microsecond frame numbers by tens of
-percent between runs; the slower seams are stable and carry the signal. Times
-are the median of 30 samples after a one-second warm-up, optimized (`bench`)
-profile.
+on an Apple Silicon macOS host at a quiet moment (load average about 2.0). Host
+load moves the few-hundred-microsecond frame numbers by tens of percent between
+runs; the slower seams are stable and carry the signal. Times are the median of
+30 samples after a one-second warm-up, optimized (`bench`) profile.
 
 | Benchmark | Median |
 |---|---|
-| `frame/warm/show_two_files` | 0.42 ms |
-| `frame/warm/show_long_file` | 0.84 ms |
-| `frame/warm/diff_single` | 0.89 ms |
-| `frame/warm/show_tiny` | 0.01 ms |
-| `frame/cold/diff_single` | 1.30 ms |
-| `update/show_next_file` (20-line file) | 1.90 ms |
-| `update/diff_next_file` | 0.93 ms |
-| `update/diff_resize` (800-line diff) | 2.93 ms |
-| `update/load_show_300_files` | 2.29 ms |
-| `parts/highlight_rust` (23 lines) | 2.02 ms |
-| `parts/highlight_rust_long` (4000 lines) | 343 ms |
-| `parts/layout_diff` (800-line diff) | 3.16 ms |
-| `parts/buffer_diff` (140x40 surface) | 0.16 ms |
+| `frame/warm/show_two_files` | 0.26 ms |
+| `frame/warm/show_long_file` | 0.50 ms |
+| `frame/warm/diff_single` | 0.51 ms |
+| `frame/warm/show_tiny` | 0.005 ms |
+| `frame/cold/diff_single` | 0.74 ms |
+| `parts/highlight_rust` (23 lines) | 1.13 ms |
+| `parts/highlight_rust_long` (4000 lines) | 192 ms |
+| `parts/layout_diff` (800-line diff) | 1.63 ms |
+| `parts/buffer_diff` (140x40 surface) | 0.085 ms |
 
 Attribution from the same run:
 
-- A warm 140x40 frame is roughly 60% `view` assembly and 40% ratatui's
-  full-surface diff scan. The scan is proportional to cells, not to how much
-  changed, so a nearly static frame still pays it.
+- A warm 140x40 frame is roughly two-thirds `view` assembly and one-third
+  ratatui's full-surface diff scan. The scan is proportional to cells, not to how
+  much changed, so a nearly static frame still pays it.
 - A cold interaction is dominated by syntax highlighting: syntect costs about
-  86 microseconds per Rust line and 39 per Elm line here, so the first view of a
-  1200-line Rust file exceeds the 100 ms median budget on highlighting alone.
+  48 microseconds per Rust line and 21 per Elm line here, so the first view of a
+  ~2100-line Rust file exceeds the 100 ms median budget on highlighting alone.
   Per-file caching means this is paid once per file, not per frame.
 - Wrapped diff layout (`aligned_rows` plus emphasis, wrapping, and run cloning)
-  is about 3 ms for an 800-line diff and is cached by generation, size,
+  is about 1.6 ms for an 800-line diff and is cached by generation, size,
   selection, and tree width.
+
+The `update/*` numbers in the next section are the pre-coalescing baseline;
+that section measures what changed.
 
 This does not measure escape-sequence encoding or writes to a real terminal;
 `TestBackend` replaces them with an in-memory surface. A PTY-based end-to-end
 input-to-redraw measurement remains open (plan §6.6).
+
+### Input coalescing and deferred selection work
+
+Arrow-key tree navigation (what a touchpad becomes, since mouse capture is off)
+used to draw once per event and, more expensively, highlight every file row the
+cursor crossed: `sync_selected` ran syntax highlighting and search re-sync
+eagerly, so a 300-row scroll paid 300 cold highlights and cloned a growing cache
+on every message.
+
+The runtime now folds every already-queued event into one batch and calls a pure
+`settle` once, so a batch highlights only its final selection. The highlight
+cache is bounded to 32 entries, and highlighting is skipped when the body is not
+drawn (narrow terminal, tree focused).
+
+Measured 2026-09-22 on a busy host (load average about 5.7). The scroll
+comparison is within a single run, so it is insensitive to host load; the
+`per_step` column reproduces the previous behavior in the same binary and
+matches the pre-change `per_key` baseline within 2%.
+
+| Scroll burst | Before (per_step) | After (batched) | Speedup |
+|---|---|---|---|
+| 1 row | 1.91 ms | 1.91 ms | 1.0x |
+| 10 rows | 18.5 ms | 1.86 ms | 10x |
+| 100 rows | 175 ms | 1.88 ms | 93x |
+| 300 rows | 520 ms | 2.02 ms | 257x |
+
+Message handling, before versus after:
+
+| Benchmark | Before | After |
+|---|---|---|
+| `update/show_next_file` (20-line file) | 901 us | 1.0 us |
+| `update/diff_next_file` | 401 us | 1.1 us |
+| `update/diff_resize` (800-line diff) | 1.31 ms | 1.0 us |
+| `update/load_show_300_files` | 1.11 ms | 155 us |
+| `update/load_diff_40_files` | 481 us | 24 us |
+
+The highlight and layout work did not disappear; it moved to `settle`, where it
+runs once per batch instead of once per message. Warm frames are unchanged: the
+frame path is untouched, and a back-to-back A/B measured 940 us on the baseline
+commit and 911 us after for `frame/warm/show_two_files`.
 
 ## 18. Security and robustness
 
@@ -1270,6 +1308,10 @@ interpretation.
   `Engine::diff`; `LoadAreas` reads `.ownai.toml` through
   `Engine::load_areas`.
 - **view** — a pure `&Model -> widgets`.
+- **settle** — a pure `Model -> Model` that runs the selection-dependent work:
+  syntax highlighting, search re-sync, and the wrapped diff layout. The runtime
+  calls it once per input batch, after folding every queued message, so a burst
+  of navigation pays for its final selection only.
 - Effects are transactional: a failed reload keeps the previous model and
   displays a self-expiring diagnostic.
 
@@ -1281,10 +1323,13 @@ presentation-only; state and behaviour remain in `app.rs`.
 
 Large, wholesale-replaced collections (`Content` payloads, tree rows, visible
 paths) are `Arc`-backed, so cloning a `Model` is O(1) rather than proportional
-to repository size. Syntax highlighting is cached per selected path, and the
-wrapped diff layout is cached in `Derived`, invalidated by content generation,
-size, selection, and tree width. Per-frame data stays in plain `Vec`. The
-frontend keeps no persistent cache.
+to repository size. Syntax highlighting is cached per selected path in a bounded,
+insertion-ordered map (32 entries), so memory and the per-message clone stay flat
+however far the user scrolls. The wrapped diff layout is cached in `Derived`,
+invalidated by content generation, size, selection, and tree width.
+Highlighting, search re-sync, and layout are computed in `settle` once per input
+batch, not in `update`. Per-frame data stays in plain `Vec`. The frontend keeps
+no persistent cache.
 
 ### 21.4 Layout and interaction
 
@@ -1366,6 +1411,11 @@ frontend keeps no persistent cache.
 
 ### 21.8 Loading and feedback
 
+- The runtime reads one event, then folds every already-queued event into a
+  batch (bounded by a count and a short time budget), applies them, runs
+  `settle` once, and draws once. The blocking first read is unchanged, so a
+  single keypress gains no latency, while a burst of arrow-key scrolling becomes
+  one frame instead of one per row.
 - The runtime polls for input and emits `Msg::Tick` when idle. A tick advances
   the spinner and expires a diagnostic; an idle tick with nothing to animate
   neither updates nor redraws.

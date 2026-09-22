@@ -474,6 +474,12 @@ consults the worktree, invokes `$EDITOR`, or creates an editable temporary file.
 > diff. It shows highlighting dominates a cold interaction and that ratatui's
 > full-surface scan is a large share of a warm frame. It uses `TestBackend` and
 > does not yet cover real terminal writes or a PTY end-to-end measurement.
+>
+> The measurements drove two fixes: the runtime now folds queued input into one
+> batch and a pure `settle` runs highlighting and diff layout once per batch,
+> and the highlight cache is bounded. A 300-row arrow-key scroll dropped from
+> 520 ms to 2.0 ms, and message handling from hundreds of microseconds to about
+> one. Warm frames are unchanged.
 
 Keep operations synchronous while they remain responsive. Measure input-to-
 redraw latency on the existing representative repositories and a larger
