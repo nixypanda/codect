@@ -67,8 +67,8 @@ check-workspace-features:
 # defaults must neither fail nor pull ratatui or crossterm into the graph.
 check-workspace-nodefault:
     cargo build -p ownai-cli --no-default-features
-    @if cargo tree -p ownai-cli --no-default-features | grep -Eq '(ratatui|crossterm)'; then \
-        echo "error: ratatui/crossterm leaked into the no-default-features build" >&2; \
+    @if cargo tree -p ownai-cli --no-default-features | grep -Eq '(ratatui|crossterm|terminal-colorsaurus)'; then \
+        echo "error: ratatui/crossterm/terminal-colorsaurus leaked into the no-default-features build" >&2; \
         exit 1; \
     fi
 

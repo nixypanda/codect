@@ -6,7 +6,9 @@
 //! layer can draw syntax foregrounds and diff backgrounds.
 //!
 //! Syntax colors come from `syntect` using the `two-face` asset bundle (bat's
-//! syntax and theme set), which is what delta itself uses. Diff line
+//! syntax and theme set), which is what delta itself uses. The dark flavor pairs
+//! with Monokai Extended, and the light flavor with GitHub, which is designed
+//! for a white background and keeps every token dark enough to read. Diff line
 //! backgrounds and the intra-line emphasis colors are delta's documented
 //! defaults.
 
@@ -50,7 +52,7 @@ fn assets() -> &'static Assets {
         Assets {
             syntaxes,
             dark: themes[EmbeddedThemeName::MonokaiExtended].clone(),
-            light: themes[EmbeddedThemeName::MonokaiExtendedLight].clone(),
+            light: themes[EmbeddedThemeName::Github].clone(),
         }
     })
 }

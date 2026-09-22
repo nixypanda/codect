@@ -57,6 +57,10 @@ toml = "1"
 # backend is the only backend.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"
+# Asks the terminal for its background color (OSC 11) to choose the light or
+# dark flavor at startup. It owns the query and restores raw mode itself, so it
+# runs before crossterm's lazy event reader is first polled.
+terminal-colorsaurus = "1"
 unicode-width = "0.2"
 
 # Delta-style syntax highlighting. Confined to `ownai-tui`; the pure-Rust

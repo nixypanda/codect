@@ -2,11 +2,12 @@
 //!
 //! Every color the frontend draws comes from a [`Palette`] resolved through a
 //! [`Capability`], so the UI can be themed (dark/light) and degrade gracefully
-//! on terminals without truecolor. This module is pure data and color math: it
-//! never reads the terminal, and the environment is consulted only by
-//! [`Theme::detect`], which the runtime calls once at startup.
+//! on terminals without truecolor. The palettes and color math are pure data;
+//! only [`Theme::detect`] touches the environment and the terminal, and the
+//! runtime calls it once at startup before the event reader exists.
 
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use ratatui::style::{Color, Style};
 
@@ -17,6 +18,16 @@ use ratatui::style::{Color, Style};
 pub fn colors_enabled() -> bool {
     std::env::var_os("NO_COLOR").is_none()
 }
+
+/// The environment variable that pins the flavor. Unset, empty, or `auto` asks
+/// the terminal for its background color.
+const FLAVOR_ENV: &str = "OWNAI_THEME";
+
+/// The longest the startup background query waits before falling back to dark.
+///
+/// Terminals that cannot answer are detected almost immediately; the budget only
+/// matters for a terminal that answers slowly.
+const QUERY_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// An sRGB color used by a palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,6 +101,9 @@ pub struct Palette {
     pub match_bg: Rgb,
     /// The current search match.
     pub match_current_bg: Rgb,
+    /// The search-match indicator in the status bar and palette, drawn on a
+    /// surface rather than on a match highlight.
+    pub match_fg: Rgb,
     /// A tree guide line.
     pub guide: Rgb,
     /// A directory label.
@@ -139,6 +153,7 @@ const DARK: Palette = Palette {
     selection_bar: Rgb(0xa6, 0xe2, 0x2e),
     match_bg: Rgb(0x66, 0x5c, 0x00),
     match_current_bg: Rgb(0xa6, 0xe2, 0x2e),
+    match_fg: Rgb(0xa6, 0xe2, 0x2e),
     guide: Rgb(0x49, 0x48, 0x3e),
     dir: Rgb(0x66, 0xd9, 0xef),
     file: Rgb(0xf8, 0xf8, 0xf2),
@@ -156,36 +171,37 @@ const DARK: Palette = Palette {
 };
 
 const LIGHT: Palette = Palette {
-    bg: Rgb(0xf8, 0xf8, 0xf2),
+    bg: Rgb(0xf6, 0xf8, 0xfa),
     surface: Rgb(0xff, 0xff, 0xff),
-    surface_alt: Rgb(0xee, 0xee, 0xea),
-    border: Rgb(0xc8, 0xc8, 0xc0),
-    border_focus: Rgb(0x00, 0x87, 0xaf),
-    divider: Rgb(0xd0, 0xd0, 0xc8),
-    text: Rgb(0x27, 0x28, 0x22),
-    text_dim: Rgb(0x6f, 0x6f, 0x66),
-    text_muted: Rgb(0x90, 0x90, 0x88),
-    accent: Rgb(0x00, 0x87, 0xaf),
-    danger: Rgb(0xc7, 0x25, 0x4e),
-    selection_bg: Rgb(0xcf, 0xe3, 0xff),
-    selection_fg: Rgb(0x10, 0x10, 0x10),
-    selection_bar: Rgb(0x00, 0x87, 0xaf),
-    match_bg: Rgb(0xff, 0xe0, 0x66),
-    match_current_bg: Rgb(0xff, 0xb0, 0x00),
-    guide: Rgb(0xc0, 0xc0, 0xb8),
-    dir: Rgb(0x00, 0x87, 0xaf),
-    file: Rgb(0x27, 0x28, 0x22),
-    badge_add: Rgb(0x4f, 0x8f, 0x00),
-    badge_mod: Rgb(0xa0, 0x80, 0x00),
-    badge_del: Rgb(0xc7, 0x25, 0x4e),
-    hunk: Rgb(0x00, 0x87, 0xaf),
-    gutter: Rgb(0x90, 0x90, 0x88),
-    del_bg: Rgb(0xf8, 0xd7, 0xda),
-    del_emph: Rgb(0xf0, 0xa8, 0xb0),
-    add_bg: Rgb(0xd6, 0xf5, 0xd6),
-    add_emph: Rgb(0xa8, 0xe6, 0xa8),
-    add_fg: Rgb(0x2f, 0x6f, 0x00),
-    del_fg: Rgb(0xa0, 0x10, 0x30),
+    surface_alt: Rgb(0xea, 0xee, 0xf2),
+    border: Rgb(0xd0, 0xd7, 0xde),
+    border_focus: Rgb(0x09, 0x69, 0xda),
+    divider: Rgb(0xd8, 0xde, 0xe4),
+    text: Rgb(0x1f, 0x23, 0x28),
+    text_dim: Rgb(0x57, 0x60, 0x6a),
+    text_muted: Rgb(0x6e, 0x77, 0x81),
+    accent: Rgb(0x09, 0x69, 0xda),
+    danger: Rgb(0xcf, 0x22, 0x2e),
+    selection_bg: Rgb(0xdb, 0xea, 0xfe),
+    selection_fg: Rgb(0x1f, 0x23, 0x28),
+    selection_bar: Rgb(0x09, 0x69, 0xda),
+    match_bg: Rgb(0xff, 0xf3, 0xbf),
+    match_current_bg: Rgb(0xff, 0xd3, 0x3d),
+    match_fg: Rgb(0x9a, 0x67, 0x00),
+    guide: Rgb(0xd0, 0xd7, 0xde),
+    dir: Rgb(0x09, 0x69, 0xda),
+    file: Rgb(0x1f, 0x23, 0x28),
+    badge_add: Rgb(0x1a, 0x7f, 0x37),
+    badge_mod: Rgb(0x9a, 0x67, 0x00),
+    badge_del: Rgb(0xcf, 0x22, 0x2e),
+    hunk: Rgb(0x09, 0x69, 0xda),
+    gutter: Rgb(0x8c, 0x95, 0x9f),
+    del_bg: Rgb(0xff, 0xeb, 0xe9),
+    del_emph: Rgb(0xff, 0xc9, 0xc9),
+    add_bg: Rgb(0xe6, 0xff, 0xec),
+    add_emph: Rgb(0xab, 0xf2, 0xbc),
+    add_fg: Rgb(0x1a, 0x7f, 0x37),
+    del_fg: Rgb(0xcf, 0x22, 0x2e),
 };
 
 /// A resolved palette plus the terminal capability it is drawn for.
@@ -220,15 +236,12 @@ impl Theme {
         }
     }
 
-    /// Detects the theme from the environment: `OWNAI_THEME` chooses the flavor
-    /// and `NO_COLOR`/`COLORTERM`/`TERM` choose the capability. Called once by
-    /// the runtime; `view` stays pure by reading the theme off the model.
+    /// Detects the theme from the environment and the terminal: `OWNAI_THEME`
+    /// pins the flavor, and `NO_COLOR`/`COLORTERM`/`TERM` choose the capability.
+    /// Called once by the runtime before the event reader starts; `view` stays
+    /// pure by reading the theme off the model.
     pub fn detect() -> Self {
-        let flavor = match std::env::var("OWNAI_THEME").ok().as_deref() {
-            Some("light") => Flavor::Light,
-            _ => Flavor::Dark,
-        };
-        Self::new(flavor, detect_capability())
+        Self::new(detect_flavor(), detect_capability())
     }
 
     /// Resolves a palette color for this terminal.
@@ -251,9 +264,71 @@ impl Theme {
         Style::default().fg(self.color(fg)).bg(self.color(bg))
     }
 
+    /// The palette ink that stays legible on a filled background.
+    ///
+    /// Chips, badges, and cursors fill a cell with a palette color and then draw
+    /// text on it. `palette.bg` is a good ink in the dark flavor because it is
+    /// near-black, but in the light flavor it is near-white and vanishes on light
+    /// fills such as `surface_alt`. Choosing whichever of `text` or `bg` contrasts
+    /// more with the fill keeps both flavors legible.
+    pub fn ink(&self, fill: Rgb) -> Rgb {
+        let fill = relative_luminance(fill);
+        let text = contrast_ratio(fill, relative_luminance(self.palette.text));
+        let background = contrast_ratio(fill, relative_luminance(self.palette.bg));
+        if text >= background {
+            self.palette.text
+        } else {
+            self.palette.bg
+        }
+    }
+
     /// Whether any color is emitted.
     pub fn colors_enabled(&self) -> bool {
         self.capability != Capability::NoColor
+    }
+}
+
+/// The flavor the frontend draws with.
+///
+/// `OWNAI_THEME=dark` and `OWNAI_THEME=light` are explicit and skip the query.
+/// Any other value (or an unset variable) asks the terminal for its background
+/// color and falls back to dark when the terminal does not answer.
+pub fn detect_flavor() -> Flavor {
+    explicit_flavor(std::env::var(FLAVOR_ENV).ok().as_deref())
+        .or_else(query_flavor)
+        .unwrap_or(Flavor::Dark)
+}
+
+/// The explicit flavor named by `OWNAI_THEME`, if it names one.
+///
+/// `auto`, an empty value, and an unset variable all defer to
+/// [`query_flavor`]; so does any unrecognized value, which keeps a typo from
+/// forcing a wrong palette.
+fn explicit_flavor(value: Option<&str>) -> Option<Flavor> {
+    match value {
+        Some("light") => Some(Flavor::Light),
+        Some("dark") => Some(Flavor::Dark),
+        _ => None,
+    }
+}
+
+/// Asks the terminal for its background color over `OSC 11`.
+///
+/// `terminal-colorsaurus` owns the query, saves and restores raw mode itself,
+/// and short-circuits terminals that cannot answer, so this returns `None`
+/// rather than blocking when detection is unsupported. It is called once, by
+/// [`Theme::detect`], before the event reader is first polled, so the reply is
+/// not competing with the event loop for standard input.
+fn query_flavor() -> Option<Flavor> {
+    if !colors_enabled() {
+        return None;
+    }
+    let mut options = terminal_colorsaurus::QueryOptions::default();
+    options.timeout = QUERY_TIMEOUT;
+    match terminal_colorsaurus::theme_mode(options) {
+        Ok(terminal_colorsaurus::ThemeMode::Dark) => Some(Flavor::Dark),
+        Ok(terminal_colorsaurus::ThemeMode::Light) => Some(Flavor::Light),
+        Err(_) => None,
     }
 }
 
@@ -317,6 +392,25 @@ fn xterm256() -> &'static [Rgb; 256] {
         }
         palette
     })
+}
+
+/// The WCAG relative luminance of a color, in `0.0..=1.0`.
+fn relative_luminance(rgb: Rgb) -> f32 {
+    fn linear(channel: u8) -> f32 {
+        let channel = f32::from(channel) / 255.0;
+        if channel <= 0.039_28 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.212_6 * linear(rgb.0) + 0.715_2 * linear(rgb.1) + 0.072_2 * linear(rgb.2)
+}
+
+/// The WCAG contrast ratio between two relative luminances, from 1.0 to 21.0.
+fn contrast_ratio(a: f32, b: f32) -> f32 {
+    let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
+    (hi + 0.05) / (lo + 0.05)
 }
 
 fn distance_squared(a: Rgb, b: Rgb) -> u32 {
@@ -412,5 +506,54 @@ mod tests {
     fn flavors_differ() {
         let light = Theme::new(Flavor::Light, Capability::TrueColor);
         assert_ne!(Theme::dark().palette.bg, light.palette.bg);
+    }
+
+    #[test]
+    fn explicit_flavor_names_the_two_known_values() {
+        assert_eq!(explicit_flavor(Some("dark")), Some(Flavor::Dark));
+        assert_eq!(explicit_flavor(Some("light")), Some(Flavor::Light));
+    }
+
+    #[test]
+    fn auto_and_unknown_values_defer_to_detection() {
+        assert_eq!(explicit_flavor(None), None);
+        assert_eq!(explicit_flavor(Some("")), None);
+        assert_eq!(explicit_flavor(Some("auto")), None);
+        // A typo must not force the wrong palette.
+        assert_eq!(explicit_flavor(Some("daerk")), None);
+    }
+
+    #[test]
+    fn ink_contrasts_with_the_fill() {
+        let dark = Theme::dark();
+        // A bright fill takes the dark ink; a dark fill takes the light ink.
+        assert_eq!(dark.ink(Rgb(0x66, 0xd9, 0xef)), dark.palette.bg);
+        assert_eq!(dark.ink(Rgb(0x1e, 0x1f, 0x1c)), dark.palette.text);
+
+        let light = Theme::new(Flavor::Light, Capability::TrueColor);
+        assert_eq!(light.ink(Rgb(0xff, 0xff, 0xff)), light.palette.text);
+        assert_eq!(light.ink(Rgb(0x00, 0x00, 0x00)), light.palette.bg);
+    }
+
+    #[test]
+    fn light_ink_keeps_contrast_on_every_chip_fill() {
+        let light = Theme::new(Flavor::Light, Capability::TrueColor);
+        // The old chip ink was `palette.bg` (near-white), which vanished on the
+        // pale `surface_alt` fill; that one must now take the dark ink.
+        assert_eq!(light.ink(light.palette.surface_alt), light.palette.text);
+        for fill in [
+            light.palette.surface_alt,
+            light.palette.accent,
+            light.palette.badge_add,
+            light.palette.badge_mod,
+            light.palette.badge_del,
+        ] {
+            let ink = light.ink(fill);
+            let ratio = contrast_ratio(relative_luminance(ink), relative_luminance(fill));
+            assert!(
+                ratio >= 3.0,
+                "ink {ink:?} on fill {fill:?} has contrast {ratio:.2}"
+            );
+        }
     }
 }

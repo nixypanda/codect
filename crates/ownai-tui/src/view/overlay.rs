@@ -179,7 +179,7 @@ fn render_revision(
 
     let before = &input.text[..input.cursor];
     let after = &input.text[input.cursor..];
-    let cursor_style = theme.fg_bg(theme.palette.bg, theme.palette.accent);
+    let cursor_style = theme.fg_bg(theme.ink(theme.palette.accent), theme.palette.accent);
     let mut spans = vec![Span::styled(
         before.to_owned(),
         theme.fg(theme.palette.text),
@@ -376,7 +376,7 @@ fn render_search(frame: &mut Frame, area: Rect, state: &SearchState, model: &Mod
 fn input_line(prefix: &str, input: &TextInput, theme: &Theme) -> Line<'static> {
     let before = &input.text[..input.cursor];
     let after = &input.text[input.cursor..];
-    let cursor_style = theme.fg_bg(theme.palette.bg, theme.palette.accent);
+    let cursor_style = theme.fg_bg(theme.ink(theme.palette.accent), theme.palette.accent);
     let mut spans = vec![Span::styled(
         prefix.to_owned(),
         theme.fg(theme.palette.accent),
@@ -463,10 +463,13 @@ fn matched_style(matched: bool, selected: bool, theme: &Theme) -> Style {
         };
     }
     if selected {
-        theme.fg_bg(theme.palette.bg, theme.palette.match_current_bg)
+        theme.fg_bg(
+            theme.ink(theme.palette.match_current_bg),
+            theme.palette.match_current_bg,
+        )
     } else {
         theme
-            .fg(theme.palette.match_current_bg)
+            .fg(theme.palette.match_fg)
             .add_modifier(Modifier::BOLD)
     }
 }

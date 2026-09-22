@@ -21,7 +21,7 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
         Span::styled(
             " ◆ ownai ",
             theme
-                .fg_bg(theme.palette.bg, theme.palette.accent)
+                .fg_bg(theme.ink(theme.palette.accent), theme.palette.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -133,7 +133,7 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
         let current = if total == 0 { 0 } else { search.cursor + 1 };
         left.push(Span::styled(
             format!("/{} {current}/{total} ", search.needle),
-            theme.fg(theme.palette.match_current_bg),
+            theme.fg(theme.palette.match_fg),
         ));
     }
 
@@ -234,7 +234,7 @@ pub(crate) fn render_diagnostic(model: &Model, frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Paragraph::new(clip_line(text, 0, width as usize)).style(
             theme
-                .fg_bg(theme.palette.bg, theme.palette.danger)
+                .fg_bg(theme.ink(theme.palette.danger), theme.palette.danger)
                 .add_modifier(Modifier::BOLD),
         ),
         popup,
@@ -243,7 +243,8 @@ pub(crate) fn render_diagnostic(model: &Model, frame: &mut Frame, area: Rect) {
 
 pub(crate) fn render_too_small(frame: &mut Frame, area: Rect, theme: &Theme) {
     frame.render_widget(
-        Paragraph::new("terminal too small").style(theme.fg(theme.palette.text_muted)),
+        Paragraph::new("terminal too small")
+            .style(theme.fg_bg(theme.palette.text_muted, theme.palette.bg)),
         area,
     );
 }
@@ -251,7 +252,7 @@ pub(crate) fn render_too_small(frame: &mut Frame, area: Rect, theme: &Theme) {
 fn chip(label: &str, background: Rgb, theme: &Theme) -> Span<'static> {
     Span::styled(
         format!(" {label} "),
-        theme.fg_bg(theme.palette.bg, background),
+        theme.fg_bg(theme.ink(background), background),
     )
 }
 

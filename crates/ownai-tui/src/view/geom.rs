@@ -4,7 +4,6 @@
 use ownai_engine::FileDiff;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Style;
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
@@ -59,6 +58,7 @@ pub(crate) fn pane_block(title: &str, focused: bool, theme: &Theme, edge: Edge) 
         .border_type(BorderType::Rounded)
         .border_style(border)
         .padding(Padding::horizontal(1))
+        .style(theme.bg(theme.palette.bg))
         .title(title.to_owned())
 }
 
@@ -249,7 +249,10 @@ pub(crate) fn render_divider(frame: &mut Frame, column: Rect, theme: &Theme) {
             style,
         )));
     }
-    frame.render_widget(Paragraph::new(lines).style(Style::default()), column);
+    frame.render_widget(
+        Paragraph::new(lines).style(theme.bg(theme.palette.bg)),
+        column,
+    );
 }
 
 /// The width of the line-number gutter: a sign column, the digits, and a space.

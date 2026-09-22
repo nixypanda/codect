@@ -54,9 +54,12 @@ fn run_in_pty(repo: &TestRepo, args: &[&str]) -> u32 {
         sink
     });
 
-    // Give the frontend time to enter the alternate screen and start reading;
-    // a key written earlier is buffered by the pty and read when it is ready.
-    std::thread::sleep(Duration::from_millis(800));
+    // Give the frontend time to enter the alternate screen and start reading.
+    // The startup color query reads standard input before the event loop begins,
+    // so a key written during that window would be consumed by the query; wait
+    // for startup to finish first. A key written earlier would otherwise be
+    // buffered by the pty and read when it is ready.
+    std::thread::sleep(Duration::from_millis(2500));
     writer.write_all(b"q").expect("write quit key");
     let _ = writer.flush();
 

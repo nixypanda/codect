@@ -98,12 +98,23 @@ pub fn run(engine: Engine, options: TuiOptions) -> Result<(), TuiError> {
         return Err(TuiError::NotATerminal);
     }
     install_panic_hook();
-    run_with(engine, options, CrosstermDriver::default())
+    // Query the terminal's background before the event reader is first polled:
+    // `terminal-colorsaurus` reads the reply from standard input itself, and the
+    // query briefly consumes any keystroke typed during startup.
+    let theme = Theme::detect();
+    run_with(engine, options, theme, CrosstermDriver::default())
 }
 
 /// The imperative seam: terminal lifecycle, event reading, and effect
 /// interpretation. Generic over the driver so tests can inject one.
-fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result<(), TuiError> {
+///
+/// The theme is resolved by the caller so tests never touch the terminal.
+fn run_with<D: Driver>(
+    engine: Engine,
+    options: TuiOptions,
+    theme: Theme,
+    driver: D,
+) -> Result<(), TuiError> {
     let mut session = Session::new(driver);
     session.setup()?;
 
@@ -114,7 +125,7 @@ fn run_with<D: Driver>(engine: Engine, options: TuiOptions, driver: D) -> Result
         options.scope_label,
         width,
         height,
-        Theme::detect(),
+        theme,
         Icons::new(options.icons),
     );
 
@@ -691,7 +702,7 @@ mod tests {
             scope_label: "all".to_owned(),
             icons: IconStyle::None,
         };
-        run_with(engine, options, driver).expect("run");
+        run_with(engine, options, Theme::dark(), driver).expect("run");
 
         let log = log.borrow();
         assert_eq!(log.setup, vec!["raw", "alternate", "hidden", "mouse"]);
@@ -724,7 +735,7 @@ mod tests {
             scope_label: "all".to_owned(),
             icons: IconStyle::None,
         };
-        run_with(engine, options, driver).expect("run");
+        run_with(engine, options, Theme::dark(), driver).expect("run");
 
         // One frame for the initial busy state and one for the whole burst. The
         // old one-message-per-frame loop would have drawn once per event.
@@ -748,7 +759,7 @@ mod tests {
             scope_label: "all".to_owned(),
             icons: IconStyle::None,
         };
-        let error = run_with(engine, options, driver).expect_err("startup failure");
+        let error = run_with(engine, options, Theme::dark(), driver).expect_err("startup failure");
         assert!(matches!(error, TuiError::Engine(_)), "got {error:?}");
         assert_eq!(
             log.borrow().teardown,
