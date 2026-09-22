@@ -1,0 +1,375 @@
+{
+  "schema": "ownai.review-eval.v1",
+  "cases": [
+    {
+      "id": "rust-add-function",
+      "path": "src/lib.rs",
+      "language": "rust",
+      "mode": "signatures",
+      "change": "added",
+      "item_kind": "function",
+      "stable_key": "src/lib.rs::fn::greet",
+      "name": "greet",
+      "before": null,
+      "after": "pub fn greet(name: &str) -> String;",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 1.0,
+        "likely_breaking": false,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": false,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "rust-remove-trait-method",
+      "path": "src/repository.rs",
+      "language": "rust",
+      "mode": "signatures",
+      "change": "removed",
+      "item_kind": "method",
+      "stable_key": "src/repository.rs::trait Repository::method::load",
+      "name": "load",
+      "before": "fn load(&self, id: Id) -> Result<User, Error>;",
+      "after": null,
+      "labels": {
+        "concern": "api-contract",
+        "risk": 3.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": true,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "rust-widen-parameter",
+      "path": "src/lib.rs",
+      "language": "rust",
+      "mode": "signatures",
+      "change": "modified",
+      "item_kind": "function",
+      "stable_key": "src/lib.rs::fn::greet",
+      "name": "greet",
+      "before": "pub fn greet(name: &str) -> String;",
+      "after": "pub fn greet(name: &str, excited: bool) -> String;",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 2.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": true,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "rust-generic-bound-change",
+      "path": "src/generics.rs",
+      "language": "rust",
+      "mode": "types",
+      "change": "modified",
+      "item_kind": "type",
+      "stable_key": "src/generics.rs::struct::Wrapper",
+      "name": "Wrapper",
+      "before": "pub struct Wrapper<'a, T: Clone, const N: usize>\nwhere T: 'a\n{\n    pub item: &'a T,\n}",
+      "after": "pub struct Wrapper<'a, T: Clone + Send, const N: usize>\nwhere T: 'a\n{\n    pub item: &'a T,\n}",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 2.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": false,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "rust-change-struct-field",
+      "path": "src/models.rs",
+      "language": "rust",
+      "mode": "types",
+      "change": "modified",
+      "item_kind": "field",
+      "stable_key": "src/models.rs::struct User::field email",
+      "name": "email",
+      "before": "pub email: String,",
+      "after": "pub email: Option<String>,",
+      "labels": {
+        "concern": "data-model",
+        "risk": 2.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "elm-add-type-alias",
+      "path": "src/User.elm",
+      "language": "elm",
+      "mode": "types",
+      "change": "added",
+      "item_kind": "type-alias",
+      "stable_key": "src/User.elm::type alias::Profile",
+      "name": "Profile",
+      "before": null,
+      "after": "type alias Profile =\n    { name : String\n    , email : Email\n    }",
+      "labels": {
+        "concern": "data-model",
+        "risk": 1.0,
+        "likely_breaking": false,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": false,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "elm-add-constructor",
+      "path": "src/Status.elm",
+      "language": "elm",
+      "mode": "types",
+      "change": "modified",
+      "item_kind": "constructor",
+      "stable_key": "src/Status.elm::type Status::constructor::Archived",
+      "name": "Archived",
+      "before": "type Status\n    = Active\n    | Suspended",
+      "after": "type Status\n    = Active\n    | Suspended\n    | Archived",
+      "labels": {
+        "concern": "data-model",
+        "risk": 2.0,
+        "likely_breaking": false,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "elm-widen-function-signature",
+      "path": "src/User.elm",
+      "language": "elm",
+      "mode": "signatures",
+      "change": "modified",
+      "item_kind": "function",
+      "stable_key": "src/User.elm::fn::create",
+      "name": "create",
+      "before": "create : UserId -> User",
+      "after": "create : UserId -> Profile -> User",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 2.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": true,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "elm-remove-port",
+      "path": "src/Ports.elm",
+      "language": "elm",
+      "mode": "signatures",
+      "change": "removed",
+      "item_kind": "port",
+      "stable_key": "src/Ports.elm::port::sendMessage",
+      "name": "sendMessage",
+      "before": "port sendMessage : String -> Cmd msg",
+      "after": null,
+      "labels": {
+        "concern": "networking-integration",
+        "risk": 3.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": true,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "haskell-add-function",
+      "path": "src/App.hs",
+      "language": "haskell",
+      "mode": "signatures",
+      "change": "added",
+      "item_kind": "function",
+      "stable_key": "src/App.hs::fn::compute",
+      "name": "compute",
+      "before": null,
+      "after": "compute :: forall a. a -> a",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 1.0,
+        "likely_breaking": false,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": false,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "haskell-change-return-type",
+      "path": "src/App.hs",
+      "language": "haskell",
+      "mode": "signatures",
+      "change": "modified",
+      "item_kind": "function",
+      "stable_key": "src/App.hs::fn::foo",
+      "name": "foo",
+      "before": "foo :: Int -> Int",
+      "after": "foo :: Int -> Bool",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 2.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": true,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "haskell-add-record-field",
+      "path": "src/Records.hs",
+      "language": "haskell",
+      "mode": "types",
+      "change": "added",
+      "item_kind": "field",
+      "stable_key": "src/Records.hs::data User::field::email",
+      "name": "email",
+      "before": null,
+      "after": "email :: Maybe Email",
+      "labels": {
+        "concern": "data-model",
+        "risk": 2.0,
+        "likely_breaking": false,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "haskell-change-type-family",
+      "path": "src/Family.hs",
+      "language": "haskell",
+      "mode": "types",
+      "change": "modified",
+      "item_kind": "type-family",
+      "stable_key": "src/Family.hs::type family::Element",
+      "name": "Element",
+      "before": "type family Element c",
+      "after": "type family Element c :: Type",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 2.0,
+        "likely_breaking": true,
+        "needs_tests": false,
+        "needs_docs": false,
+        "needs_migration": false,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "python-add-function",
+      "path": "src/math.py",
+      "language": "python",
+      "mode": "signatures",
+      "change": "added",
+      "item_kind": "function",
+      "stable_key": "src/math.py::def::add",
+      "name": "add",
+      "before": null,
+      "after": "def add(left: int, right: int) -> int: ...",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 1.0,
+        "likely_breaking": false,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": false,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "python-change-return-type",
+      "path": "src/load.py",
+      "language": "python",
+      "mode": "signatures",
+      "change": "modified",
+      "item_kind": "function",
+      "stable_key": "src/load.py::def::load",
+      "name": "load",
+      "before": "def load(id: UserId) -> Profile: ...",
+      "after": "def load(id: UserId) -> Profile | None: ...",
+      "labels": {
+        "concern": "api-contract",
+        "risk": 2.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": true,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "python-add-class-field",
+      "path": "src/models.py",
+      "language": "python",
+      "mode": "types",
+      "change": "added",
+      "item_kind": "field",
+      "stable_key": "src/models.py::class Profile::field::email",
+      "name": "email",
+      "before": null,
+      "after": "email: str",
+      "labels": {
+        "concern": "data-model",
+        "risk": 1.0,
+        "likely_breaking": false,
+        "needs_tests": true,
+        "needs_docs": false,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "python-remove-enum-variant",
+      "path": "src/status.py",
+      "language": "python",
+      "mode": "types",
+      "change": "removed",
+      "item_kind": "variant",
+      "stable_key": "src/status.py::class Status::variant::SUSPENDED",
+      "name": "SUSPENDED",
+      "before": "SUSPENDED",
+      "after": null,
+      "labels": {
+        "concern": "data-model",
+        "risk": 3.0,
+        "likely_breaking": true,
+        "needs_tests": true,
+        "needs_docs": true,
+        "needs_migration": true,
+        "security_sensitive": false
+      }
+    },
+    {
+      "id": "ambiguous-refresh-token",
+      "path": "src/auth.py",
+      "language": "python",
+      "mode": "signatures",
+      "change": "modified",
+      "item_kind": "function",
+      "stable_key": "src/auth.py::def::refresh",
+      "name": "refresh",
+      "before": "def refresh(token: Token) -> Session: ...",
+      "after": "def refresh(token: RefreshToken) -> Session: ...",
+      "ambiguous": true
+    }
+  ]
+}

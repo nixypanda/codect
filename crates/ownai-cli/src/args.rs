@@ -124,6 +124,35 @@ pub enum Command {
         #[command(subcommand)]
         command: TuiCommand,
     },
+
+    /// Evaluate a decision provider against the checked-in review corpus.
+    ///
+    /// Hidden: this is an offline development harness, not a stable product
+    /// surface. It reads a versioned fixture file and never opens a network
+    /// connection by itself; the selected provider decides whether state leaves
+    /// the process.
+    #[command(hide = true)]
+    EvalLens {
+        /// Path to a versioned evaluation fixture file.
+        #[arg(long, value_name = "PATH")]
+        fixtures: std::path::PathBuf,
+
+        /// Decision provider that answers the review questions.
+        #[arg(long, value_enum, value_name = "PROVIDER")]
+        decision_provider: DecisionProviderChoice,
+
+        /// Override the model revision the provider reports.
+        #[arg(long, value_name = "MODEL")]
+        decision_model: Option<String>,
+
+        /// Provider endpoint. Not supported by the `fake` provider.
+        #[arg(long, value_name = "URL")]
+        decision_endpoint: Option<String>,
+
+        /// Minimum choice confidence counted as covered by the coverage gate.
+        #[arg(long, value_name = "F", default_value_t = 0.55)]
+        choice_confidence_threshold: f64,
+    },
 }
 
 /// Terminal frontend subcommands. Each form starts from an unambiguous state.
@@ -249,7 +278,7 @@ impl DecisionProviderChoice {
 mod tests {
     use clap::Parser;
 
-    use super::Cli;
+    use super::{Cli, Command};
 
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("ownai").chain(args.iter().copied()))
@@ -409,5 +438,41 @@ mod tests {
             .is_ok()
         );
         assert!(parse(&["show", "--mode", "types"]).is_ok());
+    }
+
+    #[test]
+    fn eval_lens_requires_fixtures_and_a_provider() {
+        assert!(parse(&["eval-lens", "--fixtures", "f.json"]).is_err());
+        assert!(parse(&["eval-lens", "--decision-provider", "fake"]).is_err());
+        assert!(
+            parse(&[
+                "eval-lens",
+                "--fixtures",
+                "f.json",
+                "--decision-provider",
+                "fake",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn eval_lens_applies_the_default_choice_confidence_threshold() {
+        let parsed = parse(&[
+            "eval-lens",
+            "--fixtures",
+            "f.json",
+            "--decision-provider",
+            "fake",
+        ])
+        .expect("valid eval-lens invocation");
+
+        match parsed.command {
+            Command::EvalLens {
+                choice_confidence_threshold,
+                ..
+            } => assert!((choice_confidence_threshold - 0.55).abs() < 1e-12),
+            other => panic!("expected eval-lens, got {other:?}"),
+        }
     }
 }

@@ -18,6 +18,7 @@ use ownai_core::{
     SourceSpan, diff_document, show_document,
 };
 use ownai_engine::config::ConfigError;
+use ownai_engine::eval::{self, EvalError, EvalOptions};
 use ownai_engine::{
     Engine, EngineError, FileDiff, ReviewError, ReviewLens, ReviewOutcome, Selection,
     SelectionGroup,
@@ -31,6 +32,7 @@ use crate::args::TuiCommand;
 use crate::args::{Cli, ColorChoice, Command as CliCommand, DecisionProviderChoice, LensChoice};
 use crate::decision::{self, ProviderBuildError, ProviderRoute};
 use crate::disclosure::{self, DisclosureError, EndpointError};
+use crate::evaluation;
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
 use crate::review::{self, ReviewRenderOptions};
@@ -92,6 +94,26 @@ impl miette::Diagnostic for CliError {
 
 /// Discovers the repository from the current directory and runs one command.
 pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
+    // The evaluation harness reads a checked-in corpus and never touches Git, so
+    // it is handled before repository discovery. Running it from any directory
+    // is intentional: it must not require a repository.
+    if let CliCommand::EvalLens {
+        fixtures,
+        decision_provider,
+        decision_model,
+        decision_endpoint,
+        choice_confidence_threshold,
+    } = &cli.command
+    {
+        return eval_lens(
+            fixtures,
+            *decision_provider,
+            decision_model.as_deref(),
+            decision_endpoint.as_deref(),
+            *choice_confidence_threshold,
+        );
+    }
+
     let start = std::env::current_dir().map_err(|source| CliError {
         message: "could not determine the current directory".to_owned(),
         help: None,
@@ -158,7 +180,51 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
         CliCommand::Tui { command } => {
             run_tui(engine, command, &start, cli.icons).map(|()| CommandOutcome::Success)
         }
+        // Handled before repository discovery above.
+        CliCommand::EvalLens { .. } => {
+            unreachable!("`eval-lens` is handled before repository discovery")
+        }
     }
+}
+
+/// Evaluates a decision provider against a checked-in review corpus.
+///
+/// The endpoint is validated before the fixture file is read, matching the
+/// review path, so a malformed URL is a typed error rather than something a
+/// provider sees. The report is deterministic plain text on stdout.
+fn eval_lens(
+    fixtures: &Path,
+    provider_choice: DecisionProviderChoice,
+    model: Option<&str>,
+    endpoint: Option<&str>,
+    threshold: f64,
+) -> Result<CommandOutcome, CliError> {
+    if let Some(url) = endpoint {
+        disclosure::endpoint_host(url).map_err(endpoint_failure)?;
+    }
+
+    let json = std::fs::read_to_string(fixtures).map_err(|source| CliError {
+        message: format!(
+            "could not read evaluation fixtures `{}`",
+            fixtures.display()
+        ),
+        help: None,
+        source: Box::new(source),
+    })?;
+    let cases = eval::load_cases(&json).map_err(eval_failure)?;
+    let provider =
+        decision::build_provider(provider_choice, model, endpoint).map_err(provider_failure)?;
+
+    let report = eval::evaluate(
+        provider.as_ref(),
+        &cases,
+        EvalOptions {
+            choice_confidence_threshold: threshold,
+        },
+    );
+    let text = evaluation::render_report(&report, eval::REVIEW_EVAL_SCHEMA, threshold);
+    output::write_plain(&text).map_err(output_failure)?;
+    Ok(CommandOutcome::Success)
 }
 
 /// Runs the review lens over the engine diffs and writes the review document.
@@ -487,6 +553,15 @@ fn output_failure(source: io::Error) -> CliError {
 
 /// A decision provider that could not be constructed.
 fn provider_failure(error: ProviderBuildError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// An evaluation corpus that could not be loaded.
+fn eval_failure(error: EvalError) -> CliError {
     CliError {
         message: error.to_string(),
         help: None,
