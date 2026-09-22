@@ -1,0 +1,9 @@
+module App
+
+foo :: Int -> Int
+
+bar x
+
+baz, qux :: Int
+
+compute :: forall a. a -> a

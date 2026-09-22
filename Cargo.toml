@@ -4,6 +4,8 @@ members = [
     "crates/ownai-core",
     "crates/ownai-git",
     "crates/ownai-language-elm",
+    "crates/ownai-language-haskell",
+    "crates/ownai-language-python",
     "crates/ownai-language-rust",
     "crates/ownai-engine",
     "crates/ownai-tui",
@@ -21,6 +23,8 @@ publish = false
 ownai-core = { path = "crates/ownai-core" }
 ownai-git = { path = "crates/ownai-git" }
 ownai-language-elm = { path = "crates/ownai-language-elm" }
+ownai-language-haskell = { path = "crates/ownai-language-haskell" }
+ownai-language-python = { path = "crates/ownai-language-python" }
 ownai-language-rust = { path = "crates/ownai-language-rust" }
 ownai-engine = { path = "crates/ownai-engine" }
 ownai-tui = { path = "crates/ownai-tui" }
@@ -28,6 +32,8 @@ ownai-tui = { path = "crates/ownai-tui" }
 # Runtime dependencies.
 tree-sitter = "0.27"
 tree-sitter-elm = "5.9"
+tree-sitter-haskell = "0.23"
+tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 gix = { version = "0.87", default-features = false, features = [
     "auto-chain-error",

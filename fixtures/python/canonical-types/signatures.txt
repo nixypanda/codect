@@ -1,0 +1,11 @@
+T = TypeVar("T")
+
+type UserId = int
+
+class Profile(Generic[T]):
+    name: str
+    email: str
+
+class Status(Enum):
+    ACTIVE
+    SUSPENDED

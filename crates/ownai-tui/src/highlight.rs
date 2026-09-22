@@ -66,6 +66,8 @@ fn syntax_for(syntaxes: &SyntaxSet, language: Language) -> &SyntaxReference {
     let extension = match language {
         Language::Rust => "rs",
         Language::Elm => "elm",
+        Language::Haskell => "hs",
+        Language::Python => "py",
     };
     syntaxes
         .find_syntax_by_extension(extension)

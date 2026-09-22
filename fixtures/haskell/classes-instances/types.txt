@@ -1,0 +1,5 @@
+module Classes
+
+class Eq a => Container f a
+
+instance Container [] Int

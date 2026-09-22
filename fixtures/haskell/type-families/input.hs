@@ -1,0 +1,13 @@
+module Families where
+
+type family Result a
+
+type instance Result Int = Bool
+
+data family Family a
+
+data instance Family Int = IntFamily Int
+
+type family Closed a where
+  Closed Int = Bool
+  Closed a = a

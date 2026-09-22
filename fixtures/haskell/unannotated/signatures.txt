@@ -1,0 +1,8 @@
+module Exclusions
+
+visible :: Int -> Int
+
+hidden y
+
+data Local
+    = Local

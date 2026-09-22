@@ -1,0 +1,8 @@
+class Color(IntEnum):
+    RED
+    GREEN
+    BLUE
+
+class Shape(enum.Enum):
+    CIRCLE
+    SQUARE

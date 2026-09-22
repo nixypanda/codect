@@ -30,7 +30,7 @@ pub enum RepoPathError {
 /// OwnAI must not emit a partial result.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectionError {
-    /// Elm and Rust source contents must be valid UTF-8; see
+    /// Elm, Haskell, Python, and Rust source contents must be valid UTF-8; see
     /// TECHNICAL_DESIGN.md section 5.1.
     #[error("source file `{path}` is not valid UTF-8")]
     InvalidUtf8 {

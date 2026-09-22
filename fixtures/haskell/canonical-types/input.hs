@@ -1,0 +1,22 @@
+module Data.Types where
+
+import Data.Text (Text)
+
+type UserId = Int
+
+type Pair a = (a, a)
+
+newtype Email = Email Text
+
+data User
+  = User UserId (Maybe Email)
+  | Anonymous
+  deriving (Eq, Show)
+
+data Tree a
+  = Leaf
+  | Node (Tree a) a (Tree a)
+
+class Container f where
+  empty :: f a
+  insert :: a -> f a -> f a

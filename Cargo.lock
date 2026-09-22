@@ -2130,6 +2130,8 @@ dependencies = [
  "ownai-engine",
  "ownai-git",
  "ownai-language-elm",
+ "ownai-language-haskell",
+ "ownai-language-python",
  "ownai-language-rust",
  "ownai-tui",
  "portable-pty",
@@ -2154,6 +2156,8 @@ dependencies = [
  "ownai-core",
  "ownai-git",
  "ownai-language-elm",
+ "ownai-language-haskell",
+ "ownai-language-python",
  "ownai-language-rust",
  "serde",
  "tempfile",
@@ -2180,6 +2184,26 @@ dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
  "tree-sitter-elm",
+]
+
+[[package]]
+name = "ownai-language-haskell"
+version = "0.1.0"
+dependencies = [
+ "ownai-core",
+ "thiserror 2.0.20",
+ "tree-sitter",
+ "tree-sitter-haskell",
+]
+
+[[package]]
+name = "ownai-language-python"
+version = "0.1.0"
+dependencies = [
+ "ownai-core",
+ "thiserror 2.0.20",
+ "tree-sitter",
+ "tree-sitter-python",
 ]
 
 [[package]]
@@ -3146,10 +3170,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-haskell"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "977c51e504548cba13fc27cb5a2edab2124cf6716a1934915d07ab99523b05a4"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
+
+[[package]]
+name = "tree-sitter-python"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
 
 [[package]]
 name = "tree-sitter-rust"

@@ -1,0 +1,8 @@
+module Formatting
+
+foo :: Int -> Int
+
+data Maybe a
+    = Nothing
+    | Just a
+    deriving (Eq, Show)

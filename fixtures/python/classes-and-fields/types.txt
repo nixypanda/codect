@@ -1,0 +1,4 @@
+@dataclass(frozen=True)
+class Point(Base, metaclass=Meta):
+    x: float
+    y: float

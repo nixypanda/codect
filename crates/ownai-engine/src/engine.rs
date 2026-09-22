@@ -14,6 +14,8 @@ use ownai_core::{
 };
 use ownai_git::{GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
+use ownai_language_haskell::HaskellProjector;
+use ownai_language_python::PythonProjector;
 use ownai_language_rust::RustProjector;
 
 use crate::config;
@@ -23,7 +25,19 @@ use crate::selection::{Selection, SelectionGroup};
 // ZST projectors are shared as statics so the pipeline never has to own them
 // or negotiate a borrow of a longer-lived value.
 static ELM_PROJECTOR: ElmProjector = ElmProjector;
+static HASKELL_PROJECTOR: HaskellProjector = HaskellProjector;
+static PYTHON_PROJECTOR: PythonProjector = PythonProjector;
 static RUST_PROJECTOR: RustProjector = RustProjector;
+
+/// The language adapters, in a fixed order so path selection is deterministic.
+///
+/// Every new language is added here once; the pipeline stays language-agnostic.
+const PROJECTORS: [&dyn LanguageProjector; 4] = [
+    &ELM_PROJECTOR,
+    &HASKELL_PROJECTOR,
+    &PYTHON_PROJECTOR,
+    &RUST_PROJECTOR,
+];
 
 /// One projected file comparison between two revisions.
 ///
@@ -86,7 +100,7 @@ impl Engine {
             .source_entries(&revision)
             .map_err(|source| EngineError::git(source, Some(revision_spec)))?;
 
-        let projectors: [&dyn LanguageProjector; 2] = [&ELM_PROJECTOR, &RUST_PROJECTOR];
+        let projectors: &[&dyn LanguageProjector] = &PROJECTORS;
         let mut caches = Caches::default();
         let mut files = Vec::new();
         for entry in &entries {
@@ -94,7 +108,7 @@ impl Engine {
                 continue;
             }
             if let Some(file) =
-                self.project_entry(&projectors, &mut caches, revision_spec, entry, mode)?
+                self.project_entry(projectors, &mut caches, revision_spec, entry, mode)?
             {
                 files.push(file);
             }
@@ -140,7 +154,7 @@ impl Engine {
         let mut paths: BTreeSet<&RepoPath> = base_map.keys().copied().collect();
         paths.extend(target_map.keys().copied());
 
-        let projectors: [&dyn LanguageProjector; 2] = [&ELM_PROJECTOR, &RUST_PROJECTOR];
+        let projectors: &[&dyn LanguageProjector] = &PROJECTORS;
         let mut caches = Caches::default();
         let mut diffs = Vec::new();
 
@@ -162,13 +176,13 @@ impl Engine {
 
             let old = match old_entry {
                 Some(entry) => {
-                    self.project_entry(&projectors, &mut caches, base_spec, entry, mode)?
+                    self.project_entry(projectors, &mut caches, base_spec, entry, mode)?
                 }
                 None => None,
             };
             let new = match new_entry {
                 Some(entry) => {
-                    self.project_entry(&projectors, &mut caches, target_spec, entry, mode)?
+                    self.project_entry(projectors, &mut caches, target_spec, entry, mode)?
                 }
                 None => None,
             };
