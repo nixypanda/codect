@@ -106,6 +106,16 @@ pub enum Command {
         /// Provider endpoint. Not supported by the `fake` provider.
         #[arg(long, value_name = "URL", requires = "lens")]
         decision_endpoint: Option<String>,
+
+        /// Show the disclosure plan and affected paths without transmitting
+        /// state.
+        #[arg(long, requires = "lens")]
+        dry_run: bool,
+
+        /// Acknowledge remote semantic analysis for non-interactive use. Setting
+        /// `OWNAI_ACCEPT_DISCLOSURE` to `1`, `true`, or `yes` is equivalent.
+        #[arg(long, requires = "lens")]
+        accept_disclosure: bool,
     },
 
     /// Browse projections in the terminal.
@@ -335,6 +345,50 @@ mod tests {
             "fake",
             "--decision-model",
             "custom",
+        ]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn privacy_flags_without_a_lens_are_parse_errors() {
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--dry-run",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--accept-disclosure",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn privacy_flags_parse_with_a_lens_and_provider() {
+        let parsed = parse(&[
+            "diff",
+            "--mode",
+            "signatures",
+            "HEAD~1",
+            "HEAD",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "fake",
+            "--dry-run",
+            "--accept-disclosure",
         ]);
         assert!(parsed.is_ok(), "{parsed:?}");
     }

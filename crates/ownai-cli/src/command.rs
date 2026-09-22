@@ -9,6 +9,8 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
+use std::io::IsTerminal as _;
+use std::io::Write as _;
 use std::path::Path;
 
 use ownai_core::{
@@ -27,7 +29,8 @@ use crate::args::IconChoice;
 #[cfg(feature = "tui")]
 use crate::args::TuiCommand;
 use crate::args::{Cli, ColorChoice, Command as CliCommand, DecisionProviderChoice, LensChoice};
-use crate::decision::{self, ProviderBuildError};
+use crate::decision::{self, ProviderBuildError, ProviderRoute};
+use crate::disclosure::{self, DisclosureError, EndpointError};
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
 use crate::review::{self, ReviewRenderOptions};
@@ -121,6 +124,8 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
             decision_provider,
             decision_model,
             decision_endpoint,
+            dry_run,
+            accept_disclosure,
         } => {
             let selection = selection_for(paths, areas, &start, &engine)?;
             let diffs = engine
@@ -143,6 +148,8 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
                     *decision_provider,
                     decision_model.as_deref(),
                     decision_endpoint.as_deref(),
+                    *dry_run,
+                    *accept_disclosure,
                     cli.color,
                 ),
             }
@@ -158,19 +165,64 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
 ///
 /// The canonical diff is rendered from the same projections the legacy path
 /// uses, so it appears verbatim above the annotations. Clap guarantees that
-/// `--decision-provider` accompanies `--lens`.
+/// `--decision-provider` accompanies `--lens`. Before any provider is built,
+/// the plan is summarized: a dry run prints it and stops, a remote route must
+/// pass the acknowledgement gate, and local routes print a distinct notice.
+/// The offline test provider prints nothing.
 fn review_diff(
     diffs: Vec<FileDiff>,
     provider_choice: Option<DecisionProviderChoice>,
     model: Option<&str>,
     endpoint: Option<&str>,
+    dry_run: bool,
+    accept_disclosure: bool,
     color: ColorChoice,
 ) -> Result<CommandOutcome, CliError> {
     let provider_choice =
         provider_choice.expect("clap requires `--decision-provider` whenever `--lens` is present");
+    let route = provider_choice.route();
+
+    // Validate and parse the endpoint before building any state, so a malformed
+    // URL is a typed error rather than something a provider sees.
+    let host = match endpoint {
+        Some(url) => Some(disclosure::endpoint_host(url).map_err(endpoint_failure)?),
+        None => None,
+    };
+
+    let lens = ReviewLens::new(DEFAULT_MAX_STATE_BYTES).map_err(review_failure)?;
+    let plan = disclosure::review_plan(
+        provider_choice.label(),
+        route,
+        host.as_deref(),
+        model,
+        &lens,
+        &diffs,
+    );
+
+    if dry_run {
+        // A dry run never builds a provider and never transmits state.
+        output::write_plain(&disclosure::render_plan(&plan, true)).map_err(output_failure)?;
+        return Ok(CommandOutcome::Success);
+    }
+
+    match route {
+        ProviderRoute::Remote => {
+            let interactive = std::io::stderr().is_terminal();
+            let accepted = accept_disclosure || env_accepts_disclosure();
+            disclosure::check_disclosure(provider_choice.label(), route, interactive, accepted)
+                .map_err(disclosure_failure)?;
+            write_disclosure(&plan)?;
+        }
+        // A local provider needs no acknowledgement but is still visibly
+        // distinct from an offline one.
+        ProviderRoute::Local => write_disclosure(&plan)?,
+        // The deterministic offline provider stays byte-for-byte silent so the
+        // existing end-to-end output is unchanged.
+        ProviderRoute::LocalTest => {}
+    }
+
     let provider =
         decision::build_provider(provider_choice, model, endpoint).map_err(provider_failure)?;
-    let lens = ReviewLens::new(DEFAULT_MAX_STATE_BYTES).map_err(review_failure)?;
 
     // `diff_document` consumes owned projections and re-sorts by path; the
     // clone keeps the engine-ordered diffs for per-file review.
@@ -197,6 +249,30 @@ fn review_diff(
         CommandOutcome::ReviewFailed
     } else {
         CommandOutcome::Success
+    })
+}
+
+/// Writes the disclosure form of a plan to stderr.
+///
+/// The disclosure is deliberately never written to stdout, so a redirected
+/// review document stays a valid document.
+fn write_disclosure(plan: &disclosure::ReviewPlan) -> Result<(), CliError> {
+    let text = disclosure::render_plan(plan, false);
+    let mut stderr = io::stderr().lock();
+    stderr
+        .write_all(text.as_bytes())
+        .and_then(|()| stderr.flush())
+        .map_err(output_failure)
+}
+
+/// Whether `OWNAI_ACCEPT_DISCLOSURE` selects one of the truthy spellings.
+///
+/// The comparison is ASCII case-insensitive, matching the documented values.
+fn env_accepts_disclosure() -> bool {
+    std::env::var("OWNAI_ACCEPT_DISCLOSURE").is_ok_and(|value| {
+        value.eq_ignore_ascii_case("1")
+            || value.eq_ignore_ascii_case("true")
+            || value.eq_ignore_ascii_case("yes")
     })
 }
 
@@ -420,6 +496,24 @@ fn provider_failure(error: ProviderBuildError) -> CliError {
 
 /// A review lens that could not be constructed or evaluated.
 fn review_failure(error: ReviewError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// A decision endpoint URL that could not be validated.
+fn endpoint_failure(error: EndpointError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// A remote review that was not acknowledged.
+fn disclosure_failure(error: DisclosureError) -> CliError {
     CliError {
         message: error.to_string(),
         help: None,

@@ -7,6 +7,7 @@
 mod args;
 mod command;
 mod decision;
+mod disclosure;
 mod output;
 mod pathspec;
 mod review;

@@ -13,6 +13,32 @@ use ownai_decisions::{
 
 use crate::args::DecisionProviderChoice;
 
+/// Where a decision provider sends review state, which determines the privacy
+/// obligations the CLI must satisfy before evaluating anything.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderRoute {
+    /// A deterministic, offline provider. State never leaves the process, so no
+    /// disclosure is required.
+    LocalTest,
+    /// A local process. State leaves the process but stays on this machine, so a
+    /// distinct notice is shown but no acknowledgement is required.
+    Local,
+    /// A remote service. State leaves this machine, so a disclosure is required
+    /// and non-interactive use must acknowledge it.
+    Remote,
+}
+
+impl DecisionProviderChoice {
+    /// Classifies where the selected provider sends state.
+    pub fn route(self) -> ProviderRoute {
+        match self {
+            Self::Fake => ProviderRoute::LocalTest,
+            Self::Laya => ProviderRoute::Local,
+            Self::Typesafe => ProviderRoute::Remote,
+        }
+    }
+}
+
 /// The model revision the fake provider reports when none is configured.
 pub const DEFAULT_FAKE_MODEL_REVISION: &str = "fake-v1";
 
@@ -290,6 +316,19 @@ mod tests {
             error,
             ProviderBuildError::EndpointUnsupported { provider: "fake" }
         ));
+    }
+
+    #[test]
+    fn provider_routes_match_the_disclosure_contract() {
+        assert_eq!(
+            DecisionProviderChoice::Fake.route(),
+            ProviderRoute::LocalTest
+        );
+        assert_eq!(DecisionProviderChoice::Laya.route(), ProviderRoute::Local);
+        assert_eq!(
+            DecisionProviderChoice::Typesafe.route(),
+            ProviderRoute::Remote
+        );
     }
 
     /// Runs `build_provider` and returns its typed error. A success is a test

@@ -44,6 +44,16 @@ pub fn write_document(kind: DocumentKind, document: &str, color: ColorChoice) ->
     stream.flush()
 }
 
+/// Writes plain text to stdout and flushes it.
+///
+/// Used for pre-flight disclosures, which are never styled, so `--color` cannot
+/// change them.
+pub fn write_plain(text: &str) -> io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes())?;
+    out.flush()
+}
+
 /// Renders a fatal error as a miette report for stderr.
 pub fn render_diagnostic(error: &CliError) -> String {
     let mut text = String::new();

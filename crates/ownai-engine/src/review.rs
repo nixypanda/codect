@@ -205,6 +205,20 @@ impl ReviewLens {
         })
     }
 
+    /// The configured serialized-state byte limit for one review unit.
+    pub fn max_state_bytes(&self) -> usize {
+        self.max_state_bytes
+    }
+
+    /// The canonical serialized-state size of one item, without evaluating it.
+    ///
+    /// This is the exact byte count [`ReviewLens::review_item`] compares against
+    /// [`ReviewLens::max_state_bytes`], so a caller can plan a disclosure before
+    /// any provider is built or called.
+    pub fn state_bytes(item: &ItemDiff) -> usize {
+        encoded_state(item).len()
+    }
+
     /// Converts one item diff into state, checks its size, evaluates exactly one
     /// request, validates the response, and decodes its answers.
     pub fn review_item(
@@ -212,18 +226,17 @@ impl ReviewLens {
         provider: &dyn DecisionProvider,
         item: ItemDiff,
     ) -> Result<ReviewedItemDiff, ReviewError> {
-        let state = review_state(&item);
-        let encoded = serde_json::to_vec(&state).expect("review state is always serializable");
-        if encoded.len() > self.max_state_bytes {
+        let actual_bytes = Self::state_bytes(&item);
+        if actual_bytes > self.max_state_bytes {
             return Err(ReviewError::StateTooLarge {
                 path: item.path.clone(),
                 stable_key: item.stable_key.clone(),
-                actual_bytes: encoded.len(),
+                actual_bytes,
                 limit_bytes: self.max_state_bytes,
             });
         }
 
-        let request = DecisionRequest::new(state, self.questions.clone())
+        let request = DecisionRequest::new(review_state(&item), self.questions.clone())
             .map_err(|source| ReviewError::InvalidQuestions { source })?;
         let response = provider
             .evaluate(&request)
@@ -332,6 +345,15 @@ fn build_questions() -> Result<Vec<Question>, ValidationError> {
         Question::Noul(needs_migration),
         Question::Noul(security_sensitive),
     ])
+}
+
+/// The canonical serialized encoding of one item's review state.
+///
+/// Both the size check in [`ReviewLens::review_item`] and the planning API
+/// [`ReviewLens::state_bytes`] use this one function, so they can never
+/// disagree about how large a unit is.
+fn encoded_state(item: &ItemDiff) -> Vec<u8> {
+    serde_json::to_vec(&review_state(item)).expect("review state is always serializable")
 }
 
 /// Builds the versioned review state for one item.
@@ -973,6 +995,39 @@ mod tests {
             other => panic!("expected StateTooLarge, got {other:?}"),
         }
         assert!(provider.requests().is_empty());
+    }
+
+    #[test]
+    fn state_bytes_matches_the_state_review_item_measures() {
+        let item = modified_method();
+        let encoded = serde_json::to_vec(&review_state(&item)).expect("state serializes");
+        assert_eq!(ReviewLens::state_bytes(&item), encoded.len());
+
+        // A limit exactly at the reported size admits the item; one byte below
+        // rejects it while reporting the same byte count.
+        let limit = ReviewLens::state_bytes(&item);
+        let at_limit = ReviewLens::new(limit).expect("non-zero limit is valid");
+        assert_eq!(at_limit.max_state_bytes(), limit);
+        let provider = FakeProvider::new(vec![Ok(valid_response())]);
+        at_limit
+            .review_item(&provider, item.clone())
+            .expect("a state exactly at the limit is admitted");
+
+        let below = ReviewLens::new(limit - 1).expect("non-zero limit is valid");
+        match below
+            .review_item(&provider, item)
+            .expect_err("one byte below the size is rejected")
+        {
+            ReviewError::StateTooLarge {
+                actual_bytes,
+                limit_bytes,
+                ..
+            } => {
+                assert_eq!(actual_bytes, limit);
+                assert_eq!(limit_bytes, limit - 1);
+            }
+            other => panic!("expected StateTooLarge, got {other:?}"),
+        }
     }
 
     #[test]
