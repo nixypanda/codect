@@ -25,6 +25,7 @@ miette.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+ownai-decisions.workspace = true
 ownai-language-elm.workspace = true
 ownai-language-haskell.workspace = true
 ownai-language-python.workspace = true

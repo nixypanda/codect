@@ -2127,6 +2127,7 @@ dependencies = [
  "clap",
  "miette",
  "ownai-core",
+ "ownai-decisions",
  "ownai-engine",
  "ownai-git",
  "ownai-language-elm",
