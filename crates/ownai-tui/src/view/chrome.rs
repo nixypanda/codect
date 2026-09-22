@@ -170,13 +170,13 @@ fn hints(model: &Model) -> String {
         Some(Overlay::Help) => "Esc close ".to_owned(),
         None => match (model.focus, &model.content) {
             (Pane::Tree, _) => {
-                "Ctrl-P commands   Ctrl-F find   ↵ open   Tab content   ? help ".to_owned()
+                "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ".to_owned()
             }
             (Pane::Body, _) => {
-                "j/k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned()
+                "wheel / j k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned()
             }
             (Pane::Diff, _) => {
-                "j/k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned()
+                "wheel / j k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned()
             }
         },
     }

@@ -11,8 +11,9 @@
 > header/footer chrome with shared pane dividers, tree guides and diff badges,
 > line numbers and scrollbars, a spinner and self-expiring diagnostics, an
 > `Action` layer with a `Ctrl-P` command palette, a `Ctrl-F` fuzzy file finder
-> (§6.3), and `/` search with match highlighting. Mouse capture is intentionally
-> left off to preserve terminal text selection.
+> (§6.3), and `/` search with match highlighting. Mouse capture is enabled for
+> clicking the tree and wheel-scrolling the panes; copying uses the terminal's
+> selection override (usually `Shift`-drag).
 >
 > Still open from section 6: declaration navigation and the committed-source pane
 > (§6.4), unified and no-wrap diff options (§6.5), and performance work (§6.6).

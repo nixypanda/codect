@@ -126,8 +126,17 @@ Keybindings:
 | `?` | Toggle help |
 | `Esc` | Close an overlay, clear a search, or dismiss a diagnostic |
 
-Mouse capture is deliberately left off so terminal text selection and copy keep
-working.
+Mouse:
+
+| Input | Action |
+|---|---|
+| Click a file | Select it; clicking a directory folds or unfolds it |
+| Wheel over a pane | Scroll that pane and focus it |
+
+Mouse capture is enabled so clicks and the wheel work. That takes over the
+terminal's own text selection, so to copy text hold the terminal's selection
+override — usually `Shift` while dragging — or turn mouse capture off in your
+terminal. Overlays stay keyboard-driven while they are open.
 
 Requirements:
 

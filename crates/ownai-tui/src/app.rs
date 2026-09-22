@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ownai_core::{AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath};
 use ownai_engine::{EngineError, FileDiff, Selection, SelectionGroup};
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
 use crate::fuzzy;
@@ -18,7 +18,10 @@ use crate::highlight::{self, StyledLine};
 use crate::icons::Icons;
 use crate::theme::Theme;
 use crate::view::diff::layout_diff;
-use crate::view::geom::{Edge, frame_chunks, gutter_width, pane_block, split_with_dividers};
+use crate::view::geom::{
+    Edge, PaneSlot, body_layout, frame_areas, gutter_width, pane_block, split_with_dividers,
+    window_offset,
+};
 
 /// At or above this width the tree and content render side by side.
 pub(crate) const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
@@ -68,6 +71,26 @@ pub enum Key {
     CtrlF,
     CtrlP,
     CtrlU,
+}
+
+/// A mouse event the frontend understands, already translated from a terminal
+/// event and normalized to a terminal cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Mouse {
+    /// Zero-based terminal column.
+    pub column: u16,
+    /// Zero-based terminal row.
+    pub row: u16,
+    pub kind: MouseKind,
+}
+
+/// The mouse interactions the frontend acts on. Motion and drag are dropped
+/// during translation, so they never reach the core.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseKind {
+    Click,
+    ScrollUp,
+    ScrollDown,
 }
 
 /// A single-line editable field.
@@ -459,6 +482,8 @@ impl Content {
 pub enum Msg {
     /// A key was pressed.
     Key(Key),
+    /// A mouse click or wheel notch, in terminal cells.
+    Mouse(Mouse),
     /// The terminal changed size.
     Resize { width: u16, height: u16 },
     /// A periodic tick, used to animate the spinner and expire a diagnostic.
@@ -823,7 +848,7 @@ impl Model {
         let Some(diff) = self.active_diff() else {
             return Vec::new();
         };
-        let (content, _) = frame_chunks(self.width, self.height);
+        let (_, content, _) = frame_areas(self.width, self.height);
         let (old_width, new_width) = self.diff_side_widths(content, diff);
         let empty = DiffHighlight::default();
         let highlights = self.active_diff_highlight().unwrap_or(&empty);
@@ -954,6 +979,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
 
     match msg {
         Msg::Key(key) => handle_key(key, &mut next, &mut cmds),
+        Msg::Mouse(event) => handle_mouse(event, &mut next),
         Msg::Resize { width, height } => {
             next.width = width;
             next.height = height;
@@ -1820,6 +1846,76 @@ fn body_key(key: Key, model: &mut Model) {
     }
 }
 
+/// How many rows one wheel notch moves.
+const MOUSE_SCROLL_STEP: i32 = 3;
+
+/// Routes a mouse event to the pane under the pointer.
+///
+/// The pane under the pointer takes focus, so a click or wheel acts on exactly
+/// what the user points at. Mouse input is ignored while a modal overlay is
+/// open and when the terminal is too small to draw the browser.
+fn handle_mouse(event: Mouse, model: &mut Model) {
+    if model.overlay.is_some() || model.width < SINGLE_PANE_MIN_WIDTH || model.height < MIN_HEIGHT {
+        return;
+    }
+
+    let is_diff = matches!(model.content, Content::Diff(_));
+    let (_, content, _) = frame_areas(model.width, model.height);
+    let layout = body_layout(content, model.tree_percent, is_diff, model.focus);
+    let point = Position {
+        x: event.column,
+        y: event.row,
+    };
+    let Some(slot) = layout.slots.iter().find(|slot| slot.outer.contains(point)) else {
+        return;
+    };
+    let inner = pane_block("", false, &model.theme, slot.edge).inner(slot.outer);
+
+    match slot.pane {
+        PaneSlot::Tree => {
+            model.focus = Pane::Tree;
+            match event.kind {
+                MouseKind::Click => tree_click(model, inner, event.row),
+                MouseKind::ScrollUp => move_cursor(model, -MOUSE_SCROLL_STEP),
+                MouseKind::ScrollDown => move_cursor(model, MOUSE_SCROLL_STEP),
+            }
+        }
+        PaneSlot::Show | PaneSlot::Old | PaneSlot::New => {
+            model.focus = if is_diff { Pane::Diff } else { Pane::Body };
+            match event.kind {
+                MouseKind::Click => {}
+                MouseKind::ScrollUp => {
+                    model.body_scroll = model.body_scroll.saturating_sub(MOUSE_SCROLL_STEP as u16);
+                }
+                MouseKind::ScrollDown => {
+                    let step = MOUSE_SCROLL_STEP as u16;
+                    model.body_scroll = model
+                        .body_scroll
+                        .saturating_add(step)
+                        .min(max_scroll(model));
+                }
+            }
+        }
+    }
+}
+
+/// Selects or folds the tree row a click landed on, if it landed on one.
+fn tree_click(model: &mut Model, inner: Rect, row: u16) {
+    if row < inner.y || row >= inner.y.saturating_add(inner.height) {
+        return;
+    }
+    let offset = window_offset(model.cursor, model.rows.len(), inner.height as usize);
+    let index = offset + usize::from(row - inner.y);
+    let Some(kind) = model.rows.get(index).map(|row| row.kind.clone()) else {
+        return;
+    };
+    model.cursor = index;
+    match kind {
+        RowKind::Directory { path, expanded } => set_collapsed(model, path, expanded),
+        RowKind::File { .. } => sync_selected(model),
+    }
+}
+
 fn move_cursor(model: &mut Model, delta: i32) {
     if model.rows.is_empty() {
         return;
@@ -2372,6 +2468,130 @@ mod tests {
         body.focus = Pane::Body;
         let (scrolled, _) = update(Msg::Key(Key::PageDown), &body);
         assert!(scrolled.body_scroll > 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // mouse
+    // -----------------------------------------------------------------------
+
+    fn click(column: u16, row: u16) -> Mouse {
+        Mouse {
+            column,
+            row,
+            kind: MouseKind::Click,
+        }
+    }
+
+    fn scroll(column: u16, row: u16, up: bool) -> Mouse {
+        Mouse {
+            column,
+            row,
+            kind: if up {
+                MouseKind::ScrollUp
+            } else {
+                MouseKind::ScrollDown
+            },
+        }
+    }
+
+    /// The tree's inner origin for the 100×30 models below (one border and one
+    /// pad column on the left, one border row on top).
+    const TREE_X: u16 = 2;
+    const TREE_Y: u16 = 2;
+    /// A column inside the content pane, past the tree and its divider.
+    const CONTENT_X: u16 = 50;
+
+    #[test]
+    fn clicking_a_file_selects_it() {
+        let model = two_files();
+        let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &model);
+        assert_eq!(
+            next.selected.as_ref().map(ToString::to_string),
+            Some("b.rs".to_owned())
+        );
+        assert_eq!(next.cursor, 1);
+        assert_eq!(next.focus, Pane::Tree);
+    }
+
+    #[test]
+    fn clicking_a_directory_folds_it() {
+        let model = model_with(vec![
+            projected("a.rs", "a\n"),
+            projected("src/lib.rs", "l\n"),
+        ]);
+        let (folded, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &model);
+
+        let labels: Vec<&str> = folded.rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, vec!["a.rs", "src"]);
+    }
+
+    #[test]
+    fn the_wheel_moves_the_tree_cursor_and_selects_as_it_passes() {
+        let model = model_with(vec![
+            projected("a.rs", "a\n"),
+            projected("b.rs", "b\n"),
+            projected("c.rs", "c\n"),
+        ]);
+        let (moved, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &model);
+        assert_eq!(moved.focus, Pane::Tree);
+        assert_eq!(moved.cursor, 2, "the wheel step clamps to the last row");
+        assert_eq!(
+            moved.selected.as_ref().map(ToString::to_string),
+            Some("c.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_content_and_focuses_it() {
+        let model = model_with(vec![projected("a.rs", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n")]);
+        let (down, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &model);
+        assert_eq!(down.focus, Pane::Body);
+        assert_eq!(down.body_scroll, 3);
+
+        let (up, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, true)), &down);
+        assert_eq!(up.body_scroll, 0);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_diff_and_clicking_it_focuses() {
+        let model = diff_model(vec![file_diff(
+            "a.rs",
+            Some("1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"),
+            Some("1\n2\n3\n4\n5\n6\n7\n8\n9\nX\n"),
+        )]);
+        let (scrolled, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &model);
+        assert_eq!(scrolled.focus, Pane::Diff);
+        assert!(scrolled.body_scroll > 0);
+
+        // Clicking a content pane focuses it without moving the selection.
+        let (clicked, _) = update(Msg::Mouse(click(CONTENT_X, 5)), &model);
+        assert_eq!(clicked.focus, Pane::Diff);
+        assert_eq!(clicked.body_scroll, 0);
+    }
+
+    #[test]
+    fn mouse_is_ignored_while_an_overlay_is_open() {
+        let mut model = two_files();
+        model.overlay = Some(Overlay::Help);
+        let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &model);
+        assert_eq!(next.cursor, model.cursor);
+        assert_eq!(next.selected, model.selected);
+    }
+
+    #[test]
+    fn a_click_on_the_header_or_a_divider_does_nothing() {
+        let model = two_files();
+
+        let (header, _) = update(Msg::Mouse(click(5, 0)), &model);
+        assert_eq!(header.cursor, model.cursor);
+        assert_eq!(header.selected, model.selected);
+
+        // The divider sits in the one column between the two panes.
+        let mut body_focused = model.clone();
+        body_focused.focus = Pane::Body;
+        let (divider, _) = update(Msg::Mouse(click(29, 5)), &body_focused);
+        assert_eq!(divider.focus, Pane::Body, "the divider is not a pane");
+        assert_eq!(divider.selected, model.selected);
     }
 
     #[test]

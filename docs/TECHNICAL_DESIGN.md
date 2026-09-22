@@ -1242,16 +1242,21 @@ frontend keeps no persistent cache.
   panes; `n`/`N` step through them.
 - The file-tree width is adjustable and clamped.
 - `RepoPath` remains the identity; labels are escaped for display only.
-- Mouse capture is deliberately not enabled, so terminal text selection and
-  copy keep working.
+- Mouse capture is enabled. A left click selects a file or folds a directory;
+  the wheel scrolls the pane under the pointer and focuses it. Overlays stay
+  keyboard-driven. Only normal tracking and SGR coordinates are turned on, so
+  motion and drag never reach the event loop. Because capture takes over the
+  terminal's own selection, copying uses the terminal's selection override
+  (usually `Shift`-drag).
 
 ### 21.5 Terminal lifecycle and safety
 
 - Verify that standard input and output are terminals before emitting any
   control sequence.
-- Stage setup (raw mode, alternate screen, cursor) and record which steps
-  succeeded; undo exactly those, in reverse order, on normal return, error, or
-  unwinding panic. Teardown is best-effort and never panics from `Drop`.
+- Stage setup (raw mode, alternate screen, cursor, mouse capture) and record
+  which steps succeeded; undo exactly those, in reverse order, on normal return,
+  error, or unwinding panic. Teardown is best-effort and never panics from
+  `Drop`.
 - A panic hook restores the terminal before the panic message prints.
 - Resize events clamp all selections and offsets, including zero-sized layouts.
 - The runtime is generic over an injected driver so setup and cleanup can be

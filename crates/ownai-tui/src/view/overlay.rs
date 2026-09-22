@@ -198,7 +198,7 @@ fn render_revision(
 }
 
 fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let popup = centered(area, 54, 19);
+    let popup = centered(area, 54, 23);
     if popup.width == 0 || popup.height == 0 {
         return;
     }
@@ -226,6 +226,10 @@ fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
         key_line("[ / ] / \\", "resize or reset the tree", theme),
         key_line("? / Esc", "toggle help or dismiss", theme),
         key_line("q / Ctrl-C", "quit", theme),
+        Line::from(""),
+        Line::from(section("Mouse", theme)),
+        key_line("click", "open a file or fold a directory", theme),
+        key_line("wheel", "scroll the tree or the content", theme),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }

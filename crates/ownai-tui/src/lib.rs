@@ -19,7 +19,7 @@ use std::sync::Once;
 use std::time::Duration;
 
 use crossterm::cursor;
-use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind, MouseEvent};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -36,7 +36,7 @@ mod theme;
 mod view;
 
 pub use app::LoadRequest;
-use app::{Cmd, Content, Key, Model, Msg, update};
+use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, update};
 pub use icons::IconStyle;
 use icons::Icons;
 use theme::Theme;
@@ -241,6 +241,34 @@ impl<D: Driver> Drop for Session<D> {
     }
 }
 
+/// Toggles mouse capture, reporting only button and wheel events with SGR
+/// coordinates.
+///
+/// crossterm's stock `EnableMouseCapture` also switches on all-motion tracking
+/// (`?1003h`), which floods the event loop with `Moved` events. Enabling only
+/// normal tracking (`?1000h`) plus SGR coordinates keeps the queue quiet.
+struct MouseCaptured(bool);
+
+impl crossterm::Command for MouseCaptured {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        if self.0 {
+            f.write_str("\x1b[?1000h\x1b[?1006h")
+        } else {
+            f.write_str("\x1b[?1006l\x1b[?1000l")
+        }
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        use crossterm::Command;
+        if self.0 {
+            crossterm::event::EnableMouseCapture.execute_winapi()
+        } else {
+            crossterm::event::DisableMouseCapture.execute_winapi()
+        }
+    }
+}
+
 /// The real driver: raw mode, the alternate screen, and a crossterm backend.
 #[derive(Default)]
 struct CrosstermDriver {
@@ -248,6 +276,7 @@ struct CrosstermDriver {
     raw: bool,
     alternate: bool,
     hidden: bool,
+    mouse: bool,
 }
 
 impl Driver for CrosstermDriver {
@@ -262,6 +291,9 @@ impl Driver for CrosstermDriver {
         execute!(stdout, cursor::Hide).map_err(TuiError::Terminal)?;
         self.hidden = true;
 
+        execute!(stdout, MouseCaptured(true)).map_err(TuiError::Terminal)?;
+        self.mouse = true;
+
         let backend = CrosstermBackend::new(std::io::stdout());
         self.terminal = Some(Terminal::new(backend).map_err(TuiError::Terminal)?);
         Ok(())
@@ -270,6 +302,10 @@ impl Driver for CrosstermDriver {
     fn teardown(&mut self) {
         self.terminal = None;
         let mut stdout = std::io::stdout();
+        if self.mouse {
+            let _ = execute!(stdout, MouseCaptured(false));
+            self.mouse = false;
+        }
         if self.hidden {
             let _ = execute!(stdout, cursor::Show);
             self.hidden = false;
@@ -305,6 +341,11 @@ impl Driver for CrosstermDriver {
             match event::read().map_err(TuiError::Terminal)? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
                     if let Some(msg) = translate(key) {
+                        return Ok(msg);
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    if let Some(msg) = translate_mouse(mouse) {
                         return Ok(msg);
                     }
                 }
@@ -349,6 +390,24 @@ fn translate(key: KeyEvent) -> Option<Msg> {
     Some(Msg::Key(key))
 }
 
+/// Translates a terminal mouse event, dropping motion, drag, release, and
+/// non-left buttons so they never reach the core.
+fn translate_mouse(mouse: MouseEvent) -> Option<Msg> {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let kind = match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => MouseKind::Click,
+        MouseEventKind::ScrollUp => MouseKind::ScrollUp,
+        MouseEventKind::ScrollDown => MouseKind::ScrollDown,
+        _ => return None,
+    };
+    Some(Msg::Mouse(Mouse {
+        column: mouse.column,
+        row: mouse.row,
+        kind,
+    }))
+}
+
 /// Installs a panic hook that restores the terminal before the panic message
 /// is printed, so a crash does not leave the alternate screen active.
 fn install_panic_hook() {
@@ -365,6 +424,7 @@ fn install_panic_hook() {
 /// Best-effort terminal restoration that never panics.
 fn restore_terminal() {
     let mut stdout = std::io::stdout();
+    let _ = execute!(stdout, MouseCaptured(false));
     let _ = execute!(stdout, cursor::Show);
     let _ = execute!(stdout, LeaveAlternateScreen);
     let _ = disable_raw_mode();
@@ -406,7 +466,10 @@ mod tests {
 
     impl Driver for MockDriver {
         fn setup(&mut self) -> Result<(), TuiError> {
-            for (index, step) in ["raw", "alternate", "hidden"].into_iter().enumerate() {
+            for (index, step) in ["raw", "alternate", "hidden", "mouse"]
+                .into_iter()
+                .enumerate()
+            {
                 if self.fail_at == Some(index) {
                     return Err(TuiError::Terminal(std::io::Error::other("setup failed")));
                 }
@@ -418,6 +481,9 @@ mod tests {
         fn teardown(&mut self) {
             let mut log = self.log.borrow_mut();
             // Undo in reverse order, matching the real driver.
+            if log.setup.contains(&"mouse") {
+                log.teardown.push("mouse_off");
+            }
             if log.setup.contains(&"hidden") {
                 log.teardown.push("show_cursor");
             }
@@ -452,11 +518,18 @@ mod tests {
 
     #[test]
     fn a_setup_failure_tears_down_every_step_that_succeeded() {
-        let cases: [(Option<usize>, Vec<&str>); 4] = [
+        let cases: [(Option<usize>, Vec<&str>); 5] = [
             (Some(0), vec![]),
             (Some(1), vec!["disable_raw"]),
             (Some(2), vec!["leave_alternate", "disable_raw"]),
-            (None, vec!["show_cursor", "leave_alternate", "disable_raw"]),
+            (
+                Some(3),
+                vec!["show_cursor", "leave_alternate", "disable_raw"],
+            ),
+            (
+                None,
+                vec!["mouse_off", "show_cursor", "leave_alternate", "disable_raw"],
+            ),
         ];
 
         for (fail_at, expected) in cases {
@@ -502,6 +575,45 @@ mod tests {
     }
 
     #[test]
+    fn mouse_clicks_and_wheel_translate_but_motion_does_not() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        let at = |kind| MouseEvent {
+            kind,
+            column: 7,
+            row: 3,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+
+        assert!(matches!(
+            translate_mouse(at(MouseEventKind::Down(MouseButton::Left))),
+            Some(Msg::Mouse(Mouse {
+                column: 7,
+                row: 3,
+                kind: MouseKind::Click,
+            }))
+        ));
+        assert!(matches!(
+            translate_mouse(at(MouseEventKind::ScrollUp)),
+            Some(Msg::Mouse(Mouse {
+                kind: MouseKind::ScrollUp,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            translate_mouse(at(MouseEventKind::ScrollDown)),
+            Some(Msg::Mouse(Mouse {
+                kind: MouseKind::ScrollDown,
+                ..
+            }))
+        ));
+        // Motion, drag, release, and non-left buttons are dropped.
+        assert!(translate_mouse(at(MouseEventKind::Moved)).is_none());
+        assert!(translate_mouse(at(MouseEventKind::Up(MouseButton::Left))).is_none());
+        assert!(translate_mouse(at(MouseEventKind::Down(MouseButton::Right))).is_none());
+    }
+
+    #[test]
     fn a_run_quits_on_q_and_restores_the_terminal() {
         let repo = TestRepo::new();
         let engine = Engine::discover(repo.path()).expect("discover");
@@ -521,10 +633,10 @@ mod tests {
         run_with(engine, options, driver).expect("run");
 
         let log = log.borrow();
-        assert_eq!(log.setup, vec!["raw", "alternate", "hidden"]);
+        assert_eq!(log.setup, vec!["raw", "alternate", "hidden", "mouse"]);
         assert_eq!(
             log.teardown,
-            vec!["show_cursor", "leave_alternate", "disable_raw"]
+            vec!["mouse_off", "show_cursor", "leave_alternate", "disable_raw"]
         );
         assert!(log.draws >= 1, "the model must be drawn at least once");
     }
@@ -550,7 +662,7 @@ mod tests {
         assert!(matches!(error, TuiError::Engine(_)), "got {error:?}");
         assert_eq!(
             log.borrow().teardown,
-            vec!["show_cursor", "leave_alternate", "disable_raw"]
+            vec!["mouse_off", "show_cursor", "leave_alternate", "disable_raw"]
         );
     }
 

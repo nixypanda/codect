@@ -13,12 +13,12 @@ pub(crate) mod text;
 pub(crate) mod tree;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 
-use crate::app::{Content, MIN_HEIGHT, Model, Pane, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH};
+use crate::app::{Content, MIN_HEIGHT, Model, Pane, SINGLE_PANE_MIN_WIDTH};
 
 use diff::Side;
-use geom::{Edge, render_divider, split_with_dividers};
+use geom::{PaneSlot, body_layout, frame_areas, render_divider};
 
 /// Renders the whole model. Pure: it reads the model and writes to the frame.
 pub(crate) fn view(model: &Model, frame: &mut Frame) {
@@ -30,13 +30,7 @@ pub(crate) fn view(model: &Model, frame: &mut Frame) {
         return;
     }
 
-    let chunks = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    let (header, content, status) = (chunks[0], chunks[1], chunks[2]);
+    let (header, content, status) = frame_areas(area.width, area.height);
 
     chrome::render_header(model, frame, header);
     render_body(model, frame, content);
@@ -45,102 +39,51 @@ pub(crate) fn view(model: &Model, frame: &mut Frame) {
     overlay::render_overlay(model, frame, area);
 }
 
+/// Renders the body panes from the same layout mouse hit-testing uses.
 fn render_body(model: &Model, frame: &mut Frame, content: Rect) {
-    let side_by_side = frame.area().width >= SIDE_BY_SIDE_MIN_WIDTH;
-    match &model.content {
-        Content::Show(_) => {
-            if side_by_side {
-                let (columns, dividers) =
-                    split_with_dividers(content, &[model.tree_percent, 100 - model.tree_percent]);
-                tree::render_tree(
-                    model,
-                    frame,
-                    columns[0],
-                    model.focus == Pane::Tree,
-                    Edge::Left,
-                );
-                render_divider(frame, dividers[0], &model.theme);
-                show::render_show_body(
-                    model,
-                    frame,
-                    columns[1],
-                    model.focus == Pane::Body,
-                    Edge::Right,
-                );
-            } else if model.focus == Pane::Tree {
-                tree::render_tree(model, frame, content, true, Edge::Solo);
-            } else {
-                show::render_show_body(model, frame, content, true, Edge::Solo);
-            }
+    let is_diff = matches!(model.content, Content::Diff(_));
+    let layout = body_layout(content, model.tree_percent, is_diff, model.focus);
+    let rows = model.diff_rows();
+    let diff_focused = model.focus == Pane::Diff;
+
+    for slot in &layout.slots {
+        match slot.pane {
+            PaneSlot::Tree => tree::render_tree(
+                model,
+                frame,
+                slot.outer,
+                model.focus == Pane::Tree,
+                slot.edge,
+            ),
+            PaneSlot::Show => show::render_show_body(
+                model,
+                frame,
+                slot.outer,
+                model.focus == Pane::Body,
+                slot.edge,
+            ),
+            PaneSlot::Old => diff::render_diff_pane(
+                model,
+                frame,
+                slot.outer,
+                Side::Old,
+                diff_focused,
+                rows,
+                slot.edge,
+            ),
+            PaneSlot::New => diff::render_diff_pane(
+                model,
+                frame,
+                slot.outer,
+                Side::New,
+                diff_focused,
+                rows,
+                slot.edge,
+            ),
         }
-        Content::Diff(_) => {
-            let rows = model.diff_rows();
-            let diff_focused = model.focus == Pane::Diff;
-            if side_by_side {
-                let rest = 100 - model.tree_percent;
-                let side = rest / 2;
-                let (columns, dividers) =
-                    split_with_dividers(content, &[model.tree_percent, side, rest - side]);
-                tree::render_tree(
-                    model,
-                    frame,
-                    columns[0],
-                    model.focus == Pane::Tree,
-                    Edge::Left,
-                );
-                render_divider(frame, dividers[0], &model.theme);
-                diff::render_diff_pane(
-                    model,
-                    frame,
-                    columns[1],
-                    Side::Old,
-                    diff_focused,
-                    rows,
-                    Edge::Middle,
-                );
-                render_divider(frame, dividers[1], &model.theme);
-                diff::render_diff_pane(
-                    model,
-                    frame,
-                    columns[2],
-                    Side::New,
-                    diff_focused,
-                    rows,
-                    Edge::Right,
-                );
-            } else {
-                match model.focus {
-                    Pane::Tree => tree::render_tree(model, frame, content, true, Edge::Solo),
-                    Pane::Diff => {
-                        // Too narrow for side by side: stack old over new; both
-                        // halves stay synchronized on the same aligned rows.
-                        let halves = Layout::vertical([
-                            Constraint::Percentage(50),
-                            Constraint::Percentage(50),
-                        ])
-                        .split(content);
-                        diff::render_diff_pane(
-                            model,
-                            frame,
-                            halves[0],
-                            Side::Old,
-                            true,
-                            rows,
-                            Edge::Solo,
-                        );
-                        diff::render_diff_pane(
-                            model,
-                            frame,
-                            halves[1],
-                            Side::New,
-                            true,
-                            rows,
-                            Edge::Solo,
-                        );
-                    }
-                    Pane::Body => {}
-                }
-            }
-        }
+    }
+
+    for divider in &layout.dividers {
+        render_divider(frame, *divider, &model.theme);
     }
 }
