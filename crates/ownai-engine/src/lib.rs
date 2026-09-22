@@ -17,8 +17,10 @@
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod item_diff;
 pub mod selection;
 
 pub use engine::{Engine, FileDiff};
 pub use error::EngineError;
+pub use item_diff::{ItemChangeKind, ItemDiff};
 pub use selection::{Selection, SelectionError, SelectionGroup};
