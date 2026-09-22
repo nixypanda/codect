@@ -16,6 +16,7 @@ ownai-core.workspace = true
 ownai-engine.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+terminal-colorsaurus.workspace = true
 unicode-width.workspace = true
 syntect.workspace = true
 two-face.workspace = true

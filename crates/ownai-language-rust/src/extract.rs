@@ -829,6 +829,8 @@ fn kind_token(kind: ItemKind) -> &'static str {
         ItemKind::Trait => "trait",
         ItemKind::TraitImplementation => "impl",
         ItemKind::AssociatedType => "assoc_type",
+        ItemKind::TypeFamily => "type_family",
+        ItemKind::PatternSynonym => "pattern",
         ItemKind::Function => "fn",
         ItemKind::Method => "method",
         ItemKind::Value => "value",

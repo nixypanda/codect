@@ -1,0 +1,226 @@
+//! Haskell grammar node-kind constants.
+//!
+//! Tree-sitter node names are centralized here so that grammar upgrades fail
+//! focused tests when node names or shapes change.
+
+use ownai_core::{Language, ProjectionError, RepoPath, SourceSpan};
+use tree_sitter::{Node, Parser};
+
+// Visible node kinds.
+pub const HASKELL: &str = "haskell";
+pub const HEADER: &str = "header";
+pub const MODULE: &str = "module";
+pub const MODULE_ID: &str = "module_id";
+pub const EXPORTS: &str = "exports";
+pub const IMPORT: &str = "import";
+pub const IMPORTS: &str = "imports";
+pub const DECLARATIONS: &str = "declarations";
+pub const DECLARATION: &str = "declaration";
+pub const SIGNATURE: &str = "signature";
+pub const FUNCTION: &str = "function";
+pub const BIND: &str = "bind";
+pub const DATA_TYPE: &str = "data_type";
+pub const NEWTYPE: &str = "newtype";
+pub const TYPE_SYNONYM: &str = "type_synomym";
+pub const CLASS: &str = "class";
+pub const INSTANCE: &str = "instance";
+pub const DATA_FAMILY: &str = "data_family";
+pub const TYPE_FAMILY: &str = "type_family";
+pub const TYPE_INSTANCE: &str = "type_instance";
+pub const DATA_INSTANCE: &str = "data_instance";
+pub const PATTERN_SYNONYM: &str = "pattern_synonym";
+pub const DERIVING: &str = "deriving";
+pub const DERIVING_INSTANCE: &str = "deriving_instance";
+pub const KIND_SIGNATURE: &str = "kind_signature";
+pub const TYPE_ROLE: &str = "role_annotation";
+pub const FOREIGN_IMPORT: &str = "foreign_import";
+pub const FOREIGN_EXPORT: &str = "foreign_export";
+pub const PRAGMA: &str = "pragma";
+pub const COMMENT: &str = "comment";
+pub const HADDOCK: &str = "haddock";
+pub const CPP: &str = "cpp";
+pub const SPLICE: &str = "splice";
+pub const TOP_SPLICE: &str = "top_splice";
+pub const QUASIQUOTE: &str = "quasiquote";
+
+pub const DATA_CONSTRUCTORS: &str = "data_constructors";
+pub const DATA_CONSTRUCTOR: &str = "data_constructor";
+pub const NEWTYPE_CONSTRUCTOR: &str = "newtype_constructor";
+pub const FIELDS: &str = "fields";
+pub const FIELD: &str = "field";
+pub const CLASS_DECLARATIONS: &str = "class_declarations";
+pub const INSTANCE_DECLARATIONS: &str = "instance_declarations";
+pub const DEFAULT_SIGNATURE: &str = "default_signature";
+pub const TYPE_PARAMS: &str = "type_params";
+pub const TYPE_PARAM: &str = "type_param";
+pub const CONTEXT: &str = "context";
+pub const FORALL: &str = "forall";
+pub const FIELD_NAME: &str = "field_name";
+pub const VARIABLE: &str = "variable";
+pub const CONSTRUCTOR: &str = "constructor";
+pub const PREFIX_ID: &str = "prefix_id";
+pub const INFIX_ID: &str = "infix_id";
+pub const INVISIBLE: &str = "invisible";
+pub const PATTERN: &str = "pattern";
+pub const BINDING_LIST: &str = "binding_list";
+
+// Named-field names used during traversal.
+pub const FIELD_NAME_FIELD: &str = "name";
+pub const FIELD_MODULE: &str = "module";
+pub const FIELD_DECLARATIONS: &str = "declarations";
+pub const FIELD_TYPE: &str = "type";
+pub const FIELD_BODY: &str = "body";
+pub const FIELD_PATTERNS: &str = "patterns";
+pub const FIELD_EXPRESSION: &str = "expression";
+
+/// Parses one Haskell source file and rejects any tree containing `ERROR` or
+/// missing nodes. `None` parse results and error nodes are fatal so that no
+/// caller can emit a partial projection (TECHNICAL_DESIGN.md section 9).
+pub(crate) fn parse(source: &str, path: &RepoPath) -> Result<tree_sitter::Tree, ProjectionError> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_haskell::LANGUAGE.into())
+        .map_err(|_| ProjectionError::AstInvariant {
+            path: path.clone(),
+            language: Language::Haskell,
+            range: whole_file_span(source),
+            detail: "the Haskell grammar could not be assigned to a parser".to_owned(),
+        })?;
+
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| ProjectionError::ParseFailed {
+            path: path.clone(),
+            language: Language::Haskell,
+            range: whole_file_span(source),
+        })?;
+
+    if tree.root_node().has_error() {
+        let range = first_error_range(tree.root_node()).unwrap_or_else(|| whole_file_span(source));
+        return Err(ProjectionError::ErroneousSyntax {
+            path: path.clone(),
+            language: Language::Haskell,
+            range,
+        });
+    }
+
+    Ok(tree)
+}
+
+/// The first `ERROR` or missing node in source order, walked iteratively so the
+/// cost is independent of expression depth.
+pub(crate) fn first_error_range(root: Node<'_>) -> Option<SourceSpan> {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            return Some(node_span(node));
+        }
+        let mut cursor = node.walk();
+        let mut children: Vec<Node<'_>> = node.children(&mut cursor).collect();
+        while let Some(child) = children.pop() {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+pub(crate) fn node_span(node: Node<'_>) -> SourceSpan {
+    let start = node.start_position();
+    let end = node.end_position();
+    SourceSpan {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+        start_line: start.row,
+        start_column: start.column,
+        end_line: end.row,
+        end_column: end.column,
+    }
+}
+
+pub(crate) fn whole_file_span(source: &str) -> SourceSpan {
+    let mut line = 0;
+    let mut column = 0;
+    for character in source.chars() {
+        if character == '\n' {
+            line += 1;
+            column = 0;
+        } else {
+            column += character.len_utf8();
+        }
+    }
+
+    SourceSpan {
+        start_byte: 0,
+        end_byte: source.len(),
+        start_line: 0,
+        start_column: 0,
+        end_line: line,
+        end_column: column,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grammar_node_kinds_still_exist() {
+        let node_kinds = [
+            HASKELL,
+            HEADER,
+            MODULE,
+            MODULE_ID,
+            EXPORTS,
+            IMPORT,
+            IMPORTS,
+            DECLARATIONS,
+            DECLARATION,
+            SIGNATURE,
+            FUNCTION,
+            DATA_TYPE,
+            NEWTYPE,
+            TYPE_SYNONYM,
+            CLASS,
+            INSTANCE,
+            DATA_FAMILY,
+            TYPE_FAMILY,
+            TYPE_INSTANCE,
+            DATA_INSTANCE,
+            PATTERN_SYNONYM,
+            DERIVING,
+            DERIVING_INSTANCE,
+            KIND_SIGNATURE,
+            FOREIGN_IMPORT,
+            FOREIGN_EXPORT,
+            PRAGMA,
+            COMMENT,
+            HADDOCK,
+            DATA_CONSTRUCTORS,
+            DATA_CONSTRUCTOR,
+            FIELDS,
+            FIELD,
+            CLASS_DECLARATIONS,
+            INSTANCE_DECLARATIONS,
+            DEFAULT_SIGNATURE,
+            TYPE_PARAMS,
+            CONTEXT,
+        ];
+
+        for kind in node_kinds {
+            assert!(
+                tree_sitter_haskell::NODE_TYPES.contains(&format!("\"{kind}\"")),
+                "grammar no longer defines the `{kind}` node kind"
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_assigns_and_parses() {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_haskell::LANGUAGE.into())
+            .expect("the Haskell grammar must assign to a parser");
+        let tree = parser.parse("", None).expect("an empty file must parse");
+        assert!(!tree.root_node().has_error());
+    }
+}

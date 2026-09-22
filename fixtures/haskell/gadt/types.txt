@@ -1,0 +1,9 @@
+module Shapes
+
+data Shape where
+    Circle :: Double -> Shape
+    Rect :: Double -> Double -> Shape
+
+data Expr a where
+    Lit :: a -> Expr a
+    Add :: Expr a -> Expr a -> Expr a

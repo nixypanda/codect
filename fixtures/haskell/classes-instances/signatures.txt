@@ -1,0 +1,13 @@
+module Classes
+
+class Eq a => Container f a where
+    empty :: f a
+    insert :: a -> f a -> f a
+    toList :: f a -> [a]
+    size :: f a -> Int
+
+instance Container [] Int where
+    empty
+    insert x xs
+    toList
+    size

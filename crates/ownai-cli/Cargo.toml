@@ -26,6 +26,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 ownai-language-elm.workspace = true
+ownai-language-haskell.workspace = true
+ownai-language-python.workspace = true
 ownai-language-rust.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true

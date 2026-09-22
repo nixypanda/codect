@@ -1,0 +1,4 @@
+def add(left: int, right: int) -> int: ...
+
+class Box:
+    value: int

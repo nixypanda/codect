@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class Client(Protocol):
+    def get(self, url: str) -> Response: ...
+    def close(self) -> None: ...

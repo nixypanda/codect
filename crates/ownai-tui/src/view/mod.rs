@@ -14,6 +14,7 @@ pub(crate) mod tree;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::widgets::Block;
 
 use crate::app::{Content, MIN_HEIGHT, Model, Pane, SINGLE_PANE_MIN_WIDTH};
 
@@ -23,6 +24,14 @@ use geom::{PaneSlot, body_layout, frame_areas, render_divider};
 /// Renders the whole model. Pure: it reads the model and writes to the frame.
 pub(crate) fn view(model: &Model, frame: &mut Frame) {
     let area = frame.area();
+
+    // The palette owns every cell: paint the whole canvas before drawing so a
+    // terminal whose background differs from the palette never shows through
+    // the panes, gutters, or the too-small notice.
+    frame.render_widget(
+        Block::default().style(model.theme.bg(model.theme.palette.bg)),
+        area,
+    );
 
     if area.width < SINGLE_PANE_MIN_WIDTH || area.height < MIN_HEIGHT {
         chrome::render_too_small(frame, area, &model.theme);

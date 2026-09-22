@@ -3499,6 +3499,55 @@ mod tests {
         assert!(emphasis, "expected intra-line emphasis");
     }
 
+    #[test]
+    fn the_canvas_is_opaque_in_every_flavor() {
+        use crate::theme::{Capability, Flavor};
+
+        for flavor in [Flavor::Dark, Flavor::Light] {
+            // The help overlay is the largest: `Clear` resets its rect to the
+            // terminal default before the popup repaints it, so it is the most
+            // likely place for a leak.
+            for overlay in [None, Some(Overlay::Help)] {
+                let mut model = two_files();
+                model.theme = Theme::new(flavor, Capability::TrueColor);
+                model.overlay = overlay;
+                let buffer = render(&model, 100, 20);
+                for y in 0..buffer.area.height {
+                    for x in 0..buffer.area.width {
+                        let cell = buffer.cell((x, y)).expect("cell");
+                        assert_ne!(
+                            cell.bg,
+                            Color::Reset,
+                            "the terminal background leaked at ({x}, {y}) with {flavor:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_canvas_takes_the_light_palette_background() {
+        use crate::theme::{Capability, Flavor};
+
+        let mut model = two_files();
+        let light = Theme::new(Flavor::Light, Capability::TrueColor);
+        let bg = light.color(light.palette.bg);
+        model.theme = light;
+        let buffer = render(&model, 100, 20);
+
+        // The body pane interior must be the light background, not the dark one.
+        let mut count = 0;
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                if buffer.cell((x, y)).is_some_and(|cell| cell.bg == bg) {
+                    count += 1;
+                }
+            }
+        }
+        assert!(count > 0, "expected the light background somewhere");
+    }
+
     /// Renders the file tree with Nerd Font icons. Run with
     /// `--ignored --nocapture`.
     #[test]
@@ -3528,6 +3577,66 @@ mod tests {
         print!("{}", ansi_preview(&buffer));
 
         let path = std::env::temp_dir().join("ownai-delta-preview.html");
+        if std::fs::write(&path, html_preview(&buffer)).is_ok() {
+            println!("\nHTML preview: {}", path.display());
+        }
+    }
+
+    #[test]
+    #[ignore = "prints a colored preview"]
+    fn preview_light() {
+        use crate::theme::{Capability, Flavor};
+
+        let mut show = Model::new(
+            "/repo".to_owned(),
+            show_request(),
+            "all".to_owned(),
+            110,
+            24,
+            Theme::new(Flavor::Light, Capability::TrueColor),
+            Icons::new(IconStyle::None),
+        );
+        show.install(
+            Content::Show(
+                vec![projected(
+                    "src/lib.rs",
+                    "// a comment\n#[derive(Debug)]\npub struct User<'a> {\n    pub id: u32,\n    pub name: &'a str,\n    pub tags: Vec<String>,\n}\n\nimpl<'a> User<'a> {\n    pub fn new(name: &'a str) -> Self {\n        let count = 42;\n        let msg = \"hello world\";\n        Self { id: count, name, tags: vec![msg.to_string()] }\n    }\n}\n",
+                )]
+                .into(),
+            ),
+            false,
+        );
+        let show = settle(show);
+        print!("{}", ansi_preview(&render(&show, 110, 24)));
+
+        let mut diff = Model::new(
+            "/repo".to_owned(),
+            diff_request(),
+            "all".to_owned(),
+            120,
+            18,
+            Theme::new(Flavor::Light, Capability::TrueColor),
+            Icons::new(IconStyle::None),
+        );
+        diff.install(
+            Content::Diff(
+                vec![
+                    file_diff("src/added.rs", None, Some("pub fn a();\n")),
+                    file_diff(
+                        "src/Mod.rs",
+                        Some("pub fn old();\n"),
+                        Some("pub fn new();\n"),
+                    ),
+                    file_diff("src/del.rs", Some("pub fn d();\n"), None),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let diff = settle(diff);
+        let buffer = render(&diff, 120, 18);
+        print!("{}", ansi_preview(&buffer));
+        let path = std::env::temp_dir().join("ownai-light-preview.html");
         if std::fs::write(&path, html_preview(&buffer)).is_ok() {
             println!("\nHTML preview: {}", path.display());
         }

@@ -44,8 +44,8 @@ nothing beyond the approved feature list in TECHNICAL_DESIGN.md section 4.1 and
 their unavoidable transitive implications.
 
 The final `cargo build` proves the terminal frontend is optional: with
-`--no-default-features`, `ratatui`, `crossterm`, `syntect`, and `two-face` must
-not appear in `ownai-cli`'s dependency tree.
+`--no-default-features`, `ratatui`, `crossterm`, `terminal-colorsaurus`,
+`syntect`, and `two-face` must not appear in `ownai-cli`'s dependency tree.
 
 Individual recipes are available as `just build`, `just test`, `just format`,
 `just check-workspace-clippy`, `just check-workspace-features`, and

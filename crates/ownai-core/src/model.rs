@@ -20,6 +20,8 @@ pub enum ProjectionMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Language {
     Elm,
+    Haskell,
+    Python,
     Rust,
 }
 
@@ -35,6 +37,8 @@ pub enum ItemKind {
     Trait,
     TraitImplementation,
     AssociatedType,
+    TypeFamily,
+    PatternSynonym,
     Function,
     Method,
     Value,
@@ -222,12 +226,27 @@ impl RepoPath {
         self.extension() == Some(b"rs")
     }
 
+    /// Standard Haskell source (`.hs`); literate Haskell (`.lhs`) is not
+    /// supported because the grammar cannot parse it.
+    pub fn is_haskell(&self) -> bool {
+        self.extension() == Some(b"hs")
+    }
+
+    /// Python source (`.py`) and type stubs (`.pyi`).
+    pub fn is_python(&self) -> bool {
+        matches!(self.extension(), Some(b"py" | b"pyi"))
+    }
+
     /// Extension matching is case-sensitive ASCII bytes.
     pub fn language(&self) -> Option<Language> {
         if self.is_elm() {
             Some(Language::Elm)
         } else if self.is_rust() {
             Some(Language::Rust)
+        } else if self.is_haskell() {
+            Some(Language::Haskell)
+        } else if self.is_python() {
+            Some(Language::Python)
         } else {
             None
         }
@@ -345,12 +364,27 @@ mod tests {
             Some(Language::Rust)
         );
         assert_eq!(
+            RepoPath::new("src/Main.hs").unwrap().language(),
+            Some(Language::Haskell)
+        );
+        assert_eq!(
+            RepoPath::new("src/app.py").unwrap().language(),
+            Some(Language::Python)
+        );
+        assert_eq!(
+            RepoPath::new("src/app.pyi").unwrap().language(),
+            Some(Language::Python)
+        );
+        assert_eq!(
             RepoPath::new("src/User.elm").unwrap().extension(),
             Some(b"elm".as_slice())
         );
         assert_eq!(RepoPath::new("README.md").unwrap().language(), None);
         assert_eq!(RepoPath::new(".gitignore").unwrap().extension(), None);
         assert_eq!(RepoPath::new("src/Foo.RS").unwrap().language(), None);
+        assert_eq!(RepoPath::new("src/Foo.HS").unwrap().language(), None);
+        assert_eq!(RepoPath::new("src/Foo.PY").unwrap().language(), None);
+        assert_eq!(RepoPath::new("src/Main.lhs").unwrap().language(), None);
         assert_eq!(RepoPath::new("src/noext").unwrap().language(), None);
         assert_eq!(RepoPath::new("src/trailing.").unwrap().extension(), None);
     }

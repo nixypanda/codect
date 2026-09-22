@@ -12,6 +12,8 @@ use ownai_core::{
     show_document,
 };
 use ownai_language_elm::ElmProjector;
+use ownai_language_haskell::HaskellProjector;
+use ownai_language_python::PythonProjector;
 use ownai_language_rust::RustProjector;
 
 const MODES: [ProjectionMode; 2] = [ProjectionMode::Types, ProjectionMode::Signatures];
@@ -131,4 +133,63 @@ fn mixed_diff_document_covers_added_deleted_modified_and_unchanged_files() {
 fn show_document_and_diff_document_are_empty_without_files() {
     assert_eq!(show_document(&[]), "");
     assert_eq!(diff_document(&[], &[]), "");
+}
+
+#[test]
+fn show_document_orders_all_four_languages_by_raw_path_bytes() {
+    let elm = fixture("elm/normal-module/input.elm");
+    let haskell = fixture("haskell/canonical-types/input.hs");
+    let python = fixture("python/canonical-types/input.py");
+    let rust = fixture("rust/structs/input.rs");
+
+    for mode in MODES {
+        let elm = project(&ElmProjector, "src/App.elm", &elm, mode);
+        let haskell = project(&HaskellProjector, "src/Main.hs", &haskell, mode);
+        let python = project(&PythonProjector, "src/app.py", &python, mode);
+        let rust = project(&RustProjector, "src/lib.rs", &rust, mode);
+
+        // Supplied out of order to prove the document reorders by raw bytes:
+        // "src/App.elm" < "src/Main.hs" < "src/app.py" < "src/lib.rs".
+        let document = show_document(&[rust.clone(), python.clone(), haskell.clone(), elm.clone()]);
+
+        let expected = format!(
+            "== src/App.elm ==\n{}\n== src/Main.hs ==\n{}\n== src/app.py ==\n{}\n== src/lib.rs ==\n{}",
+            elm.canonical_text(),
+            haskell.canonical_text(),
+            python.canonical_text(),
+            rust.canonical_text()
+        );
+        assert_eq!(document, expected, "unexpected {mode:?} show document");
+        assert!(!document.contains('\u{1b}'));
+    }
+}
+
+#[test]
+fn diff_document_reports_haskell_and_python_changes() {
+    let haskell_old = fixture("haskell/records/input.hs");
+    let haskell_new = fixture("haskell/gadt/input.hs");
+    let python_old = fixture("python/enums/input.py");
+    let python_new = fixture("python/decorators/input.py");
+
+    for mode in MODES {
+        let old = vec![
+            project(&HaskellProjector, "src/Model.hs", &haskell_old, mode),
+            project(&PythonProjector, "src/model.py", &python_old, mode),
+        ];
+        let new = vec![
+            project(&HaskellProjector, "src/Model.hs", &haskell_new, mode),
+            project(&PythonProjector, "src/model.py", &python_new, mode),
+        ];
+
+        let document = diff_document(&old, &new);
+        assert!(!document.contains('\u{1b}'));
+        assert!(
+            document.contains("diff --ownai a/src/Model.hs b/src/Model.hs\n"),
+            "Haskell block missing in {mode:?}: {document:?}"
+        );
+        assert!(
+            document.contains("diff --ownai a/src/model.py b/src/model.py\n"),
+            "Python block missing in {mode:?}: {document:?}"
+        );
+    }
 }

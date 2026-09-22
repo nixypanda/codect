@@ -48,6 +48,8 @@ impl Icons {
             IconStyle::Nerd => match path.language() {
                 Some(Language::Rust) => "\u{e7a8}",
                 Some(Language::Elm) => "\u{e62c}",
+                Some(Language::Haskell) => "\u{e777}",
+                Some(Language::Python) => "\u{e73c}",
                 None => "\u{f15b}",
             },
         }
@@ -56,7 +58,9 @@ impl Icons {
 
 /// Every Nerd glyph the tree can draw, for the width invariant test.
 #[cfg(test)]
-const NERD_GLYPHS: [&str; 4] = ["\u{f07b}", "\u{e7a8}", "\u{e62c}", "\u{f15b}"];
+const NERD_GLYPHS: [&str; 6] = [
+    "\u{f07b}", "\u{e7a8}", "\u{e62c}", "\u{e777}", "\u{e73c}", "\u{f15b}",
+];
 
 #[cfg(test)]
 mod tests {
@@ -79,6 +83,8 @@ mod tests {
         let icons = Icons::new(IconStyle::Nerd);
         assert_eq!(icons.file(&path("src/main.rs")), "\u{e7a8}");
         assert_eq!(icons.file(&path("src/Main.elm")), "\u{e62c}");
+        assert_eq!(icons.file(&path("src/Main.hs")), "\u{e777}");
+        assert_eq!(icons.file(&path("src/app.py")), "\u{e73c}");
         assert_eq!(icons.file(&path("README.md")), "\u{f15b}");
     }
 

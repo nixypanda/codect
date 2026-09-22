@@ -18,9 +18,9 @@ const FOCUSED_DIFF_HELP: &str = "Focused diffs are semantic: implementation-only
     name = "ownai",
     version,
     about = "Show and diff canonical Type and Signature projections of Git revisions",
-    long_about = "OwnAI projects committed Elm and Rust source files into canonical \
-                  Type and Signature forms and diffs those projections between two \
-                  revisions.\n\nFocused diffs are semantic: implementation-only \
+    long_about = "OwnAI projects committed Elm, Haskell, Python, and Rust source files \
+                  into canonical Type and Signature forms and diffs those projections \
+                  between two revisions.\n\nFocused diffs are semantic: implementation-only \
                   changes such as function bodies, comments, and whitespace are \
                   invisible. Only changes that alter a projected declaration appear.",
     after_help = FOCUSED_DIFF_HELP,

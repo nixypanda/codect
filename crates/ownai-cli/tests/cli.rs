@@ -116,6 +116,59 @@ fn show_elm_only_defaults_to_head_in_both_modes() {
 }
 
 #[test]
+fn show_all_four_languages_in_byte_order() {
+    let repo = TestRepo::init();
+    repo.write("src/App.elm", &fixture("elm/normal-module/input.elm"));
+    repo.write("src/Main.hs", &fixture("haskell/canonical-types/input.hs"));
+    repo.write("src/app.py", &fixture("python/canonical-types/input.py"));
+    repo.write("src/lib.rs", &fixture("rust/structs/input.rs"));
+    repo.commit("base");
+
+    let expected = format!(
+        "== src/App.elm ==\n{}\n== src/Main.hs ==\n{}\n== src/app.py ==\n{}\n== src/lib.rs ==\n{}",
+        fixture("elm/normal-module/types.txt"),
+        fixture("haskell/canonical-types/types.txt"),
+        fixture("python/canonical-types/types.txt"),
+        fixture("rust/structs/types.txt"),
+    );
+
+    ownai_in(&repo, &["show", "--mode", "types"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(expected))
+        .stderr(predicates::str::is_empty());
+}
+
+#[test]
+fn focused_diff_hides_body_changes_across_haskell_and_python() {
+    let repo = TestRepo::init();
+    repo.write(
+        "src/Model.hs",
+        "module Model where\n\narea :: Int -> Int\narea width = width * 2\n",
+    );
+    repo.write(
+        "src/model.py",
+        "def area(width: int) -> int:\n    return width * 2\n",
+    );
+    repo.commit("base");
+    repo.write(
+        "src/Model.hs",
+        "module Model where\n\narea :: Int -> Int\narea width = width * 3\n",
+    );
+    repo.write(
+        "src/model.py",
+        "def area(width: int) -> int:\n    return width * 3\n",
+    );
+    repo.commit("body only");
+
+    ownai_in(&repo, &["diff", "--mode", "signatures", "HEAD^", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty())
+        .stderr(predicates::str::is_empty());
+}
+
+#[test]
 fn show_rust_only_in_both_modes() {
     let repo = TestRepo::init();
     repo.write("src/lib.rs", &fixture("rust/structs/input.rs"));

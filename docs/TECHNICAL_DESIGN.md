@@ -8,7 +8,7 @@ This document specifies how to implement the OwnAI MVP. It is intended to be det
 
 The MVP supports:
 
-- Elm and Rust source files.
+- Elm, Haskell, Python, and Rust source files.
 - Types and Signatures projection modes.
 - Showing a projection for a Git commit.
 - Diffing projections from two Git commits.
@@ -23,7 +23,7 @@ The MVP does not perform type inference, expand macros, inspect function bodies,
 | Implementation language | Rust, stable toolchain, Rust 2024 edition |
 | Project structure | Cargo workspace with separate core, language, Git, and CLI crates |
 | Git access | `gix`, read-only, behind an OwnAI-owned interface |
-| Parsing | Tree-sitter with the Elm and Rust grammars |
+| Parsing | Tree-sitter with the Elm, Haskell, Python, and Rust grammars |
 | Projection | Language-specific extraction into a small shared projection model |
 | Rendering | Deterministic, language-specific canonical rendering |
 | Diffing | Line-oriented patience diff over canonical projected text |
@@ -57,6 +57,18 @@ crates/
       revision.rs
       tree.rs
   ownai-language-elm/
+    src/
+      lib.rs
+      extract.rs
+      render.rs
+      syntax.rs
+  ownai-language-haskell/
+    src/
+      lib.rs
+      extract.rs
+      render.rs
+      syntax.rs
+  ownai-language-python/
     src/
       lib.rs
       extract.rs
@@ -120,8 +132,11 @@ ownai-cli
 ownai-tui           ──→ ownai-core
                     └──→ ownai-engine
 ownai-engine        ──→ ownai-core, ownai-git
-                    └──→ ownai-language-elm, ownai-language-rust
+                    └──→ ownai-language-elm, ownai-language-haskell,
+                         ownai-language-python, ownai-language-rust
 ownai-language-elm  ──→ ownai-core
+ownai-language-haskell ──→ ownai-core
+ownai-language-python  ──→ ownai-core
 ownai-language-rust ──→ ownai-core
 ownai-git           ──→ ownai-core
 ```
@@ -145,6 +160,8 @@ Declare shared dependency versions under `[workspace.dependencies]`. Initially u
 [workspace.dependencies]
 tree-sitter = "0.27"
 tree-sitter-elm = "5.9"
+tree-sitter-haskell = "0.23"
+tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 gix = { version = "0.87", default-features = false, features = [
   "auto-chain-error",
@@ -166,9 +183,12 @@ toml = "1"
 # Terminal frontend only. `ratatui` is built without its default feature bundle
 # so the enabled feature set stays auditable; the crossterm backend is the only
 # backend. `syntect` uses the pure-Rust `fancy-regex` backend, and `two-face`
-# supplies the bat syntax and theme assets delta uses.
+# supplies the bat syntax and theme assets delta uses. `terminal-colorsaurus`
+# asks the terminal for its background color (OSC 11) to pick the light or dark
+# flavor at startup.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"
+terminal-colorsaurus = "1"
 unicode-width = "0.2"
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
@@ -180,12 +200,14 @@ disabled (section 4.1).
 
 The terminal dependencies are used only by `ownai-tui`, behind the default-on
 `tui` feature of `ownai-cli`. With `--no-default-features`, none of `ratatui`,
-`crossterm`, `unicode-width`, `syntect`, or `two-face` may appear in
-`ownai-cli`'s dependency tree; this is enforced by `just check-workspace-nodefault`
-(section 18.1). `syntect` uses the `fancy-regex` backend so the build needs no
-Oniguruma C toolchain. The premium UI work adds no dependency: `ratatui` is
-still built with only its `crossterm` feature, and the palette and finder use an
-in-crate fuzzy matcher.
+`crossterm`, `terminal-colorsaurus`, `unicode-width`, `syntect`, or `two-face`
+may appear in `ownai-cli`'s dependency tree; this is enforced by
+`just check-workspace-nodefault` (section 18.1). `syntect` uses the
+`fancy-regex` backend so the build needs no Oniguruma C toolchain.
+`terminal-colorsaurus` shares `libc` and `mio` with crossterm and adds only
+`terminal-trx` and `xterm-color`. The premium UI work adds no other dependency:
+`ratatui` is still built with only its `crossterm` feature, and the palette and
+finder use an in-crate fuzzy matcher.
 
 Use current compatible releases for test-only dependencies:
 
@@ -226,9 +248,11 @@ Review this list whenever `gix` is upgraded because it is pre-1.0 and feature re
 
 ### 4.2 Tree-sitter features
 
-Use the native Tree-sitter runtime with its default `std` support. Do not enable Tree-sitter's WASM runtime. Load the grammars through `tree_sitter_elm::LANGUAGE` and `tree_sitter_rust::LANGUAGE`.
+Use the native Tree-sitter runtime with its default `std` support. Do not enable Tree-sitter's WASM runtime. Load the grammars through `tree_sitter_elm::LANGUAGE`, `tree_sitter_haskell::LANGUAGE`, `tree_sitter_python::LANGUAGE`, and `tree_sitter_rust::LANGUAGE`.
 
-At startup in tests, assert that both grammars can be assigned to a parser. Grammar upgrades must include a review of `NODE_TYPES` and all affected snapshots.
+At startup in tests, assert that every grammar can be assigned to a parser. Grammar upgrades must include a review of `NODE_TYPES` and all affected snapshots.
+
+The Haskell grammar's generated parser is large, so it increases build time and binary size noticeably; that cost is accepted for language support. Literate Haskell (`.lhs`) is not supported because the grammar cannot parse it, and CPP is not preprocessed, so a source file using `#if` fails as erroneous syntax under section 9 rather than being expanded.
 
 ## 5. Core model
 
@@ -244,6 +268,8 @@ pub enum ProjectionMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Language {
     Elm,
+    Haskell,
+    Python,
     Rust,
 }
 
@@ -258,6 +284,8 @@ pub enum ItemKind {
     Trait,
     TraitImplementation,
     AssociatedType,
+    TypeFamily,
+    PatternSynonym,
     Function,
     Method,
     Value,
@@ -310,11 +338,11 @@ Requirements:
 - Reject absolute paths and `..` traversal.
 - Contain paths with a byte-exact, boundary-aware `RepoPath::is_within` check, so a directory contains itself and its descendants but not a sibling whose name merely shares its prefix (`src` does not contain `src2/x.rs`).
 - Sort by raw path bytes for deterministic output.
-- Detect `.elm` and `.rs` using ASCII extension bytes.
+- Detect `.elm`, `.hs`, `.py`/`.pyi`, and `.rs` using ASCII extension bytes.
 - Escape invalid UTF-8 when displaying a path.
 - Do not convert a repository path to `PathBuf` merely to inspect a committed tree.
 
-Elm and Rust source contents must be valid UTF-8. A supported source blob containing invalid UTF-8 is a fatal projection diagnostic.
+All supported source contents must be valid UTF-8. A supported source blob containing invalid UTF-8 is a fatal projection diagnostic.
 
 ### 5.2 Stable keys
 
@@ -328,6 +356,12 @@ Stable keys identify declarations inside a projected file. They are not global d
 - Rust inherent implementation: normalized target type.
 - Rust trait implementation: normalized trait path plus normalized target type.
 - Rust associated item: implementation or trait key plus item kind and name.
+- Haskell module: declared module name.
+- Haskell top-level type, class, family, pattern, or value: module name, item kind, and declared name.
+- Haskell class or instance member: container key plus item kind and name. Instance members are keyed by the written method name.
+- Python file module: repository path.
+- Python class or type declaration: container, item kind, and declared name.
+- Python class member: class key, item kind (field, method, or variant), and declared name.
 
 If two declarations produce the same key, append a deterministic source-order ordinal. Never include byte offsets in the primary key because harmless edits before a declaration would destabilize it.
 
@@ -806,7 +840,7 @@ Rules:
 - The config is untrusted input. It is size-bounded to 1 MiB, a symlinked config is rejected rather than followed, and an empty or whitespace-only area name or an empty path list is rejected.
 - A path that is absolute, contains `..`, or is otherwise unusable is rejected. `.`, repeated slashes, and a trailing slash are normalized leniently; normalization is lexical and never consults the filesystem.
 - `--area` and `--path` are mutually exclusive: the `PathSelection` variants make the two selections disjoint by construction, and `clap` rejects a command that passes both with a usage error (exit `2`).
-- An area is satisfied when any one of its paths names something in the projected revision, or in either side of a diff. A group that matches nothing is fatal; a group that exists but contains no Elm or Rust files succeeds with empty output.
+- An area is satisfied when any one of its paths names something in the projected revision, or in either side of a diff. A group that matches nothing is fatal; a group that exists but contains no supported files succeeds with empty output.
 - A missing, unreadable, oversized, or malformed config is fatal (exit `1`, empty stdout). An unknown area name is likewise fatal and its diagnostic lists the known names.
 
 ## 15. Diagnostics and failure behavior
@@ -894,6 +928,33 @@ Required Rust cases:
 - Macro definitions and invocations that must be excluded.
 - Comments and formatting variations.
 
+Required Haskell cases:
+
+- Module headers with and without export lists, and files with no header.
+- `data` and `newtype` declarations, including record, prefix, and infix constructors.
+- GADTs and constructors with contexts.
+- Type synonyms, kind signatures, and type-role annotations.
+- Type and data families, abstract and closed, with instances.
+- Classes with superclass constraints, method signatures, and default methods.
+- Instances, including method heads and associated family instances.
+- `deriving` clauses with strategies and `via`.
+- Top-level signatures, annotated and unannotated bindings, and multi-name signatures.
+- Foreign imports and pattern-synonym signatures.
+- Preserved pragmas.
+- Imports, comments, Haddocks, and Template Haskell splices that must be excluded.
+- Comments and formatting variations.
+
+Required Python cases:
+
+- Classes with bases, keywords, and PEP 695 type parameters.
+- Dataclass-style annotated fields and enum members.
+- Type aliases, `TypeVar`/`NewType` declarations, and `.pyi` stubs.
+- Functions and methods with annotations, defaults, `async`, and decorators.
+- Module-level annotated and unannotated values.
+- Nested functions, lambdas, and local classes that must be excluded.
+- Imports and docstrings that must be excluded.
+- Comments and formatting variations.
+
 Fixture and test file location:
 
 - Unit tests live beside the code they cover.
@@ -905,7 +966,7 @@ Fixture and test file location:
 
 ### 16.3 Invariance tests
 
-For both languages, prove:
+For every language, prove:
 
 - Changing only a function body leaves both projections unchanged.
 - Changing comments leaves both projections unchanged.
@@ -924,7 +985,7 @@ Create real temporary repositories and commits. Test:
 - Annotated tag peeling.
 - Packed objects.
 - Added, deleted, modified, and unchanged supported files.
-- Mixed Elm and Rust commits.
+- Mixed-language commits.
 - Unsupported files ignored.
 - Symlink and submodule entries ignored.
 - Bare repository operation.
@@ -957,18 +1018,23 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
   `update` as a `Cmd` rather than being performed inline.
 - `ratatui::TestBackend` covers the file tree, empty states, help, diagnostics,
   responsive layouts, the modal overlays, syntax coloring, delta diff
-  backgrounds, intra-line emphasis, hunk headers, and side-by-side wrapping.
+  backgrounds, intra-line emphasis, hunk headers, and side-by-side wrapping. A
+  coverage test renders both flavors and asserts no cell keeps the terminal's
+  default background, so the palette is proven to own the whole canvas.
 - Palette, finder, and search are covered by pure `update` tests (filtering,
   action dispatch, selection, live matches, stepping) and by rendered
   `TestBackend` tests. The fuzzy matcher has its own unit tests, including a
   scoring order between consecutive and scattered matches.
 - `theme.rs` unit tests cover capability resolution (truecolor, 256, 16, and
-  `NO_COLOR`) and the dark palette's delta defaults.
+  `NO_COLOR`), the dark palette's delta defaults, and the `OWNAI_THEME` override:
+  `dark`/`light` are explicit and unknown values defer to the terminal query.
 - An injected terminal driver covers partial setup and matching cleanup; a PTY
-  smoke test runs where the platform supports one.
+  smoke test runs where the platform supports one. The PTY test waits for the
+  startup color query to finish before sending its quit key, since the query
+  reads standard input.
 - The feature graph is checked by `just check-workspace-nodefault`: the
-  no-default-features build must not link `ratatui`, `crossterm`, `syntect`, or
-  `two-face`.
+  no-default-features build must not link `ratatui`, `crossterm`,
+  `terminal-colorsaurus`, `syntect`, or `two-face`.
 - No test launches an editor, writes repository data, or depends on the
   developer's terminal configuration.
 
@@ -987,7 +1053,7 @@ Initial performance rules:
 - Do not build compiler projects or invoke external processes.
 - Do not enable parallel projection until deterministic tests and profiling exist.
 
-Add benchmarks for large synthetic trees and representative real Elm/Rust repositories before adding threads, persistent caches, or broader `gix` features.
+Add benchmarks for large synthetic trees and representative real repositories before adding threads, persistent caches, or broader `gix` features.
 
 The terminal frontend follows the same rules. It holds large, rarely-changed
 collections (`Content`, tree rows, visible paths) behind `Arc`, so cloning the
@@ -1156,7 +1222,7 @@ cargo tree -e features -p ownai-git
 cargo build -p ownai-cli --no-default-features
 ```
 
-Review the `cargo tree` command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features. The final build must succeed and link none of `ratatui`, `crossterm`, `syntect`, or `two-face`; `just check-workspace-nodefault` additionally asserts their absence with `cargo tree`.
+Review the `cargo tree` command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features. The final build must succeed and link none of `ratatui`, `crossterm`, `terminal-colorsaurus`, `syntect`, or `two-face`; `just check-workspace-nodefault` additionally asserts their absence with `cargo tree`.
 
 ## 19. Implementation sequence
 
@@ -1178,7 +1244,7 @@ Acceptance gate: the workspace builds and `ownai-core` has no Git, parser, or CL
 - Implement supported-blob tree traversal and reads.
 - Add temporary-repository integration tests.
 
-Acceptance gate: tests can enumerate and read Elm/Rust files from two commits without invoking the Git executable.
+Acceptance gate: tests can enumerate and read supported files from two commits without invoking the Git executable.
 
 ### Phase 3: Elm projector
 
@@ -1213,7 +1279,7 @@ Acceptance gate: body-only commits produce empty focused diffs; type and signatu
 - Add end-to-end CLI tests.
 - Ensure help text states focused-diff limitations.
 
-Acceptance gate: all documented command forms work in normal, bare, Elm-only, Rust-only, and mixed repositories.
+Acceptance gate: all documented command forms work in normal, bare, single-language, and mixed repositories.
 
 ### Phase 7: Hardening
 
@@ -1230,7 +1296,7 @@ Acceptance gate: a release build passes all tests and the dependency feature tre
 - Add `ownai-tui` with the TEA core and terminal runtime, behind the default-on `tui` feature.
 - Implement `ownai tui show`: file tree, projection pane, mode switch, scrolling, help, and the terminal-safety contract.
 
-Acceptance gate: `ownai tui show` works in normal, bare, Elm-only, Rust-only, and mixed repositories; CLI output is byte-for-byte unchanged; the no-default-features build links no terminal dependency.
+Acceptance gate: `ownai tui show` works in normal, bare, single-language, and mixed repositories; CLI output is byte-for-byte unchanged; the no-default-features build links no terminal dependency.
 
 ### Phase 9: Diff frontend
 
@@ -1245,12 +1311,28 @@ Acceptance gate: added, deleted, and modified projected files render correctly; 
 
 Acceptance gate: the documented keybindings work end to end, and every earlier frontend gate still passes.
 
+### Phase 11: Haskell and Python support
+
+- Add the `tree-sitter-haskell` and `tree-sitter-python` grammars and the
+  `ownai-language-haskell` and `ownai-language-python` crates.
+- Extend `Language`, `RepoPath` extension detection, and `ItemKind` in core.
+- Implement Haskell and Python extraction and canonical rendering (sections 23
+  and 24) with syntax, fixture, projector, and invariance tests.
+- Register the adapters in the engine's fixed projector list.
+- Add Haskell and Python syntax mapping and Nerd Font glyphs to the frontend.
+- Add mixed four-language end-to-end coverage.
+
+Acceptance gate: both new languages satisfy every required fixture and
+invariance test; a body-only change in either language produces an empty focused
+diff; mixed four-language `show` orders by raw path bytes; the full workspace
+check passes.
+
 ## 20. Completion definition
 
 The MVP implementation is complete when:
 
 - Both documented commands operate entirely through `gix` and never invoke Git.
-- Elm and Rust projections satisfy every product rule in both modes.
+- Elm, Haskell, Python, and Rust projections satisfy every product rule in both modes.
 - Formatting-, comment-, and body-only edits produce no focused diff.
 - Type and signature edits appear in the correct modes.
 - Mixed-language, added-file, and deleted-file comparisons work.
@@ -1261,7 +1343,7 @@ The MVP implementation is complete when:
 - All required tests and snapshots pass.
 - Only the approved `gix` features are enabled.
 - The terminal frontend opens, browses, and quits safely in normal, bare,
-  Elm-only, Rust-only, and mixed repositories, restoring the terminal on every
+  single-language, and mixed repositories, restoring the terminal on every
   exit path.
 - The frontend switches modes, changes scope and revisions, resizes the tree,
   and renders syntax-highlighted side-by-side diffs with hunk headers.
@@ -1377,9 +1459,11 @@ no persistent cache.
 
 ### 21.6 Syntax highlighting and diff styling
 
-- Syntax foregrounds come from `syntect` with the `two-face` bat assets (Rust
-  and Elm included), using the pure-Rust `fancy-regex` backend. The dark and
-  light UI flavors pair with `MonokaiExtended` and `MonokaiExtendedLight`.
+- Syntax foregrounds come from `syntect` with the `two-face` bat assets (Elm,
+  Haskell, Python, and Rust included), using the pure-Rust `fancy-regex`
+  backend. The dark UI flavor pairs with `MonokaiExtended` and the light flavor
+  with `Github`, which is built for a white background and keeps every token
+  dark enough to read.
 - Diff rows use delta's default full-line added and removed backgrounds, with a
   brighter intra-line emphasis on the bytes that differ, `+`/`-` gutter markers,
   hunk headers, and `⋯ n unchanged lines` indicators for collapsed gaps.
@@ -1397,9 +1481,21 @@ no persistent cache.
   `Capability`: truecolor, the 256-color xterm palette, the 16 ANSI colors, or
   no color. The theme is part of the `Model`, so `view` never reads the
   environment.
-- `OWNAI_THEME=light` selects the light flavor; otherwise the dark flavor is
-  used. `COLORTERM` and `TERM` select the capability, and `NO_COLOR` wins over
-  both.
+- The dark or light flavor is chosen at startup: `OWNAI_THEME=dark` and
+  `OWNAI_THEME=light` are explicit, and anything else (including unset) asks the
+  terminal for its background color with `terminal-colorsaurus` over `OSC 11`,
+  falling back to dark when the terminal does not answer. `COLORTERM` and `TERM`
+  select the capability, and `NO_COLOR` wins over both. The query runs once in
+  `run`, before crossterm's lazy event reader is first polled, and briefly
+  consumes a keystroke typed during startup.
+- `view` paints the whole frame with `palette.bg` and every pane block carries
+  that background, so the palette owns every cell and a terminal whose own
+  background differs from the palette never shows through.
+- Text drawn on a filled cell (chips, the diagnostic toast, the input cursor,
+  and a selected palette match) uses `Theme::ink`, which picks whichever of
+  `text` or `bg` contrasts more with the fill. This replaces the old
+  `palette.bg`-as-ink trick, which was legible in the dark flavor but near-white
+  on the light flavor's pale fills.
 - The palette and finder use a small dependency-free fuzzy matcher
   (`fuzzy.rs`); no new crate is added for navigation.
 - `icons.rs` holds an opt-in Nerd Font glyph set. Nerd Fonts cannot be detected
@@ -1431,12 +1527,152 @@ Use primary upstream documentation when an API detail in this design needs confi
 - [`gix` feature flags](https://docs.rs/crate/gix/latest/features)
 - [Tree-sitter Rust binding](https://docs.rs/tree-sitter/latest/tree_sitter/)
 - [Tree-sitter Elm grammar](https://github.com/elm-tooling/tree-sitter-elm)
+- [Tree-sitter Haskell grammar](https://github.com/tree-sitter/tree-sitter-haskell)
+- [Tree-sitter Python grammar](https://github.com/tree-sitter/tree-sitter-python)
 - [Tree-sitter Rust grammar](https://github.com/tree-sitter/tree-sitter-rust)
 - [`similar` diff crate](https://docs.rs/similar/latest/similar/)
 - [`clap` derive reference](https://docs.rs/clap/latest/clap/_derive/)
 - [`ratatui`](https://docs.rs/ratatui/latest/ratatui/)
 - [`crossterm`](https://docs.rs/crossterm/latest/crossterm/)
+- [`terminal-colorsaurus`](https://docs.rs/terminal-colorsaurus/latest/terminal_colorsaurus/)
 - [`syntect`](https://docs.rs/syntect/latest/syntect/)
 - [`two-face`](https://docs.rs/two-face/latest/two_face/)
 
 Pin resolved versions in `Cargo.lock`. When upgrading `gix` or a grammar, read its changelog, inspect feature resolution or `NODE_TYPES`, and run the complete fixture and integration suite before accepting new snapshots.
+
+## 23. Haskell projection
+
+The Haskell adapter lives in `ownai-language-haskell`. It owns the Haskell
+grammar and every Haskell node name through `syntax.rs`.
+
+### 23.1 General rules
+
+- Parse the optional module header and retain the declared module name; omit the
+  export list, exactly as Elm omits its exposing clause.
+- Omit imports, comments, and Haddocks.
+- Preserve pragmas (`{-# LANGUAGE ... #-}`, `{-# INLINE ... #-}`, and similar)
+  because they can change a declaration's meaning. A pragma prefixes the
+  declaration that follows it; a file-level pragma prefixes the module header.
+- Consider only top-level declarations and declarations inside a class or
+  instance body. Bindings inside `where` or `let` are never inspected.
+- Preserve declaration order after omitted declarations are removed.
+
+### 23.2 Types mode
+
+Include:
+
+- `data` and `newtype` declarations with type parameters, contexts, and kind
+  annotations.
+- Constructors in prefix, record, infix, and GADT form. A record renders one
+  field per indented line; multiple constructors render one per indented line.
+- `deriving` clauses with their strategies and `via` types.
+- `type` synonyms.
+- `type` and `data` families, including abstract and closed families with their
+  equations, and `type`/`data` instances.
+- `kind_signature` and `type_role` declarations.
+- Class headers with contexts, type parameters, functional dependencies, and
+  associated family declarations.
+- Instance headers, including associated type and data instances.
+- Standalone `deriving instance` declarations.
+
+Canonical examples:
+
+```haskell
+data User
+    = User UserId (Maybe Email)
+    | Anonymous
+    deriving (Eq, Show)
+
+data User = User
+    { name :: Text
+    , email :: Email
+    }
+    deriving (Eq, Show)
+
+class Eq a => Container f a where
+    empty :: f a
+```
+
+A class or instance in Types mode shows its header only; the `where` keyword is
+emitted only when a member is actually displayed, so a Types-mode class reads as
+`class Eq a => Container f a`.
+
+### 23.3 Signatures mode
+
+Include everything from Types mode plus:
+
+- Top-level type signatures, including multi-name signatures (`baz, qux :: Int`).
+- Top-level function and binding declarations that have no matching explicit
+  signature, rendered as their written head (`bar x`, `hidden`). A definition
+  whose name is covered by a signature is represented by the signature alone,
+  regardless of source order.
+- Class method signatures and default-method signatures.
+- Instance method heads, with their written argument patterns and no invented
+  types; a method definition already covered by a signature is not repeated.
+- Foreign imports.
+- Pattern-synonym signatures (`pattern Single :: a -> [a]`).
+
+Function, method, and binding bodies are never rendered, so a body-only edit
+leaves both projections unchanged.
+
+## 24. Python projection
+
+The Python adapter lives in `ownai-language-python`. It owns the Python grammar
+and every Python node name through `syntax.rs`.
+
+### 24.1 General rules
+
+- Use the repository-relative file path as the outer file context; Python has
+  no module declaration.
+- Omit imports, comments, and docstrings.
+- Preserve decorators because they can change a declaration's meaning
+  (`@dataclass`, `@property`, `@staticmethod`, `@overload`, and similar).
+- Consider only module- and class-level declarations. Functions, classes,
+  lambdas, and comprehensions inside a function body are never inspected.
+- Preserve declaration order after omitted declarations are removed.
+
+### 24.2 Types mode
+
+Include:
+
+- `class` declarations with base classes, keyword arguments, and PEP 695 type
+  parameters.
+- Class-level annotated attributes, rendered as fields.
+- Enum members of a class whose bases name an enum type, rendered like
+  constructors.
+- PEP 695 `type` aliases.
+- `TypeVar`, `ParamSpec`, `TypeVarTuple`, and `NewType` declarations.
+
+Canonical example:
+
+```python
+@dataclass(frozen=True)
+class Point(Base, metaclass=Meta):
+    x: float
+    y: float
+```
+
+### 24.3 Signatures mode
+
+Include everything from Types mode plus:
+
+- `def` and `async def` signatures at module and class scope, with parameters,
+  annotations, defaults, return types, decorators, and type parameters.
+- Module-level and class-level values with declared types, with the initializer
+  removed.
+- Module-level and class-level values without a declared type, rendered as their
+  bare name.
+- Function and method bodies are replaced with the `...` placeholder.
+- Unannotated declarations are rendered exactly as written; Python does not use
+  Elm's missing-annotation placeholder.
+
+Canonical examples:
+
+```python
+def load(id: UserId, *, source=None, **options) -> Profile | None: ...
+
+@staticmethod
+def parse(text: str) -> int: ...
+
+MAX: int
+```

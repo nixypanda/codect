@@ -7,12 +7,19 @@
 core      = ["crates/ownai-core/src"]
 git       = ["crates/ownai-git/src"]
 cli       = ["crates/ownai-cli/src"]
-languages = ["crates/ownai-language-elm/src", "crates/ownai-language-rust/src"]
+languages = [
+    "crates/ownai-language-elm/src",
+    "crates/ownai-language-haskell/src",
+    "crates/ownai-language-python/src",
+    "crates/ownai-language-rust/src",
+]
 
 seams = [
     "crates/ownai-core/src/lib.rs",
     "crates/ownai-git/src/lib.rs",
     "crates/ownai-language-elm/src/lib.rs",
+    "crates/ownai-language-haskell/src/lib.rs",
+    "crates/ownai-language-python/src/lib.rs",
     "crates/ownai-language-rust/src/lib.rs",
     "crates/ownai-cli/src/main.rs",
     "crates/ownai-cli/src/command.rs",

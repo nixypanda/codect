@@ -20,6 +20,13 @@
 >
 > `README.md`, `PRODUCT.md`, and `TECHNICAL_DESIGN.md` (section 21) now describe
 > the implemented terminal frontend.
+>
+> A follow-on change makes the light/dark choice automatic: the frontend asks
+> the terminal for its background color at startup (`terminal-colorsaurus`,
+> OSC 11), keeps `OWNAI_THEME=dark|light` as an override, and paints every cell
+> with the palette background so a white terminal no longer shows through behind
+> the dark palette. The light palette is a GitHub-inspired one and text on
+> filled cells picks a contrasting ink.
 
 ## 1. Delivery principle
 
