@@ -107,6 +107,12 @@ pub enum Command {
         #[arg(long, value_name = "URL", requires = "lens")]
         decision_endpoint: Option<String>,
 
+        /// Allow a non-default remote endpoint. A custom endpoint must be
+        /// explicitly allowed so a configuration typo cannot send repository
+        /// state to an unintended host.
+        #[arg(long, requires = "lens")]
+        allow_custom_endpoint: bool,
+
         /// Show the disclosure plan and affected paths without transmitting
         /// state.
         #[arg(long, requires = "lens")]
@@ -148,6 +154,12 @@ pub enum Command {
         /// Provider endpoint. Not supported by the `fake` provider.
         #[arg(long, value_name = "URL")]
         decision_endpoint: Option<String>,
+
+        /// Allow a non-default remote endpoint. A custom endpoint must be
+        /// explicitly allowed so a configuration typo cannot send repository
+        /// state to an unintended host.
+        #[arg(long)]
+        allow_custom_endpoint: bool,
 
         /// Minimum choice confidence counted as covered by the coverage gate.
         #[arg(long, value_name = "F", default_value_t = 0.55)]
@@ -423,6 +435,38 @@ mod tests {
     }
 
     #[test]
+    fn allow_custom_endpoint_without_a_lens_is_a_parse_error() {
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--allow-custom-endpoint",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn allow_custom_endpoint_parses_with_a_lens_and_provider() {
+        let parsed = parse(&[
+            "diff",
+            "--mode",
+            "signatures",
+            "HEAD~1",
+            "HEAD",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "typesafe",
+            "--allow-custom-endpoint",
+        ]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
     fn plain_diff_and_show_invocations_still_parse() {
         assert!(parse(&["diff", "--mode", "types", "HEAD~1", "HEAD"]).is_ok());
         assert!(
@@ -451,6 +495,21 @@ mod tests {
                 "f.json",
                 "--decision-provider",
                 "fake",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn eval_lens_accepts_allow_custom_endpoint() {
+        assert!(
+            parse(&[
+                "eval-lens",
+                "--fixtures",
+                "f.json",
+                "--decision-provider",
+                "typesafe",
+                "--allow-custom-endpoint",
             ])
             .is_ok()
         );

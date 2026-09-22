@@ -9,6 +9,8 @@ mod error;
 pub mod fake;
 mod model;
 mod provider;
+#[cfg(feature = "typesafe")]
+pub mod typesafe;
 
 pub use error::{DecisionError, ValidationError};
 pub use model::{
@@ -17,3 +19,7 @@ pub use model::{
     ScoreAnswer, ScoreLevel, ScoreQuestion, Usage,
 };
 pub use provider::DecisionProvider;
+#[cfg(feature = "typesafe")]
+pub use typesafe::{
+    DEFAULT_TYPESAFE_ENDPOINT, DEFAULT_TYPESAFE_MODEL, Secret, TypeSafeConfig, TypeSafeProvider,
+};

@@ -30,7 +30,7 @@ use crate::args::IconChoice;
 #[cfg(feature = "tui")]
 use crate::args::TuiCommand;
 use crate::args::{Cli, ColorChoice, Command as CliCommand, DecisionProviderChoice, LensChoice};
-use crate::decision::{self, ProviderBuildError, ProviderRoute};
+use crate::decision::{self, ProviderBuildError, ProviderOptions, ProviderRoute};
 use crate::disclosure::{self, DisclosureError, EndpointError};
 use crate::evaluation;
 use crate::output::{self, DocumentKind};
@@ -102,6 +102,7 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
         decision_provider,
         decision_model,
         decision_endpoint,
+        allow_custom_endpoint,
         choice_confidence_threshold,
     } = &cli.command
     {
@@ -110,6 +111,7 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
             *decision_provider,
             decision_model.as_deref(),
             decision_endpoint.as_deref(),
+            *allow_custom_endpoint,
             *choice_confidence_threshold,
         );
     }
@@ -146,6 +148,7 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
             decision_provider,
             decision_model,
             decision_endpoint,
+            allow_custom_endpoint,
             dry_run,
             accept_disclosure,
         } => {
@@ -168,8 +171,11 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
                 Some(LensChoice::Review) => review_diff(
                     diffs,
                     *decision_provider,
-                    decision_model.as_deref(),
-                    decision_endpoint.as_deref(),
+                    ProviderOptions {
+                        model: decision_model.as_deref(),
+                        endpoint: decision_endpoint.as_deref(),
+                        allow_custom_endpoint: *allow_custom_endpoint,
+                    },
                     *dry_run,
                     *accept_disclosure,
                     cli.color,
@@ -197,6 +203,7 @@ fn eval_lens(
     provider_choice: DecisionProviderChoice,
     model: Option<&str>,
     endpoint: Option<&str>,
+    allow_custom_endpoint: bool,
     threshold: f64,
 ) -> Result<CommandOutcome, CliError> {
     if let Some(url) = endpoint {
@@ -212,8 +219,15 @@ fn eval_lens(
         source: Box::new(source),
     })?;
     let cases = eval::load_cases(&json).map_err(eval_failure)?;
-    let provider =
-        decision::build_provider(provider_choice, model, endpoint).map_err(provider_failure)?;
+    let provider = decision::build_provider(
+        provider_choice,
+        ProviderOptions {
+            model,
+            endpoint,
+            allow_custom_endpoint,
+        },
+    )
+    .map_err(provider_failure)?;
 
     let report = eval::evaluate(
         provider.as_ref(),
@@ -238,8 +252,7 @@ fn eval_lens(
 fn review_diff(
     diffs: Vec<FileDiff>,
     provider_choice: Option<DecisionProviderChoice>,
-    model: Option<&str>,
-    endpoint: Option<&str>,
+    options: ProviderOptions<'_>,
     dry_run: bool,
     accept_disclosure: bool,
     color: ColorChoice,
@@ -250,17 +263,21 @@ fn review_diff(
 
     // Validate and parse the endpoint before building any state, so a malformed
     // URL is a typed error rather than something a provider sees.
-    let host = match endpoint {
+    let host = match options.endpoint {
         Some(url) => Some(disclosure::endpoint_host(url).map_err(endpoint_failure)?),
         None => None,
     };
+
+    // Resolve the model once so the disclosure plan and the provider agree even
+    // when the alias comes from the environment or a provider default.
+    let resolved_model = decision::resolve_model(provider_choice, options.model);
 
     let lens = ReviewLens::new(DEFAULT_MAX_STATE_BYTES).map_err(review_failure)?;
     let plan = disclosure::review_plan(
         provider_choice.label(),
         route,
         host.as_deref(),
-        model,
+        resolved_model.as_deref(),
         &lens,
         &diffs,
     );
@@ -287,8 +304,14 @@ fn review_diff(
         ProviderRoute::LocalTest => {}
     }
 
-    let provider =
-        decision::build_provider(provider_choice, model, endpoint).map_err(provider_failure)?;
+    let provider = decision::build_provider(
+        provider_choice,
+        ProviderOptions {
+            model: resolved_model.as_deref(),
+            ..options
+        },
+    )
+    .map_err(provider_failure)?;
 
     // `diff_document` consumes owned projections and re-sorts by path; the
     // clone keeps the engine-ordered diffs for per-file review.

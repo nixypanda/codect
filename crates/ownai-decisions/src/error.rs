@@ -8,6 +8,9 @@ pub enum ValidationError {
     #[error("{field} must not be empty")]
     Empty { field: &'static str },
 
+    #[error("provider response could not be parsed: {message}")]
+    MalformedResponse { message: String },
+
     #[error("question id `{value}` contains unsupported characters")]
     InvalidQuestionId { value: String },
 

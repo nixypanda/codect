@@ -10,8 +10,9 @@ name = "ownai"
 path = "src/main.rs"
 
 [features]
-default = ["tui"]
+default = ["tui", "typesafe"]
 tui = ["dep:ownai-tui"]
+typesafe = ["ownai-decisions/typesafe"]
 
 [dependencies]
 ownai-core.workspace = true
@@ -35,3 +36,4 @@ assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
 portable-pty.workspace = true
+tiny_http.workspace = true

@@ -63,12 +63,13 @@ check-workspace-clippy:
 check-workspace-features:
     cargo tree -e features -p ownai-git
 
-# The terminal frontend is a default-on optional feature; building without
-# defaults must neither fail nor pull ratatui or crossterm into the graph.
+# The terminal frontend and the remote TypeSafe provider are default-on
+# optional features; building without defaults must neither fail nor pull
+# ratatui, crossterm, terminal-colorsaurus, or an HTTP client into the graph.
 check-workspace-nodefault:
     cargo build -p ownai-cli --no-default-features
-    @if cargo tree -p ownai-cli --no-default-features | grep -Eq '(ratatui|crossterm|terminal-colorsaurus)'; then \
-        echo "error: ratatui/crossterm/terminal-colorsaurus leaked into the no-default-features build" >&2; \
+    @if cargo tree -p ownai-cli --no-default-features | grep -Eq '(ratatui|crossterm|terminal-colorsaurus|ureq)'; then \
+        echo "error: ratatui/crossterm/terminal-colorsaurus/ureq leaked into the no-default-features build" >&2; \
         exit 1; \
     fi
 

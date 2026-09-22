@@ -2,13 +2,18 @@
 //!
 //! The fake provider is always compiled and never opens a network connection. It
 //! answers every question from the request's own shape, so it is reproducible and
-//! backs the Phase 1 end-to-end test. The real providers are wired in later
-//! steps; until then [`build_provider`] reports them as unavailable rather than
+//! backs the Phase 1 end-to-end test. [`build_provider`] also constructs the
+//! optional TypeSafe provider when the `typesafe` feature is enabled; it reports
+//! any provider that is unavailable in this build as a typed error rather than
 //! silently substituting a different implementation.
 
 use ownai_decisions::{
     Answer, ChoiceAnswer, DecisionError, DecisionProvider, DecisionRequest, DecisionResponse,
     NoulAnswer, Probability, Question, ScoreAnswer,
+};
+#[cfg(feature = "typesafe")]
+use ownai_decisions::{
+    DEFAULT_TYPESAFE_ENDPOINT, DEFAULT_TYPESAFE_MODEL, Secret, TypeSafeConfig, TypeSafeProvider,
 };
 
 use crate::args::DecisionProviderChoice;
@@ -52,6 +57,33 @@ pub enum ProviderBuildError {
     /// The requested provider does not accept an explicit endpoint.
     #[error("the `{provider}` decision provider does not support `--decision-endpoint`")]
     EndpointUnsupported { provider: &'static str },
+
+    /// The provider needs an environment credential that is missing or empty.
+    #[cfg_attr(not(feature = "typesafe"), allow(dead_code))]
+    #[error("the `{provider}` decision provider requires the `{variable}` environment variable")]
+    MissingCredential {
+        provider: &'static str,
+        variable: &'static str,
+    },
+
+    /// An explicit endpoint was supplied without the opt-in flag.
+    #[cfg_attr(not(feature = "typesafe"), allow(dead_code))]
+    #[error(
+        "the `{provider}` decision provider requires `--allow-custom-endpoint` for a custom endpoint"
+    )]
+    CustomEndpointNotAllowed { provider: &'static str },
+}
+
+/// The provider-construction inputs gathered from the command line.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProviderOptions<'a> {
+    /// An explicit model alias from `--decision-model`.
+    pub model: Option<&'a str>,
+    /// An explicit endpoint from `--decision-endpoint`.
+    pub endpoint: Option<&'a str>,
+    /// Whether an explicit endpoint has been explicitly allowed.
+    #[cfg_attr(not(feature = "typesafe"), allow(dead_code))]
+    pub allow_custom_endpoint: bool,
 }
 
 /// A deterministic, network-free [`DecisionProvider`] for tests and fixtures.
@@ -152,28 +184,105 @@ fn answer_for(question: &Question) -> Answer {
     }
 }
 
+/// Resolves the effective model alias a provider would use, without building it.
+///
+/// The dry-run and disclosure plans call this so their `model:` line matches the
+/// provider that will actually run. For the `fake` provider a missing alias
+/// stays `None`, because its disclosed default revision is an implementation
+/// detail. TypeSafe falls back to `OWNAI_DECISION_MODEL` and then to
+/// [`DEFAULT_TYPESAFE_MODEL`], matching [`build_provider`].
+pub fn resolve_model(choice: DecisionProviderChoice, flag: Option<&str>) -> Option<String> {
+    match choice {
+        DecisionProviderChoice::Fake | DecisionProviderChoice::Laya => flag.map(str::to_owned),
+        DecisionProviderChoice::Typesafe => {
+            #[cfg(feature = "typesafe")]
+            {
+                Some(
+                    flag.map(str::to_owned)
+                        .or_else(env_model)
+                        .unwrap_or_else(|| DEFAULT_TYPESAFE_MODEL.to_owned()),
+                )
+            }
+            #[cfg(not(feature = "typesafe"))]
+            {
+                flag.map(str::to_owned)
+            }
+        }
+    }
+}
+
+/// Reads `OWNAI_DECISION_MODEL`, treating an empty value as unset.
+#[cfg(feature = "typesafe")]
+fn env_model() -> Option<String> {
+    std::env::var("OWNAI_DECISION_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
 /// Constructs the decision provider selected on the command line.
 ///
 /// `endpoint` is rejected by the fake provider so a flag that cannot take effect
-/// is never silently ignored.
+/// is never silently ignored. For TypeSafe any explicit endpoint requires
+/// [`ProviderOptions::allow_custom_endpoint`], even one equal to the default, so
+/// a configuration typo cannot redirect repository state to another host. The
+/// API key is read only from `TYPESAFE_API_KEY`, never from a flag or config.
 pub fn build_provider(
     choice: DecisionProviderChoice,
-    model: Option<&str>,
-    endpoint: Option<&str>,
+    options: ProviderOptions<'_>,
 ) -> Result<Box<dyn DecisionProvider>, ProviderBuildError> {
     match choice {
         DecisionProviderChoice::Fake => {
-            if endpoint.is_some() {
+            if options.endpoint.is_some() {
                 return Err(ProviderBuildError::EndpointUnsupported { provider: "fake" });
             }
-            let model_revision = model.unwrap_or(DEFAULT_FAKE_MODEL_REVISION);
+            let model_revision = options.model.unwrap_or(DEFAULT_FAKE_MODEL_REVISION);
             Ok(Box::new(FakeDecisionProvider::new(model_revision)))
         }
-        DecisionProviderChoice::Typesafe => Err(ProviderBuildError::Unavailable {
-            provider: "typesafe",
-        }),
+        DecisionProviderChoice::Typesafe => build_typesafe(options),
         DecisionProviderChoice::Laya => Err(ProviderBuildError::Unavailable { provider: "laya" }),
     }
+}
+
+/// Builds the TypeSafe provider when the feature is enabled.
+#[cfg(feature = "typesafe")]
+fn build_typesafe(
+    options: ProviderOptions<'_>,
+) -> Result<Box<dyn DecisionProvider>, ProviderBuildError> {
+    let endpoint = match options.endpoint {
+        Some(endpoint) => {
+            if !options.allow_custom_endpoint {
+                return Err(ProviderBuildError::CustomEndpointNotAllowed {
+                    provider: "typesafe",
+                });
+            }
+            endpoint.to_owned()
+        }
+        None => DEFAULT_TYPESAFE_ENDPOINT.to_owned(),
+    };
+
+    let model = resolve_model(DecisionProviderChoice::Typesafe, options.model)
+        .unwrap_or_else(|| DEFAULT_TYPESAFE_MODEL.to_owned());
+
+    let api_key = std::env::var("TYPESAFE_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(ProviderBuildError::MissingCredential {
+            provider: "typesafe",
+            variable: "TYPESAFE_API_KEY",
+        })?;
+
+    let config = TypeSafeConfig::new(endpoint, model, Secret::new(api_key));
+    Ok(Box::new(TypeSafeProvider::new(config)))
+}
+
+/// Reports TypeSafe as unavailable when the feature is disabled.
+#[cfg(not(feature = "typesafe"))]
+fn build_typesafe(
+    _options: ProviderOptions<'_>,
+) -> Result<Box<dyn DecisionProvider>, ProviderBuildError> {
+    Err(ProviderBuildError::Unavailable {
+        provider: "typesafe",
+    })
 }
 
 #[cfg(test)]
@@ -286,8 +395,14 @@ mod tests {
 
     #[test]
     fn fake_provider_honours_a_model_revision_override() {
-        let provider = build_provider(DecisionProviderChoice::Fake, Some("custom-model"), None)
-            .expect("the fake provider builds");
+        let provider = build_provider(
+            DecisionProviderChoice::Fake,
+            ProviderOptions {
+                model: Some("custom-model"),
+                ..ProviderOptions::default()
+            },
+        )
+        .expect("the fake provider builds");
         let response = provider
             .evaluate(&sample_request())
             .expect("evaluate succeeds");
@@ -295,22 +410,42 @@ mod tests {
     }
 
     #[test]
-    fn build_provider_reports_typesafe_and_laya_as_unavailable() {
-        for choice in [
+    fn build_provider_reports_laya_as_unavailable() {
+        let error = build_error(DecisionProviderChoice::Laya, ProviderOptions::default());
+        assert!(matches!(
+            error,
+            ProviderBuildError::Unavailable { provider: "laya" }
+        ));
+    }
+
+    #[cfg(feature = "typesafe")]
+    #[test]
+    fn typesafe_rejects_a_custom_endpoint_without_opt_in() {
+        // The endpoint check precedes credential lookup, so this is
+        // deterministic even when `TYPESAFE_API_KEY` is set in the environment.
+        let error = build_error(
             DecisionProviderChoice::Typesafe,
-            DecisionProviderChoice::Laya,
-        ] {
-            let error = build_error(choice, None, None);
-            assert!(matches!(error, ProviderBuildError::Unavailable { .. }));
-        }
+            ProviderOptions {
+                endpoint: Some("http://127.0.0.1:8080"),
+                ..ProviderOptions::default()
+            },
+        );
+        assert!(matches!(
+            error,
+            ProviderBuildError::CustomEndpointNotAllowed {
+                provider: "typesafe"
+            }
+        ));
     }
 
     #[test]
     fn fake_provider_rejects_an_endpoint() {
         let error = build_error(
             DecisionProviderChoice::Fake,
-            None,
-            Some("http://127.0.0.1:8080"),
+            ProviderOptions {
+                endpoint: Some("http://127.0.0.1:8080"),
+                ..ProviderOptions::default()
+            },
         );
         assert!(matches!(
             error,
@@ -335,10 +470,9 @@ mod tests {
     /// failure, so the `Ok` side never needs a `Debug` bound.
     fn build_error(
         choice: DecisionProviderChoice,
-        model: Option<&str>,
-        endpoint: Option<&str>,
+        options: ProviderOptions<'_>,
     ) -> ProviderBuildError {
-        match build_provider(choice, model, endpoint) {
+        match build_provider(choice, options) {
             Ok(_) => panic!("expected provider construction to fail"),
             Err(error) => error,
         }
