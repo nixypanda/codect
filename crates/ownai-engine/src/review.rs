@@ -10,7 +10,7 @@
 //! kind, and canonical text come from the projection model; the provider only
 //! supplies bounded judgments.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ownai_core::{ItemKind, Language, ProjectionMode, RepoPath};
 use ownai_decisions::{
@@ -19,6 +19,7 @@ use ownai_decisions::{
     ValidationError,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::engine::FileDiff;
 use crate::item_diff::{ItemChangeKind, ItemDiff};
@@ -84,6 +85,141 @@ const RISK_LEVELS: [(&str, &str); 5] = [
         "Broad or irreversible risk requiring specialist review",
     ),
 ];
+
+/// The largest number of concerns one taxonomy may define.
+const MAX_CONCERNS: usize = 32;
+
+/// The largest allowed concise concern key, in bytes.
+const MAX_CONCERN_KEY_BYTES: usize = 64;
+
+/// The largest allowed concern description, in bytes.
+const MAX_CONCERN_DESCRIPTION_BYTES: usize = 256;
+
+/// The required fallback key every taxonomy must define.
+const OTHER_CONCERN: &str = "other";
+
+/// A validated, ordered `concern` taxonomy for the review lens.
+///
+/// Repository configuration is untrusted, size-bounded data, so a taxonomy is
+/// constructed only through [`ReviewConcerns::new`], which rejects empty
+/// taxonomies, a missing `other`, excessive option counts, invalid or duplicate
+/// keys, and empty or oversized descriptions. The order is significant: the
+/// provider receives the concerns in exactly this order, and the question-set
+/// digest binds it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReviewConcerns {
+    options: Vec<(String, String)>,
+}
+
+/// A review concern taxonomy that cannot be used as a question.
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+pub enum ReviewConcernsError {
+    /// The taxonomy defined no concerns at all.
+    #[error("a review concern taxonomy must define at least one concern")]
+    Empty,
+
+    /// The required fallback concern was absent.
+    #[error("a review concern taxonomy must include an `other` concern")]
+    MissingOther,
+
+    /// The taxonomy defined more concerns than the lens accepts.
+    #[error(
+        "a review concern taxonomy defines {count} concerns, exceeding the {maximum}-concern limit"
+    )]
+    TooManyConcerns { count: usize, maximum: usize },
+
+    /// A concern key was empty, too long, or contained a disallowed byte.
+    #[error("review concern key `{key}` is empty, too long, or not a plain ASCII key")]
+    InvalidConcernKey { key: String },
+
+    /// The same key appeared more than once.
+    #[error("review concern `{key}` is defined more than once")]
+    DuplicateConcern { key: String },
+
+    /// A description was empty after trimming.
+    #[error("review concern `{key}` has an empty description")]
+    EmptyConcernDescription { key: String },
+
+    /// A description exceeded the byte limit.
+    #[error(
+        "review concern `{key}` description is {bytes} bytes, exceeding the {maximum}-byte limit"
+    )]
+    ConcernDescriptionTooLong {
+        key: String,
+        bytes: usize,
+        maximum: usize,
+    },
+}
+
+impl ReviewConcerns {
+    /// Validates ordered `(key, description)` pairs into a taxonomy.
+    pub fn new(
+        options: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self, ReviewConcernsError> {
+        let options: Vec<(String, String)> = options.into_iter().collect();
+        if options.is_empty() {
+            return Err(ReviewConcernsError::Empty);
+        }
+        if options.len() > MAX_CONCERNS {
+            return Err(ReviewConcernsError::TooManyConcerns {
+                count: options.len(),
+                maximum: MAX_CONCERNS,
+            });
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut has_other = false;
+        for (key, description) in &options {
+            if !valid_concern_key(key) {
+                return Err(ReviewConcernsError::InvalidConcernKey { key: key.clone() });
+            }
+            if !seen.insert(key.as_str()) {
+                return Err(ReviewConcernsError::DuplicateConcern { key: key.clone() });
+            }
+            has_other |= key == OTHER_CONCERN;
+            if description.trim().is_empty() {
+                return Err(ReviewConcernsError::EmptyConcernDescription { key: key.clone() });
+            }
+            if description.len() > MAX_CONCERN_DESCRIPTION_BYTES {
+                return Err(ReviewConcernsError::ConcernDescriptionTooLong {
+                    key: key.clone(),
+                    bytes: description.len(),
+                    maximum: MAX_CONCERN_DESCRIPTION_BYTES,
+                });
+            }
+        }
+
+        if !has_other {
+            return Err(ReviewConcernsError::MissingOther);
+        }
+        Ok(Self { options })
+    }
+
+    /// The built-in taxonomy, in its fixed order.
+    ///
+    /// This is the source the constants above define; it satisfies the same
+    /// invariants, so construction cannot fail.
+    pub fn builtin() -> Self {
+        let options = CONCERN_OPTIONS
+            .iter()
+            .map(|(key, description)| ((*key).to_owned(), (*description).to_owned()));
+        Self::new(options).expect("the built-in concern taxonomy is valid")
+    }
+
+    /// The ordered `(key, description)` pairs sent as the concern options.
+    pub fn options(&self) -> &[(String, String)] {
+        &self.options
+    }
+}
+
+/// A concern key is a short, portable ASCII token.
+fn valid_concern_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= MAX_CONCERN_KEY_BYTES
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
 
 /// A decoded choice answer: the selected value, its full distribution, and the
 /// provider's confidence.
@@ -185,24 +321,55 @@ pub enum ReviewError {
 /// The fixed v1 question set plus the local serialized-state byte limit.
 pub struct ReviewLens {
     questions: Vec<Question>,
+    concerns: ReviewConcerns,
+    question_digest: String,
     max_state_bytes: usize,
 }
 
 impl ReviewLens {
-    /// Builds the fixed v1 question set.
+    /// Builds the question set over the built-in concern taxonomy.
     ///
     /// A zero `max_state_bytes` is rejected before a provider can ever be
     /// called.
     pub fn new(max_state_bytes: usize) -> Result<Self, ReviewError> {
+        Self::with_concerns(max_state_bytes, ReviewConcerns::builtin())
+    }
+
+    /// Builds the question set over a configured concern taxonomy.
+    ///
+    /// A zero `max_state_bytes` is rejected before a provider can ever be
+    /// called. The taxonomy is validated by [`ReviewConcerns::new`]; the lens
+    /// only turns it into a question and folds it into the question-set digest.
+    pub fn with_concerns(
+        max_state_bytes: usize,
+        concerns: ReviewConcerns,
+    ) -> Result<Self, ReviewError> {
         if max_state_bytes == 0 {
             return Err(ReviewError::InvalidStateLimit { limit_bytes: 0 });
         }
-        let questions =
-            build_questions().map_err(|source| ReviewError::InvalidQuestions { source })?;
+        let questions = build_questions(&concerns)
+            .map_err(|source| ReviewError::InvalidQuestions { source })?;
+        let question_digest = question_set_digest(&questions);
         Ok(Self {
             questions,
+            concerns,
+            question_digest,
             max_state_bytes,
         })
+    }
+
+    /// The concern taxonomy this lens sends, in order.
+    pub fn concerns(&self) -> &ReviewConcerns {
+        &self.concerns
+    }
+
+    /// The lowercase hexadecimal SHA-256 of the complete question set.
+    ///
+    /// The digest covers question IDs, kinds, order, instructions, option
+    /// keys and descriptions, and score level labels and descriptions, so a
+    /// change to any of them, including the concern taxonomy, changes it.
+    pub fn question_digest(&self) -> &str {
+        &self.question_digest
     }
 
     /// The configured serialized-state byte limit for one review unit.
@@ -286,18 +453,11 @@ impl ReviewLens {
     }
 }
 
-fn build_questions() -> Result<Vec<Question>, ValidationError> {
-    // The review lens requires an `other` fallback even though the shared
-    // choice constructor does not. The constants are static, so this is an
-    // invariant assertion rather than caller validation.
-    assert!(
-        CONCERN_OPTIONS.iter().any(|(key, _)| *key == "other"),
-        "the review lens concern question must include an `other` option"
-    );
-
-    let options = CONCERN_OPTIONS
+fn build_questions(concerns: &ReviewConcerns) -> Result<Vec<Question>, ValidationError> {
+    let options = concerns
+        .options()
         .iter()
-        .map(|(key, description)| ChoiceOption::new(*key, Some((*description).to_owned())))
+        .map(|(key, description)| ChoiceOption::new(key.clone(), Some(description.clone())))
         .collect::<Result<Vec<_>, _>>()?;
     let concern = ChoiceQuestion::new(
         QuestionId::new(CONCERN_ID)?,
@@ -345,6 +505,56 @@ fn build_questions() -> Result<Vec<Question>, ValidationError> {
         Question::Noul(needs_migration),
         Question::Noul(security_sensitive),
     ])
+}
+
+/// A stable lowercase hexadecimal SHA-256 over the complete question set.
+///
+/// `Question` deliberately does not implement `Serialize`, so the canonical
+/// value is built here from the public accessors. `serde_json` sorts object
+/// keys, so the encoding is deterministic across runs and machines.
+fn question_set_digest(questions: &[Question]) -> String {
+    let canonical = Value::Array(questions.iter().map(question_value).collect());
+    let bytes = serde_json::to_vec(&canonical).expect("the question set is always serializable");
+    let digest = Sha256::digest(&bytes);
+    hex_lower(digest.as_slice())
+}
+
+/// The canonical JSON value of one question: ID, kind, instructions, and the
+/// option or level labels and descriptions.
+fn question_value(question: &Question) -> Value {
+    match question {
+        Question::Choice(question) => json!({
+            "id": question.id().as_str(),
+            "kind": "choice",
+            "instructions": question.instructions(),
+            "options": question
+                .options()
+                .iter()
+                .map(|option| json!({
+                    "key": option.key(),
+                    "description": option.description(),
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        Question::Score(question) => json!({
+            "id": question.id().as_str(),
+            "kind": "score",
+            "instructions": question.instructions(),
+            "levels": question
+                .levels()
+                .iter()
+                .map(|level| json!({
+                    "label": level.label(),
+                    "description": level.description(),
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        Question::Noul(question) => json!({
+            "id": question.id().as_str(),
+            "kind": "noul",
+            "instructions": question.instructions(),
+        }),
+    }
 }
 
 /// The canonical serialized encoding of one item's review state.
@@ -520,6 +730,44 @@ mod tests {
 
     fn prob(value: f64) -> Probability {
         Probability::new(value).expect("valid probability")
+    }
+
+    fn concerns(pairs: &[(&str, &str)]) -> ReviewConcerns {
+        ReviewConcerns::new(
+            pairs
+                .iter()
+                .map(|(key, description)| ((*key).to_owned(), (*description).to_owned())),
+        )
+        .expect("valid concern taxonomy")
+    }
+
+    /// A response whose concern distribution matches a configured taxonomy.
+    fn configured_response(keys: &[&str], selected: &str) -> DecisionResponse {
+        let selected_probability = 0.6;
+        let share = (1.0 - selected_probability) / (keys.len() - 1) as f64;
+        let probabilities = keys
+            .iter()
+            .map(|key| {
+                let value = if *key == selected {
+                    selected_probability
+                } else {
+                    share
+                };
+                ((*key).to_owned(), prob(value))
+            })
+            .collect();
+        let concern = ChoiceAnswer::new(selected, probabilities, prob(0.9))
+            .expect("valid configured concern answer");
+        let answers = vec![
+            (qid(CONCERN_ID), Answer::Choice(concern)),
+            (qid(RISK_ID), score_answer(3.0)),
+            (qid(LIKELY_BREAKING_ID), noul_answer(0.5)),
+            (qid(NEEDS_TESTS_ID), noul_answer(0.5)),
+            (qid(NEEDS_DOCS_ID), noul_answer(0.5)),
+            (qid(NEEDS_MIGRATION_ID), noul_answer(0.5)),
+            (qid(SECURITY_SENSITIVE_ID), noul_answer(0.5)),
+        ];
+        DecisionResponse::new("fake", "fake-v1", answers, None).expect("valid response")
     }
 
     fn sample_path() -> RepoPath {
@@ -1171,5 +1419,196 @@ mod tests {
             }
             other => panic!("expected InvalidResponse, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn review_concerns_accepts_a_valid_taxonomy() {
+        let concerns = concerns(&[
+            ("engine", "Projection, Git access, and selection"),
+            ("other", "No listed concern is a good fit"),
+        ]);
+
+        assert_eq!(concerns.options().len(), 2);
+        assert_eq!(concerns.options()[0].0, "engine");
+        assert_eq!(concerns.options()[1].0, "other");
+        assert_eq!(
+            ReviewConcerns::builtin().options().len(),
+            CONCERN_OPTIONS.len()
+        );
+    }
+
+    #[test]
+    fn review_concerns_rejects_an_empty_taxonomy() {
+        assert_eq!(
+            ReviewConcerns::new(Vec::new()),
+            Err(ReviewConcernsError::Empty)
+        );
+    }
+
+    #[test]
+    fn review_concerns_requires_the_other_key() {
+        let error = ReviewConcerns::new(vec![("engine".to_owned(), "Engine behavior".to_owned())])
+            .expect_err("missing other");
+        assert_eq!(error, ReviewConcernsError::MissingOther);
+    }
+
+    #[test]
+    fn review_concerns_rejects_too_many_options() {
+        let mut options: Vec<(String, String)> = (0..MAX_CONCERNS)
+            .map(|index| (format!("concern-{index}"), "A concern".to_owned()))
+            .collect();
+        options.push((OTHER_CONCERN.to_owned(), "No listed concern".to_owned()));
+
+        let error = ReviewConcerns::new(options).expect_err("too many");
+        assert_eq!(
+            error,
+            ReviewConcernsError::TooManyConcerns {
+                count: MAX_CONCERNS + 1,
+                maximum: MAX_CONCERNS,
+            }
+        );
+    }
+
+    #[test]
+    fn review_concerns_rejects_invalid_and_oversized_keys() {
+        let invalid = [
+            "",
+            "has space",
+            "colon:name",
+            "sla/sh",
+            "dotted.name",
+            "unico\u{00e9}de",
+        ];
+        for key in invalid {
+            let error = ReviewConcerns::new(vec![
+                (key.to_owned(), "A concern".to_owned()),
+                (OTHER_CONCERN.to_owned(), "No listed concern".to_owned()),
+            ])
+            .expect_err("invalid key");
+            assert_eq!(
+                error,
+                ReviewConcernsError::InvalidConcernKey {
+                    key: key.to_owned()
+                },
+                "key {key:?} must be rejected"
+            );
+        }
+
+        let oversized = "k".repeat(MAX_CONCERN_KEY_BYTES + 1);
+        let error = ReviewConcerns::new(vec![
+            (oversized.clone(), "A concern".to_owned()),
+            (OTHER_CONCERN.to_owned(), "No listed concern".to_owned()),
+        ])
+        .expect_err("oversized key");
+        assert_eq!(
+            error,
+            ReviewConcernsError::InvalidConcernKey { key: oversized }
+        );
+    }
+
+    #[test]
+    fn review_concerns_rejects_duplicate_keys() {
+        let error = ReviewConcerns::new(vec![
+            ("engine".to_owned(), "First".to_owned()),
+            ("engine".to_owned(), "Second".to_owned()),
+            (OTHER_CONCERN.to_owned(), "No listed concern".to_owned()),
+        ])
+        .expect_err("duplicate");
+        assert_eq!(
+            error,
+            ReviewConcernsError::DuplicateConcern {
+                key: "engine".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn review_concerns_rejects_empty_descriptions() {
+        for description in ["", "   ", "\t\n"] {
+            let error = ReviewConcerns::new(vec![
+                ("engine".to_owned(), description.to_owned()),
+                (OTHER_CONCERN.to_owned(), "No listed concern".to_owned()),
+            ])
+            .expect_err("empty description");
+            assert_eq!(
+                error,
+                ReviewConcernsError::EmptyConcernDescription {
+                    key: "engine".to_owned()
+                },
+                "description {description:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn review_concerns_rejects_oversized_descriptions() {
+        let description = "x".repeat(MAX_CONCERN_DESCRIPTION_BYTES + 1);
+        let error = ReviewConcerns::new(vec![
+            ("engine".to_owned(), description),
+            (OTHER_CONCERN.to_owned(), "No listed concern".to_owned()),
+        ])
+        .expect_err("oversized description");
+        assert_eq!(
+            error,
+            ReviewConcernsError::ConcernDescriptionTooLong {
+                key: "engine".to_owned(),
+                bytes: MAX_CONCERN_DESCRIPTION_BYTES + 1,
+                maximum: MAX_CONCERN_DESCRIPTION_BYTES,
+            }
+        );
+    }
+
+    #[test]
+    fn with_concerns_sends_the_configured_option_keys_in_order() {
+        let lens = ReviewLens::with_concerns(
+            TEST_LIMIT,
+            concerns(&[
+                ("engine", "Projection, Git access, and selection"),
+                ("tui", "Terminal interaction and rendering"),
+                ("other", "No listed concern is a good fit"),
+            ]),
+        )
+        .expect("valid lens");
+        let provider = FakeProvider::new(vec![Ok(configured_response(
+            &["engine", "tui", "other"],
+            "engine",
+        ))]);
+
+        lens.review_item(&provider, modified_method())
+            .expect("review succeeds");
+
+        let requests = provider.requests();
+        let questions = requests[0].questions();
+        let Question::Choice(concern) = &questions[0] else {
+            panic!("concern must be a choice question");
+        };
+        let keys: Vec<&str> = concern.options().iter().map(ChoiceOption::key).collect();
+        assert_eq!(keys, vec!["engine", "tui", "other"]);
+    }
+
+    #[test]
+    fn question_digest_is_stable_and_depends_on_the_taxonomy() {
+        let builtin = ReviewLens::new(TEST_LIMIT).expect("valid lens");
+        let digest = builtin.question_digest();
+        assert_eq!(digest.len(), 64, "SHA-256 hex is 64 characters");
+        assert!(
+            digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "the digest must be lowercase hexadecimal: {digest}"
+        );
+
+        let same = ReviewLens::new(TEST_LIMIT).expect("valid lens");
+        assert_eq!(same.question_digest(), digest);
+
+        let configured = ReviewLens::with_concerns(
+            TEST_LIMIT,
+            concerns(&[
+                ("engine", "Projection, Git access, and selection"),
+                ("other", "No listed concern is a good fit"),
+            ]),
+        )
+        .expect("valid lens");
+        assert_ne!(configured.question_digest(), digest);
     }
 }

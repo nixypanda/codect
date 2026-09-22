@@ -83,6 +83,14 @@ impl Engine {
         Ok(config::Config::load(&self.root)?.areas().clone())
     }
 
+    /// Reads the current `.ownai.toml` review settings.
+    ///
+    /// A missing file yields the defaults; every other failure propagates so a
+    /// malformed config is never silently ignored.
+    pub fn load_review_config(&self) -> Result<config::ReviewConfig, EngineError> {
+        Ok(config::Config::load_for_review(&self.root)?)
+    }
+
     /// Projects every selected file of `revision`.
     ///
     /// Supported selected files are returned in raw path-byte order, including

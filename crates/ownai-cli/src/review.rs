@@ -35,6 +35,17 @@ impl Default for ReviewRenderOptions {
     }
 }
 
+/// The attribution lines at the top of a review document.
+///
+/// Making the header explicit keeps the question-set digest (and any future
+/// attribution) a named input rather than another bare argument.
+pub struct ReviewDocumentHeader<'a> {
+    /// The provider's command-line label.
+    pub provider: &'a str,
+    /// The lowercase hexadecimal digest of the lens's complete question set.
+    pub question_digest: &'a str,
+}
+
 /// Renders the complete review document: a header, the underlying canonical
 /// diff verbatim, and one annotation per outcome in order.
 ///
@@ -42,7 +53,7 @@ impl Default for ReviewRenderOptions {
 /// separated by exactly one blank line and the document ends with exactly one
 /// trailing newline.
 pub fn review_document(
-    provider: &str,
+    header: ReviewDocumentHeader<'_>,
     canonical_diff: &str,
     outcomes: &[ReviewOutcome],
     options: &ReviewRenderOptions,
@@ -50,10 +61,11 @@ pub fn review_document(
     let mut document = String::new();
 
     let _ = writeln!(document, "ownai review");
-    let _ = writeln!(document, "provider: {provider}");
+    let _ = writeln!(document, "provider: {}", header.provider);
     let _ = writeln!(document, "model-revision: {}", returned_revisions(outcomes));
     let _ = writeln!(document, "lens: review");
     let _ = writeln!(document, "state-schema: {REVIEW_STATE_SCHEMA}");
+    let _ = writeln!(document, "question-set: {}", header.question_digest);
 
     let counts = OutcomeCounts::of(outcomes);
     let _ = writeln!(
@@ -254,6 +266,18 @@ mod tests {
         "+async fn refresh(&mut self, token: RefreshToken) -> Result<Session, Error>;\n",
     );
 
+    /// A placeholder digest for tests that assert structure rather than header
+    /// bytes. `complete_document_is_exact` uses the real built-in digest.
+    const QUESTION_DIGEST: &str =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn header(provider: &str) -> ReviewDocumentHeader<'_> {
+        ReviewDocumentHeader {
+            provider,
+            question_digest: QUESTION_DIGEST,
+        }
+    }
+
     fn prob(value: f64) -> Probability {
         Probability::new(value).expect("valid probability")
     }
@@ -400,53 +424,64 @@ mod tests {
             provider_failed_outcome(),
         ];
 
+        let digest = ownai_engine::ReviewLens::new(1 << 20)
+            .expect("the built-in lens is valid")
+            .question_digest()
+            .to_owned();
         let document = review_document(
-            "fake",
+            ReviewDocumentHeader {
+                provider: "fake",
+                question_digest: &digest,
+            },
             CANONICAL_DIFF,
             &outcomes,
             &ReviewRenderOptions::default(),
         );
 
-        let expected = concat!(
-            "ownai review\n",
-            "provider: fake\n",
-            "model-revision: jev-2024-06, laya-v1\n",
-            "lens: review\n",
-            "state-schema: ownai.review-unit.v1\n",
-            "units: 2 reviewed, 1 skipped, 1 failed\n",
-            "\n",
-            "diff --ownai a/src/auth.rs b/src/auth.rs\n",
-            "--- a/src/auth.rs\n",
-            "+++ b/src/auth.rs\n",
-            "@@ -1 +1 @@\n",
-            "-fn refresh(&mut self, token: Token) -> Result<(), Error>;\n",
-            "+async fn refresh(&mut self, token: RefreshToken) -> Result<Session, Error>;\n",
-            "\n",
-            "src/auth.rs :: impl Session::refresh\n",
-            "  change: modified\n",
-            "  concern: authentication-authorization (confidence 0.88)\n",
-            "  risk: 3.6/5 (confidence 0.74)\n",
-            "  likely-breaking: 0.71\n",
-            "  needs-tests: 0.91\n",
-            "  needs-docs: 0.43\n",
-            "  needs-migration: 0.66\n",
-            "  security-sensitive: 0.86\n",
-            "\n",
-            "src/lib.rs :: function helper\n",
-            "  change: added\n",
-            "  concern: uncertain (leading: api-contract 0.40, other 0.30)\n",
-            "  risk: 2.5/5 (confidence 0.60)\n",
-            "  likely-breaking: 0.71\n",
-            "  needs-tests: 0.91\n",
-            "  needs-docs: 0.43\n",
-            "  needs-migration: 0.66\n",
-            "  security-sensitive: 0.86\n",
-            "\n",
-            "src/big.rs :: struct Big\n",
-            "  skipped: state is 2048 bytes, exceeding the 1024-byte limit\n",
-            "\n",
-            "src/net.rs :: function fetch\n",
-            "  failed: decision provider failed: boom\n",
+        let expected = format!(
+            concat!(
+                "ownai review\n",
+                "provider: fake\n",
+                "model-revision: jev-2024-06, laya-v1\n",
+                "lens: review\n",
+                "state-schema: ownai.review-unit.v1\n",
+                "question-set: {}\n",
+                "units: 2 reviewed, 1 skipped, 1 failed\n",
+                "\n",
+                "diff --ownai a/src/auth.rs b/src/auth.rs\n",
+                "--- a/src/auth.rs\n",
+                "+++ b/src/auth.rs\n",
+                "@@ -1 +1 @@\n",
+                "-fn refresh(&mut self, token: Token) -> Result<(), Error>;\n",
+                "+async fn refresh(&mut self, token: RefreshToken) -> Result<Session, Error>;\n",
+                "\n",
+                "src/auth.rs :: impl Session::refresh\n",
+                "  change: modified\n",
+                "  concern: authentication-authorization (confidence 0.88)\n",
+                "  risk: 3.6/5 (confidence 0.74)\n",
+                "  likely-breaking: 0.71\n",
+                "  needs-tests: 0.91\n",
+                "  needs-docs: 0.43\n",
+                "  needs-migration: 0.66\n",
+                "  security-sensitive: 0.86\n",
+                "\n",
+                "src/lib.rs :: function helper\n",
+                "  change: added\n",
+                "  concern: uncertain (leading: api-contract 0.40, other 0.30)\n",
+                "  risk: 2.5/5 (confidence 0.60)\n",
+                "  likely-breaking: 0.71\n",
+                "  needs-tests: 0.91\n",
+                "  needs-docs: 0.43\n",
+                "  needs-migration: 0.66\n",
+                "  security-sensitive: 0.86\n",
+                "\n",
+                "src/big.rs :: struct Big\n",
+                "  skipped: state is 2048 bytes, exceeding the 1024-byte limit\n",
+                "\n",
+                "src/net.rs :: function fetch\n",
+                "  failed: decision provider failed: boom\n",
+            ),
+            digest,
         );
         assert_eq!(document, expected);
     }
@@ -455,7 +490,7 @@ mod tests {
     fn document_has_exactly_one_blank_line_between_sections_and_one_trailing_newline() {
         let outcomes = vec![confident_outcome(), skipped_outcome()];
         let document = review_document(
-            "fake",
+            header("fake"),
             CANONICAL_DIFF,
             &outcomes,
             &ReviewRenderOptions::default(),
@@ -469,7 +504,7 @@ mod tests {
     #[test]
     fn empty_diff_omits_the_diff_section() {
         let document = review_document(
-            "fake",
+            header("fake"),
             "",
             &[confident_outcome()],
             &ReviewRenderOptions::default(),
@@ -483,7 +518,7 @@ mod tests {
     #[test]
     fn header_shows_sorted_distinct_revisions_and_unknown_without_reviewed_outcomes() {
         let document = review_document(
-            "fake",
+            header("fake"),
             "",
             &[uncertain_outcome(), confident_outcome()],
             &ReviewRenderOptions::default(),
@@ -491,7 +526,7 @@ mod tests {
         assert!(document.contains("model-revision: jev-2024-06, laya-v1\n"));
 
         let only_failures = review_document(
-            "fake",
+            header("fake"),
             "",
             &[skipped_outcome(), provider_failed_outcome()],
             &ReviewRenderOptions::default(),
@@ -513,7 +548,12 @@ mod tests {
             skipped_outcome(),
             provider_failed_outcome(),
         ];
-        let document = review_document("fake", "", &outcomes, &ReviewRenderOptions::default());
+        let document = review_document(
+            header("fake"),
+            "",
+            &outcomes,
+            &ReviewRenderOptions::default(),
+        );
         assert!(document.contains("units: 3 reviewed, 1 skipped, 1 failed\n"));
     }
 
@@ -529,7 +569,12 @@ mod tests {
             score(4.0, 0.755),
             "rev",
         );
-        let document = review_document("fake", "", &[outcome], &ReviewRenderOptions::default());
+        let document = review_document(
+            header("fake"),
+            "",
+            &[outcome],
+            &ReviewRenderOptions::default(),
+        );
 
         assert!(document.contains("  concern: api-contract (confidence 0.70)\n"));
         assert!(document.contains("  risk: 4.0/5 (confidence 0.76)\n"));
@@ -669,7 +714,12 @@ mod tests {
                 ReviewError::InvalidStateLimit { limit_bytes: 0 },
             ),
         ];
-        let document = review_document("fake", "", &outcomes, &ReviewRenderOptions::default());
+        let document = review_document(
+            header("fake"),
+            "",
+            &outcomes,
+            &ReviewRenderOptions::default(),
+        );
 
         let a = document.find("src/a.rs :: function a").expect("a");
         let b = document.find("src/b.rs :: function b").expect("b");
@@ -686,7 +736,7 @@ mod tests {
             provider_failed_outcome(),
         ];
         let document = review_document(
-            "fake",
+            header("fake"),
             CANONICAL_DIFF,
             &outcomes,
             &ReviewRenderOptions::default(),

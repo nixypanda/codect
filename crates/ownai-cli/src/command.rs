@@ -20,8 +20,8 @@ use ownai_core::{
 use ownai_engine::config::ConfigError;
 use ownai_engine::eval::{self, EvalError, EvalOptions};
 use ownai_engine::{
-    Engine, EngineError, FileDiff, ReviewError, ReviewLens, ReviewOutcome, Selection,
-    SelectionGroup,
+    Engine, EngineError, FileDiff, ReviewConcerns, ReviewConfig, ReviewError, ReviewLens,
+    ReviewOutcome, Selection, SelectionGroup,
 };
 use ownai_git::GitError;
 
@@ -35,7 +35,7 @@ use crate::disclosure::{self, DisclosureError, EndpointError};
 use crate::evaluation;
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
-use crate::review::{self, ReviewRenderOptions};
+use crate::review::{self, ReviewDocumentHeader, ReviewRenderOptions};
 
 /// The default serialized-state byte limit for one review unit.
 pub const DEFAULT_MAX_STATE_BYTES: usize = 64 * 1024;
@@ -168,18 +168,22 @@ pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
                     .map_err(output_failure)?;
                     Ok(CommandOutcome::Success)
                 }
-                Some(LensChoice::Review) => review_diff(
-                    diffs,
-                    *decision_provider,
-                    ProviderOptions {
-                        model: decision_model.as_deref(),
-                        endpoint: decision_endpoint.as_deref(),
-                        allow_custom_endpoint: *allow_custom_endpoint,
-                    },
-                    *dry_run,
-                    *accept_disclosure,
-                    cli.color,
-                ),
+                Some(LensChoice::Review) => {
+                    let config = engine.load_review_config().map_err(engine_failure)?;
+                    review_diff(
+                        diffs,
+                        *decision_provider,
+                        ProviderOptions {
+                            model: decision_model.as_deref(),
+                            endpoint: decision_endpoint.as_deref(),
+                            allow_custom_endpoint: *allow_custom_endpoint,
+                        },
+                        *dry_run,
+                        *accept_disclosure,
+                        cli.color,
+                        config,
+                    )
+                }
             }
         }
         #[cfg(feature = "tui")]
@@ -256,6 +260,7 @@ fn review_diff(
     dry_run: bool,
     accept_disclosure: bool,
     color: ColorChoice,
+    config: ReviewConfig,
 ) -> Result<CommandOutcome, CliError> {
     let provider_choice =
         provider_choice.expect("clap requires `--decision-provider` whenever `--lens` is present");
@@ -272,7 +277,17 @@ fn review_diff(
     // when the alias comes from the environment or a provider default.
     let resolved_model = decision::resolve_model(provider_choice, options.model);
 
-    let lens = ReviewLens::new(DEFAULT_MAX_STATE_BYTES).map_err(review_failure)?;
+    // A repository may replace the built-in concern taxonomy and raise or lower
+    // the confidence gate; the lens owns the resulting question set and digest.
+    let concerns = config
+        .concerns
+        .clone()
+        .unwrap_or_else(ReviewConcerns::builtin);
+    let lens =
+        ReviewLens::with_concerns(DEFAULT_MAX_STATE_BYTES, concerns).map_err(review_failure)?;
+    let render_options = ReviewRenderOptions {
+        choice_confidence_threshold: config.choice_confidence_threshold,
+    };
     let plan = disclosure::review_plan(
         provider_choice.label(),
         route,
@@ -324,10 +339,13 @@ fn review_diff(
     }
 
     let document = review::review_document(
-        provider_choice.label(),
+        ReviewDocumentHeader {
+            provider: provider_choice.label(),
+            question_digest: lens.question_digest(),
+        },
         &canonical_diff,
         &outcomes,
-        &ReviewRenderOptions::default(),
+        &render_options,
     );
     output::write_document(DocumentKind::Review, &document, color).map_err(output_failure)?;
 

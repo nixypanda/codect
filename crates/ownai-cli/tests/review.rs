@@ -45,15 +45,27 @@ const CANONICAL_DIFF: &str = concat!(
     "+pub fn greet(name: &str, excited: bool) -> String;\n",
 );
 
-const REVIEW_HEADER: &str = concat!(
-    "ownai review\n",
-    "provider: fake\n",
-    "model-revision: fake-v1\n",
-    "lens: review\n",
-    "state-schema: ownai.review-unit.v1\n",
-    "units: 1 reviewed, 0 skipped, 0 failed\n",
-    "\n",
-);
+/// The exact review header for a repository with no `.ownai.toml`: the CLI uses
+/// the built-in concern taxonomy, so the digest matches the built-in lens.
+fn review_header() -> String {
+    let digest = ownai_engine::ReviewLens::new(1 << 20)
+        .expect("the built-in lens is valid")
+        .question_digest()
+        .to_owned();
+    format!(
+        concat!(
+            "ownai review\n",
+            "provider: fake\n",
+            "model-revision: fake-v1\n",
+            "lens: review\n",
+            "state-schema: ownai.review-unit.v1\n",
+            "question-set: {}\n",
+            "units: 1 reviewed, 0 skipped, 0 failed\n",
+            "\n",
+        ),
+        digest,
+    )
+}
 
 /// The projector's stable key qualifies a top-level declaration with its file
 /// path and a kind token, so the widened `greet` renders as
@@ -118,7 +130,7 @@ fn review_document_with_the_fake_provider_is_exact() {
         "a successful review must not write diagnostics"
     );
 
-    let expected = format!("{REVIEW_HEADER}{CANONICAL_DIFF}\n{REVIEW_ANNOTATION}");
+    let expected = format!("{}{CANONICAL_DIFF}\n{REVIEW_ANNOTATION}", review_header());
     assert_eq!(stdout(&output), expected);
 }
 
@@ -379,4 +391,151 @@ fn accept_disclosure_environment_passes_the_remote_gate() {
     assert!(diagnostic.contains("provider: typesafe\n"), "{diagnostic}");
     assert!(diagnostic.contains("route: remote\n"), "{diagnostic}");
     assert!(diagnostic.contains("units:"), "{diagnostic}");
+}
+
+#[test]
+fn configured_threshold_and_concerns_change_the_concern_line_and_digest() {
+    let repo = repo_with_widened_signature();
+    repo.write(
+        ".ownai.toml",
+        concat!(
+            "[lenses.review]\n",
+            "choice_confidence_threshold = 0.95\n",
+            "\n",
+            "[lenses.review.concerns]\n",
+            "engine = \"Projection, Git access, selection, and application behavior\"\n",
+            "other = \"No listed concern is a good fit\"\n",
+        ),
+    );
+
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "signatures",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "fake",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        output.stderr.is_empty(),
+        "a successful review must not write diagnostics"
+    );
+
+    let document = stdout(&output);
+    assert!(
+        document.contains("  concern: uncertain (leading: engine 0.50, other 0.50)\n"),
+        "the configured taxonomy and threshold must render uncertainty: {document}"
+    );
+
+    let concerns = ownai_engine::ReviewConcerns::new(vec![
+        (
+            "engine".to_owned(),
+            "Projection, Git access, selection, and application behavior".to_owned(),
+        ),
+        (
+            "other".to_owned(),
+            "No listed concern is a good fit".to_owned(),
+        ),
+    ])
+    .expect("valid concerns");
+    let digest = ownai_engine::ReviewLens::with_concerns(1 << 20, concerns)
+        .expect("valid lens")
+        .question_digest()
+        .to_owned();
+    assert!(
+        document.contains(&format!("question-set: {digest}\n")),
+        "the header must carry the configured question-set digest: {document}"
+    );
+}
+
+#[test]
+fn a_concern_taxonomy_without_other_exits_non_zero_with_empty_stdout() {
+    let repo = repo_with_widened_signature();
+    repo.write(
+        ".ownai.toml",
+        "[lenses.review.concerns]\nengine = \"Engine behavior\"\n",
+    );
+
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "signatures",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "fake",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+
+    assert!(!output.status.success(), "a missing `other` must fail");
+    assert!(
+        output.stdout.is_empty(),
+        "no document may be written: {}",
+        stdout(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("review concerns"),
+        "stderr must explain the invalid concerns: {diagnostic}"
+    );
+}
+
+#[test]
+fn an_out_of_range_threshold_exits_non_zero_with_empty_stdout() {
+    let repo = repo_with_widened_signature();
+    repo.write(
+        ".ownai.toml",
+        "[lenses.review]\nchoice_confidence_threshold = 1.5\n",
+    );
+
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "signatures",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "fake",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+
+    assert!(!output.status.success(), "an invalid threshold must fail");
+    assert!(
+        output.stdout.is_empty(),
+        "no document may be written: {}",
+        stdout(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("threshold"),
+        "stderr must explain the invalid threshold: {diagnostic}"
+    );
+}
+
+#[test]
+fn a_malformed_config_does_not_break_a_plain_diff_without_a_lens() {
+    let repo = repo_with_widened_signature();
+    repo.write(".ownai.toml", "this is not toml\n");
+
+    let output = run(&repo, &["diff", "--mode", "signatures", "HEAD~1", "HEAD"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(output.stderr.is_empty());
+    assert_eq!(stdout(&output), CANONICAL_DIFF);
 }

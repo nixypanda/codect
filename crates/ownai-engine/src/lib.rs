@@ -22,6 +22,7 @@ pub mod item_diff;
 pub mod review;
 pub mod selection;
 
+pub use config::ReviewConfig;
 pub use engine::{Engine, FileDiff};
 pub use error::EngineError;
 pub use eval::{
@@ -30,7 +31,7 @@ pub use eval::{
 };
 pub use item_diff::{ItemChangeKind, ItemDiff};
 pub use review::{
-    ChoiceJudgment, REVIEW_STATE_SCHEMA, ReviewError, ReviewJudgment, ReviewLens, ReviewOutcome,
-    ReviewedItemDiff, ScoreJudgment,
+    ChoiceJudgment, REVIEW_STATE_SCHEMA, ReviewConcerns, ReviewConcernsError, ReviewError,
+    ReviewJudgment, ReviewLens, ReviewOutcome, ReviewedItemDiff, ScoreJudgment,
 };
 pub use selection::{Selection, SelectionError, SelectionGroup};
