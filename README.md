@@ -20,6 +20,27 @@ nix develop
 With [direnv](https://direnv.net/) installed, `direnv allow` activates the same
 shell automatically via `.envrc`.
 
+## Install with Nix
+
+The flake provides native packages for both Intel (`x86_64-darwin`) and Apple
+Silicon (`aarch64-darwin`) Macs. From a checkout, install the package into your
+user profile with:
+
+```sh
+nix profile install .
+```
+
+Or run it without installing:
+
+```sh
+nix run . -- --help
+```
+
+When installing from GitHub, replace `.` with `github:nixypanda/ownai`. Nix
+automatically selects the package matching the Mac on which the command runs.
+To update an installation made from this checkout, run
+`nix profile upgrade ownai`.
+
 ## Required checks
 
 Run every required development check with one command:

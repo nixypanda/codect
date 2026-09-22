@@ -24,15 +24,75 @@
       ];
 
       forAllSystems =
-        f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; }));
+        f:
+        nixpkgs.lib.genAttrs systems (
+          system:
+          f (
+            import nixpkgs {
+              inherit system;
+              overlays = [ (import rust-overlay) ];
+            }
+          )
+        );
 
       rustToolchain =
         pkgs:
         pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" ];
         };
+
+      ownaiPackage =
+        pkgs:
+        let
+          toolchain = rustToolchain pkgs;
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = toolchain;
+            rustc = toolchain;
+          };
+        in
+        rustPlatform.buildRustPackage {
+          pname = "ownai";
+          version = "0.1.0";
+
+          src = self;
+          cargoLock.lockFile = ./Cargo.lock;
+
+          cargoBuildFlags = [ "--package=ownai-cli" ];
+          cargoTestFlags = [ "--package=ownai-cli" ];
+
+          # The workspace root is a virtual manifest, so install the binary
+          # produced by cargoBuildHook directly instead of using `cargo install`.
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 target/${pkgs.stdenv.hostPlatform.rust.cargoShortTarget}/release/ownai \
+              "$out/bin/ownai"
+            runHook postInstall
+          '';
+
+          nativeCheckInputs = [ pkgs.gitMinimal ];
+
+          meta = {
+            description = "Selectable focused views and diffs of a codebase";
+            homepage = "https://github.com/nixypanda/ownai";
+            license = pkgs.lib.licenses.mit;
+            mainProgram = "ownai";
+            platforms = pkgs.lib.platforms.unix;
+          };
+        };
     in
     {
+      packages = forAllSystems (pkgs: {
+        default = ownaiPackage pkgs;
+        ownai = ownaiPackage pkgs;
+      });
+
+      apps = forAllSystems (pkgs: {
+        default = {
+          type = "app";
+          program = "${ownaiPackage pkgs}/bin/ownai";
+        };
+      });
+
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           packages = [
@@ -47,5 +107,7 @@
           };
         };
       });
+
+      formatter = forAllSystems (pkgs: pkgs.nixfmt-tree);
     };
 }
