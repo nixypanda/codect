@@ -60,4 +60,13 @@ return function(H)
     vim.cmd("OwnaiShow signatures")
     H.eq(vim.wo.foldminlines, 0, "foldminlines is zeroed")
   end)
+
+  H.test("buffer_source normalizes an empty buffer to no bytes", function()
+    local view = require("ownai.view")
+    vim.cmd("silent! %bwipeout!")
+    vim.cmd("enew")
+    H.eq(view.buffer_source(0), "", "empty buffer has no bytes")
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "x" })
+    H.eq(view.buffer_source(0), "x\n", "a single line keeps its newline")
+  end)
 end
