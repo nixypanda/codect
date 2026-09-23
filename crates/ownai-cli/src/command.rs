@@ -171,7 +171,9 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
 ///
 /// Exactly one `--path` supplies the language and the repository-relative path
 /// used to build stable keys. The path is resolved with the same lexical
-/// containment rules as `--path` scoping, so it can never leave the repository.
+/// containment rules as `--path` scoping. `--worktree` additionally refuses a
+/// symlinked target and checks the fully-resolved path, so a read can never
+/// leave the repository.
 fn run_source_show(
     format: Format,
     mode: ProjectionMode,
@@ -185,7 +187,7 @@ fn run_source_show(
     let bytes = if from_stdin {
         read_stdin().map_err(stdin_failure)
     } else {
-        read_worktree(engine.root(), &path).map_err(|source| worktree_failure(&path, source))
+        read_worktree(engine.root(), &path).map_err(worktree_failure)
     }?;
 
     let file = ownai_engine::project_source(&path, &bytes, mode).map_err(engine_failure)?;
@@ -212,6 +214,9 @@ fn run_source_show(
 ///
 /// `--path` is repeatable for revision scoping, but an editor buffer has
 /// exactly one language and path context, so more than one is a usage error.
+/// `--path` must name a single file: a directory scope (including `.`, which
+/// resolves to `PathSelection::All`) is a usage error rather than a runtime
+/// read failure.
 fn single_source_path(
     paths: &[OsString],
     cwd: &Path,
@@ -226,7 +231,18 @@ fn single_source_path(
     let selection =
         pathspec::build_selection(paths, cwd, engine.root()).map_err(path_arg_failure)?;
     match selection {
-        PathSelection::Literals(mut resolved) if resolved.len() == 1 => Ok(resolved.remove(0)),
+        PathSelection::Literals(mut resolved) if resolved.len() == 1 => {
+            let path = resolved.remove(0);
+            // A directory cannot be one file's source. The lexical resolution
+            // above already rejects `.` and the repository root; this catches a
+            // non-root existing directory such as `src`.
+            if is_directory(engine.root(), &path) {
+                return Err(CliError::usage(
+                    "`--stdin` and `--worktree` require `--path` to name one file".to_owned(),
+                ));
+            }
+            Ok(path)
+        }
         // `--path .` resolves to the repository root, which is a directory
         // scope rather than a file context.
         _ => Err(CliError::usage(
@@ -235,16 +251,87 @@ fn single_source_path(
     }
 }
 
+/// Whether `path`, resolved against the repository root, is an existing
+/// directory.
+///
+/// `symlink_metadata` describes the link itself, so a symlinked directory is
+/// classified as a link (and rejected as such by `--worktree`) rather than as
+/// the directory it points to.
+fn is_directory(root: &Path, path: &RepoPath) -> bool {
+    std::fs::symlink_metadata(worktree_path(root, path))
+        .is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
 fn read_stdin() -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     io::stdin().lock().read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 
-/// Reads the worktree file for `path`. Git paths are raw bytes, so on Unix the
-/// path is rebuilt from bytes rather than lossily converted.
-fn read_worktree(root: &Path, path: &RepoPath) -> io::Result<Vec<u8>> {
-    std::fs::read(worktree_path(root, path))
+/// A worktree file that cannot supply the editor's source bytes.
+///
+/// `--worktree` is the one path that reads a file the user points at on disk,
+/// so it is the one place where a symlink could redirect a repository-relative
+/// read outside the repository. The target is rejected when it is itself a
+/// symlink (mirroring `.ownai.toml`) and the fully-resolved path is checked to
+/// stay inside the repository, so a symlinked ancestor directory cannot escape
+/// either.
+#[derive(Debug, thiserror::Error)]
+enum WorktreeError {
+    #[error("`{path}` is a symlink, which is not followed")]
+    Symlink { path: RepoPath },
+
+    #[error("`{path}` resolves outside the repository")]
+    OutsideRepository { path: RepoPath },
+
+    #[error("could not read worktree file `{path}`")]
+    Read {
+        path: RepoPath,
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// Reads the worktree file for `path`.
+///
+/// Git paths are raw bytes, so on Unix the path is rebuilt from bytes rather
+/// than lossily converted. The path is already lexically contained in the
+/// repository; the symlink and resolution checks here close the remaining gap
+/// between a lexical path and the bytes actually read.
+fn read_worktree(root: &Path, path: &RepoPath) -> Result<Vec<u8>, WorktreeError> {
+    let full = worktree_path(root, path);
+
+    // `symlink_metadata` describes the link itself, which is what decides
+    // whether reading the file is allowed at all; `metadata` would silently
+    // follow the link and defeat the check.
+    let metadata = std::fs::symlink_metadata(&full).map_err(|source| WorktreeError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(WorktreeError::Symlink { path: path.clone() });
+    }
+
+    // Even a non-symlinked target can sit behind a symlinked directory, so the
+    // fully-resolved path must still be under the repository.
+    let resolved = full.canonicalize().map_err(|source| WorktreeError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let repository = root.canonicalize().map_err(|source| WorktreeError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    if !resolved.starts_with(&repository) {
+        return Err(WorktreeError::OutsideRepository { path: path.clone() });
+    }
+
+    // Read the validated, fully-resolved path rather than the original, so a
+    // symlink swapped in after the checks cannot be followed at read time.
+    std::fs::read(&resolved).map_err(|source| WorktreeError::Read {
+        path: path.clone(),
+        source,
+    })
 }
 
 fn worktree_path(root: &Path, path: &RepoPath) -> PathBuf {
@@ -267,11 +354,11 @@ fn stdin_failure(source: io::Error) -> CliError {
     }
 }
 
-fn worktree_failure(path: &RepoPath, source: io::Error) -> CliError {
+fn worktree_failure(error: WorktreeError) -> CliError {
     CliError {
-        message: format!("could not read worktree file `{path}`"),
+        message: error.to_string(),
         help: None,
-        source: Box::new(source),
+        source: Box::new(error),
     }
 }
 

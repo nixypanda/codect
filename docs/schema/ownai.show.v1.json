@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/nixypanda/ownai/docs/schema/ownai.show.v1.json",
   "title": "OwnAI show document v1",
-  "description": "The versioned JSON document emitted by `ownai show --format json` for a committed revision, standard input, or the worktree. Consumers must tolerate unknown fields and must treat any `schema` value other than `ownai.show.v1` as a fatal, explicit version mismatch. Line numbers are ONE-BASED for editor friendliness; byte offsets are ZERO-BASED into the decoded UTF-8 source. `projection` is the requested mode; `outline` is mode-independent and complete, derived from the Signatures superset projection.",
+  "description": "The versioned JSON document emitted by `ownai show --format json` for a committed revision, standard input, or the worktree. Consumers must tolerate unknown fields: fields may be added additively within `ownai.show.v1`, so every object permits additional properties while its required fields and value constraints stay strict. A consumer must treat any `schema` value other than `ownai.show.v1` as a fatal, explicit version mismatch. Line numbers are ONE-BASED for editor friendliness; byte offsets are ZERO-BASED into the decoded UTF-8 source. `projection` is the requested mode; `outline` is mode-independent and complete, derived from the Signatures superset projection.",
   "type": "object",
   "required": ["schema", "input", "revision", "mode", "files"],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "schema": {
       "const": "ownai.show.v1",
@@ -33,7 +33,7 @@
     "file": {
       "type": "object",
       "required": ["path", "language", "projection", "outline"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "path": {
           "description": "The repository-relative path. Invalid UTF-8 bytes are escaped as \\xNN.",
@@ -53,7 +53,7 @@
     "projection": {
       "type": "object",
       "required": ["text", "items"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "text": {
           "description": "The exact canonical text this file emits in text mode for the requested mode.",
@@ -76,9 +76,12 @@
         "span",
         "canonical_text"
       ],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
-        "stable_key": { "type": "string" },
+        "stable_key": {
+          "description": "The declaration's identity within its file. Unique within this file, but not necessarily across the repository (Rust impl keys are not path-namespaced), so consumers key global state by (path, stable_key).",
+          "type": "string"
+        },
         "parent_key": {
           "description": "The stable_key of the containing declaration, or null at top level.",
           "type": ["string", "null"]
@@ -103,9 +106,12 @@
         "signature",
         "retained_in_mode"
       ],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
-        "stable_key": { "type": "string" },
+        "stable_key": {
+          "description": "The declaration's identity within its file. Unique within this file, but not necessarily across the repository (Rust impl keys are not path-namespaced), so consumers key global state by (path, stable_key).",
+          "type": "string"
+        },
         "parent_key": {
           "description": "The stable_key of the containing declaration, or null at top level.",
           "type": ["string", "null"]
@@ -114,7 +120,7 @@
         "name": { "type": "string" },
         "span": { "$ref": "#/$defs/span" },
         "signature": {
-          "description": "The declaration's canonical fragment from the Signatures superset projection. A nested declaration's fragment carries its container indentation. Single line where the canonical form is single line.",
+          "description": "The declaration's canonical fragment from the Signatures superset projection. A nested declaration's fragment carries its container indentation. Single line where the canonical form is single line. This is the closed-fold text only when `retained_in_mode` is false; when it is true, the mode-correct closed-fold text is the matching `projection.items[].canonical_text`, which differs for container declarations (trait/impl/module) because the requested mode may omit members the superset shows.",
           "type": "string"
         },
         "retained_in_mode": {
@@ -126,15 +132,15 @@
     "span": {
       "type": "object",
       "required": ["start_line", "end_line", "start_byte", "end_byte"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "start_line": {
-          "description": "One-based first line of the declaration.",
+          "description": "One-based first line of the declaration node. Preceding attributes, decorators, `{-# ... #-}` pragmas, and doc comments are excluded even though `signature` may include them; an editor should extend a fold start upward over those lines. A `decorator_start_line` field may be added additively within `ownai.show.v1` later.",
           "type": "integer",
           "minimum": 1
         },
         "end_line": {
-          "description": "One-based last line of the declaration.",
+          "description": "One-based last line of the declaration, including its body. For a brace language this is the closing brace; for Python it is the last line of the suite.",
           "type": "integer",
           "minimum": 1
         },

@@ -448,30 +448,47 @@ impl Engine {
             return Ok(None);
         };
         let language = projector.language();
+        let items =
+            self.project_items_cached(projector, caches, revision_spec, entry, language, mode)?;
+        Ok(Some(ProjectedFile::new(
+            entry.path.clone(),
+            language,
+            items,
+        )))
+    }
 
+    /// Projects one entry's items in `mode`, reading the blob once and reusing
+    /// the `(blob id, language, mode)` cache across paths.
+    ///
+    /// The cache key intentionally excludes the path: `ProjectedItem` carries
+    /// no path, and stable keys and spans are path-independent, so items
+    /// computed for one path are valid for another path with the same blob.
+    fn project_items_cached(
+        &self,
+        projector: &dyn LanguageProjector,
+        caches: &mut Caches,
+        revision_spec: &str,
+        entry: &SourceEntry,
+        language: Language,
+        mode: ProjectionMode,
+    ) -> Result<Vec<ProjectedItem>, EngineError> {
         if let Some(items) = lookup_projection(caches, &entry.blob_id, language, mode) {
-            // The cache key intentionally excludes the path. Reusing the items
-            // for another path is safe because stable keys and spans are never
-            // rendered; only `canonical_text` reaches a document.
-            return Ok(Some(ProjectedFile::new(
-                entry.path.clone(),
-                language,
-                items,
-            )));
+            return Ok(items);
         }
 
         let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
         let source = decode_source(&entry.path, language, &bytes)
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
-        let projected = projector
+        let items = projector
             .project(ProjectionInput {
                 path: &entry.path,
                 source,
                 mode,
             })
-            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?
+            .items()
+            .to_vec();
 
-        let items = projected.items().to_vec();
         caches
             .projections
             .entry(entry.blob_id.clone())
@@ -481,15 +498,15 @@ impl Engine {
                 mode,
                 items: items.clone(),
             });
-        Ok(Some(ProjectedFile::new(
-            entry.path.clone(),
-            language,
-            items,
-        )))
+        Ok(items)
     }
 
     /// Reads, decodes, and projects one entry in both the requested mode and the
     /// Signatures superset, assembling the file's outline.
+    ///
+    /// Both projections go through the shared `(blob id, language, mode)` cache,
+    /// so a blob is read once and each mode is computed at most once per
+    /// operation.
     ///
     /// Returns `None` for an unsupported path, which is an exclusion rather
     /// than a failure.
@@ -505,17 +522,20 @@ impl Engine {
             return Ok(None);
         };
         let language = projector.language();
-        let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
-        let source = decode_source(&entry.path, language, &bytes)
-            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
 
-        let projection = project_items(projector, &entry.path, source, mode)
-            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
+        let projection =
+            self.project_items_cached(projector, caches, revision_spec, entry, language, mode)?;
         let superset = if mode == ProjectionMode::Signatures {
             projection.clone()
         } else {
-            project_items(projector, &entry.path, source, ProjectionMode::Signatures)
-                .map_err(|error| self.projection_failure(error, Some(revision_spec)))?
+            self.project_items_cached(
+                projector,
+                caches,
+                revision_spec,
+                entry,
+                language,
+                ProjectionMode::Signatures,
+            )?
         };
         Ok(Some(assemble_outline(
             &entry.path,

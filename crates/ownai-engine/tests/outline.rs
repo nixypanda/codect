@@ -53,6 +53,10 @@ fn signatures_projection_is_a_superset_of_types_over_the_fixture_corpus() {
     files.sort();
     assert!(!files.is_empty(), "expected at least one fixture input");
 
+    // The corpus as a whole must contain at least one declaration Types drops;
+    // otherwise the mode-independence assertions below would pass vacuously.
+    let mut saw_dropped = false;
+
     for path in files {
         let display = path.to_string_lossy().into_owned();
         let source = std::fs::read(&path).unwrap_or_else(|error| panic!("read {display}: {error}"));
@@ -70,6 +74,8 @@ fn signatures_projection_is_a_superset_of_types_over_the_fixture_corpus() {
             .map(|item| item.stable_key.as_str())
             .collect();
 
+        // Every Types declaration survives into Signatures; otherwise the
+        // outline superset assumption is violated.
         for item in types.projection.items() {
             assert!(
                 signature_keys.contains(item.stable_key.as_str()),
@@ -79,18 +85,23 @@ fn signatures_projection_is_a_superset_of_types_over_the_fixture_corpus() {
             );
         }
 
-        // The outline enumerates the Signatures superset exactly, in order.
+        // The Types-mode outline is the Signatures superset, not the Types
+        // projection: it must enumerate exactly the Signatures projection, in
+        // order, even though Types drops many declarations. This is the
+        // property that makes the outline mode-independent, and it crosses two
+        // genuinely different projections.
         assert_eq!(
-            signatures
+            types
                 .outline
                 .iter()
                 .map(|item| item.stable_key.clone())
                 .collect::<Vec<_>>(),
             keys(signatures.projection.items()),
-            "{display}: outline must enumerate the Signatures projection"
+            "{display}: the Types-mode outline must enumerate the Signatures superset"
         );
 
-        // In Signatures mode every outlined declaration is retained.
+        // In Signatures mode every outlined declaration is retained, because the
+        // requested mode is the superset.
         for item in &signatures.outline {
             assert!(
                 item.retained_in_mode,
@@ -99,23 +110,33 @@ fn signatures_projection_is_a_superset_of_types_over_the_fixture_corpus() {
             );
         }
 
-        // In Types mode the retained outline entries are exactly the Types
-        // projection, and every dropped declaration is still outlined.
-        let retained: BTreeSet<&str> = types
-            .outline
-            .iter()
-            .filter(|item| item.retained_in_mode)
-            .map(|item| item.stable_key.as_str())
-            .collect();
+        // `retained_in_mode` in the Types outline is exactly membership in the
+        // Types projection, so a dropped declaration is still located.
         let types_keys: BTreeSet<&str> = types
             .projection
             .items()
             .iter()
             .map(|item| item.stable_key.as_str())
             .collect();
-        assert_eq!(
-            retained, types_keys,
-            "{display}: retained outline entries must equal the Types projection"
-        );
+        for item in &types.outline {
+            assert_eq!(
+                item.retained_in_mode,
+                types_keys.contains(item.stable_key.as_str()),
+                "{display}: retained_in_mode disagrees with the Types projection for `{}`",
+                item.stable_key
+            );
+        }
+
+        // The outline is not just a relabelled projection: the corpus must
+        // contain declarations the requested mode drops, so these assertions
+        // are not vacuous.
+        if types.outline.iter().any(|item| !item.retained_in_mode) {
+            saw_dropped = true;
+        }
     }
+
+    assert!(
+        saw_dropped,
+        "the fixture corpus must contain a declaration Types mode drops"
+    );
 }
