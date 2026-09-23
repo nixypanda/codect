@@ -202,6 +202,40 @@ does not change projection or diff semantics, and it is read-only: it reads
 committed blobs and never writes the repository, worktree, or index, and it
 never opens an editor.
 
+### Editor projection surface
+
+The MVP exposes a machine-readable projection document so an editor can build a
+semantic fold view without reimplementing OwnAI's projection rules. It is not an
+editor integration; it is the stable interface one consumes.
+
+- `ownai show --format json` emits the versioned `ownai.show.v1` document. Its
+  schema is committed at `docs/schema/ownai.show.v1.json`, and golden documents
+  live under `fixtures/schema/`.
+- The document pairs the requested mode's canonical projection with a
+  **mode-independent outline**: every declaration in the file, including ones
+  the requested mode drops. Each outline entry carries the declaration's stable
+  key, parent key, kind, name, source span, canonical signature, and whether the
+  requested mode retains it. An editor builds folds from the outline and labels
+  a closed fold with the signature.
+- The outline is what lets one source buffer render like a focused view at two
+  fold depths: all folds closed at Types depth reproduces the Types projection,
+  and opening a fold reveals the real source.
+- The document is versioned by its `schema` field. Consumers must tolerate
+  unknown fields and must treat any other `schema` value as a fatal, explicit
+  version mismatch.
+
+Unlike every other MVP path, this surface can project **working-tree bytes**. A
+working-tree buffer cannot be folded from a committed revision because its spans
+would drift as the user types, so `--stdin` reads the buffer's bytes from
+standard input and `--worktree` reads the file at `--path` from disk. Both
+require exactly one `--path`, which supplies the language and the
+repository-relative path used to build stable keys, and both resolve inside the
+repository.
+
+OwnAI now **reads** the worktree for this path. It remains strictly read-only:
+it never writes the repository, worktree, or index, and the stdin and worktree
+inputs are incapable of writing.
+
 ### MVP exclusions
 
 The first MVP does not include:
@@ -217,7 +251,8 @@ The first MVP does not include:
 - Rename or move detection beyond what is visible in the projected text.
 - Semantic-versioning recommendations.
 - Languages other than Elm, Haskell, Python, and Rust.
-- Editor-specific experiences.
+- Interactive editor integrations. The MVP does expose the `ownai.show.v1`
+  projection surface an editor consumes; the integration itself is not included.
 - Agent-specific experiences.
 - Hosted code-review or continuous-integration experiences.
 

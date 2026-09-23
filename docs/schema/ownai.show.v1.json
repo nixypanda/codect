@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nixypanda/ownai/docs/schema/ownai.show.v1.json",
+  "title": "OwnAI show document v1",
+  "description": "The versioned JSON document emitted by `ownai show --format json` for a committed revision, standard input, or the worktree. Consumers must tolerate unknown fields and must treat any `schema` value other than `ownai.show.v1` as a fatal, explicit version mismatch. Line numbers are ONE-BASED for editor friendliness; byte offsets are ZERO-BASED into the decoded UTF-8 source. `projection` is the requested mode; `outline` is mode-independent and complete, derived from the Signatures superset projection.",
+  "type": "object",
+  "required": ["schema", "input", "revision", "mode", "files"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "ownai.show.v1",
+      "description": "The schema identifier. A mismatch is fatal."
+    },
+    "input": {
+      "description": "Which input produced the document. `revision` means a committed revision; `stdin` and `worktree` mean editor-supplied bytes.",
+      "enum": ["revision", "stdin", "worktree"]
+    },
+    "revision": {
+      "description": "The revision spec that was projected, or null for stdin/worktree.",
+      "type": ["string", "null"]
+    },
+    "mode": {
+      "description": "The projection mode requested on the command line.",
+      "enum": ["types", "signatures"]
+    },
+    "files": {
+      "description": "One or more files in raw repository-path byte order.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/file" }
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "required": ["path", "language", "projection", "outline"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "The repository-relative path. Invalid UTF-8 bytes are escaped as \\xNN.",
+          "type": "string"
+        },
+        "language": {
+          "enum": ["elm", "haskell", "python", "rust"]
+        },
+        "projection": { "$ref": "#/$defs/projection" },
+        "outline": {
+          "description": "The mode-independent declaration outline. Every declaration appears, including ones the requested mode drops.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/outline_item" }
+        }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "required": ["text", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "description": "The exact canonical text this file emits in text mode for the requested mode.",
+          "type": "string"
+        },
+        "items": {
+          "description": "The requested-mode projected items, including index-only nested entries.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/item" }
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": [
+        "stable_key",
+        "parent_key",
+        "kind",
+        "name",
+        "span",
+        "canonical_text"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "stable_key": { "type": "string" },
+        "parent_key": {
+          "description": "The stable_key of the containing declaration, or null at top level.",
+          "type": ["string", "null"]
+        },
+        "kind": { "$ref": "#/$defs/kind" },
+        "name": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "canonical_text": {
+          "description": "The item's canonical fragment. A nested item's fragment carries its container indentation.",
+          "type": "string"
+        }
+      }
+    },
+    "outline_item": {
+      "type": "object",
+      "required": [
+        "stable_key",
+        "parent_key",
+        "kind",
+        "name",
+        "span",
+        "signature",
+        "retained_in_mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "stable_key": { "type": "string" },
+        "parent_key": {
+          "description": "The stable_key of the containing declaration, or null at top level.",
+          "type": ["string", "null"]
+        },
+        "kind": { "$ref": "#/$defs/kind" },
+        "name": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "signature": {
+          "description": "The declaration's canonical fragment from the Signatures superset projection. A nested declaration's fragment carries its container indentation. Single line where the canonical form is single line.",
+          "type": "string"
+        },
+        "retained_in_mode": {
+          "description": "True when the requested mode's projection retains this stable_key.",
+          "type": "boolean"
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": ["start_line", "end_line", "start_byte", "end_byte"],
+      "additionalProperties": false,
+      "properties": {
+        "start_line": {
+          "description": "One-based first line of the declaration.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "description": "One-based last line of the declaration.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "start_byte": {
+          "description": "Zero-based first byte of the declaration in the decoded UTF-8 source.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_byte": {
+          "description": "Zero-based end byte (exclusive) of the declaration in the decoded UTF-8 source.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "kind": {
+      "description": "The exhaustive declaration kind. Every ItemKind in ownai-core maps to exactly one value.",
+      "enum": [
+        "module",
+        "type",
+        "type_alias",
+        "constructor",
+        "field",
+        "variant",
+        "trait",
+        "trait_implementation",
+        "associated_type",
+        "type_family",
+        "pattern_synonym",
+        "function",
+        "method",
+        "value",
+        "constant",
+        "static",
+        "port",
+        "operator",
+        "foreign_block"
+      ]
+    }
+  }
+}
