@@ -82,9 +82,58 @@ function M.apply(buf)
   M.apply_window(st, win)
 end
 
+--- Window id -> the window-local fold options we replaced, so they can be
+--- restored when the buffer leaves the window.
+local saved_window_options = {}
+
+local MANAGED_OPTIONS = {
+  "foldmethod",
+  "foldexpr",
+  "foldtext",
+  "foldenable",
+  "foldminlines",
+  "foldlevel",
+}
+
+--- Remember the window-local fold options we are about to replace. Idempotent:
+--- the first call for a window wins, so re-applying does not overwrite the
+--- saved originals with our own values.
+local function save_window_options(win)
+  if saved_window_options[win] then
+    return
+  end
+  local saved = {}
+  for _, name in ipairs(MANAGED_OPTIONS) do
+    saved[name] = vim.wo[win][name]
+  end
+  saved_window_options[win] = saved
+end
+
+--- Restore the window-local fold options replaced by `apply_window`.
+---
+--- Called when an OwnAI buffer leaves its window so `foldmethod`, `foldexpr`,
+--- `foldtext`, `foldminlines`, and `foldlevel` do not leak into the next
+--- buffer shown in that window.
+function M.restore_window(win)
+  local saved = saved_window_options[win]
+  if not saved then
+    return
+  end
+  saved_window_options[win] = nil
+  if not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  for _, name in ipairs(MANAGED_OPTIONS) do
+    vim.wo[win][name] = saved[name]
+  end
+end
+
 --- Apply window-local fold options and open/closed state in a window.
 function M.apply_window(st, win)
   vim.api.nvim_win_call(win, function()
+    -- Remember the options we replace so they can be restored on leave.
+    save_window_options(win)
+
     if require("ownai").config.manage_fold_options ~= false then
       vim.wo.foldmethod = "expr"
       vim.wo.foldexpr = FOLDEXPR
@@ -93,17 +142,21 @@ function M.apply_window(st, win)
       -- Neovim refuses to close a fold over a single line at the default
       -- foldminlines, which would hide every one-line declaration.
       vim.wo.foldminlines = 0
-      -- Reset to "everything open", then close what the mode/overrides require.
-      vim.wo.foldlevel = 0
-      vim.wo.foldlevel = 99
     end
+
+    -- Reset to "everything open" and force the fold cache to recompute. This
+    -- is part of applying the fold state, not a configuration choice: without
+    -- it, `:[a,b]foldclose` can act on a stale or already-closed fold and
+    -- escalate, collapsing a retained container (visible when
+    -- `manage_fold_options = false` skips the rest of the option setup).
+    vim.wo.foldlevel = 0
+    vim.wo.foldlevel = 99
+    -- `zx` forces foldexpr re-evaluation. Setting `foldlevel` alone does not
+    -- invalidate a fold cache that was populated while the option was low.
+    pcall(vim.cmd, "normal! zx")
 
     local line_count = vim.api.nvim_buf_line_count(st.buf)
 
-    -- Close ancestors before descendants, and never close a declaration whose
-    -- ancestor is already closed: `:[a,b]foldclose` on a line inside a closed
-    -- fold escalates and closes the enclosing fold, which would collapse a
-    -- retained container around a dropped member.
     local order = {}
     for _, item in ipairs(st.items or {}) do
       order[#order + 1] = item
@@ -115,26 +168,37 @@ function M.apply_window(st, win)
       return a.fold_start < b.fold_start
     end)
 
-    local closed = {}
+    -- Apply ancestor-first, reading each fold's actual state back from
+    -- `foldclosed()` instead of assuming everything starts open. That keeps
+    -- the apply idempotent: an already-closed fold is not closed again (which
+    -- would escalate and collapse its container), and a fold that should be
+    -- open but is closed is opened.
+    local effective_closed = {}
     for _, item in ipairs(order) do
-      if state.is_closed(st, item) then
+      local first = math.max(item.fold_start or 0, 1)
+      local last = math.min(item.end_line or 0, line_count)
+      if first <= last then
         local ancestor_closed = false
         local parent = item.parent
         while parent do
-          if closed[parent] then
+          if effective_closed[parent] then
             ancestor_closed = true
             break
           end
           local parent_item = st.by_key and st.by_key[parent]
           parent = parent_item and parent_item.parent
         end
-        if not ancestor_closed then
-          closed[item.key] = true
-          local first = math.max(item.fold_start or 0, 1)
-          local last = math.min(item.end_line or 0, line_count)
-          if first <= last then
+
+        if ancestor_closed then
+          -- Hidden inside a closed ancestor; leave it alone.
+          effective_closed[item.key] = true
+        elseif state.is_closed(st, item) then
+          effective_closed[item.key] = true
+          if vim.fn.foldclosed(first) ~= first then
             pcall(vim.cmd, string.format("%d,%dfoldclose", first, last))
           end
+        elseif vim.fn.foldclosed(first) == first then
+          pcall(vim.cmd, string.format("%d,%dfoldopen", first, last))
         end
       end
     end

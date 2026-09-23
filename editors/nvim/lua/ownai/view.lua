@@ -367,6 +367,16 @@ function M.setup_autocmds()
     desc = "OwnAI: restore the window-local foldtext",
   })
 
+  vim.api.nvim_create_autocmd("BufLeave", {
+    group = group,
+    callback = function(event)
+      if state.is_active(event.buf) then
+        folds.restore_window(vim.api.nvim_get_current_win())
+      end
+    end,
+    desc = "OwnAI: restore window-local fold options when the buffer leaves the window",
+  })
+
   vim.api.nvim_create_autocmd("BufWipeout", {
     group = group,
     callback = function(event)

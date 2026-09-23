@@ -69,4 +69,49 @@ return function(H)
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { "x" })
     H.eq(view.buffer_source(0), "x\n", "a single line keeps its newline")
   end)
+
+  H.test("manage_fold_options = false keeps retained containers open across applies (F7)", function()
+    local ownai = require("ownai")
+    ownai.setup({ manage_fold_options = false })
+
+    H.open_fixture()
+    -- The user owns the fold setup; this mirrors configuring the plugin's
+    -- foldexpr by hand and starting from a fully-closed window.
+    vim.wo.foldmethod = "expr"
+    vim.wo.foldexpr = "v:lua.require'ownai.folds'.foldexpr(v:lnum)"
+    vim.wo.foldenable = true
+    vim.wo.foldminlines = 0
+    vim.wo.foldlevel = 0
+
+    vim.cmd("OwnaiShow types")
+    local widget = H.item_by_key("editors/nvim/tests/fixtures/sample.rs::type::Widget")
+    local make = H.item_by_key("editors/nvim/tests/fixtures/sample.rs::fn::make")
+    H.falsy(vim.fn.foldclosed(widget.fold_start) == widget.fold_start, "retained struct is open")
+    H.eq(vim.fn.foldclosed(make.fold_start), make.fold_start, "dropped function is closed")
+
+    -- A repeated apply must not escalate and collapse the retained container.
+    vim.cmd("OwnaiFold types")
+    H.falsy(
+      vim.fn.foldclosed(widget.fold_start) == widget.fold_start,
+      "retained struct stays open after re-apply"
+    )
+    H.eq(vim.fn.foldclosed(make.fold_start), make.fold_start, "dropped function stays closed")
+
+    ownai.setup({})
+  end)
+
+  H.test("window-local fold options are restored when the buffer leaves the window (F8)", function()
+    H.open_fixture()
+    vim.wo.foldmethod = "manual"
+    vim.wo.foldminlines = 7
+
+    vim.cmd("OwnaiShow signatures")
+    H.eq(vim.wo.foldmethod, "expr", "the plugin owns the options while the buffer is shown")
+    H.eq(vim.wo.foldminlines, 0, "foldminlines is zeroed while the buffer is shown")
+
+    -- Switch this window to a buffer the plugin does not own.
+    vim.cmd("enew")
+    H.eq(vim.wo.foldmethod, "manual", "foldmethod is restored on leave")
+    H.eq(vim.wo.foldminlines, 7, "foldminlines is restored on leave")
+  end)
 end

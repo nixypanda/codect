@@ -53,9 +53,17 @@ With `manage_fold_options = true` (the default) the plugin owns the
 window-local fold options for OwnAI buffers: `foldmethod=expr`, `foldexpr`,
 `foldtext`, `foldenable`, `foldminlines=0`, and a `foldlevel` reset on every
 apply. Because it resets `foldlevel`, native `zr`/`zm` depth keys do not
-persist; use `:OwnaiFold`, `za`/`zo`/`zc`, or the cycle key instead. Set
-`manage_fold_options = false` to keep your own configuration; OwnAI still
-opens and closes its folds.
+persist; use `:OwnaiFold`, `za`/`zo`/`zc`, or the cycle key instead. The
+previous window-local fold options are saved and restored when the buffer
+leaves the window, so they do not leak into the next buffer.
+
+Set `manage_fold_options = false` to keep your own fold configuration
+(`foldmethod`, `foldexpr`, `foldtext`, `foldenable`, `foldminlines`). The plugin
+still applies its open/closed state, and it still resets `foldlevel` and forces
+a fold recompute so the apply starts from "everything open" and cannot collapse
+a retained container. This option is only useful if the window is using the
+plugin's `foldexpr` (or you drive `foldexpr` yourself); without semantic folds
+there is nothing for the plugin to open or close.
 
 `default_mode` must be `types` or `signatures`. `setup` warns and falls back to
 `signatures` otherwise.
@@ -64,8 +72,8 @@ opens and closes its folds.
 
 | Command | Behavior |
 |---|---|
-| `:OwnaiShow [types\|signatures]` | Project the current buffer via stdin and fold it to the mode (default `signatures`). |
-| `:OwnaiFold [types\|signatures\|full]` | Fold to the mode. Reuses the cached projection for the current bytes; fetches one only when the mode is not cached. `full` unfolds everything. |
+| `:OwnaiShow [types\|signatures]` | Project the current buffer via stdin and fold it to the mode (default `signatures`). Attaches the buffer keymaps. |
+| `:OwnaiFold [types\|signatures\|full]` | Fold to the mode. Reuses the cached projection for the current bytes and path; fetches one only when the mode is not cached or the buffer's file changed. Attaches the buffer keymaps. `full` unfolds everything. |
 | `:OwnaiOutline` | Declaration picker via `vim.ui.select` (no plugin dependencies). |
 
 ## Folding
@@ -82,8 +90,14 @@ opens and closes its folds.
 - A fold start extends upward over complete leading annotations: line comments
   (`///`, `//!`, `//`, `--`, `#`), block comments (`/** */`, `/* */`, `/*! */`,
   `{-| -}`, `{- -}`), pragmas (`{-# #-}`), balanced attributes (`#[ ... ]`), and
-  decorators (`@...`, including parenthesized/continued forms). A run stops at a
-  blank line, at another declaration, and never claims a `#!` shebang.
+  decorators (`@...`, including parenthesized/continued forms). Nested blocks
+  and blank lines *inside* a block or continued decorator are folded as one
+  run; a blank line *between* separate runs still ends it. Bracket and
+  parenthesis counting ignores string literals, so `#[doc = "a ] b"]` balances.
+  A trailing comment (`//`, `#`, `--`, `/*`, `{-`) that directly follows another
+  declaration stays with that declaration; a forward-attaching form (`///`,
+  `//!`, `/**`, `/*!`, `{-|`, `{-#`, `#[`, `#![`, `@…`) may cross into the
+  preceding declaration's span. A `#!` shebang is never claimed.
 - Expansion is sticky, keyed by `(path, stable_key)`: a declaration you open
   stays open across re-folds, refreshes, and mode switches, and one you close
   stays closed. Overrides are dropped when the buffer is wiped; call
