@@ -163,20 +163,26 @@ function M.install(buf, doc, file_entry, mode, root, path, hash)
   st.root = root
   st.path = path
   st.mode = mode
+  st.active = true
   st.file_entry = file_entry
   st.source_hash = hash
   st.docs = st.docs or {}
-  st.docs[doc.mode] = { doc = doc, hash = hash }
+  st.docs[doc.mode] = { doc = doc, hash = hash, path = path }
 
   M.set(buf, st)
   M.decorate(st)
   return st
 end
 
---- The cached document for `mode`, when its source hash matches `hash`.
-function M.cached_doc(st, mode, hash)
+--- The cached document for `mode`, when its source hash and target path match.
+---
+--- The path is part of the key because the same bytes at a different path can
+--- project to a different outline (language detection, path-namespaced stable
+--- keys), so a path change must force a refetch rather than reuse a stale
+--- `file_entry`.
+function M.cached_doc(st, mode, hash, path)
   local entry = st and st.docs and st.docs[mode]
-  if entry and (hash == nil or entry.hash == hash) then
+  if entry and (hash == nil or entry.hash == hash) and (path == nil or entry.path == path) then
     return entry.doc
   end
   return nil

@@ -97,8 +97,9 @@ function M.ensure(buf, mode)
   local hash = vim.fn.sha256(source)
 
   local st = state.get(buf)
-  if state.cached_doc(st, mode, hash) then
+  if state.cached_doc(st, mode, hash, target.path) then
     state.set_mode(buf, mode)
+    require("ownai").attach_keymaps(buf)
     folds.apply(buf)
     return state.get(buf)
   end
@@ -119,6 +120,7 @@ function M.ensure(buf, mode)
   end
 
   st = state.install(buf, doc, file_entry, mode, target.root, target.path, hash)
+  require("ownai").attach_keymaps(buf)
   folds.apply(buf)
   return st
 end
@@ -136,8 +138,6 @@ function M.show(mode)
     return fail(err)
   end
 
-  require("ownai").attach_keymaps(buf)
-  folds.apply(buf)
   return st
 end
 

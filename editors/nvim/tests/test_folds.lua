@@ -124,4 +124,20 @@ return function(H)
     local method_first = vim.api.nvim_buf_get_lines(0, method.fold_start - 1, method.fold_start, false)[1]
     H.contains(method_first, "///", "method fold start includes its doc comment")
   end)
+
+  H.test("the document cache is keyed by path (F5)", function()
+    local a = "editors/nvim/tests/fixtures/cache_a.rs"
+    local b = "editors/nvim/tests/fixtures/cache_b.rs"
+
+    H.open_path(a)
+    vim.cmd("OwnaiShow types")
+    H.eq(H.state().path, a, "state records the projected path")
+
+    -- Identical bytes at a different path: the cache must miss and refetch so
+    -- `st.path`, `st.root`, and `st.file_entry` track the new target.
+    vim.cmd("file " .. vim.fn.fnameescape(b))
+    vim.cmd("OwnaiFold types")
+    H.eq(H.state().path, b, "path is refreshed when the buffer's file changes")
+    H.truthy(H.item_named("same"), "the refetched document's outline is installed")
+  end)
 end
