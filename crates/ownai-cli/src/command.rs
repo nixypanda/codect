@@ -9,6 +9,8 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
+use std::io::IsTerminal as _;
+use std::io::Write as _;
 use std::path::Path;
 
 use ownai_core::{
@@ -16,16 +18,39 @@ use ownai_core::{
     SourceSpan, diff_document, show_document,
 };
 use ownai_engine::config::ConfigError;
-use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_engine::eval::{self, EvalError, EvalOptions};
+use ownai_engine::{
+    Engine, EngineError, FileDiff, ReviewConcerns, ReviewConfig, ReviewError, ReviewLens,
+    ReviewOutcome, Selection, SelectionGroup,
+};
 use ownai_git::GitError;
 
 #[cfg(feature = "tui")]
 use crate::args::IconChoice;
 #[cfg(feature = "tui")]
 use crate::args::TuiCommand;
-use crate::args::{Cli, Command as CliCommand};
+use crate::args::{Cli, ColorChoice, Command as CliCommand, DecisionProviderChoice, LensChoice};
+use crate::decision::{self, ProviderBuildError, ProviderOptions, ProviderRoute};
+use crate::disclosure::{self, DisclosureError, EndpointError};
+use crate::evaluation;
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
+use crate::review::{self, ReviewDocumentHeader, ReviewRenderOptions};
+
+/// The default serialized-state byte limit for one review unit.
+pub const DEFAULT_MAX_STATE_BYTES: usize = 64 * 1024;
+
+/// The successful result of a command.
+///
+/// A review document is written before the exit status is chosen, so a failed
+/// unit is signaled only by [`CommandOutcome::ReviewFailed`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandOutcome {
+    /// The command completed; a review, if any, had no failed unit.
+    Success,
+    /// The review document was written, but at least one unit failed.
+    ReviewFailed,
+}
 
 /// A fatal CLI failure with structured context and an underlying cause.
 ///
@@ -68,7 +93,29 @@ impl miette::Diagnostic for CliError {
 }
 
 /// Discovers the repository from the current directory and runs one command.
-pub fn run(cli: &Cli) -> Result<(), CliError> {
+pub fn run(cli: &Cli) -> Result<CommandOutcome, CliError> {
+    // The evaluation harness reads a checked-in corpus and never touches Git, so
+    // it is handled before repository discovery. Running it from any directory
+    // is intentional: it must not require a repository.
+    if let CliCommand::EvalLens {
+        fixtures,
+        decision_provider,
+        decision_model,
+        decision_endpoint,
+        allow_custom_endpoint,
+        choice_confidence_threshold,
+    } = &cli.command
+    {
+        return eval_lens(
+            fixtures,
+            *decision_provider,
+            decision_model.as_deref(),
+            decision_endpoint.as_deref(),
+            *allow_custom_endpoint,
+            *choice_confidence_threshold,
+        );
+    }
+
     let start = std::env::current_dir().map_err(|source| CliError {
         message: "could not determine the current directory".to_owned(),
         help: None,
@@ -88,7 +135,8 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
                 .show(revision, (*mode).into(), &selection)
                 .map_err(engine_failure)?;
             output::write_document(DocumentKind::Show, &show_document(&files), cli.color)
-                .map_err(output_failure)
+                .map_err(output_failure)?;
+            Ok(CommandOutcome::Success)
         }
         CliCommand::Diff {
             mode,
@@ -96,18 +144,260 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             target,
             paths,
             areas,
+            lens,
+            decision_provider,
+            decision_model,
+            decision_endpoint,
+            allow_custom_endpoint,
+            dry_run,
+            accept_disclosure,
         } => {
             let selection = selection_for(paths, areas, &start, &engine)?;
             let diffs = engine
                 .diff(base, target, (*mode).into(), &selection)
                 .map_err(engine_failure)?;
-            let (old, new) = split_diff(diffs);
-            output::write_document(DocumentKind::Diff, &diff_document(&old, &new), cli.color)
-                .map_err(output_failure)
+
+            match lens {
+                None => {
+                    let (old, new) = split_diff(diffs);
+                    output::write_document(
+                        DocumentKind::Diff,
+                        &diff_document(&old, &new),
+                        cli.color,
+                    )
+                    .map_err(output_failure)?;
+                    Ok(CommandOutcome::Success)
+                }
+                Some(LensChoice::Review) => {
+                    let config = engine.load_review_config().map_err(engine_failure)?;
+                    review_diff(
+                        diffs,
+                        *decision_provider,
+                        ProviderOptions {
+                            model: decision_model.as_deref(),
+                            endpoint: decision_endpoint.as_deref(),
+                            allow_custom_endpoint: *allow_custom_endpoint,
+                        },
+                        *dry_run,
+                        *accept_disclosure,
+                        cli.color,
+                        config,
+                    )
+                }
+            }
         }
         #[cfg(feature = "tui")]
-        CliCommand::Tui { command } => run_tui(engine, command, &start, cli.icons),
+        CliCommand::Tui { command } => {
+            run_tui(engine, command, &start, cli.icons).map(|()| CommandOutcome::Success)
+        }
+        // Handled before repository discovery above.
+        CliCommand::EvalLens { .. } => {
+            unreachable!("`eval-lens` is handled before repository discovery")
+        }
     }
+}
+
+/// Evaluates a decision provider against a checked-in review corpus.
+///
+/// The endpoint is validated before the fixture file is read, matching the
+/// review path, so a malformed URL is a typed error rather than something a
+/// provider sees. The report is deterministic plain text on stdout.
+fn eval_lens(
+    fixtures: &Path,
+    provider_choice: DecisionProviderChoice,
+    model: Option<&str>,
+    endpoint: Option<&str>,
+    allow_custom_endpoint: bool,
+    threshold: f64,
+) -> Result<CommandOutcome, CliError> {
+    if let Some(url) = endpoint {
+        disclosure::endpoint_host(url).map_err(endpoint_failure)?;
+    }
+
+    let json = std::fs::read_to_string(fixtures).map_err(|source| CliError {
+        message: format!(
+            "could not read evaluation fixtures `{}`",
+            fixtures.display()
+        ),
+        help: None,
+        source: Box::new(source),
+    })?;
+    let cases = eval::load_cases(&json).map_err(eval_failure)?;
+    let provider = decision::build_provider(
+        provider_choice,
+        ProviderOptions {
+            model,
+            endpoint,
+            allow_custom_endpoint,
+        },
+    )
+    .map_err(provider_failure)?;
+
+    let report = eval::evaluate(
+        provider.as_ref(),
+        &cases,
+        EvalOptions {
+            choice_confidence_threshold: threshold,
+        },
+    );
+    let text = evaluation::render_report(&report, eval::REVIEW_EVAL_SCHEMA, threshold);
+    output::write_plain(&text).map_err(output_failure)?;
+    Ok(CommandOutcome::Success)
+}
+
+/// The provider-specific caveat rendered in a review document header.
+///
+/// Laya's shipped checkpoints are not calibrated for code review: measured on
+/// this repository, the base English checkpoint ranks obvious breaking changes
+/// low, and the fine-tuned typed-decisions checkpoint collapses toward 0.5 on
+/// every question. The document states that rather than presenting the
+/// probabilities as settled.
+fn review_note(provider: DecisionProviderChoice) -> Option<&'static str> {
+    match provider {
+        DecisionProviderChoice::Laya => {
+            Some("laya judgments are experimental and not calibrated for code review")
+        }
+        DecisionProviderChoice::Fake | DecisionProviderChoice::Typesafe => None,
+    }
+}
+
+/// Runs the review lens over the engine diffs and writes the review document.
+///
+/// The canonical diff is rendered from the same projections the legacy path
+/// uses, so it appears verbatim above the annotations. Clap guarantees that
+/// `--decision-provider` accompanies `--lens`. Before any provider is built,
+/// the plan is summarized: a dry run prints it and stops, a remote route must
+/// pass the acknowledgement gate, and local routes print a distinct notice.
+/// The offline test provider prints nothing.
+fn review_diff(
+    diffs: Vec<FileDiff>,
+    provider_choice: Option<DecisionProviderChoice>,
+    options: ProviderOptions<'_>,
+    dry_run: bool,
+    accept_disclosure: bool,
+    color: ColorChoice,
+    config: ReviewConfig,
+) -> Result<CommandOutcome, CliError> {
+    let provider_choice =
+        provider_choice.expect("clap requires `--decision-provider` whenever `--lens` is present");
+    let route = provider_choice.route();
+
+    // Validate and parse the endpoint before building any state, so a malformed
+    // URL is a typed error rather than something a provider sees.
+    let host = match options.endpoint {
+        Some(url) => Some(disclosure::endpoint_host(url).map_err(endpoint_failure)?),
+        None => None,
+    };
+
+    // Resolve the model once so the disclosure plan and the provider agree even
+    // when the alias comes from the environment or a provider default.
+    let resolved_model = decision::resolve_model(provider_choice, options.model);
+
+    // A repository may replace the built-in concern taxonomy and raise or lower
+    // the confidence gate; the lens owns the resulting question set and digest.
+    let concerns = config
+        .concerns
+        .clone()
+        .unwrap_or_else(ReviewConcerns::builtin);
+    let lens =
+        ReviewLens::with_concerns(DEFAULT_MAX_STATE_BYTES, concerns).map_err(review_failure)?;
+    let render_options = ReviewRenderOptions {
+        choice_confidence_threshold: config.choice_confidence_threshold,
+    };
+    let plan = disclosure::review_plan(
+        provider_choice.label(),
+        route,
+        host.as_deref(),
+        resolved_model.as_deref(),
+        &lens,
+        &diffs,
+    );
+
+    if dry_run {
+        // A dry run never builds a provider and never transmits state.
+        output::write_plain(&disclosure::render_plan(&plan, true)).map_err(output_failure)?;
+        return Ok(CommandOutcome::Success);
+    }
+
+    match route {
+        ProviderRoute::Remote => {
+            let interactive = std::io::stderr().is_terminal();
+            let accepted = accept_disclosure || env_accepts_disclosure();
+            disclosure::check_disclosure(provider_choice.label(), route, interactive, accepted)
+                .map_err(disclosure_failure)?;
+            write_disclosure(&plan)?;
+        }
+        // A local provider needs no acknowledgement but is still visibly
+        // distinct from an offline one.
+        ProviderRoute::Local => write_disclosure(&plan)?,
+        // The deterministic offline provider stays byte-for-byte silent so the
+        // existing end-to-end output is unchanged.
+        ProviderRoute::LocalTest => {}
+    }
+
+    let provider = decision::build_provider(
+        provider_choice,
+        ProviderOptions {
+            model: resolved_model.as_deref(),
+            ..options
+        },
+    )
+    .map_err(provider_failure)?;
+
+    // `diff_document` consumes owned projections and re-sorts by path; the
+    // clone keeps the engine-ordered diffs for per-file review.
+    let (old, new) = split_diff(diffs.clone());
+    let canonical_diff = diff_document(&old, &new);
+
+    let mut outcomes = Vec::new();
+    for diff in &diffs {
+        outcomes.extend(lens.review_file(provider.as_ref(), diff));
+    }
+
+    let document = review::review_document(
+        ReviewDocumentHeader {
+            provider: provider_choice.label(),
+            question_digest: lens.question_digest(),
+            note: review_note(provider_choice),
+        },
+        &canonical_diff,
+        &outcomes,
+        &render_options,
+    );
+    output::write_document(DocumentKind::Review, &document, color).map_err(output_failure)?;
+
+    let failed = outcomes
+        .iter()
+        .any(|outcome| matches!(outcome, ReviewOutcome::Failed { .. }));
+    Ok(if failed {
+        CommandOutcome::ReviewFailed
+    } else {
+        CommandOutcome::Success
+    })
+}
+
+/// Writes the disclosure form of a plan to stderr.
+///
+/// The disclosure is deliberately never written to stdout, so a redirected
+/// review document stays a valid document.
+fn write_disclosure(plan: &disclosure::ReviewPlan) -> Result<(), CliError> {
+    let text = disclosure::render_plan(plan, false);
+    let mut stderr = io::stderr().lock();
+    stderr
+        .write_all(text.as_bytes())
+        .and_then(|()| stderr.flush())
+        .map_err(output_failure)
+}
+
+/// Whether `OWNAI_ACCEPT_DISCLOSURE` selects one of the truthy spellings.
+///
+/// The comparison is ASCII case-insensitive, matching the documented values.
+fn env_accepts_disclosure() -> bool {
+    std::env::var("OWNAI_ACCEPT_DISCLOSURE").is_ok_and(|value| {
+        value.eq_ignore_ascii_case("1")
+            || value.eq_ignore_ascii_case("true")
+            || value.eq_ignore_ascii_case("yes")
+    })
 }
 
 /// Splits engine diffs into the two projection slices the document renderer
@@ -316,6 +606,51 @@ fn output_failure(source: io::Error) -> CliError {
         message: "could not write output".to_owned(),
         help: None,
         source: Box::new(source),
+    }
+}
+
+/// A decision provider that could not be constructed.
+fn provider_failure(error: ProviderBuildError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// An evaluation corpus that could not be loaded.
+fn eval_failure(error: EvalError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// A review lens that could not be constructed or evaluated.
+fn review_failure(error: ReviewError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// A decision endpoint URL that could not be validated.
+fn endpoint_failure(error: EndpointError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
+/// A remote review that was not acknowledged.
+fn disclosure_failure(error: DisclosureError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
     }
 }
 

@@ -46,6 +46,7 @@ const PROJECTORS: [&dyn LanguageProjector; 4] = [
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiff {
     pub path: RepoPath,
+    pub mode: ProjectionMode,
     pub old: Option<ProjectedFile>,
     pub new: Option<ProjectedFile>,
 }
@@ -80,6 +81,14 @@ impl Engine {
     /// the owned snapshot.
     pub fn load_areas(&self) -> Result<AreaSet, EngineError> {
         Ok(config::Config::load(&self.root)?.areas().clone())
+    }
+
+    /// Reads the current `.ownai.toml` review settings.
+    ///
+    /// A missing file yields the defaults; every other failure propagates so a
+    /// malformed config is never silently ignored.
+    pub fn load_review_config(&self) -> Result<config::ReviewConfig, EngineError> {
+        Ok(config::Config::load_for_review(&self.root)?)
     }
 
     /// Projects every selected file of `revision`.
@@ -194,6 +203,7 @@ impl Engine {
             }
             diffs.push(FileDiff {
                 path: path.clone(),
+                mode,
                 old,
                 new,
             });

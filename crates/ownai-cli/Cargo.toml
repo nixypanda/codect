@@ -10,13 +10,16 @@ name = "ownai"
 path = "src/main.rs"
 
 [features]
-default = ["tui"]
+default = ["tui", "typesafe", "laya"]
 tui = ["dep:ownai-tui"]
+typesafe = ["ownai-decisions/typesafe"]
+laya = ["ownai-decisions/laya"]
 
 [dependencies]
 ownai-core.workspace = true
 ownai-git.workspace = true
 ownai-engine.workspace = true
+ownai-decisions.workspace = true
 ownai-tui = { workspace = true, optional = true }
 anstream.workspace = true
 anstyle.workspace = true
@@ -29,7 +32,9 @@ ownai-language-elm.workspace = true
 ownai-language-haskell.workspace = true
 ownai-language-python.workspace = true
 ownai-language-rust.workspace = true
+serde_json.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
 portable-pty.workspace = true
+tiny_http.workspace = true

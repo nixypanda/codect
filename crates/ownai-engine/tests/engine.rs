@@ -371,3 +371,37 @@ fn root_is_the_worktree_for_a_normal_repository() {
     let root = engine(&repo).root().to_path_buf();
     assert!(root.ends_with(repo.path().file_name().unwrap()));
 }
+
+#[test]
+fn load_review_config_defaults_without_a_file_and_reads_a_configured_taxonomy() {
+    let repo = TestRepo::init();
+    repo.write("a.rs", RUST_BASE);
+    repo.commit("base");
+
+    let engine = engine(&repo);
+    let defaults = engine.load_review_config().expect("defaults");
+    assert_eq!(defaults.choice_confidence_threshold, 0.55);
+    assert!(defaults.concerns.is_none());
+
+    repo.write(
+        ".ownai.toml",
+        concat!(
+            "[lenses.review]\n",
+            "choice_confidence_threshold = 0.9\n",
+            "\n",
+            "[lenses.review.concerns]\n",
+            "engine = \"Engine behavior\"\n",
+            "other = \"No listed concern\"\n",
+        ),
+    );
+
+    let configured = engine.load_review_config().expect("configured");
+    assert_eq!(configured.choice_confidence_threshold, 0.9);
+    let concerns = configured.concerns.expect("configured concerns");
+    let keys: Vec<&str> = concerns
+        .options()
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect();
+    assert_eq!(keys, vec!["engine", "other"]);
+}

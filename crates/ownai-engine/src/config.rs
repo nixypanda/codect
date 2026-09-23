@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use ownai_core::{Area, AreaError, AreaSet, RepoPath, RepoPathError};
 
+use crate::review::{ReviewConcerns, ReviewConcernsError};
+
 /// The largest config that will be read. Area definitions are tiny, so a larger
 /// file is far more likely a mistake or an attack than something worth parsing.
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -20,10 +22,37 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 /// flag to point at another file.
 const FILE_NAME: &str = ".ownai.toml";
 
+/// The default choice confidence threshold when the repository sets none.
+const DEFAULT_REVIEW_CHOICE_CONFIDENCE_THRESHOLD: f64 = 0.55;
+
 /// The repository's areas, already validated and name-sorted.
 #[derive(Debug)]
 pub struct Config {
     areas: AreaSet,
+    review: ReviewConfig,
+}
+
+/// The repository's optional review-lens settings.
+///
+/// `concerns` is `None` when the repository did not configure a taxonomy, in
+/// which case the review lens's built-in taxonomy applies. A configured
+/// taxonomy is read from a [`BTreeMap`], so it is name-sorted; the built-in
+/// taxonomy keeps its fixed source order.
+#[derive(Clone, Debug)]
+pub struct ReviewConfig {
+    /// The confidence at or above which a concern is rendered as confident.
+    pub choice_confidence_threshold: f64,
+    /// The configured concern taxonomy, when the repository defines one.
+    pub concerns: Option<ReviewConcerns>,
+}
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self {
+            choice_confidence_threshold: DEFAULT_REVIEW_CHOICE_CONFIDENCE_THRESHOLD,
+            concerns: None,
+        }
+    }
 }
 
 impl Config {
@@ -63,11 +92,28 @@ impl Config {
             areas.push(build_area(file.clone(), name, paths)?);
         }
         let areas = AreaSet::new(areas).map_err(|source| ConfigError::from_area(&file, source))?;
-        Ok(Self { areas })
+        let review = build_review(&file, parsed.lenses.review)?;
+        Ok(Self { areas, review })
+    }
+
+    /// Reads only the review settings, treating a missing file as defaults.
+    ///
+    /// Every other failure, including a malformed or oversized file, is
+    /// propagated so a broken config is never silently ignored.
+    pub fn load_for_review(repo_root: &Path) -> Result<ReviewConfig, ConfigError> {
+        match Self::load(repo_root) {
+            Ok(config) => Ok(config.review),
+            Err(ConfigError::NotFound { .. }) => Ok(ReviewConfig::default()),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn areas(&self) -> &AreaSet {
         &self.areas
+    }
+
+    pub fn review(&self) -> &ReviewConfig {
+        &self.review
     }
 }
 
@@ -78,6 +124,56 @@ impl Config {
 struct ConfigFile {
     #[serde(default)]
     areas: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    lenses: Lenses,
+}
+
+/// The `[lenses]` table. Only the review lens is defined in v1.
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Lenses {
+    #[serde(default)]
+    review: ReviewSection,
+}
+
+/// The `[lenses.review]` table.
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewSection {
+    choice_confidence_threshold: Option<f64>,
+    #[serde(default)]
+    concerns: Option<BTreeMap<String, String>>,
+}
+
+/// Validates the review section into owned settings.
+///
+/// A configured taxonomy is built from a name-sorted map, so its order is
+/// deterministic but sorted rather than source order.
+fn build_review(file: &Path, section: ReviewSection) -> Result<ReviewConfig, ConfigError> {
+    let threshold = section
+        .choice_confidence_threshold
+        .unwrap_or(DEFAULT_REVIEW_CHOICE_CONFIDENCE_THRESHOLD);
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        return Err(ConfigError::InvalidReviewThreshold {
+            file: file.to_path_buf(),
+            value: threshold.to_string(),
+        });
+    }
+
+    let concerns = match section.concerns {
+        Some(concerns) => Some(ReviewConcerns::new(concerns).map_err(|source| {
+            ConfigError::InvalidReviewConcerns {
+                file: file.to_path_buf(),
+                source,
+            }
+        })?),
+        None => None,
+    };
+
+    Ok(ReviewConfig {
+        choice_confidence_threshold: threshold,
+        concerns,
+    })
 }
 
 fn build_area(file: PathBuf, name: String, paths: Vec<String>) -> Result<Area, ConfigError> {
@@ -170,6 +266,18 @@ pub enum ConfigError {
 
     #[error("`{file}` defines the area `{name}` more than once")]
     DuplicateArea { file: PathBuf, name: String },
+
+    #[error(
+        "`{file}` sets an invalid review choice confidence threshold `{value}`; it must be finite and within 0.0..=1.0"
+    )]
+    InvalidReviewThreshold { file: PathBuf, value: String },
+
+    #[error("`{file}` defines invalid review concerns")]
+    InvalidReviewConcerns {
+        file: PathBuf,
+        #[source]
+        source: ReviewConcernsError,
+    },
 }
 
 impl ConfigError {
@@ -338,5 +446,167 @@ mod tests {
 
         let error = Config::load(dir.path()).unwrap_err();
         assert!(matches!(error, ConfigError::Symlink { .. }));
+    }
+
+    #[test]
+    fn a_valid_review_section_loads_the_threshold_and_sorted_concerns() {
+        let dir = temp();
+        write_config(
+            dir.path(),
+            concat!(
+                "[lenses.review]\n",
+                "choice_confidence_threshold = 0.75\n",
+                "\n",
+                "[lenses.review.concerns]\n",
+                "tui = \"Terminal interaction\"\n",
+                "engine = \"Engine behavior\"\n",
+                "other = \"No listed concern is a good fit\"\n",
+            ),
+        );
+
+        let config = Config::load(dir.path()).expect("load config");
+        let review = config.review();
+        assert_eq!(review.choice_confidence_threshold, 0.75);
+        let concerns = review.concerns.as_ref().expect("configured concerns");
+        let keys: Vec<&str> = concerns
+            .options()
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["engine", "other", "tui"],
+            "configured order is sorted"
+        );
+    }
+
+    #[test]
+    fn an_areas_only_config_yields_the_default_review_config() {
+        let dir = temp();
+        write_config(dir.path(), "[areas]\nfrontend = [\"apps/web\"]\n");
+
+        let config = Config::load(dir.path()).expect("load config");
+        let review = config.review();
+        assert_eq!(review.choice_confidence_threshold, 0.55);
+        assert!(review.concerns.is_none());
+    }
+
+    #[test]
+    fn unknown_keys_under_lenses_are_rejected() {
+        let dir = temp();
+        for contents in [
+            "[lenses]\nsurprise = true\n",
+            "[lenses.review]\nsurprise = true\n",
+        ] {
+            write_config(dir.path(), contents);
+            let error = Config::load(dir.path()).unwrap_err();
+            assert!(
+                matches!(error, ConfigError::Parse { .. }),
+                "`{contents}` must be rejected, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_or_non_finite_review_threshold_is_rejected() {
+        let dir = temp();
+        for value in ["1.5", "-0.1", "nan", "inf"] {
+            write_config(
+                dir.path(),
+                &format!("[lenses.review]\nchoice_confidence_threshold = {value}\n"),
+            );
+            let parsed: f64 = value.parse().expect("the fixture is a float");
+            let error = Config::load(dir.path()).unwrap_err();
+            match error {
+                ConfigError::InvalidReviewThreshold {
+                    value: reported, ..
+                } => {
+                    assert_eq!(reported, parsed.to_string());
+                }
+                other => panic!("expected InvalidReviewThreshold for {value}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn review_concerns_without_other_are_rejected() {
+        let dir = temp();
+        write_config(
+            dir.path(),
+            "[lenses.review.concerns]\nengine = \"Engine behavior\"\n",
+        );
+
+        let error = Config::load(dir.path()).unwrap_err();
+        match error {
+            ConfigError::InvalidReviewConcerns { source, .. } => {
+                assert_eq!(source, ReviewConcernsError::MissingOther);
+            }
+            other => panic!("expected InvalidReviewConcerns, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn too_many_review_concerns_are_rejected() {
+        let dir = temp();
+        let mut contents = String::from("[lenses.review.concerns]\n");
+        for index in 0..33 {
+            contents.push_str(&format!("concern-{index} = \"A concern\"\n"));
+        }
+        contents.push_str("other = \"No listed concern\"\n");
+        write_config(dir.path(), &contents);
+
+        let error = Config::load(dir.path()).unwrap_err();
+        match error {
+            ConfigError::InvalidReviewConcerns { source, .. } => {
+                assert!(matches!(
+                    source,
+                    ReviewConcernsError::TooManyConcerns {
+                        count: 34,
+                        maximum: 32,
+                    }
+                ));
+            }
+            other => panic!("expected InvalidReviewConcerns, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_oversized_review_concern_description_is_rejected() {
+        let dir = temp();
+        let description = "x".repeat(257);
+        write_config(
+            dir.path(),
+            &format!(
+                "[lenses.review.concerns]\nengine = \"{description}\"\nother = \"No listed concern\"\n"
+            ),
+        );
+
+        let error = Config::load(dir.path()).unwrap_err();
+        match error {
+            ConfigError::InvalidReviewConcerns { source, .. } => {
+                assert!(matches!(
+                    source,
+                    ReviewConcernsError::ConcernDescriptionTooLong {
+                        bytes: 257,
+                        maximum: 256,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected InvalidReviewConcerns, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_for_review_defaults_a_missing_file_but_rejects_a_malformed_one() {
+        let missing = temp();
+        let review = Config::load_for_review(missing.path()).expect("defaults");
+        assert_eq!(review.choice_confidence_threshold, 0.55);
+        assert!(review.concerns.is_none());
+
+        let malformed = temp();
+        write_config(malformed.path(), "this is not toml");
+        let error = Config::load_for_review(malformed.path()).unwrap_err();
+        assert!(matches!(error, ConfigError::Parse { .. }));
     }
 }

@@ -17,8 +17,21 @@
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod eval;
+pub mod item_diff;
+pub mod review;
 pub mod selection;
 
+pub use config::ReviewConfig;
 pub use engine::{Engine, FileDiff};
 pub use error::EngineError;
+pub use eval::{
+    EvalCase, EvalError, EvalLabels, EvalOptions, EvaluationReport, GroupMetrics, Metrics,
+    REVIEW_EVAL_SCHEMA, evaluate, load_cases,
+};
+pub use item_diff::{ItemChangeKind, ItemDiff};
+pub use review::{
+    ChoiceJudgment, REVIEW_STATE_SCHEMA, ReviewConcerns, ReviewConcernsError, ReviewError,
+    ReviewJudgment, ReviewLens, ReviewOutcome, ReviewedItemDiff, ScoreJudgment,
+};
 pub use selection::{Selection, SelectionError, SelectionGroup};

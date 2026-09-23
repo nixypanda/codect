@@ -106,6 +106,7 @@ pub fn file_diff(
     let repo_path = RepoPath::new(path).expect("benchmark path is valid");
     FileDiff {
         path: repo_path,
+        mode: ProjectionMode::Types,
         old: old.map(|(text, language)| projected(path, language, text)),
         new: new.map(|(text, language)| projected(path, language, text)),
     }

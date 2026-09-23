@@ -2215,6 +2215,7 @@ mod tests {
     fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
         FileDiff {
             path: RepoPath::new(path).expect("valid path"),
+            mode: ProjectionMode::Types,
             old: old.map(|text| projected(path, text)),
             new: new.map(|text| projected(path, text)),
         }

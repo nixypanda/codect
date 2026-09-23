@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/ownai-core",
+    "crates/ownai-decisions",
     "crates/ownai-git",
     "crates/ownai-language-elm",
     "crates/ownai-language-haskell",
@@ -21,6 +22,7 @@ publish = false
 [workspace.dependencies]
 # First-party crates.
 ownai-core = { path = "crates/ownai-core" }
+ownai-decisions = { path = "crates/ownai-decisions" }
 ownai-git = { path = "crates/ownai-git" }
 ownai-language-elm = { path = "crates/ownai-language-elm" }
 ownai-language-haskell = { path = "crates/ownai-language-haskell" }
@@ -50,7 +52,19 @@ bstr = "1"
 anstream = "1"
 anstyle = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 toml = "1"
+
+# Blocking HTTP client for the optional TypeSafe decision provider. Default
+# features are disabled so the enabled TLS and body features stay auditable;
+# `rustls` supplies TLS, `rustls-webpki-roots` the static Mozilla root store,
+# and `json` request/response serialization. It never pulls an async runtime.
+ureq = { version = "3", default-features = false, features = [
+    "rustls",
+    "rustls-webpki-roots",
+    "json",
+] }
 
 # Terminal frontend dependencies. `ratatui` is built without its default
 # feature bundle so the enabled feature set stays auditable; the crossterm
@@ -74,6 +88,9 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 portable-pty = "0.9"
+# A tiny blocking HTTP server for provider contract tests. It binds a loopback
+# port chosen by the OS and never leaves the test process.
+tiny_http = "0.12"
 
 # Benchmark-only dependency. Confined to `ownai-tui`'s `bench` feature via a
 # `required-features` bench target, so it never enters a normal build.

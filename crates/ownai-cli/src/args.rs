@@ -89,6 +89,39 @@ pub enum Command {
         /// exclusive with `--path`.
         #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
         areas: Vec<String>,
+
+        /// Annotate each changed declaration with semantic review judgments.
+        #[arg(long, value_enum, requires = "decision_provider")]
+        lens: Option<LensChoice>,
+
+        /// Decision provider that answers the review questions. Required with
+        /// `--lens`.
+        #[arg(long, value_enum, value_name = "PROVIDER", requires = "lens")]
+        decision_provider: Option<DecisionProviderChoice>,
+
+        /// Override the model revision the provider reports for the review.
+        #[arg(long, value_name = "MODEL", requires = "lens")]
+        decision_model: Option<String>,
+
+        /// Provider endpoint. Not supported by the `fake` provider.
+        #[arg(long, value_name = "URL", requires = "lens")]
+        decision_endpoint: Option<String>,
+
+        /// Allow a non-default remote endpoint. A custom endpoint must be
+        /// explicitly allowed so a configuration typo cannot send repository
+        /// state to an unintended host.
+        #[arg(long, requires = "lens")]
+        allow_custom_endpoint: bool,
+
+        /// Show the disclosure plan and affected paths without transmitting
+        /// state.
+        #[arg(long, requires = "lens")]
+        dry_run: bool,
+
+        /// Acknowledge remote semantic analysis for non-interactive use. Setting
+        /// `OWNAI_ACCEPT_DISCLOSURE` to `1`, `true`, or `yes` is equivalent.
+        #[arg(long, requires = "lens")]
+        accept_disclosure: bool,
     },
 
     /// Browse projections in the terminal.
@@ -96,6 +129,41 @@ pub enum Command {
     Tui {
         #[command(subcommand)]
         command: TuiCommand,
+    },
+
+    /// Evaluate a decision provider against the checked-in review corpus.
+    ///
+    /// Hidden: this is an offline development harness, not a stable product
+    /// surface. It reads a versioned fixture file and never opens a network
+    /// connection by itself; the selected provider decides whether state leaves
+    /// the process.
+    #[command(hide = true)]
+    EvalLens {
+        /// Path to a versioned evaluation fixture file.
+        #[arg(long, value_name = "PATH")]
+        fixtures: std::path::PathBuf,
+
+        /// Decision provider that answers the review questions.
+        #[arg(long, value_enum, value_name = "PROVIDER")]
+        decision_provider: DecisionProviderChoice,
+
+        /// Override the model revision the provider reports.
+        #[arg(long, value_name = "MODEL")]
+        decision_model: Option<String>,
+
+        /// Provider endpoint. Not supported by the `fake` provider.
+        #[arg(long, value_name = "URL")]
+        decision_endpoint: Option<String>,
+
+        /// Allow a non-default remote endpoint. A custom endpoint must be
+        /// explicitly allowed so a configuration typo cannot send repository
+        /// state to an unintended host.
+        #[arg(long)]
+        allow_custom_endpoint: bool,
+
+        /// Minimum choice confidence counted as covered by the coverage gate.
+        #[arg(long, value_name = "F", default_value_t = 0.55)]
+        choice_confidence_threshold: f64,
     },
 }
 
@@ -186,4 +254,284 @@ pub enum IconChoice {
     None,
     /// Nerd Font folder and file-type glyphs.
     Nerd,
+}
+
+/// The semantic lens selected by `--lens`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum LensChoice {
+    /// Annotate each changed declaration with review judgments.
+    Review,
+}
+
+/// The decision provider that answers semantic-lens questions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum DecisionProviderChoice {
+    /// A deterministic, offline provider for tests and fixtures. It never opens
+    /// a network connection and always returns the same answers for a request.
+    Fake,
+    /// The remote TypeSafe/Jev provider. Not yet available.
+    Typesafe,
+    /// The local Laya provider. Not yet available.
+    Laya,
+}
+
+impl DecisionProviderChoice {
+    /// The provider name attributed in a review document's header.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fake => "fake",
+            Self::Typesafe => "typesafe",
+            Self::Laya => "laya",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Command};
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("ownai").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn lens_with_the_fake_provider_parses_for_diff() {
+        let parsed = parse(&[
+            "diff",
+            "--mode",
+            "signatures",
+            "HEAD~1",
+            "HEAD",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "fake",
+        ]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn a_lens_without_a_provider_is_a_parse_error() {
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--lens",
+                "review"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_provider_without_a_lens_is_a_parse_error() {
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--decision-provider",
+                "fake",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn decision_model_and_endpoint_without_a_lens_are_parse_errors() {
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--decision-model",
+                "custom",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--decision-endpoint",
+                "http://localhost:1234",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn lens_provider_options_parse_together() {
+        let parsed = parse(&[
+            "diff",
+            "--mode",
+            "signatures",
+            "HEAD~1",
+            "HEAD",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "fake",
+            "--decision-model",
+            "custom",
+        ]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn privacy_flags_without_a_lens_are_parse_errors() {
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--dry-run",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--accept-disclosure",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn privacy_flags_parse_with_a_lens_and_provider() {
+        let parsed = parse(&[
+            "diff",
+            "--mode",
+            "signatures",
+            "HEAD~1",
+            "HEAD",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "fake",
+            "--dry-run",
+            "--accept-disclosure",
+        ]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn allow_custom_endpoint_without_a_lens_is_a_parse_error() {
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "HEAD~1",
+                "HEAD",
+                "--allow-custom-endpoint",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn allow_custom_endpoint_parses_with_a_lens_and_provider() {
+        let parsed = parse(&[
+            "diff",
+            "--mode",
+            "signatures",
+            "HEAD~1",
+            "HEAD",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "typesafe",
+            "--allow-custom-endpoint",
+        ]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn plain_diff_and_show_invocations_still_parse() {
+        assert!(parse(&["diff", "--mode", "types", "HEAD~1", "HEAD"]).is_ok());
+        assert!(
+            parse(&[
+                "diff",
+                "--mode",
+                "signatures",
+                "--path",
+                "src",
+                "HEAD~1",
+                "HEAD"
+            ])
+            .is_ok()
+        );
+        assert!(parse(&["show", "--mode", "types"]).is_ok());
+    }
+
+    #[test]
+    fn eval_lens_requires_fixtures_and_a_provider() {
+        assert!(parse(&["eval-lens", "--fixtures", "f.json"]).is_err());
+        assert!(parse(&["eval-lens", "--decision-provider", "fake"]).is_err());
+        assert!(
+            parse(&[
+                "eval-lens",
+                "--fixtures",
+                "f.json",
+                "--decision-provider",
+                "fake",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn eval_lens_accepts_allow_custom_endpoint() {
+        assert!(
+            parse(&[
+                "eval-lens",
+                "--fixtures",
+                "f.json",
+                "--decision-provider",
+                "typesafe",
+                "--allow-custom-endpoint",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn eval_lens_applies_the_default_choice_confidence_threshold() {
+        let parsed = parse(&[
+            "eval-lens",
+            "--fixtures",
+            "f.json",
+            "--decision-provider",
+            "fake",
+        ])
+        .expect("valid eval-lens invocation");
+
+        match parsed.command {
+            Command::EvalLens {
+                choice_confidence_threshold,
+                ..
+            } => assert!((choice_confidence_threshold - 0.55).abs() < 1e-12),
+            other => panic!("expected eval-lens, got {other:?}"),
+        }
+    }
 }
