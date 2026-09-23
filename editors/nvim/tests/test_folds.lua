@@ -4,6 +4,15 @@ local P = "editors/nvim/tests/fixtures/sample.rs::"
 local WIDGET = P .. "type::Widget"
 local NEW = "impl Widget::method::new"
 
+--- One fixture per language, covering containers, dropped members, and modes.
+local MODE_FIXTURES = {
+  "fixtures/rust/nested-modules/input.rs",
+  "fixtures/rust/implementations/input.rs",
+  "fixtures/elm/ports-and-infix/input.elm",
+  "fixtures/haskell/classes-instances/input.hs",
+  "fixtures/python/decorators/input.py",
+}
+
 return function(H)
   H.test(":OwnaiFold full unfolds everything and switching back re-folds", function()
     H.open_fixture()
@@ -20,19 +29,64 @@ return function(H)
     H.truthy(#H.closed_starts() > 0, "switching back to types re-folds")
   end)
 
-  H.test(":OwnaiFold does not call the CLI", function()
+  H.test(":OwnaiFold reuses a cached document without calling the CLI", function()
     H.open_fixture()
     vim.cmd("OwnaiShow signatures")
 
-    -- A stub binary that always fails proves no CLI call happens.
-    local restore = H.with_stub_binary("exit 7")
-    local ok = pcall(function()
-      vim.cmd("OwnaiFold types")
-      vim.cmd("OwnaiFold full")
-      vim.cmd("OwnaiFold signatures")
-    end)
+    local marker = vim.fn.tempname()
+    vim.fn.delete(marker)
+
+    -- Cached: same content and mode, so the CLI must not run.
+    local restore = H.with_marker_binary(marker)
+    vim.cmd("OwnaiFold signatures")
     restore()
-    H.truthy(ok, "local re-fold never invoked the binary")
+    H.falsy(vim.fn.filereadable(marker) == 1, "cached :OwnaiFold must not call the CLI")
+
+    -- Uncached: a different mode must be fetched, proving the marker works.
+    vim.fn.delete(marker)
+    local restore_uncached = H.with_marker_binary(marker)
+    H.capture_notify(function()
+      vim.cmd("OwnaiFold types")
+    end)
+    restore_uncached()
+    H.truthy(vim.fn.filereadable(marker) == 1, "uncached :OwnaiFold must call the CLI")
+
+    vim.fn.delete(marker)
+  end)
+
+  H.test(":OwnaiFold matches a fresh :OwnaiShow for every mode and language", function()
+    for _, fixture in ipairs(MODE_FIXTURES) do
+      for _, mode in ipairs({ "types", "signatures" }) do
+        local other = (mode == "types") and "signatures" or "types"
+
+        H.open_path(fixture)
+        vim.cmd("OwnaiShow " .. mode)
+        local fresh = H.snapshot()
+
+        H.open_path(fixture)
+        vim.cmd("OwnaiShow " .. other)
+        vim.cmd("OwnaiFold " .. mode)
+        local folded = H.snapshot()
+
+        H.eq(folded, fresh, string.format("%s [%s]: :OwnaiFold matches :OwnaiShow", fixture, mode))
+      end
+    end
+  end)
+
+  H.test("a dropped container nested in a retained container does not collapse it", function()
+    local rel = "fixtures/rust/nested-modules/input.rs"
+    H.open_path(rel)
+    vim.cmd("OwnaiShow types")
+
+    local inner = H.item_by_key(rel .. "::mod::outer::mod::inner")
+    H.truthy(inner, "inner module is outlined")
+    H.truthy(inner.retained, "inner module is retained in types")
+    H.falsy(vim.fn.foldclosed(inner.fold_start) == inner.fold_start, "retained container stays open")
+
+    local impl = H.item_by_key("impl Deep")
+    H.truthy(impl, "nested impl is outlined")
+    H.falsy(impl.retained, "nested impl is dropped in types")
+    H.eq(vim.fn.foldclosed(impl.fold_start), impl.fold_start, "dropped nested impl is folded")
   end)
 
   H.test("an impl nests its methods", function()

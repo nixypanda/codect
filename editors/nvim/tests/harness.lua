@@ -54,6 +54,24 @@ function H.open_fixture()
   return vim.api.nvim_get_current_buf()
 end
 
+--- Open an arbitrary repository-relative file in a clean buffer.
+function H.open_path(rel)
+  vim.cmd("silent! %bwipeout!")
+  require("ownai.state").clear_overrides(rel)
+  vim.cmd("edit " .. vim.fn.fnameescape(rel))
+  return vim.api.nvim_get_current_buf()
+end
+
+--- A fold-state fingerprint: every line's closed-fold start and fold text.
+function H.snapshot()
+  local count = vim.api.nvim_buf_line_count(0)
+  local lines = {}
+  for line = 1, count do
+    lines[#lines + 1] = string.format("%d:%s", vim.fn.foldclosed(line), vim.fn.foldtextresult(line))
+  end
+  return table.concat(lines, "\n")
+end
+
 --- The declaration whose fold starts at `line`.
 function H.item_at(line)
   local st = H.state()
@@ -126,6 +144,11 @@ function H.with_stub_binary(body)
     vim.g.ownai_binary = previous
     vim.fn.delete(path)
   end
+end
+
+--- A stub that records that it ran by creating `marker`, then exits 0.
+function H.with_marker_binary(marker)
+  return H.with_stub_binary(string.format("printf called > %s", vim.fn.shellescape(marker)))
 end
 
 function H.run()

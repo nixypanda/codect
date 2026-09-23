@@ -85,16 +85,57 @@ end
 --- Apply window-local fold options and open/closed state in a window.
 function M.apply_window(st, win)
   vim.api.nvim_win_call(win, function()
-    vim.wo.foldmethod = "expr"
-    vim.wo.foldexpr = FOLDEXPR
-    vim.wo.foldenable = true
-    vim.wo.foldtext = FOLDTEXT
-    -- Reset to "everything open", then close what the mode/overrides require.
-    vim.wo.foldlevel = 0
-    vim.wo.foldlevel = 99
+    if require("ownai").config.manage_fold_options ~= false then
+      vim.wo.foldmethod = "expr"
+      vim.wo.foldexpr = FOLDEXPR
+      vim.wo.foldenable = true
+      vim.wo.foldtext = FOLDTEXT
+      -- Neovim refuses to close a fold over a single line at the default
+      -- foldminlines, which would hide every one-line declaration.
+      vim.wo.foldminlines = 0
+      -- Reset to "everything open", then close what the mode/overrides require.
+      vim.wo.foldlevel = 0
+      vim.wo.foldlevel = 99
+    end
+
+    local line_count = vim.api.nvim_buf_line_count(st.buf)
+
+    -- Close ancestors before descendants, and never close a declaration whose
+    -- ancestor is already closed: `:[a,b]foldclose` on a line inside a closed
+    -- fold escalates and closes the enclosing fold, which would collapse a
+    -- retained container around a dropped member.
+    local order = {}
     for _, item in ipairs(st.items or {}) do
+      order[#order + 1] = item
+    end
+    table.sort(order, function(a, b)
+      if a.level ~= b.level then
+        return a.level < b.level
+      end
+      return a.fold_start < b.fold_start
+    end)
+
+    local closed = {}
+    for _, item in ipairs(order) do
       if state.is_closed(st, item) then
-        pcall(vim.cmd, string.format("%d,%dfoldclose", item.fold_start, item.end_line))
+        local ancestor_closed = false
+        local parent = item.parent
+        while parent do
+          if closed[parent] then
+            ancestor_closed = true
+            break
+          end
+          local parent_item = st.by_key and st.by_key[parent]
+          parent = parent_item and parent_item.parent
+        end
+        if not ancestor_closed then
+          closed[item.key] = true
+          local first = math.max(item.fold_start or 0, 1)
+          local last = math.min(item.end_line or 0, line_count)
+          if first <= last then
+            pcall(vim.cmd, string.format("%d,%dfoldclose", first, last))
+          end
+        end
       end
     end
     vim.cmd("redraw")

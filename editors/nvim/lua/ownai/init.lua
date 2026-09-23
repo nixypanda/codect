@@ -7,6 +7,10 @@ M.defaults = {
   default_mode = "signatures",
   -- Debounce for TextChanged refreshes, in milliseconds.
   debounce_ms = 200,
+  -- Set the window-local fold options (foldmethod, foldexpr, foldtext,
+  -- foldenable, foldminlines, foldlevel) for OwnAI buffers. Set false to keep
+  -- your own fold configuration; OwnAI will still open/close its folds.
+  manage_fold_options = true,
   keymaps = {
     -- Set to false to register no keymaps at all.
     enabled = true,
@@ -76,6 +80,22 @@ end
 --- Merge user options and install autocmds.
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
+
+  -- `:OwnaiShow` and `:OwnaiFold` only accept types|signatures, so a default
+  -- of `full` would break both commands.
+  local default_mode = M.config.default_mode
+  if default_mode ~= "types" and default_mode ~= "signatures" then
+    vim.notify(
+      string.format(
+        "OwnAI: default_mode must be `types` or `signatures`, got %s; using %q",
+        vim.inspect(default_mode),
+        M.defaults.default_mode
+      ),
+      vim.log.levels.WARN
+    )
+    M.config.default_mode = M.defaults.default_mode
+  end
+
   require("ownai.view").setup_autocmds()
 
   for buf in pairs(require("ownai.state").buffers) do
@@ -85,6 +105,11 @@ function M.setup(opts)
   end
 
   return M.config
+end
+
+--- Drop every sticky fold override for every file in this session.
+function M.clear_overrides()
+  require("ownai.state").clear_all_overrides()
 end
 
 return M

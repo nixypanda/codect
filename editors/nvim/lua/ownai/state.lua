@@ -60,6 +60,11 @@ function M.clear_overrides(path)
   end
 end
 
+--- Drop every sticky override. Exposed as `require("ownai").clear_overrides()`.
+function M.clear_all_overrides()
+  M.overrides = {}
+end
+
 --- Is this declaration closed by default in `mode`?
 ---
 --- Semantics:
@@ -89,18 +94,21 @@ end
 
 --- Resolve whether `item` is retained in `mode`.
 ---
---- Uses the mode's own cached document when available (authoritative), and
---- otherwise approximates from the mode-independent outline. The approximation
---- is only needed for a local `:OwnaiFold` switch to a mode that has not been
---- fetched this session.
+--- Authoritative: the mode's own document carries `retained_in_mode`. A
+--- document for the target mode is always installed before this runs (see
+--- `view.ensure`), so no approximation from the mode-independent outline is
+--- needed or allowed. `full` retains everything.
 local function resolve_retained(item, mode, doc)
+  if mode == "full" then
+    return true
+  end
   if doc and doc.mode == mode then
     local outline_item = doc._outline_by_key and doc._outline_by_key[item.key]
     if outline_item then
       return outline_item.retained_in_mode == true
     end
   end
-  return outline.approx_retained(item, mode)
+  return true
 end
 
 --- Closed-fold text for an item.
@@ -111,7 +119,7 @@ end
 --- visually distinct.
 local function resolve_closed_text(item, mode, doc)
   if item.retained then
-    if doc and doc.mode == mode and doc._items_by_key then
+    if doc and doc._items_by_key then
       local projected = doc._items_by_key[item.key]
       if projected and projected.canonical_text then
         return outline.first_line(projected.canonical_text)
@@ -145,8 +153,9 @@ end
 ---
 --- `doc` is the whole `ownai.show.v1` document; `file_entry` is the matching
 --- entry from `doc.files`. `mode` is the mode to fold with (which may differ
---- from `doc.mode` for a local `:OwnaiFold`).
-function M.install(buf, doc, file_entry, mode, root, path)
+--- from `doc.mode` for a local `:OwnaiFold`). `hash` is the source hash the
+--- document was projected from, so a later re-fold can reuse it.
+function M.install(buf, doc, file_entry, mode, root, path, hash)
   index_doc(doc, file_entry)
 
   local st = M.buffers[buf] or {}
@@ -155,12 +164,22 @@ function M.install(buf, doc, file_entry, mode, root, path)
   st.path = path
   st.mode = mode
   st.file_entry = file_entry
+  st.source_hash = hash
   st.docs = st.docs or {}
-  st.docs[doc.mode] = doc
+  st.docs[doc.mode] = { doc = doc, hash = hash }
 
   M.set(buf, st)
   M.decorate(st)
   return st
+end
+
+--- The cached document for `mode`, when its source hash matches `hash`.
+function M.cached_doc(st, mode, hash)
+  local entry = st and st.docs and st.docs[mode]
+  if entry and (hash == nil or entry.hash == hash) then
+    return entry.doc
+  end
+  return nil
 end
 
 --- Switch an active buffer to another mode, reusing cached documents.
@@ -176,7 +195,10 @@ end
 
 --- (Re)compute the mode-dependent fields on the processed outline.
 function M.decorate(st)
-  local doc = st.docs and st.docs[st.mode] or nil
+  local entry = st.docs and st.docs[st.mode] or nil
+  local doc = entry and entry.doc or nil
+  -- The outline is mode-independent, so any installed document can supply it
+  -- (used by `full`, which has no document of its own).
   local source = (doc and doc._file) or st.file_entry
   if not source then
     return

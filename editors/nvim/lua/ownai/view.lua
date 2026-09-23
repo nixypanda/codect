@@ -56,10 +56,13 @@ function M.resolve_target(buf)
   return { root = root, path = abs:sub(#prefix + 1), abs = abs }
 end
 
---- Exact buffer bytes, normalized with a trailing newline.
+--- Exact buffer bytes. An empty buffer has no content, not a lone newline.
 function M.buffer_source(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   if #lines == 0 then
+    return ""
+  end
+  if #lines == 1 and lines[1] == "" then
     return ""
   end
   return table.concat(lines, "\n") .. "\n"
@@ -78,6 +81,48 @@ local function find_file(doc, path)
   return nil
 end
 
+--- Ensure an authoritative document for the buffer's current content and mode.
+---
+--- Reuses the cached document when it was projected from the same bytes and
+--- mode; otherwise fetches one from the CLI. This is what makes
+--- `:OwnaiFold <mode>` mode-correct: it never folds from a stale or absent
+--- document. Returns the buffer state, or nil plus an error string.
+function M.ensure(buf, mode)
+  local target, target_err = M.resolve_target(buf)
+  if not target then
+    return nil, target_err
+  end
+
+  local source = M.buffer_source(buf)
+  local hash = vim.fn.sha256(source)
+
+  local st = state.get(buf)
+  if state.cached_doc(st, mode, hash) then
+    state.set_mode(buf, mode)
+    folds.apply(buf)
+    return state.get(buf)
+  end
+
+  local doc, cli_err = cli.show({
+    root = target.root,
+    path = target.path,
+    mode = mode,
+    source = source,
+  })
+  if not doc then
+    return nil, cli_err
+  end
+
+  local file_entry = find_file(doc, target.path)
+  if not file_entry then
+    return nil, "ownai returned no projection for " .. target.path
+  end
+
+  st = state.install(buf, doc, file_entry, mode, target.root, target.path, hash)
+  folds.apply(buf)
+  return st
+end
+
 --- Project the current buffer and fold it to `mode`.
 function M.show(mode)
   local buf = vim.api.nvim_get_current_buf()
@@ -86,35 +131,20 @@ function M.show(mode)
     return fail(string.format(":OwnaiShow expects `types` or `signatures`, got %q", mode))
   end
 
-  local target, target_err = M.resolve_target(buf)
-  if not target then
-    return fail(target_err)
+  local st, err = M.ensure(buf, mode)
+  if not st then
+    return fail(err)
   end
 
-  local source = M.buffer_source(buf)
-  local doc, cli_err = cli.show({
-    root = target.root,
-    path = target.path,
-    mode = mode,
-    source = source,
-  })
-  if not doc then
-    return fail(cli_err)
-  end
-
-  local file_entry = find_file(doc, target.path)
-  if not file_entry then
-    return fail("ownai returned no projection for " .. target.path)
-  end
-
-  local st = state.install(buf, doc, file_entry, mode, target.root, target.path)
-  st.source_hash = vim.fn.sha256(source)
   require("ownai").attach_keymaps(buf)
   folds.apply(buf)
   return st
 end
 
---- Re-fold locally with no OwnAI call.
+--- Re-fold the current buffer to `mode`.
+---
+--- Fetches an authoritative document for the current bytes and mode when it is
+--- not cached, and reuses the cache otherwise. `full` needs no document.
 function M.fold(mode)
   local buf = vim.api.nvim_get_current_buf()
   mode = mode or config().default_mode or "signatures"
@@ -122,17 +152,20 @@ function M.fold(mode)
     return fail(string.format(":OwnaiFold expects `types`, `signatures`, or `full`, got %q", mode))
   end
 
-  local st = state.get(buf)
-  if not st then
-    -- Nothing projected yet: a real projection is the only source of outline.
-    if mode == "full" then
+  if mode == "full" then
+    local st = state.get(buf)
+    if not st then
       return fail("nothing to unfold; run :OwnaiShow first")
     end
-    return M.show(mode)
+    state.set_mode(buf, mode)
+    folds.apply(buf)
+    return st
   end
 
-  state.set_mode(buf, mode)
-  folds.apply(buf)
+  local st, err = M.ensure(buf, mode)
+  if not st then
+    return fail(err)
+  end
   return st
 end
 
@@ -186,8 +219,7 @@ function M.refresh(buf)
     return
   end
 
-  state.install(buf, doc, file_entry, st.mode, target.root, target.path)
-  st.source_hash = hash
+  state.install(buf, doc, file_entry, st.mode, target.root, target.path, hash)
   folds.apply(buf)
 end
 
@@ -338,9 +370,13 @@ function M.setup_autocmds()
   vim.api.nvim_create_autocmd("BufWipeout", {
     group = group,
     callback = function(event)
+      local st = state.get(event.buf)
+      if st and st.path then
+        state.clear_overrides(st.path)
+      end
       state.clear(event.buf)
     end,
-    desc = "OwnAI: drop per-buffer state",
+    desc = "OwnAI: drop per-buffer state and sticky overrides",
   })
 end
 

@@ -31,6 +31,7 @@ programs.neovim.extraPackages = [ pkgs.ownai ];
 require("ownai").setup({
   default_mode = "signatures", -- used when a command omits its argument
   debounce_ms = 200,           -- TextChanged refresh debounce
+  manage_fold_options = true,  -- set window-local fold options (see below)
   keymaps = {
     enabled = true,            -- false disables every binding
     next_declaration = "]f",
@@ -48,12 +49,23 @@ require("ownai").setup({
 `setup` is optional: commands work with the defaults. Set any individual
 binding to `false` or `""` to leave it unregistered.
 
+With `manage_fold_options = true` (the default) the plugin owns the
+window-local fold options for OwnAI buffers: `foldmethod=expr`, `foldexpr`,
+`foldtext`, `foldenable`, `foldminlines=0`, and a `foldlevel` reset on every
+apply. Because it resets `foldlevel`, native `zr`/`zm` depth keys do not
+persist; use `:OwnaiFold`, `za`/`zo`/`zc`, or the cycle key instead. Set
+`manage_fold_options = false` to keep your own configuration; OwnAI still
+opens and closes its folds.
+
+`default_mode` must be `types` or `signatures`. `setup` warns and falls back to
+`signatures` otherwise.
+
 ## Commands
 
 | Command | Behavior |
 |---|---|
 | `:OwnaiShow [types\|signatures]` | Project the current buffer via stdin and fold it to the mode (default `signatures`). |
-| `:OwnaiFold [types\|signatures\|full]` | Re-fold locally with no OwnAI call. `full` unfolds everything. |
+| `:OwnaiFold [types\|signatures\|full]` | Fold to the mode. Reuses the cached projection for the current bytes; fetches one only when the mode is not cached. `full` unfolds everything. |
 | `:OwnaiOutline` | Declaration picker via `vim.ui.select` (no plugin dependencies). |
 
 ## Folding
@@ -62,15 +74,20 @@ binding to `false` or `""` to leave it unregistered.
   an enum its variants.
 - In `types` and `signatures`, signature-kind declarations (function, method,
   value, constant, static, port, operator, foreign block) are folded and
-  type/container declarations stay open. `full` folds nothing.
+  type/container declarations stay open. `full` folds nothing. Single-line
+  declarations fold too.
 - A retained declaration's closed fold shows its mode-correct
   `projection.items[].canonical_text`. A declaration the mode drops is folded
   with a `kind name — hidden in <mode>` marker and the outline `signature`.
-- A fold start extends upward over consecutive attributes, decorators, pragmas,
-  and doc comments, which the outline span excludes.
+- A fold start extends upward over complete leading annotations: line comments
+  (`///`, `//!`, `//`, `--`, `#`), block comments (`/** */`, `/* */`, `/*! */`,
+  `{-| -}`, `{- -}`), pragmas (`{-# #-}`), balanced attributes (`#[ ... ]`), and
+  decorators (`@...`, including parenthesized/continued forms). A run stops at a
+  blank line, at another declaration, and never claims a `#!` shebang.
 - Expansion is sticky, keyed by `(path, stable_key)`: a declaration you open
   stays open across re-folds, refreshes, and mode switches, and one you close
-  stays closed.
+  stays closed. Overrides are dropped when the buffer is wiped; call
+  `require("ownai").clear_overrides()` to drop them all.
 - Folds refresh on `BufWritePost`, `InsertLeave`, and a debounced `TextChanged`.
   The CLI is never invoked per keystroke.
 
