@@ -42,6 +42,18 @@ pub fn greet(name: &str) -> String {
 
 const EMPTY_RUST: &str = "// no declarations here\n";
 
+const RUST_MODULE: &str = "\
+pub mod outer {
+    pub fn f() {}
+}
+";
+
+const PYTHON_CLASS: &str = "\
+class Widget:
+    def render(self):
+        return 1
+";
+
 fn engine(repo: &TestRepo) -> Engine {
     Engine::discover(repo.path()).expect("discover repository")
 }
@@ -317,7 +329,7 @@ fn diff_accepts_a_path_deleted_by_the_target() {
 }
 
 #[test]
-fn the_projection_cache_keys_on_blob_not_path() {
+fn identical_blobs_project_the_same_text_at_each_path() {
     let repo = TestRepo::init();
     repo.write("one.rs", RUST_BASE);
     repo.write("two.rs", RUST_BASE);
@@ -334,8 +346,60 @@ fn the_projection_cache_keys_on_blob_not_path() {
             .collect::<Vec<_>>(),
         vec!["one.rs", "two.rs"]
     );
-    // Identical blobs share cached items but each file keeps its own path.
+    // Identical blobs project identical text, and each file keeps its own path.
     assert_eq!(files[0].canonical_text(), files[1].canonical_text());
+}
+
+#[test]
+fn identical_blobs_at_different_paths_get_path_correct_stable_keys() {
+    let repo = TestRepo::init();
+    repo.write("a/m.rs", RUST_MODULE);
+    repo.write("b/m.rs", RUST_MODULE);
+    repo.write("a/m.py", PYTHON_CLASS);
+    repo.write("b/m.py", PYTHON_CLASS);
+    repo.commit("base");
+
+    let files = engine(&repo)
+        .show_outlines("HEAD", ProjectionMode::Types, &Selection::all())
+        .expect("show outlines");
+
+    let keys_of = |raw: &str| -> Vec<String> {
+        let file = files
+            .iter()
+            .find(|file| file.path.to_string() == raw)
+            .unwrap_or_else(|| panic!("no outline for {raw}"));
+        file.outline
+            .iter()
+            .map(|item| item.stable_key.clone())
+            .collect()
+    };
+
+    // Rust `mod` stable keys embed the repository path, so the second file must
+    // not reuse the first file's cached keys even though the blob is identical.
+    assert_eq!(
+        keys_of("a/m.rs"),
+        vec!["a/m.rs::mod::outer", "a/m.rs::mod::outer::fn::f"]
+    );
+    assert_eq!(
+        keys_of("b/m.rs"),
+        vec!["b/m.rs::mod::outer", "b/m.rs::mod::outer::fn::f"]
+    );
+
+    // Python `class` keys are path-namespaced too.
+    assert_eq!(
+        keys_of("a/m.py"),
+        vec![
+            "a/m.py::class::Widget",
+            "a/m.py::class::Widget::method::render"
+        ]
+    );
+    assert_eq!(
+        keys_of("b/m.py"),
+        vec![
+            "b/m.py::class::Widget",
+            "b/m.py::class::Widget::method::render"
+        ]
+    );
 }
 
 #[test]

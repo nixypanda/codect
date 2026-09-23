@@ -458,11 +458,13 @@ impl Engine {
     }
 
     /// Projects one entry's items in `mode`, reading the blob once and reusing
-    /// the `(blob id, language, mode)` cache across paths.
+    /// the `(blob id, path, language, mode)` cache.
     ///
-    /// The cache key intentionally excludes the path: `ProjectedItem` carries
-    /// no path, and stable keys and spans are path-independent, so items
-    /// computed for one path are valid for another path with the same blob.
+    /// The cache key includes the path because `stable_key` is path-namespaced
+    /// for several languages (Python, Haskell, Elm, and Rust `mod`): those keys
+    /// embed the repository path, so items projected for one path are not valid
+    /// for a different path that happens to share the same blob. Blob bytes are
+    /// still cached on the blob id alone, so an identical blob is read once.
     fn project_items_cached(
         &self,
         projector: &dyn LanguageProjector,
@@ -472,7 +474,8 @@ impl Engine {
         language: Language,
         mode: ProjectionMode,
     ) -> Result<Vec<ProjectedItem>, EngineError> {
-        if let Some(items) = lookup_projection(caches, &entry.blob_id, language, mode) {
+        if let Some(items) = lookup_projection(caches, &entry.blob_id, &entry.path, language, mode)
+        {
             return Ok(items);
         }
 
@@ -494,6 +497,7 @@ impl Engine {
             .entry(entry.blob_id.clone())
             .or_default()
             .push(CachedProjection {
+                path: entry.path.clone(),
                 language,
                 mode,
                 items: items.clone(),
@@ -504,9 +508,9 @@ impl Engine {
     /// Reads, decodes, and projects one entry in both the requested mode and the
     /// Signatures superset, assembling the file's outline.
     ///
-    /// Both projections go through the shared `(blob id, language, mode)` cache,
-    /// so a blob is read once and each mode is computed at most once per
-    /// operation.
+    /// Both projections go through the shared `(blob id, path, language, mode)`
+    /// cache, so a blob is read once and each mode is computed at most once per
+    /// path and operation.
     ///
     /// Returns `None` for an unsupported path, which is an exclusion rather
     /// than a failure.
@@ -572,6 +576,7 @@ struct Caches {
 }
 
 struct CachedProjection {
+    path: RepoPath,
     language: Language,
     mode: ProjectionMode,
     items: Vec<ProjectedItem>,
@@ -580,13 +585,14 @@ struct CachedProjection {
 fn lookup_projection(
     caches: &Caches,
     id: &ObjectId,
+    path: &RepoPath,
     language: Language,
     mode: ProjectionMode,
 ) -> Option<Vec<ProjectedItem>> {
     caches.projections.get(id).and_then(|entries| {
         entries
             .iter()
-            .find(|entry| entry.language == language && entry.mode == mode)
+            .find(|entry| entry.path == *path && entry.language == language && entry.mode == mode)
             .map(|entry| entry.items.clone())
     })
 }
