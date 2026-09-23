@@ -1,14 +1,16 @@
 # Plan: OwnAI Neovim plugin — semantic fold viewer
 
-> Status: **Phase 0 and Phase 1 implemented.** `ownai show --format json` emits
-> the versioned `ownai.show.v1` document for committed, stdin, and worktree
-> input, with a mode-independent declaration outline. The schema is committed at
-> `docs/schema/ownai.show.v1.json`, golden documents live under
-> `fixtures/schema/`, and the CLI contract is documented in
+> Status: **Phase 0, Phase 1, Phase 2, and the Nix packaging are implemented.**
+> `ownai show --format json` emits the versioned `ownai.show.v1` document for
+> committed, stdin, and worktree input, with a mode-independent declaration
+> outline. The schema is committed at `docs/schema/ownai.show.v1.json`, golden
+> documents live under `fixtures/schema/`, and the CLI contract is documented in
 > `TECHNICAL_DESIGN.md` section 14.2.
 >
-> The Neovim plugin itself (Phase 2) and the Nix packaging (section 7) are not
-> part of this slice; they are owned separately.
+> The Neovim plugin (Phase 2) lives under `editors/nvim/` and the flake packages
+> it as `packages.<system>.ownai-nvim`, with `just test-nvim` and a
+> `checks.<system>.ownai-nvim` flake check. The diff slice (Phase 3) remains
+> future work.
 >
 > Owner intent: a Neovim plugin that shows the *entire* codebase but folds
 > details according to OwnAI's projection mode (Types / Signatures), letting the
@@ -192,6 +194,9 @@ Contract rules:
 
 ## 4. Phase 2 — Plugin (`:OwnaiShow`)
 
+Status: **implemented.** The plugin lives under `editors/nvim/`, with a
+no-dependency headless test harness.
+
 Goal: open a working-tree file, fold it by mode, and manipulate folds. Verified
 in Neovim.
 
@@ -208,18 +213,18 @@ editors/nvim/                     # later: ownai.nvim
     view.lua        # :OwnaiShow / :OwnaiFold / :OwnaiOutline
     health.lua      # :checkhealth ownai (binary + schema version)
   plugin/ownai.lua  # lazy command declarations
-  tests/            # plenary/busted headless tests
+  tests/            # no-dependency headless harness (run.lua)
 ```
 
 ### 4.2 Commands and keys
 
 | Command / key | Behavior |
 |---|---|
-| `:OwnaiShow [mode]` | Project the current buffer via stdin; fold to `mode` (default `signatures`). |
-| `:OwnaiFold types\|signatures\|full` | Re-fold the current buffer locally; no OwnAI call. |
+| `:OwnaiShow [mode]` | Project the current buffer via stdin; fold to `mode` (default `signatures`). Attaches the buffer keymaps. |
+| `:OwnaiFold types\|signatures\|full` | Re-fold the current buffer to `mode`. Reuses the cached projection for the current bytes and path; fetches one on a cache miss (mode or file changed). Attaches the buffer keymaps. |
 | `:OwnaiOutline` | Picker of declarations from the outline. |
 | `]f` / `[f` | Next/previous declaration. |
-| `zr` / `zm` | Native fold-depth keys keep working within a mode. |
+| `zr` / `zm` | Not persistent: each apply resets `foldlevel` to open every fold before re-applying the mode's open/closed state. Use `:OwnaiFold` or the cycle key to change depth. |
 
 ### 4.3 Fold behavior
 
@@ -233,7 +238,14 @@ editors/nvim/                     # later: ownai.nvim
   Full opens everything.
 - Expansion is sticky by `stable_key`; refresh on `InsertLeave`, debounced
   `TextChanged`, and `BufWritePost`, then restore the expanded set.
-- One OwnAI call per (content change, mode change). Never per keystroke.
+- One OwnAI call per (content, mode, path) change. `:OwnaiFold` reuses the
+  cached document when the bytes, mode, and path all match and fetches one
+  otherwise. Never per keystroke.
+- Each apply resets `foldlevel` to "everything open" and recomputes folds
+  before re-applying the mode's open/closed state, so native `zr`/`zm` depth
+  does not persist and a repeated apply cannot collapse a retained container.
+- The window-local fold options the plugin replaces are saved and restored
+  when the buffer leaves the window.
 
 ### 4.4 Phase 2 acceptance
 
@@ -241,7 +253,8 @@ editors/nvim/                     # later: ownai.nvim
   fold rendering OwnAI's canonical fragment; opening a fold reveals the real
   body.
 - `:OwnaiShow signatures` additionally opens signatures.
-- `:OwnaiFold` cycles depth without invoking OwnAI.
+- `:OwnaiFold` re-folds to a mode, reusing the cached projection when the
+  bytes, mode, and path match and fetching one otherwise.
 - Expanding a fold, editing the body, and re-running preserves expansion.
 - Works for all four languages on the fixture corpus.
 - `:checkhealth ownai` reports binary path and schema compatibility.
@@ -268,6 +281,11 @@ Out of scope for this execution, recorded so Phase 1/2 choices stay compatible:
   startup.
 
 ## 7. Nix packaging (flake)
+
+Status: **implemented.** `packages.<system>.ownai-nvim` builds via
+`vimUtils.buildVimPlugin`, `pkgs.neovim` is in the dev shell, `just test-nvim`
+runs the headless suite, and `checks.<system>.ownai-nvim` runs it in a
+throwaway repository.
 
 Goal: a Nix user can install the plugin and the binary from this flake with no
 manual cloning, and plugin development/testing runs in `nix develop`.
@@ -354,5 +372,8 @@ mismatch is diagnosable.
    inherent `impl` with no type info) — folded placeholder vs omitted. The
    outline now marks them with `retained_in_mode: false`.
 5. `decorator_start_line` (leading attributes and doc comments) was dropped from
-   this slice; folds currently start at the declaration's own span. It can be
-   added additively within `ownai.show.v1` if the plugin needs it.
+   this slice. Resolved in Phase 2 without a schema change: the plugin extends
+   each fold start upward over complete leading annotation runs (line comments,
+   block comments, pragmas, balanced attributes, decorators) using the buffer
+   text. The field can still be added additively within `ownai.show.v1` if a
+   consumer wants the boundary from the engine.
