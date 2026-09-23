@@ -150,6 +150,11 @@
               mkdir -p work/editors
               cp -r ${./editors/nvim} work/editors/nvim
               chmod -R u+w work/editors/nvim
+              # The plugin tests resolve some fixtures relative to the repository
+              # root, so the check's work dir needs both `editors/nvim` and
+              # `fixtures/` to look like a real checkout.
+              cp -r ${./fixtures} work/fixtures
+              chmod -R u+w work/fixtures
               cd work
               git init -q
               git config user.email check@example.com
