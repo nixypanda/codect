@@ -865,11 +865,16 @@ ownai show --format json --mode <types|signatures> --worktree --path <PATH>
   at `--path` from disk. Both require exactly one `--path`, which supplies the
   language and the repository-relative path used to build stable keys, and both
   are mutually exclusive with `REVISION` and `--area`. A missing or repeated
-  `--path` is a usage error (exit `2`).
+  `--path` is a usage error (exit `2`), and so is a `--path` that names a
+  directory: `.` and the repository root resolve to a directory scope, and an
+  existing directory such as `src` is rejected because an editor buffer names a
+  single file.
 - The path is resolved with the same lexical containment rules as `--path`
-  scoping (section 14), so it can never leave the repository. An unsupported
-  extension, a non-UTF-8 source, or a path outside the repository exits `1` with
-  empty stdout.
+  scoping (section 14). `--worktree` additionally refuses a symlinked target and
+  checks the fully-resolved path stays inside the repository, so a read can
+  never leave it even through a symlinked ancestor directory. An unsupported
+  extension, a non-UTF-8 source, a path outside the repository, a symlinked
+  worktree file, or a resolved path that escapes exits `1` with empty stdout.
 - These inputs are read-only. They never write the repository, worktree, or
   index.
 - JSON is written raw; `--color` never introduces ANSI into it.
@@ -892,7 +897,7 @@ Document shape:
       },
       "outline": [
         {
-          "stable_key": "impl Session::refresh",
+          "stable_key": "impl Session::method::refresh",
           "parent_key": "impl Session",
           "kind": "method",
           "name": "refresh",
@@ -913,18 +918,36 @@ Contract rules:
   `retained_in_mode` is set by `stable_key` membership. Types can drop an entire
   `impl` block, so projected items alone cannot locate folds. A corpus test
   proves the Signatures projection is a superset of Types by `stable_key`.
-- `signature` is the declaration's canonical fragment from the Signatures
-  projection, so a consumer can render a closed fold for a declaration the
-  requested mode drops. A nested declaration's fragment carries its container
-  indentation. It is single line where the canonical form is single line.
+- The closed-fold text of a declaration depends on `retained_in_mode`. When the
+  requested mode **retains** the `stable_key`, the mode-correct text is the
+  matching `projection.items[].canonical_text`. When it does not, use
+  `signature`, which is the declaration's canonical fragment from the Signatures
+  superset and is intentionally the superset form. The two differ for container
+  declarations (trait/impl/module): for example, a trait implementation that
+  Types mode retains with only its associated types has a `signature` that also
+  shows the methods Signatures mode adds. A nested declaration's fragment
+  carries its container indentation, and it is single line where the canonical
+  form is single line.
 - `projection.text` is exactly the canonical text text mode emits for that file,
   so the document and the text view cannot drift.
-- Line numbers are one-based for editor friendliness; byte offsets are
-  zero-based into the decoded UTF-8 source. A consumer converts as needed.
+- Line numbers are one-based on the wire (the JSON layer adds one to the
+  zero-based adapter span), for editor friendliness; byte offsets are zero-based
+  into the decoded UTF-8 source. A consumer converts byte offsets if needed and
+  does not convert line numbers.
+- `span` starts at the declaration node, so preceding attributes, decorators,
+  `{-# ... #-}` pragmas, and doc comments are excluded even though `signature`
+  may include them. An editor extends a fold start upward over those lines. A
+  `decorator_start_line` field can be added additively within `ownai.show.v1`
+  later.
+- `stable_key` is unique within its file but not necessarily across the
+  repository: Rust `impl` keys are not path-namespaced, so a consumer keys
+  global state (expanded folds, cursors) by `(path, stable_key)`.
 - `kind` is an exhaustive mapping of `ItemKind` with no wildcard arm, so a new
   kind is a compile error rather than a silent fallback.
-- Unknown fields must be tolerated by consumers; a `schema` value other than
-  `ownai.show.v1` is a fatal, explicit version mismatch.
+- Unknown fields must be tolerated by consumers, and fields may be added
+  additively within `ownai.show.v1`; the schema permits additional properties
+  while keeping the required fields and value constraints strict. A `schema`
+  value other than `ownai.show.v1` is a fatal, explicit version mismatch.
 
 Crate placement:
 

@@ -27,8 +27,10 @@
 
 ### 1.1 The unifying trick
 
-`foldtext()` returns the item's OwnAI `signature`. A real-source buffer with
-all folds closed at Types depth then renders *exactly* like
+`foldtext()` returns the declaration's closed-fold text: the matching
+`projection.items[].canonical_text` when the requested mode retains the
+declaration, or `outline.signature` (the full Signatures form) when it does not.
+A real-source buffer with all folds closed at Types depth then renders like
 `ownai show --mode types`, while every fold opens to real code. Show and the
 fold view become one buffer at two fold depths.
 
@@ -83,8 +85,11 @@ Rules:
 - `--worktree` reads the file at `--path` from disk. `--stdin` is the primary
   editor path (handles unsaved buffers, no temp files, no races).
 - `--stdin`/`--worktree` are mutually exclusive with `REVISION` and with
-  `--area`; `--path` must resolve inside the repository, and exactly one
-  `--path` is required.
+  `--area`; `--path` must resolve inside the repository, exactly one `--path` is
+  required, and it must name a single file — a directory (including `.` or the
+  repository root) is a usage error (exit 2). `--worktree` refuses a symlinked
+  target and checks the fully-resolved path stays inside the repository
+  (exit 1).
 - All new input paths are read-only. They never write the repository, worktree,
   or index.
 - Non-UTF-8 source, unsupported extensions, and out-of-repo paths fail with
@@ -108,7 +113,7 @@ Rules:
       },
       "outline": [                 // mode-INDEPENDENT, every declaration
         {
-          "stable_key": "impl Session::refresh",
+          "stable_key": "impl Session::method::refresh",
           "parent_key": "impl Session",   // null for top-level
           "kind": "method",
           "name": "refresh",
@@ -129,18 +134,33 @@ Contract rules:
   block or a function, so projected items alone cannot locate folds. It is
   derived from the Signatures projection (the superset); `retained_in_mode` is
   set by `stable_key` membership.
-- `signature` is the declaration's canonical fragment from the Signatures
-  projection, so a consumer can render a closed fold for a declaration the
-  current mode drops. A nested declaration's fragment carries its container
-  indentation. Single line where the canonical form is single line.
+- The closed-fold text depends on `retained_in_mode`. When the requested mode
+  retains the declaration, use the matching `projection.items[].canonical_text`
+  (mode-correct). When it does not, use `signature`, which is the declaration's
+  canonical fragment from the Signatures superset and is intentionally the
+  superset form. They differ for container declarations (trait/impl/module):
+  a trait implementation Types mode keeps with only its associated types has a
+  `signature` that also shows the methods Signatures adds. A nested declaration's
+  fragment carries its container indentation. Single line where the canonical
+  form is single line.
 - `projection.text` equals the canonical text used by text mode for that file.
-- `span` carries both lines and bytes; **line values are one-based** on the wire
-  for editor friendliness, and byte offsets are zero-based. The plugin converts
-  if needed.
+- `span` carries both lines and bytes. **Line values are ONE-based on the wire**
+  for editor friendliness — the JSON layer adds one to the zero-based adapter
+  span — and byte offsets are zero-based into the decoded UTF-8 source. The
+  plugin does not convert line numbers; it converts byte offsets only if needed.
+- `span` starts at the declaration node, so preceding attributes, decorators,
+  `{-# ... #-}` pragmas, and doc comments are excluded even though `signature`
+  may include them. Extend a fold start upward over those lines. A
+  `decorator_start_line` field may be added additively within `ownai.show.v1`
+  later; there is none today.
 - `stable_key` values for identical content are byte-identical between the
   committed-blob path and the stdin/worktree path.
-- Unknown fields must be tolerated by consumers; a schema version mismatch is
-  fatal and explicit.
+- `stable_key` is unique within its file but not necessarily across the
+  repository: Rust `impl` keys are not path-namespaced, so key global state
+  (expanded folds, cursors) by `(path, stable_key)`.
+- Unknown fields must be tolerated by consumers, and fields may be added
+  additively within `ownai.show.v1`; a schema version mismatch is fatal and
+  explicit.
 - `kind` values are exhaustive over `ItemKind` with no wildcard arm, so a new
   kind is a compile error.
 
@@ -206,7 +226,9 @@ editors/nvim/                     # later: ownai.nvim
 - Build the fold tree from `parent_key` so `impl` nests `fn`, `struct` nests
   fields.
 - `foldmethod=expr` with a cached map; `foldexpr` reads the map, `foldtext`
-  returns the item's `signature`.
+  returns the declaration's mode-correct closed-fold text: the matching
+  `projection.items[].canonical_text` when the mode retains it, else the
+  outline's `signature`.
 - Mode is a fold-depth target: Types closes signatures, Signatures opens them,
   Full opens everything.
 - Expansion is sticky by `stable_key`; refresh on `InsertLeave`, debounced

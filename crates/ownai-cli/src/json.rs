@@ -12,7 +12,19 @@
 //! - Line numbers are **one-based** for editor friendliness. Byte offsets are
 //!   zero-based into the decoded UTF-8 source. The plugin converts as needed.
 //! - `projection` is the requested mode; `outline` is mode-independent and
-//!   complete, derived from the Signatures superset projection.
+//!   complete, derived from the Signatures superset projection. For a
+//!   declaration the requested mode retains, the mode-correct closed-fold text
+//!   is the matching `projection.items[].canonical_text`; `outline.signature`
+//!   is only the fallback for `retained_in_mode: false` and is intentionally
+//!   the superset form. Container declarations (trait/impl/module) therefore
+//!   differ between the two.
+//! - `span` starts at the declaration node and excludes preceding attributes,
+//!   decorators, `{-# ... #-}` pragmas, and doc comments, which `signature`
+//!   may include. An editor extends a fold start upward over those lines; a
+//!   `decorator_start_line` field can be added additively within v1 later.
+//! - `stable_key` is unique within its file, not across the repository: Rust
+//!   `impl` keys are not path-namespaced, so consumers key global state by
+//!   `(path, stable_key)`.
 //! - JSON output contains no ANSI and is unaffected by `--color`.
 
 use ownai_core::{ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, SourceSpan};

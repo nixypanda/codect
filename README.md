@@ -75,9 +75,21 @@ Individual recipes are available as `just build`, `just test`, `just format`,
 ## Usage
 
 ```text
-ownai show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+ownai show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+ownai show --format json --mode <types|signatures> --stdin    --path <FILE>
+ownai show --format json --mode <types|signatures> --worktree --path <FILE>
 ownai diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
+
+`--format` defaults to `text`, the canonical projection. `--format json` emits
+the versioned `ownai.show.v1` document: the requested mode's projection plus a
+mode-independent declaration outline that an editor can turn into semantic
+folds. `--stdin` projects a buffer's bytes and `--worktree` projects the file at
+`--path` on disk; both require exactly one `--path` naming a file, and the
+result carries the same stable keys as a committed revision. See
+[docs/TECHNICAL_DESIGN.md](./docs/TECHNICAL_DESIGN.md) section 14.2 and
+[docs/schema/ownai.show.v1.json](./docs/schema/ownai.show.v1.json) for the
+contract.
 
 `--path`/`-p` is repeatable and scopes a command to a file or directory (a
 directory includes everything beneath it); a path that names nothing in the

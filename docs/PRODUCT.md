@@ -215,11 +215,18 @@ editor integration; it is the stable interface one consumes.
   **mode-independent outline**: every declaration in the file, including ones
   the requested mode drops. Each outline entry carries the declaration's stable
   key, parent key, kind, name, source span, canonical signature, and whether the
-  requested mode retains it. An editor builds folds from the outline and labels
-  a closed fold with the signature.
-- The outline is what lets one source buffer render like a focused view at two
-  fold depths: all folds closed at Types depth reproduces the Types projection,
-  and opening a fold reveals the real source.
+  requested mode retains it.
+- An editor builds folds from the outline. A closed fold over a declaration the
+  requested mode retains shows that declaration's mode-correct canonical
+  fragment, taken from the projection items by stable key; a declaration the
+  mode drops has no projection item, so its fold shows the outline's signature,
+  which is always the full Signatures form. The two can differ for container
+  declarations such as a trait implementation, whose Types form may omit members
+  the Signatures form shows.
+- This is what lets one source buffer render like a focused view at two fold
+  depths, and opening a fold reveals the real source. A span starts at the
+  declaration itself, so an editor extends a fold upward over any preceding
+  attributes, decorators, or doc comments.
 - The document is versioned by its `schema` field. Consumers must tolerate
   unknown fields and must treat any other `schema` value as a fatal, explicit
   version mismatch.
@@ -230,7 +237,8 @@ would drift as the user types, so `--stdin` reads the buffer's bytes from
 standard input and `--worktree` reads the file at `--path` from disk. Both
 require exactly one `--path`, which supplies the language and the
 repository-relative path used to build stable keys, and both resolve inside the
-repository.
+repository. A `--path` that names a directory is a usage error, and `--worktree`
+refuses a symlinked target so a read can never escape the repository.
 
 OwnAI now **reads** the worktree for this path. It remains strictly read-only:
 it never writes the repository, worktree, or index, and the stdin and worktree
