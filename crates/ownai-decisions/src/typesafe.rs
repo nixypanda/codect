@@ -67,7 +67,6 @@
 //! response is never retried.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -75,7 +74,7 @@ use serde_json::{Value, json};
 
 use crate::{
     Answer, ChoiceAnswer, DecisionError, DecisionProvider, DecisionRequest, DecisionResponse,
-    NoulAnswer, Probability, Question, QuestionId, ScoreAnswer, Usage, ValidationError,
+    NoulAnswer, Probability, Question, QuestionId, ScoreAnswer, Secret, Usage, ValidationError,
 };
 
 /// The default remote endpoint when none is configured.
@@ -101,31 +100,6 @@ const RETRY_AFTER_CAP: Duration = Duration::from_secs(5);
 
 /// The default provider attribution when the wire response omits `provider`.
 const DEFAULT_WIRE_PROVIDER: &str = "typesafe";
-
-/// An API key that never appears in `Debug` output.
-///
-/// The value is deliberately not exposed by any formatting trait; callers that
-/// need the bytes for an `Authorization` header call [`Secret::expose`].
-#[derive(Clone)]
-pub struct Secret(String);
-
-impl Secret {
-    /// Wraps an API key.
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    /// Returns the raw key. The caller is responsible for never logging it.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for Secret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Secret([redacted])")
-    }
-}
 
 /// Configuration for [`TypeSafeProvider`].
 ///
@@ -543,15 +517,6 @@ struct WireUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn secret_debug_never_contains_the_key() {
-        let secret = Secret::new("sk-super-secret-value");
-        let rendered = format!("{secret:?}");
-        assert_eq!(rendered, "Secret([redacted])");
-        assert!(!rendered.contains("sk-super-secret-value"));
-        assert_eq!(secret.expose(), "sk-super-secret-value");
-    }
 
     #[test]
     fn config_defaults_are_documented() {

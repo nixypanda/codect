@@ -11,6 +11,9 @@ test-support = []
 # The optional blocking HTTPS TypeSafe provider. Off by default so the base
 # crate and any offline build stay free of an HTTP client.
 typesafe = ["dep:ureq", "dep:serde"]
+# The optional blocking HTTP Laya provider for a local `laya-serve` process.
+# Off by default for the same reason as `typesafe`.
+laya = ["dep:ureq", "dep:serde"]
 
 [dependencies]
 serde = { workspace = true, optional = true }

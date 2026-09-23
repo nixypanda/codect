@@ -176,31 +176,66 @@ fn plain_diff_without_a_lens_is_unchanged() {
 }
 
 #[test]
-fn unavailable_providers_exit_non_zero_with_a_diagnostic() {
+fn an_unavailable_provider_exits_non_zero_with_a_diagnostic() {
+    // TypeSafe without `TYPESAFE_API_KEY` cannot be built, so it must fail
+    // before any document is written.
     let repo = repo_with_widened_signature();
-    for provider in ["typesafe", "laya"] {
-        let output = run(
-            &repo,
-            &[
-                "diff",
-                "--mode",
-                "signatures",
-                "--lens",
-                "review",
-                "--decision-provider",
-                provider,
-                "HEAD~1",
-                "HEAD",
-            ],
-        );
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "signatures",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "typesafe",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
 
-        assert!(!output.status.success(), "{provider} must not succeed");
-        assert!(
-            output.stdout.is_empty(),
-            "{provider} must not write a review document"
-        );
-        assert!(!output.stderr.is_empty(), "{provider} must report why");
-    }
+    assert!(!output.status.success(), "typesafe must not succeed");
+    assert!(
+        output.stdout.is_empty(),
+        "an unbuildable provider must not write a review document"
+    );
+    assert!(!output.stderr.is_empty(), "typesafe must report why");
+}
+
+#[cfg(feature = "laya")]
+#[test]
+fn a_laya_provider_without_a_server_fails_visibly() {
+    // Point at a loopback port nothing listens on so the test is deterministic
+    // even when a real `laya-serve` is running on the default port.
+    let repo = repo_with_widened_signature();
+    let output = run(
+        &repo,
+        &[
+            "diff",
+            "--mode",
+            "signatures",
+            "--lens",
+            "review",
+            "--decision-provider",
+            "laya",
+            "--decision-endpoint",
+            "http://127.0.0.1:1/v1/systemone",
+            "--allow-custom-endpoint",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+
+    assert!(!output.status.success(), "a failed provider exits non-zero");
+    // The canonical diff and the typed failure are still rendered, the local
+    // route is disclosed on stderr, and the provider caveat is in the header.
+    assert!(!output.stdout.is_empty());
+    assert!(!output.stderr.is_empty());
+    assert!(
+        stdout(&output).contains("note: laya judgments are experimental"),
+        "the laya caveat must appear in the document header"
+    );
 }
 
 #[test]

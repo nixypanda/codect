@@ -245,6 +245,22 @@ fn eval_lens(
     Ok(CommandOutcome::Success)
 }
 
+/// The provider-specific caveat rendered in a review document header.
+///
+/// Laya's shipped checkpoints are not calibrated for code review: measured on
+/// this repository, the base English checkpoint ranks obvious breaking changes
+/// low, and the fine-tuned typed-decisions checkpoint collapses toward 0.5 on
+/// every question. The document states that rather than presenting the
+/// probabilities as settled.
+fn review_note(provider: DecisionProviderChoice) -> Option<&'static str> {
+    match provider {
+        DecisionProviderChoice::Laya => {
+            Some("laya judgments are experimental and not calibrated for code review")
+        }
+        DecisionProviderChoice::Fake | DecisionProviderChoice::Typesafe => None,
+    }
+}
+
 /// Runs the review lens over the engine diffs and writes the review document.
 ///
 /// The canonical diff is rendered from the same projections the legacy path
@@ -342,6 +358,7 @@ fn review_diff(
         ReviewDocumentHeader {
             provider: provider_choice.label(),
             question_digest: lens.question_digest(),
+            note: review_note(provider_choice),
         },
         &canonical_diff,
         &outcomes,

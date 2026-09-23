@@ -10,9 +10,10 @@ name = "ownai"
 path = "src/main.rs"
 
 [features]
-default = ["tui", "typesafe"]
+default = ["tui", "typesafe", "laya"]
 tui = ["dep:ownai-tui"]
 typesafe = ["ownai-decisions/typesafe"]
+laya = ["ownai-decisions/laya"]
 
 [dependencies]
 ownai-core.workspace = true

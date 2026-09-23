@@ -44,6 +44,9 @@ pub struct ReviewDocumentHeader<'a> {
     pub provider: &'a str,
     /// The lowercase hexadecimal digest of the lens's complete question set.
     pub question_digest: &'a str,
+    /// An optional provider-specific caveat rendered as a `note:` line, such as
+    /// a provider whose judgments are not yet calibrated for code review.
+    pub note: Option<&'a str>,
 }
 
 /// Renders the complete review document: a header, the underlying canonical
@@ -73,6 +76,9 @@ pub fn review_document(
         "units: {} reviewed, {} skipped, {} failed",
         counts.reviewed, counts.skipped, counts.failed
     );
+    if let Some(note) = header.note {
+        let _ = writeln!(document, "note: {note}");
+    }
 
     if !canonical_diff.is_empty() {
         document.push('\n');
@@ -275,6 +281,7 @@ mod tests {
         ReviewDocumentHeader {
             provider,
             question_digest: QUESTION_DIGEST,
+            note: None,
         }
     }
 
@@ -432,6 +439,7 @@ mod tests {
             ReviewDocumentHeader {
                 provider: "fake",
                 question_digest: &digest,
+                note: None,
             },
             CANONICAL_DIFF,
             &outcomes,

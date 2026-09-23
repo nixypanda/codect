@@ -11,6 +11,12 @@ default:
 shell:
     nix develop
 
+# Start the local Laya decision server that the `laya` decision provider talks
+# to. The first run downloads the selected checkpoint; set LAYA_MODELS=english
+# to preload only the English checkpoint. See docs/plans/semantic-lenses.md.
+laya-serve:
+    nix run .#laya-serve
+
 # Build all projects.
 build: build-workspace
 

@@ -7,13 +7,17 @@
 //! any provider that is unavailable in this build as a typed error rather than
 //! silently substituting a different implementation.
 
+#[cfg(any(feature = "typesafe", feature = "laya"))]
+use ownai_decisions::Secret;
 use ownai_decisions::{
     Answer, ChoiceAnswer, DecisionError, DecisionProvider, DecisionRequest, DecisionResponse,
     NoulAnswer, Probability, Question, ScoreAnswer,
 };
+#[cfg(feature = "laya")]
+use ownai_decisions::{DEFAULT_LAYA_ENDPOINT, DEFAULT_LAYA_MODEL, LayaConfig, LayaProvider};
 #[cfg(feature = "typesafe")]
 use ownai_decisions::{
-    DEFAULT_TYPESAFE_ENDPOINT, DEFAULT_TYPESAFE_MODEL, Secret, TypeSafeConfig, TypeSafeProvider,
+    DEFAULT_TYPESAFE_ENDPOINT, DEFAULT_TYPESAFE_MODEL, TypeSafeConfig, TypeSafeProvider,
 };
 
 use crate::args::DecisionProviderChoice;
@@ -51,6 +55,7 @@ pub const DEFAULT_FAKE_MODEL_REVISION: &str = "fake-v1";
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderBuildError {
     /// The requested provider is not implemented in this build.
+    #[cfg_attr(any(feature = "typesafe", feature = "laya"), allow(dead_code))]
     #[error("the `{provider}` decision provider is not yet available")]
     Unavailable { provider: &'static str },
 
@@ -193,7 +198,21 @@ fn answer_for(question: &Question) -> Answer {
 /// [`DEFAULT_TYPESAFE_MODEL`], matching [`build_provider`].
 pub fn resolve_model(choice: DecisionProviderChoice, flag: Option<&str>) -> Option<String> {
     match choice {
-        DecisionProviderChoice::Fake | DecisionProviderChoice::Laya => flag.map(str::to_owned),
+        DecisionProviderChoice::Fake => flag.map(str::to_owned),
+        DecisionProviderChoice::Laya => {
+            #[cfg(feature = "laya")]
+            {
+                Some(
+                    flag.map(str::to_owned)
+                        .or_else(env_model)
+                        .unwrap_or_else(|| DEFAULT_LAYA_MODEL.to_owned()),
+                )
+            }
+            #[cfg(not(feature = "laya"))]
+            {
+                flag.map(str::to_owned)
+            }
+        }
         DecisionProviderChoice::Typesafe => {
             #[cfg(feature = "typesafe")]
             {
@@ -212,7 +231,7 @@ pub fn resolve_model(choice: DecisionProviderChoice, flag: Option<&str>) -> Opti
 }
 
 /// Reads `OWNAI_DECISION_MODEL`, treating an empty value as unset.
-#[cfg(feature = "typesafe")]
+#[cfg(any(feature = "typesafe", feature = "laya"))]
 fn env_model() -> Option<String> {
     std::env::var("OWNAI_DECISION_MODEL")
         .ok()
@@ -239,8 +258,47 @@ pub fn build_provider(
             Ok(Box::new(FakeDecisionProvider::new(model_revision)))
         }
         DecisionProviderChoice::Typesafe => build_typesafe(options),
-        DecisionProviderChoice::Laya => Err(ProviderBuildError::Unavailable { provider: "laya" }),
+        DecisionProviderChoice::Laya => build_laya(options),
     }
+}
+
+/// Builds the Laya provider when the feature is enabled.
+///
+/// The endpoint defaults to loopback. Any explicit endpoint requires
+/// [`ProviderOptions::allow_custom_endpoint`] so a typo cannot redirect review
+/// state to an unintended host. The optional API key is read only from
+/// `LAYA_API_KEY`, never from a flag or config.
+#[cfg(feature = "laya")]
+fn build_laya(
+    options: ProviderOptions<'_>,
+) -> Result<Box<dyn DecisionProvider>, ProviderBuildError> {
+    let endpoint = match options.endpoint {
+        Some(endpoint) => {
+            if !options.allow_custom_endpoint {
+                return Err(ProviderBuildError::CustomEndpointNotAllowed { provider: "laya" });
+            }
+            endpoint.to_owned()
+        }
+        None => DEFAULT_LAYA_ENDPOINT.to_owned(),
+    };
+
+    let model = resolve_model(DecisionProviderChoice::Laya, options.model)
+        .unwrap_or_else(|| DEFAULT_LAYA_MODEL.to_owned());
+
+    let mut config = LayaConfig::new(endpoint, model);
+    config.api_key = std::env::var("LAYA_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(Secret::new);
+    Ok(Box::new(LayaProvider::new(config)))
+}
+
+/// Reports Laya as unavailable when the feature is disabled.
+#[cfg(not(feature = "laya"))]
+fn build_laya(
+    _options: ProviderOptions<'_>,
+) -> Result<Box<dyn DecisionProvider>, ProviderBuildError> {
+    Err(ProviderBuildError::Unavailable { provider: "laya" })
 }
 
 /// Builds the TypeSafe provider when the feature is enabled.
@@ -409,12 +467,38 @@ mod tests {
         assert_eq!(response.model_revision(), "custom-model");
     }
 
+    #[cfg(not(feature = "laya"))]
     #[test]
     fn build_provider_reports_laya_as_unavailable() {
         let error = build_error(DecisionProviderChoice::Laya, ProviderOptions::default());
         assert!(matches!(
             error,
             ProviderBuildError::Unavailable { provider: "laya" }
+        ));
+    }
+
+    #[cfg(feature = "laya")]
+    #[test]
+    fn laya_builds_with_the_default_local_endpoint() {
+        // Construction must not contact the server; only `evaluate` does.
+        let provider = build_provider(DecisionProviderChoice::Laya, ProviderOptions::default())
+            .expect("the laya provider builds without a server");
+        let _ = provider;
+    }
+
+    #[cfg(feature = "laya")]
+    #[test]
+    fn laya_rejects_a_custom_endpoint_without_opt_in() {
+        let error = build_error(
+            DecisionProviderChoice::Laya,
+            ProviderOptions {
+                endpoint: Some("http://127.0.0.1:9000/v1/systemone"),
+                ..ProviderOptions::default()
+            },
+        );
+        assert!(matches!(
+            error,
+            ProviderBuildError::CustomEndpointNotAllowed { provider: "laya" }
         ));
     }
 

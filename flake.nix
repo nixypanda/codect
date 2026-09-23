@@ -7,6 +7,11 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The local Laya decision server. Laya pins its own nixpkgs revision so its
+    # prebuilt torch and binary cache resolve; do not make it follow ours.
+    laya = {
+      url = "github:NandhaKishorM/laya";
+    };
   };
 
   outputs =
@@ -14,6 +19,7 @@
       self,
       nixpkgs,
       rust-overlay,
+      laya,
     }:
     let
       systems = [
@@ -84,12 +90,20 @@
       packages = forAllSystems (pkgs: {
         default = ownaiPackage pkgs;
         ownai = ownaiPackage pkgs;
+        # Re-exported from the upstream Laya flake so `nix run .#laya-serve`
+        # starts the local decision server this repository's `laya` provider
+        # talks to.
+        laya-serve = laya.packages.${pkgs.stdenv.hostPlatform.system}.laya-serve;
       });
 
       apps = forAllSystems (pkgs: {
         default = {
           type = "app";
           program = "${ownaiPackage pkgs}/bin/ownai";
+        };
+        laya-serve = {
+          type = "app";
+          program = "${laya.packages.${pkgs.stdenv.hostPlatform.system}.laya-serve}/bin/laya-serve";
         };
       });
 
