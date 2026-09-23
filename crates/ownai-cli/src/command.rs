@@ -8,12 +8,12 @@
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
-use std::io;
-use std::path::Path;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 use ownai_core::{
     AreaSet, DiagnosticContext, PathSelection, PathSelectionError, ProjectedFile, ProjectionError,
-    SourceSpan, diff_document, show_document,
+    ProjectionMode, RepoPath, SourceSpan, diff_document, show_document,
 };
 use ownai_engine::config::ConfigError;
 use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
@@ -23,7 +23,8 @@ use ownai_git::GitError;
 use crate::args::IconChoice;
 #[cfg(feature = "tui")]
 use crate::args::TuiCommand;
-use crate::args::{Cli, Command as CliCommand};
+use crate::args::{Cli, Command as CliCommand, Format};
+use crate::json;
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
 
@@ -37,6 +38,29 @@ pub struct CliError {
     help: Option<String>,
     source: Box<dyn Error + Send + Sync + 'static>,
 }
+
+impl CliError {
+    /// A usage failure that exits `2`, matching `clap`'s own usage errors.
+    fn usage(message: String) -> Self {
+        Self {
+            message,
+            help: None,
+            source: Box::new(UsageError),
+        }
+    }
+
+    /// Whether this failure is a usage error (exit `2`) rather than a runtime
+    /// failure (exit `1`). Usage errors are recognized by their source type, so
+    /// every other constructor stays unchanged.
+    pub fn is_usage(&self) -> bool {
+        self.source.downcast_ref::<UsageError>().is_some()
+    }
+}
+
+/// The source for a [`CliError::usage`]; the detail is in the message.
+#[derive(Debug, thiserror::Error)]
+#[error("usage error")]
+struct UsageError;
 
 impl fmt::Debug for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -79,16 +103,49 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
     match &cli.command {
         CliCommand::Show {
             mode,
+            format,
             revision,
             paths,
             areas,
+            stdin,
+            worktree,
         } => {
+            let projection_mode: ProjectionMode = (*mode).into();
+            if *stdin || *worktree {
+                return run_source_show(
+                    *format,
+                    projection_mode,
+                    paths,
+                    *stdin,
+                    &start,
+                    &engine,
+                    cli.color,
+                );
+            }
+
+            let revision_spec = revision.as_deref().unwrap_or("HEAD");
             let selection = selection_for(paths, areas, &start, &engine)?;
-            let files = engine
-                .show(revision, (*mode).into(), &selection)
-                .map_err(engine_failure)?;
-            output::write_document(DocumentKind::Show, &show_document(&files), cli.color)
-                .map_err(output_failure)
+            match format {
+                Format::Text => {
+                    let files = engine
+                        .show(revision_spec, projection_mode, &selection)
+                        .map_err(engine_failure)?;
+                    output::write_document(DocumentKind::Show, &show_document(&files), cli.color)
+                        .map_err(output_failure)
+                }
+                Format::Json => {
+                    let files = engine
+                        .show_outlines(revision_spec, projection_mode, &selection)
+                        .map_err(engine_failure)?;
+                    let document = json::document(
+                        json::Input::Revision,
+                        Some(revision_spec),
+                        projection_mode,
+                        &files,
+                    );
+                    output::write_json(&document).map_err(output_failure)
+                }
+            }
         }
         CliCommand::Diff {
             mode,
@@ -107,6 +164,114 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         }
         #[cfg(feature = "tui")]
         CliCommand::Tui { command } => run_tui(engine, command, &start, cli.icons),
+    }
+}
+
+/// Projects one editor-supplied source file, from stdin or the worktree.
+///
+/// Exactly one `--path` supplies the language and the repository-relative path
+/// used to build stable keys. The path is resolved with the same lexical
+/// containment rules as `--path` scoping, so it can never leave the repository.
+fn run_source_show(
+    format: Format,
+    mode: ProjectionMode,
+    paths: &[OsString],
+    from_stdin: bool,
+    cwd: &Path,
+    engine: &Engine,
+    color: crate::args::ColorChoice,
+) -> Result<(), CliError> {
+    let path = single_source_path(paths, cwd, engine)?;
+    let bytes = if from_stdin {
+        read_stdin().map_err(stdin_failure)
+    } else {
+        read_worktree(engine.root(), &path).map_err(|source| worktree_failure(&path, source))
+    }?;
+
+    let file = ownai_engine::project_source(&path, &bytes, mode).map_err(engine_failure)?;
+    match format {
+        Format::Text => output::write_document(
+            DocumentKind::Show,
+            &show_document(std::slice::from_ref(&file.projection)),
+            color,
+        )
+        .map_err(output_failure),
+        Format::Json => {
+            let input = if from_stdin {
+                json::Input::Stdin
+            } else {
+                json::Input::Worktree
+            };
+            let document = json::document(input, None, mode, std::slice::from_ref(&file));
+            output::write_json(&document).map_err(output_failure)
+        }
+    }
+}
+
+/// Resolves the single `--path` that supplies the stdin/worktree context.
+///
+/// `--path` is repeatable for revision scoping, but an editor buffer has
+/// exactly one language and path context, so more than one is a usage error.
+fn single_source_path(
+    paths: &[OsString],
+    cwd: &Path,
+    engine: &Engine,
+) -> Result<RepoPath, CliError> {
+    if paths.len() != 1 {
+        return Err(CliError::usage(
+            "`--stdin` and `--worktree` require exactly one `--path`".to_owned(),
+        ));
+    }
+
+    let selection =
+        pathspec::build_selection(paths, cwd, engine.root()).map_err(path_arg_failure)?;
+    match selection {
+        PathSelection::Literals(mut resolved) if resolved.len() == 1 => Ok(resolved.remove(0)),
+        // `--path .` resolves to the repository root, which is a directory
+        // scope rather than a file context.
+        _ => Err(CliError::usage(
+            "`--stdin` and `--worktree` require `--path` to name one file".to_owned(),
+        )),
+    }
+}
+
+fn read_stdin() -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    io::stdin().lock().read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Reads the worktree file for `path`. Git paths are raw bytes, so on Unix the
+/// path is rebuilt from bytes rather than lossily converted.
+fn read_worktree(root: &Path, path: &RepoPath) -> io::Result<Vec<u8>> {
+    std::fs::read(worktree_path(root, path))
+}
+
+fn worktree_path(root: &Path, path: &RepoPath) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        root.join(std::ffi::OsStr::from_bytes(path.as_bytes()))
+    }
+    #[cfg(not(unix))]
+    {
+        root.join(path.to_string())
+    }
+}
+
+fn stdin_failure(source: io::Error) -> CliError {
+    CliError {
+        message: "could not read source from standard input".to_owned(),
+        help: None,
+        source: Box::new(source),
+    }
+}
+
+fn worktree_failure(path: &RepoPath, source: io::Error) -> CliError {
+    CliError {
+        message: format!("could not read worktree file `{path}`"),
+        help: None,
+        source: Box::new(source),
     }
 }
 
@@ -281,7 +446,19 @@ fn engine_failure(error: EngineError) -> CliError {
             help: None,
             source: Box::new(source),
         },
+        EngineError::UnsupportedPath { path } => CliError {
+            message: "unsupported source path".to_owned(),
+            help: None,
+            source: Box::new(UnsupportedPath { path }),
+        },
     }
+}
+
+/// The underlying error for an unsupported explicitly supplied path.
+#[derive(Debug, thiserror::Error)]
+#[error("no language adapter supports `{path}`")]
+struct UnsupportedPath {
+    path: RepoPath,
 }
 
 #[cfg(feature = "tui")]

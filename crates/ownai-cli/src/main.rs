@@ -6,6 +6,7 @@
 
 mod args;
 mod command;
+mod json;
 mod output;
 mod pathspec;
 
@@ -23,10 +24,16 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         // Repository, revision, object, UTF-8, and parse failures all share
         // exit 1 (section 14); the report goes to stderr so stdout stays a
-        // valid, complete document or empty.
+        // valid, complete document or empty. A usage failure discovered after
+        // parsing (for example a missing stdin `--path`) shares `clap`'s
+        // exit 2.
         Err(error) => {
             eprint!("{}", output::render_diagnostic(&error));
-            ExitCode::FAILURE
+            if error.is_usage() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }

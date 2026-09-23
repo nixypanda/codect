@@ -50,6 +50,7 @@ bstr = "1"
 anstream = "1"
 anstyle = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "1"
 
 # Terminal frontend dependencies. `ratatui` is built without its default

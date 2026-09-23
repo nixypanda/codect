@@ -138,6 +138,17 @@ pub fn fixture(relative: &str) -> String {
         .unwrap_or_else(|error| panic!("read fixture {}: {error}", path.display()))
 }
 
+/// Reads a committed document from the repository-level `docs/` tree.
+pub fn doc(relative: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs")
+        .join(relative);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read document {}: {error}", path.display()))
+}
+
+pub mod schema;
+
 fn git(dir: &Path, args: &[&str]) -> Output {
     let mut command = Command::new("git");
     for prefix in [

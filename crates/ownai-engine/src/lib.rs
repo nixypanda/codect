@@ -19,6 +19,6 @@ pub mod engine;
 pub mod error;
 pub mod selection;
 
-pub use engine::{Engine, FileDiff};
+pub use engine::{Engine, FileDiff, FileOutline, OutlineItem, project_source};
 pub use error::EngineError;
 pub use selection::{Selection, SelectionError, SelectionGroup};

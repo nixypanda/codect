@@ -9,8 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ownai_core::{
-    AreaSet, DiagnosticContext, Language, LanguageProjector, ProjectedFile, ProjectedItem,
-    ProjectionError, ProjectionInput, ProjectionMode, RepoPath, decode_source, select_projector,
+    AreaSet, DiagnosticContext, ItemKind, Language, LanguageProjector, ProjectedFile,
+    ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath, SourceSpan,
+    decode_source, select_projector,
 };
 use ownai_git::{GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
@@ -48,6 +49,124 @@ pub struct FileDiff {
     pub path: RepoPath,
     pub old: Option<ProjectedFile>,
     pub new: Option<ProjectedFile>,
+}
+
+/// One declaration in a file's mode-independent outline.
+///
+/// The outline is derived from the Signatures projection, which is the superset
+/// of the Types projection, so it can locate a declaration the requested mode
+/// drops entirely (for example an inherent `impl` in Types mode). The engine
+/// keeps this value free of serialization concerns; the CLI owns the JSON form.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutlineItem {
+    pub stable_key: String,
+    /// The `stable_key` of the containing declaration, or `None` at top level.
+    pub parent_key: Option<String>,
+    pub kind: ItemKind,
+    pub name: String,
+    /// The declaration's source span, as produced by the adapter (zero-based
+    /// lines; the JSON layer converts them).
+    pub span: SourceSpan,
+    /// The declaration's canonical fragment from the Signatures projection.
+    /// For a nested declaration this carries its container indentation.
+    pub signature: String,
+    /// Whether the requested mode's projection retains this `stable_key`.
+    pub retained_in_mode: bool,
+}
+
+/// A requested-mode projection paired with the file's complete outline.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileOutline {
+    pub path: RepoPath,
+    pub language: Language,
+    pub projection: ProjectedFile,
+    pub outline: Vec<OutlineItem>,
+}
+
+/// Projects explicit source bytes for `path`, returning the requested-mode
+/// projection plus a mode-independent outline.
+///
+/// This is the editor-facing entry point: it never touches Git and needs no
+/// repository, so a caller can project a buffer's bytes directly. An unsupported
+/// path is a typed [`EngineError::UnsupportedPath`] because the caller supplied
+/// the path as the projection context rather than as a scope.
+pub fn project_source(
+    path: &RepoPath,
+    bytes: &[u8],
+    mode: ProjectionMode,
+) -> Result<FileOutline, EngineError> {
+    let Some(projector) = select_projector(&PROJECTORS, path) else {
+        return Err(EngineError::UnsupportedPath { path: path.clone() });
+    };
+    let language = projector.language();
+    let source = decode_source(path, language, bytes).map_err(source_projection_failure)?;
+    let projection =
+        project_items(projector, path, source, mode).map_err(source_projection_failure)?;
+    let superset = if mode == ProjectionMode::Signatures {
+        projection.clone()
+    } else {
+        project_items(projector, path, source, ProjectionMode::Signatures)
+            .map_err(source_projection_failure)?
+    };
+    Ok(assemble_outline(path, language, projection, superset))
+}
+
+/// Builds a [`FileOutline`] from the requested-mode and Signatures projections.
+fn assemble_outline(
+    path: &RepoPath,
+    language: Language,
+    projection: Vec<ProjectedItem>,
+    superset: Vec<ProjectedItem>,
+) -> FileOutline {
+    let retained: BTreeSet<&str> = projection
+        .iter()
+        .map(|item| item.stable_key.as_str())
+        .collect();
+    let outline = superset
+        .iter()
+        .map(|item| OutlineItem {
+            stable_key: item.stable_key.clone(),
+            parent_key: item.parent_key.clone(),
+            kind: item.kind,
+            name: item.name.clone(),
+            span: item.span.clone(),
+            signature: item.canonical_text.clone(),
+            retained_in_mode: retained.contains(item.stable_key.as_str()),
+        })
+        .collect();
+    FileOutline {
+        path: path.clone(),
+        language,
+        projection: ProjectedFile::new(path.clone(), language, projection),
+        outline,
+    }
+}
+
+fn project_items(
+    projector: &dyn LanguageProjector,
+    path: &RepoPath,
+    source: &str,
+    mode: ProjectionMode,
+) -> Result<Vec<ProjectedItem>, ProjectionError> {
+    Ok(projector
+        .project(ProjectionInput { path, source, mode })?
+        .items()
+        .to_vec())
+}
+
+/// A projection failure with no repository or revision context, as produced by
+/// [`project_source`].
+fn source_projection_failure(error: ProjectionError) -> EngineError {
+    let context = DiagnosticContext {
+        path: Some(error.path().clone()),
+        language: Some(error.language()),
+        range: error.range().cloned(),
+        ..DiagnosticContext::default()
+    };
+    EngineError::Projection {
+        context: Box::new(context),
+        source: error,
+    }
 }
 
 /// A discovered repository plus the pipeline over it.
@@ -109,6 +228,41 @@ impl Engine {
             }
             if let Some(file) =
                 self.project_entry(projectors, &mut caches, revision_spec, entry, mode)?
+            {
+                files.push(file);
+            }
+        }
+        Ok(files)
+    }
+
+    /// Projects every selected file of `revision`, pairing the requested-mode
+    /// projection with a complete, mode-independent outline.
+    ///
+    /// This is the JSON `show` path. It reads exactly the same committed blobs
+    /// as [`Engine::show`], in the same raw path-byte order, so the outline and
+    /// `stable_key` values match the text document for the same revision.
+    pub fn show_outlines(
+        &self,
+        revision_spec: &str,
+        mode: ProjectionMode,
+        selection: &Selection,
+    ) -> Result<Vec<FileOutline>, EngineError> {
+        let revision = self.repository.resolve_commit(revision_spec)?;
+        self.ensure_groups(&revision, revision_spec, selection.groups())?;
+        let entries = self
+            .repository
+            .source_entries(&revision)
+            .map_err(|source| EngineError::git(source, Some(revision_spec)))?;
+
+        let projectors: &[&dyn LanguageProjector] = &PROJECTORS;
+        let mut caches = Caches::default();
+        let mut files = Vec::new();
+        for entry in &entries {
+            if !selection.scope().matches(&entry.path) {
+                continue;
+            }
+            if let Some(file) =
+                self.project_entry_outline(projectors, &mut caches, revision_spec, entry, mode)?
             {
                 files.push(file);
             }
@@ -308,14 +462,14 @@ impl Engine {
 
         let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
         let source = decode_source(&entry.path, language, &bytes)
-            .map_err(|error| self.projection_failure(error, revision_spec))?;
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
         let projected = projector
             .project(ProjectionInput {
                 path: &entry.path,
                 source,
                 mode,
             })
-            .map_err(|error| self.projection_failure(error, revision_spec))?;
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
 
         let items = projected.items().to_vec();
         caches
@@ -334,10 +488,51 @@ impl Engine {
         )))
     }
 
-    fn projection_failure(&self, error: ProjectionError, revision_spec: &str) -> EngineError {
+    /// Reads, decodes, and projects one entry in both the requested mode and the
+    /// Signatures superset, assembling the file's outline.
+    ///
+    /// Returns `None` for an unsupported path, which is an exclusion rather
+    /// than a failure.
+    fn project_entry_outline(
+        &self,
+        projectors: &[&dyn LanguageProjector],
+        caches: &mut Caches,
+        revision_spec: &str,
+        entry: &SourceEntry,
+        mode: ProjectionMode,
+    ) -> Result<Option<FileOutline>, EngineError> {
+        let Some(projector) = select_projector(projectors, &entry.path) else {
+            return Ok(None);
+        };
+        let language = projector.language();
+        let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
+        let source = decode_source(&entry.path, language, &bytes)
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
+
+        let projection = project_items(projector, &entry.path, source, mode)
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
+        let superset = if mode == ProjectionMode::Signatures {
+            projection.clone()
+        } else {
+            project_items(projector, &entry.path, source, ProjectionMode::Signatures)
+                .map_err(|error| self.projection_failure(error, Some(revision_spec)))?
+        };
+        Ok(Some(assemble_outline(
+            &entry.path,
+            language,
+            projection,
+            superset,
+        )))
+    }
+
+    fn projection_failure(
+        &self,
+        error: ProjectionError,
+        revision_spec: Option<&str>,
+    ) -> EngineError {
         let context = DiagnosticContext {
             repository: Some(self.repository.git_dir().to_path_buf()),
-            revision: Some(revision_spec.to_owned()),
+            revision: revision_spec.map(str::to_owned),
             path: Some(error.path().clone()),
             language: Some(error.language()),
             range: error.range().cloned(),
