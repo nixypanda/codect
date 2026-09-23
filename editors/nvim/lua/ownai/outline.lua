@@ -61,6 +61,103 @@ local function count_plain(s, needle)
   return n
 end
 
+--- The index just past a quoted string starting at `i`, or nil.
+---
+--- Handles `\` escapes and an unterminated string (consumes the rest of the
+--- line). `'` is treated as a string delimiter, which is right for Python
+--- decorators and Rust char literals; a bare lifetime in an attribute is rare
+--- enough to accept the approximation.
+local function quoted_string_end(s, i)
+  local quote = s:sub(i, i)
+  local j = i + 1
+  while j <= #s do
+    local c = s:sub(j, j)
+    if c == "\\" then
+      j = j + 2
+    elseif c == quote then
+      return j + 1
+    else
+      j = j + 1
+    end
+  end
+  return #s + 1
+end
+
+--- The index just past a raw/byte string starting at `i`, or nil.
+---
+--- Recognizes `r"…"`, `r#"…"#`, `br"…"`, `br#"…"#`, and `rb…` forms. The
+--- closing quote must be followed by the same number of `#` characters.
+local function raw_string_end(s, i)
+  local rest = s:sub(i)
+  local prefix, hashes, quote = rest:match("^(br)(#*)([\"'])")
+  if not prefix then
+    prefix, hashes, quote = rest:match("^(rb)(#*)([\"'])")
+  end
+  if not prefix then
+    prefix, hashes, quote = rest:match("^(r)(#*)([\"'])")
+  end
+  if not prefix then
+    return nil
+  end
+  local closer = quote .. hashes
+  local from = i + #prefix + #hashes + 1
+  local found = s:find(closer, from, true)
+  if found then
+    return found + #closer
+  end
+  return #s + 1
+end
+
+--- The index just past a Rust lifetime starting at `i` (`'a`, `'static`), or
+--- nil when the `'` opens a char literal. A lifetime has no closing quote.
+local function lifetime_end(s, i)
+  local ident = s:sub(i + 1):match("^[%a_][%w_]*")
+  if ident and s:sub(i + 1 + #ident, i + 1 + #ident) ~= "'" then
+    return i + 1 + #ident
+  end
+  return nil
+end
+
+--- Replace the contents of string literals with spaces.
+---
+--- Delimiter counting (`[`/`]`, `(`/`)`) must ignore brackets inside strings:
+--- `#[doc = "a ] b"]` has one `[` and one `]`, not one and two. Raw/byte
+--- string prefixes are blanked too; they are never delimiters. A Rust lifetime
+--- (`'a`) is copied verbatim rather than treated as a char literal.
+local function strip_strings(s)
+  local out = {}
+  local i = 1
+  while i <= #s do
+    local stop = raw_string_end(s, i)
+    local handled = false
+    if not stop then
+      local c = s:sub(i, i)
+      if c == "'" then
+        local life = lifetime_end(s, i)
+        if life then
+          out[#out + 1] = s:sub(i, life - 1)
+          i = life
+          handled = true
+        else
+          stop = quoted_string_end(s, i)
+        end
+      elseif c == '"' then
+        stop = quoted_string_end(s, i)
+      end
+    end
+    if not handled then
+      if stop then
+        out[#out + 1] = string.rep(" ", stop - i)
+        i = stop
+      else
+        out[#out + 1] = s:sub(i, i)
+        i = i + 1
+      end
+    end
+  end
+  return table.concat(out)
+end
+
 --- A single-line comment. `#[` / `#![` are Rust attributes, not comments.
 local function is_line_comment(s)
   if starts_with(s, "///") or starts_with(s, "//!") or starts_with(s, "//") then
@@ -93,54 +190,98 @@ local BLOCK_SPECS = {
 }
 
 --- The line that opens a block annotation ending at `last`, or nil.
+---
+--- Scans upward and tracks nesting depth (string-aware), so a balanced inner
+--- block (`/* inner */`) is skipped and the outermost opener is returned. Blank
+--- lines inside the already-open block are tolerated; a blank line between
+--- separate annotation runs still ends the search.
 local function find_block_start(lines, last, spec)
+  local depth = 0
   for i = last, 1, -1 do
     local raw = lines[i] or ""
-    if is_blank(raw) then
+    local scanned = strip_strings(raw)
+    local opens = count_plain(scanned, spec.open)
+    local closes = count_plain(scanned, spec.close)
+    if i == last then
+      depth = closes - opens
+    else
+      depth = depth + closes - opens
+    end
+
+    if depth <= 0 then
+      if depth == 0 and starts_with(ltrim(raw), spec.open) then
+        return i
+      end
       return nil
     end
-    if starts_with(ltrim(raw), spec.open) then
-      -- Rust attributes: the brackets must balance across the whole block.
-      if spec.close == "]" then
-        local depth = 0
-        for j = i, last do
-          depth = depth + count_plain(lines[j] or "", "[") - count_plain(lines[j] or "", "]")
-        end
-        if depth ~= 0 then
-          return nil
-        end
-      end
-      return i
-    end
+    -- depth > 0: inside the block. A blank line here is interior, not a
+    -- separator between annotation runs.
   end
   return nil
 end
 
 --- The line that opens a `@decorator` ending at `last`, including
 --- parenthesized/continued forms, or nil.
+---
+--- Blank lines inside the parentheses are tolerated (a continued decorator may
+--- group its arguments); the search still stops at a blank line between
+--- separate runs.
 local function find_decorator_start(lines, last)
-  local balance = 0
+  local depth = 0
   for i = last, 1, -1 do
     local raw = lines[i] or ""
-    if is_blank(raw) then
-      return nil
-    end
-    balance = balance + count_plain(raw, "(") - count_plain(raw, ")")
-    if balance == 0 then
-      if starts_with(ltrim(raw), "@") then
+    local scanned = strip_strings(raw)
+    depth = depth + count_plain(scanned, ")") - count_plain(scanned, "(")
+    if depth <= 0 then
+      if depth == 0 and starts_with(ltrim(raw), "@") then
         return i
       end
-      return nil
-    end
-    if balance > 0 then
       return nil
     end
   end
   return nil
 end
 
---- The start line of a complete leading annotation block ending at `last`, or
---- nil when `last` is not the final line of one.
+--- Classify an annotation block by its opening line.
+---
+--- `trailing` comments belong to the declaration above when they directly
+--- follow it (`//`, `#`, `--`, `/*`, `{-`). `forward` forms attach to the
+--- declaration below and may cross into the preceding declaration's span
+--- (`///`, `//!`, `/**`, `/*!`, `{-|`, `{-#`, `#[`, `#![`, `@…`).
+local function annotation_form(s)
+  if starts_with(s, "///") or starts_with(s, "//!") then
+    return "forward"
+  end
+  if starts_with(s, "//") then
+    return "trailing"
+  end
+  if starts_with(s, "/**") or starts_with(s, "/*!") then
+    return "forward"
+  end
+  if starts_with(s, "/*") then
+    return "trailing"
+  end
+  if starts_with(s, "{-|") or starts_with(s, "{-#") then
+    return "forward"
+  end
+  if starts_with(s, "{-") then
+    return "trailing"
+  end
+  if starts_with(s, "#[") or starts_with(s, "#![") then
+    return "forward"
+  end
+  if starts_with(s, "@") then
+    return "forward"
+  end
+  if starts_with(s, "--") or starts_with(s, "#") then
+    return "trailing"
+  end
+  return nil
+end
+
+--- The start line of a complete leading annotation block ending at `last`,
+--- plus its form ("forward" or "trailing"), or nil when `last` is not the
+--- final line of one.
 local function annotation_start(lines, last)
   local raw = lines[last]
   if is_blank(raw) then
@@ -154,19 +295,19 @@ local function annotation_start(lines, last)
   end
 
   if is_line_comment(s) then
-    return last
+    return last, annotation_form(s)
   end
 
   local decorator = find_decorator_start(lines, last)
   if decorator then
-    return decorator
+    return decorator, annotation_form(ltrim(lines[decorator] or ""))
   end
 
   for _, spec in ipairs(BLOCK_SPECS) do
-    if contains(raw, spec.close) then
+    if contains(strip_strings(raw), spec.close) then
       local start = find_block_start(lines, last, spec)
       if start then
-        return start
+        return start, annotation_form(ltrim(lines[start] or ""))
       end
     end
   end
@@ -180,14 +321,19 @@ end
 --- attributes/decorators/doc comments. `lines` is the buffer's full line list
 --- and `is_boundary` answers whether a line belongs to a different (non-
 --- ancestor) declaration, which ends a leading run. Returns the 1-based start.
+---
+--- A trailing comment form that directly follows another declaration belongs to
+--- that declaration and stops the run. A forward-attaching form (`///`, `#[`,
+--- `@…`, `/**`, `{-|`, …) belongs to the declaration below and may cross into
+--- the preceding declaration's span.
 function M.fold_start(lines, start_line, is_boundary)
   local line = start_line
   while line > 1 do
-    local block_start = annotation_start(lines, line - 1)
+    local block_start, form = annotation_start(lines, line - 1)
     if not block_start then
       break
     end
-    if is_boundary and block_start > 1 and is_boundary(block_start - 1) then
+    if is_boundary and form == "trailing" and block_start > 1 and is_boundary(block_start - 1) then
       break
     end
     line = block_start
