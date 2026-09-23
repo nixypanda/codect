@@ -19,21 +19,6 @@ local SIGNATURE_KINDS = {
   foreign_block = true,
 }
 
---- Declaration kinds Types mode retains. Everything else is dropped and gets a
---- "hidden" marker. Used only to approximate a mode whose document is not
---- cached; a cached document's `retained_in_mode` is authoritative.
-local TYPES_RETAINED = {
-  type = true,
-  type_alias = true,
-  trait = true,
-  field = true,
-  variant = true,
-  constructor = true,
-  associated_type = true,
-  type_family = true,
-  pattern_synonym = true,
-}
-
 function M.is_signature_kind(kind)
   return SIGNATURE_KINDS[kind] == true
 end
@@ -47,82 +32,165 @@ function M.first_line(text)
   return vim.trim(line)
 end
 
---- A Types-mode inherent `impl` has no `for`; a trait impl does.
-function M.is_trait_impl(signature)
-  local first = M.first_line(signature)
-  return first:match("^impl%s") ~= nil and first:match(" for ") ~= nil
+local function ltrim(s)
+  return (s:gsub("^%s+", ""))
 end
 
---- Approximate `retained_in_mode` from the outline alone.
-function M.approx_retained(item, mode)
-  if mode == "signatures" then
-    return true
-  end
-  if mode == "types" then
-    if item.kind == "trait_implementation" then
-      return M.is_trait_impl(item.signature)
+local function is_blank(s)
+  return s == nil or s:match("^%s*$") ~= nil
+end
+
+local function contains(s, needle)
+  return s:find(needle, 1, true) ~= nil
+end
+
+local function starts_with(s, prefix)
+  return s:sub(1, #prefix) == prefix
+end
+
+local function count_plain(s, needle)
+  local n, i = 0, 1
+  while true do
+    local a, b = s:find(needle, i, true)
+    if not a then
+      break
     end
-    return TYPES_RETAINED[item.kind] == true
+    n = n + 1
+    i = b + 1
   end
-  return true
+  return n
 end
 
---- Does this source line look like a leading attribute, decorator, pragma, or
---- doc comment? Conservative: only a short, explicit set of prefixes.
-function M.is_leading_annotation(line)
-  local s = line:gsub("^%s+", "")
-  if s == "" then
-    return false
-  end
-  -- Rust attributes: #[...] and #![...]
-  if s:match("^#%[") or s:match("^#!%[") then
+--- A single-line comment. `#[` / `#![` are Rust attributes, not comments.
+local function is_line_comment(s)
+  if starts_with(s, "///") or starts_with(s, "//!") or starts_with(s, "//") then
     return true
   end
-  -- Decorators: @Component, @override, ...
-  if s:match("^@") then
+  if starts_with(s, "--") then
     return true
   end
-  -- Haskell pragmas: {-# ... #-}
-  if s:match("^{%-%#") then
-    return true
-  end
-  -- Haddock / Elm doc comments: {-| ...
-  if s:match("^{%-|") then
-    return true
-  end
-  -- Line doc comments: ///, //!, //, --
-  if s:match("^///") or s:match("^//!") or s:match("^//") then
-    return true
-  end
-  -- Block doc comments: /** ... */ and /*! ... */
-  if s:match("^/%*%*") or s:match("^/%*!") then
-    return true
-  end
-  -- Haskell / Elm line comments, including -- | and -- ^
-  if s:match("^%-%-") then
-    return true
-  end
-  -- Python and other `#` line comments.
-  if s:match("^#") then
+  if starts_with(s, "#") then
+    if starts_with(s, "#[") or starts_with(s, "#![") then
+      return false
+    end
+    -- `#-}` closes a Haskell `{-# ... #-}` pragma.
+    if starts_with(s, "#-}") then
+      return false
+    end
     return true
   end
   return false
 end
 
---- Extend a fold start upward over consecutive leading annotations.
+--- Block annotations: opener, closer. `{-#` must precede `{-`, and `#![` must
+--- precede `#[`, because the closer of the former also matches the latter.
+local BLOCK_SPECS = {
+  { open = "/*", close = "*/" },
+  { open = "{-#", close = "#-}" },
+  { open = "{-", close = "-}" },
+  { open = "#![", close = "]" },
+  { open = "#[", close = "]" },
+}
+
+--- The line that opens a block annotation ending at `last`, or nil.
+local function find_block_start(lines, last, spec)
+  for i = last, 1, -1 do
+    local raw = lines[i] or ""
+    if is_blank(raw) then
+      return nil
+    end
+    if starts_with(ltrim(raw), spec.open) then
+      -- Rust attributes: the brackets must balance across the whole block.
+      if spec.close == "]" then
+        local depth = 0
+        for j = i, last do
+          depth = depth + count_plain(lines[j] or "", "[") - count_plain(lines[j] or "", "]")
+        end
+        if depth ~= 0 then
+          return nil
+        end
+      end
+      return i
+    end
+  end
+  return nil
+end
+
+--- The line that opens a `@decorator` ending at `last`, including
+--- parenthesized/continued forms, or nil.
+local function find_decorator_start(lines, last)
+  local balance = 0
+  for i = last, 1, -1 do
+    local raw = lines[i] or ""
+    if is_blank(raw) then
+      return nil
+    end
+    balance = balance + count_plain(raw, "(") - count_plain(raw, ")")
+    if balance == 0 then
+      if starts_with(ltrim(raw), "@") then
+        return i
+      end
+      return nil
+    end
+    if balance > 0 then
+      return nil
+    end
+  end
+  return nil
+end
+
+--- The start line of a complete leading annotation block ending at `last`, or
+--- nil when `last` is not the final line of one.
+local function annotation_start(lines, last)
+  local raw = lines[last]
+  if is_blank(raw) then
+    return nil
+  end
+  local s = ltrim(raw)
+
+  -- A shebang on line 1 is a file directive, not a declaration annotation.
+  if last == 1 and starts_with(s, "#!") and not starts_with(s, "#![") then
+    return nil
+  end
+
+  if is_line_comment(s) then
+    return last
+  end
+
+  local decorator = find_decorator_start(lines, last)
+  if decorator then
+    return decorator
+  end
+
+  for _, spec in ipairs(BLOCK_SPECS) do
+    if contains(raw, spec.close) then
+      local start = find_block_start(lines, last, spec)
+      if start then
+        return start
+      end
+    end
+  end
+
+  return nil
+end
+
+--- Extend a fold start upward over complete leading annotations.
 ---
 --- `start_line` is 1-based and comes from the outline span, which excludes
---- attributes/decorators/doc comments. Returns the 1-based extended start.
-function M.fold_start(buf, start_line)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+--- attributes/decorators/doc comments. `lines` is the buffer's full line list
+--- and `is_boundary` answers whether a line belongs to a different (non-
+--- ancestor) declaration, which ends a leading run. Returns the 1-based start.
+function M.fold_start(lines, start_line, is_boundary)
   local line = start_line
   while line > 1 do
-    local previous = lines[line - 1]
-    if previous and M.is_leading_annotation(previous) then
-      line = line - 1
-    else
+    local block_start = annotation_start(lines, line - 1)
+    if not block_start then
       break
     end
+    if is_boundary and block_start > 1 and is_boundary(block_start - 1) then
+      break
+    end
+    line = block_start
   end
   return line
 end
@@ -180,8 +248,41 @@ function M.build(file_entry, buf)
     end
   end
 
+  local lines = (buf and vim.api.nvim_buf_is_valid(buf)) and vim.api.nvim_buf_get_lines(buf, 0, -1, false) or {}
+
+  local function is_ancestor(item, key)
+    local p = item.parent
+    while p do
+      if p == key then
+        return true
+      end
+      local parent = by_key[p]
+      p = parent and parent.parent
+    end
+    return false
+  end
+
+  local function span_contains(span, line)
+    return span ~= nil and span.start_line <= line and line <= span.end_line
+  end
+
+  -- A line is a declaration boundary when it belongs to a different, non-
+  -- ancestor declaration. A leading run must not cross one: a comment that
+  -- directly follows another declaration belongs to that declaration.
+  local function is_boundary(item, line)
+    for _, other in ipairs(list) do
+      if other ~= item and span_contains(other.span, line) and not is_ancestor(item, other.key) then
+        return true
+      end
+    end
+    return false
+  end
+
   for _, item in ipairs(list) do
-    item.fold_start = M.fold_start(buf, item.span and item.span.start_line or 1)
+    local start = item.span and item.span.start_line or 1
+    item.fold_start = M.fold_start(lines, start, function(line)
+      return is_boundary(item, line)
+    end)
     item.level = math.min(item.depth + 1, 20)
   end
 

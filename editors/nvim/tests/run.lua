@@ -43,6 +43,7 @@ local specs = {
   "test_show.lua",
   "test_dropped.lua",
   "test_folds.lua",
+  "test_annotations.lua",
   "test_one_liners.lua",
   "test_sticky.lua",
   "test_outline.lua",
