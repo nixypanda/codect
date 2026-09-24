@@ -16,13 +16,27 @@ local AUTO_MODES = { types = true, signatures = true }
 local NAV_SKIP = { field = true, variant = true }
 
 --- Global auto-fold state. Module-level so it survives `setup()` re-invocation
---- (setup only replaces `config` and re-registers autocmds). `enabled` is the
---- toggle; `mode` is the depth auto-fold applies; `warned` throttles genuine
---- failures to one warning per enable session.
+--- (setup only replaces `config` and re-registers autocmds), but session-scoped:
+--- nothing here is written to disk, so it does not survive a Neovim restart.
+---
+---   * `enabled`   the toggle.
+---   * `mode`      the depth auto-fold currently applies.
+---   * `last_mode` the last depth an enable accepted, reused when a later
+---                 `enable()`/`toggle()` omits its argument.
+---   * `warned`    throttles genuine failures to one warning per enable session.
+---   * `folded`    buffers auto-fold folded, so `disable()` can unfold exactly
+---                 those and leave explicitly folded buffers alone.
+---   * `failed`    buffers whose last auto-fold attempt failed non-fatally,
+---                 keyed by buffer: `{ path, hash, mode }`. A re-entry with the
+---                 same path, content hash, and mode is a no-op instead of
+---                 another `git rev-parse` plus synchronous CLI call.
 local auto = {
   enabled = false,
   mode = nil,
+  last_mode = nil,
   warned = false,
+  folded = {},
+  failed = {},
 }
 
 local function config()
@@ -104,14 +118,20 @@ end
 --- mode; otherwise fetches one from the CLI. This is what makes
 --- `:OwnaiFold <mode>` mode-correct: it never folds from a stale or absent
 --- document. Returns the buffer state, or nil plus an error string.
-function M.ensure(buf, mode)
-  local target, target_err = M.resolve_target(buf)
+---
+--- `target`, `hash`, and `source` may be supplied by a caller that already
+--- resolved them (auto-fold does, to avoid a second `git rev-parse`).
+function M.ensure(buf, mode, target, hash, source)
   if not target then
-    return nil, target_err
+    local target_err
+    target, target_err = M.resolve_target(buf)
+    if not target then
+      return nil, target_err
+    end
   end
 
-  local source = M.buffer_source(buf)
-  local hash = vim.fn.sha256(source)
+  source = source or M.buffer_source(buf)
+  hash = hash or vim.fn.sha256(source)
 
   local st = state.get(buf)
   if state.cached_doc(st, mode, hash, target.path) then
@@ -187,8 +207,13 @@ function M.fold(mode)
 end
 
 --- Resolve and validate the mode for an auto-fold request.
+---
+--- An explicit `mode` wins; otherwise the last mode an enable accepted is
+--- reused so a re-enable after `disable()` returns to the mode that was just
+--- active; the configured `default_mode` is the fallback only before the first
+--- enable of the session.
 local function resolve_auto_mode(mode)
-  mode = mode or config().default_mode or "signatures"
+  mode = mode or auto.last_mode or config().default_mode or "signatures"
   if not AUTO_MODES[mode] then
     return nil, string.format(":OwnaiEnable expects `types` or `signatures`, got %q", mode)
   end
@@ -233,6 +258,12 @@ end
 --- autocmds. Ineligible buffers (not a file, unnamed, a directory, outside a
 --- Git repository) and languages the CLI rejects are skipped without an error;
 --- a genuine failure (missing binary, schema mismatch) warns at most once.
+---
+--- A non-fatal failure is remembered per `(path, content hash, mode)` so
+--- re-entering an unchanged buffer does not repeat the `git rev-parse` and
+--- synchronous CLI call; the memory is dropped when the content changes, the
+--- buffer is wiped, or an enable starts a new session. On success the buffer is
+--- recorded as auto-folded so `disable()` unfolds exactly what it folded.
 function M.auto_fold(buf)
   if not auto.enabled then
     return
@@ -244,25 +275,40 @@ function M.auto_fold(buf)
     return
   end
 
-  if not M.resolve_target(buf) then
+  local target = M.resolve_target(buf)
+  if not target then
     return
   end
 
-  local result, err = M.ensure(buf, mode)
+  local source = M.buffer_source(buf)
+  local hash = vim.fn.sha256(source)
+
+  local failed = auto.failed[buf]
+  if failed and failed.path == target.path and failed.hash == hash and failed.mode == mode then
+    return
+  end
+
+  local result, err = M.ensure(buf, mode, target, hash, source)
   if not result then
     if is_fatal_auto_error(err) then
       warn_auto(err)
+    else
+      auto.failed[buf] = { path = target.path, hash = hash, mode = mode }
     end
     return
   end
+
+  auto.failed[buf] = nil
+  auto.folded[buf] = true
   auto.warned = false
 end
 
 --- Turn global auto-fold on and fold the current buffer to `mode`.
 ---
---- `mode` defaults to `config().default_mode` and must be `types` or
---- `signatures`. Other already-open buffers fold when next entered; newly
---- opened files fold on BufReadPost.
+--- `mode` defaults to the last mode an enable accepted (so disabling and
+--- re-enabling returns to the same depth), then `config().default_mode`. It
+--- must be `types` or `signatures`. Other already-open buffers fold when next
+--- entered; newly opened files fold on BufReadPost.
 function M.enable(mode)
   local resolved, err = resolve_auto_mode(mode)
   if not resolved then
@@ -271,7 +317,10 @@ function M.enable(mode)
 
   auto.enabled = true
   auto.mode = resolved
+  auto.last_mode = resolved
   auto.warned = false
+  -- A fresh enable retries buffers that failed before.
+  auto.failed = {}
 
   M.auto_fold(vim.api.nvim_get_current_buf())
 
@@ -279,32 +328,37 @@ function M.enable(mode)
   return true
 end
 
---- Turn global auto-fold off and unfold every buffer the plugin folded.
+--- Turn global auto-fold off and unfold every buffer it folded.
 ---
---- Buffers are switched to `full` and re-applied locally: no CLI call is made.
+--- Only buffers auto-fold actually folded (recorded in `auto.folded`) are
+--- unfolded. A buffer the user folded with `:OwnaiShow`/`:OwnaiFold` keeps its
+--- folds. Unfolding is local (`full`): no CLI call is made.
 function M.disable()
   auto.enabled = false
   auto.warned = false
+  auto.failed = {}
 
-  for buf in pairs(state.buffers) do
+  for buf in pairs(auto.folded) do
     if vim.api.nvim_buf_is_valid(buf) and state.is_active(buf) then
       state.set_mode(buf, "full")
       folds.apply(buf)
     end
   end
+  auto.folded = {}
 
   vim.notify("OwnAI: auto-fold disabled", vim.log.levels.INFO)
   return true
 end
 
---- Toggle global auto-fold. Enables with `mode` (or the default) when off.
+--- Toggle global auto-fold. Enables with `mode` (or the remembered/default
+--- mode) when off; returns whether auto-fold is on afterwards (`enable` can
+--- reject an invalid mode).
 function M.toggle(mode)
   if auto.enabled then
     M.disable()
     return false
   end
-  M.enable(mode)
-  return true
+  return M.enable(mode) == true
 end
 
 --- Is global auto-fold on?
@@ -325,10 +379,19 @@ function M.cycle()
 end
 
 --- Refresh an active buffer: re-project only when its bytes changed.
+---
+--- `full` is a local unfold target, not a CLI mode (`ownai show` only accepts
+--- `types`/`signatures`), so it never calls the binary: it just recomputes the
+--- local fold state. This covers buffers edited after `disable()`.
 function M.refresh(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   local st = state.get(buf)
   if not st or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+
+  if st.mode == "full" then
+    folds.apply(buf)
     return
   end
 
@@ -528,6 +591,8 @@ function M.setup_autocmds()
         state.clear_overrides(st.path)
       end
       state.clear(event.buf)
+      auto.folded[event.buf] = nil
+      auto.failed[event.buf] = nil
     end,
     desc = "OwnAI: drop per-buffer state and sticky overrides",
   })

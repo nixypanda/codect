@@ -43,7 +43,7 @@ vim.api.nvim_create_user_command("OwnaiEnable", function(args)
 end, {
   nargs = "?",
   complete = mode_complete({ "types", "signatures" }),
-  desc = "OwnAI: enable global auto-fold and fold the current buffer (default signatures)",
+  desc = "OwnAI: enable global auto-fold and fold the current buffer (default: last enabled mode, else the configured default)",
 })
 
 vim.api.nvim_create_user_command("OwnaiDisable", function()
@@ -58,7 +58,7 @@ vim.api.nvim_create_user_command("OwnaiToggle", function(args)
 end, {
   nargs = "?",
   complete = mode_complete({ "types", "signatures" }),
-  desc = "OwnAI: toggle global auto-fold (default signatures)",
+  desc = "OwnAI: toggle global auto-fold (default: last enabled mode, else the configured default)",
 })
 
 -- Install default autocmds immediately so commands work without setup().

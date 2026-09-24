@@ -223,9 +223,9 @@ editors/nvim/                     # later: ownai.nvim
 | `:OwnaiShow [mode]` | Project the current buffer via stdin; fold to `mode` (default `signatures`). Attaches the buffer keymaps. |
 | `:OwnaiFold types\|signatures\|full` | Re-fold the current buffer to `mode`. Reuses the cached projection for the current bytes and path; fetches one on a cache miss (mode or file changed). Attaches the buffer keymaps. |
 | `:OwnaiOutline` | Picker of declarations from the outline. |
-| `:OwnaiEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default `signatures`); new files fold on read. |
-| `:OwnaiDisable` | Turn global auto-fold off and unfold every buffer the plugin folded, without a binary call. |
-| `:OwnaiToggle [types\|signatures]` | Toggle global auto-fold. |
+| `:OwnaiEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default: the last enabled mode, else `default_mode`); new files fold on read. |
+| `:OwnaiDisable` | Turn global auto-fold off and unfold the buffers auto-fold folded, without a binary call. Buffers folded with `:OwnaiShow`/`:OwnaiFold` stay folded. |
+| `:OwnaiToggle [types\|signatures]` | Toggle global auto-fold (default: the last enabled mode, else `default_mode`); returns whether it is on afterwards. |
 | `]f` / `[f` | Next/previous declaration. |
 | `zr` / `zm` | Not persistent: each apply resets `foldlevel` to open every fold before re-applying the mode's open/closed state. Use `:OwnaiFold` or the cycle key to change depth. |
 
@@ -253,11 +253,15 @@ editors/nvim/                     # later: ownai.nvim
   `:OwnaiToggle`, or `require("ownai").enable/disable/toggle/is_enabled`). While
   on it folds the current buffer immediately and every other file buffer as it
   enters a window (`BufWinEnter`) or is read (`BufReadPost`); disabling unfolds
-  every buffer the plugin folded locally, with no binary call. Ineligible
-  buffers (non-file, unnamed, directory, outside a Git repository) and
-  unsupported languages are skipped silently; a genuine setup failure warns at
-  most once. The flag lives in the plugin module, so `setup()` re-invocation
-  preserves it.
+  the buffers auto-fold itself folded locally, with no binary call, and leaves
+  buffers folded by `:OwnaiShow`/`:OwnaiFold` alone. Ineligible buffers (non-file,
+  unnamed, directory, outside a Git repository) and unsupported languages are
+  skipped silently; a genuine setup failure warns at most once. An enable with no
+  argument reuses the last enabled mode (falling back to `default_mode` before
+  the first enable), and a non-fatal failure is cached per `(path, content hash,
+  mode)` so re-entry does not repeat the CLI call. The flag lives in the plugin
+  module, so `setup()` re-invocation preserves it; it is session-scoped and does
+  not persist across a Neovim restart.
 
 ### 4.4 Phase 2 acceptance
 

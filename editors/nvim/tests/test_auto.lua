@@ -21,6 +21,20 @@ local function pump(ms)
 end
 
 return function(H)
+  H.test("enable with no prior enable uses the configured default mode", function()
+    H.open_fixture()
+    ownai.disable()
+
+    local messages = H.capture_notify(function()
+      ownai.enable()
+    end)
+    H.truthy(ownai.is_enabled(), "enabled")
+    H.eq(H.state().mode, ownai.config.default_mode, "uses config.default_mode before any enable")
+    H.contains(messages[1], ownai.config.default_mode)
+
+    ownai.disable()
+  end)
+
   H.test("enable folds the current buffer and is_enabled reflects it", function()
     H.open_fixture()
     ownai.disable()
@@ -140,17 +154,121 @@ return function(H)
     H.contains(bogus_messages[1], "bogus")
   end)
 
-  H.test("enable defaults to the configured mode", function()
+  H.test("toggle returns falsy when enable rejects the mode (F4)", function()
     H.open_fixture()
+    ownai.disable()
+
+    local full_messages = H.capture_notify(function()
+      H.falsy(ownai.toggle("full"), "toggle returns falsy for `full`")
+      H.falsy(ownai.is_enabled(), "a rejected toggle does not enable")
+    end)
+    H.truthy(#full_messages > 0, "the rejected mode reports an error")
+    H.contains(full_messages[1], "full")
+
+    local bogus_messages = H.capture_notify(function()
+      H.falsy(ownai.toggle("bogus"), "toggle returns falsy for an unknown mode")
+    end)
+    H.contains(bogus_messages[1], "bogus")
+  end)
+
+  H.test("re-enable reuses the last enabled mode (F5)", function()
+    H.open_fixture()
+    ownai.disable()
+
+    ownai.enable("types")
     ownai.disable()
 
     local messages = H.capture_notify(function()
       ownai.enable()
     end)
     H.truthy(ownai.is_enabled(), "enabled")
-    H.eq(H.state().mode, ownai.config.default_mode, "uses config.default_mode")
-    H.contains(messages[1], ownai.config.default_mode)
+    H.eq(H.state().mode, "types", "reuses the last enabled mode, not default_mode")
+    H.contains(messages[1], "types")
 
     ownai.disable()
+  end)
+
+  H.test("disable unfolds only the buffers auto-fold folded (F2)", function()
+    H.open_fixture()
+    local a = vim.api.nvim_get_current_buf()
+    vim.cmd("OwnaiShow types")
+    H.truthy(#H.closed_starts() > 0, "A is folded by an explicit :OwnaiShow")
+    ownai.disable()
+
+    vim.cmd("edit " .. vim.fn.fnameescape(OTHER))
+    local b = vim.api.nvim_get_current_buf()
+    ownai.enable("types")
+    H.truthy(wait_folded(b, "types"), "B is auto-folded")
+
+    ownai.disable()
+    H.eq(state.get(a).mode, "types", "explicitly folded A keeps its mode")
+    H.truthy(state.is_active(a), "A stays active")
+    H.eq(state.get(b).mode, "full", "auto-folded B unfolds")
+
+    vim.api.nvim_set_current_buf(a)
+    pump(20)
+    H.truthy(#H.closed_starts() > 0, "A keeps its closed folds across disable")
+  end)
+
+  H.test("editing a buffer after disable never calls the CLI (F1)", function()
+    H.open_fixture()
+    ownai.disable()
+    ownai.enable("types")
+    H.truthy(#H.closed_starts() > 0, "folded while enabled")
+
+    local marker = vim.fn.tempname()
+    local restore = H.with_stub_binary(
+      string.format("printf called > %s", vim.fn.shellescape(marker))
+    )
+
+    local buf = vim.api.nvim_get_current_buf()
+    local messages = H.capture_notify(function()
+      ownai.disable()
+      vim.api.nvim_buf_set_lines(buf, 0, 0, false, { "-- edited" })
+      vim.api.nvim_exec_autocmds("InsertLeave", { buffer = buf })
+      pump(400)
+    end)
+
+    H.falsy(vim.fn.filereadable(marker) == 1, "the CLI is not invoked after disable")
+    for _, message in ipairs(messages) do
+      H.falsy(
+        tostring(message):find("refresh failed", 1, true),
+        "no refresh failure warning: " .. tostring(message)
+      )
+    end
+
+    restore()
+    vim.fn.delete(marker)
+  end)
+
+  H.test("a non-fatal auto-fold failure is attempted once per content (F3)", function()
+    H.open_fixture()
+    ownai.disable()
+
+    local marker = vim.fn.tempname()
+    local restore = H.with_stub_binary(string.format(
+      "echo x >> %s\necho unsupported language >&2\nexit 1",
+      vim.fn.shellescape(marker)
+    ))
+
+    local ok, err = pcall(function()
+      local buf = vim.api.nvim_get_current_buf()
+      ownai.enable("types")
+
+      for _ = 1, 3 do
+        vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = buf })
+        pump(200)
+      end
+
+      local attempts = vim.fn.filereadable(marker) == 1 and #vim.fn.readfile(marker) or 0
+      H.eq(attempts, 1, "one CLI call for unchanged bytes across re-entry")
+    end)
+
+    ownai.disable()
+    restore()
+    vim.fn.delete(marker)
+    if not ok then
+      error(err)
+    end
   end)
 end

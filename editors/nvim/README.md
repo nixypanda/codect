@@ -75,9 +75,9 @@ there is nothing for the plugin to open or close.
 | `:OwnaiShow [types\|signatures]` | Project the current buffer via stdin and fold it to the mode (default `signatures`). Attaches the buffer keymaps. |
 | `:OwnaiFold [types\|signatures\|full]` | Fold to the mode. Reuses the cached projection for the current bytes and path; fetches one only when the mode is not cached or the buffer's file changed. Attaches the buffer keymaps. `full` unfolds everything. |
 | `:OwnaiOutline` | Declaration picker via `vim.ui.select` (no plugin dependencies). |
-| `:OwnaiEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default `signatures`). |
-| `:OwnaiDisable` | Turn global auto-fold off and unfold every buffer the plugin folded. |
-| `:OwnaiToggle [types\|signatures]` | Toggle global auto-fold (default `signatures`). |
+| `:OwnaiEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default: the last enabled mode, else `default_mode`). |
+| `:OwnaiDisable` | Turn global auto-fold off and unfold the buffers auto-fold folded. Buffers folded with `:OwnaiShow`/`:OwnaiFold` stay folded. |
+| `:OwnaiToggle [types\|signatures]` | Toggle global auto-fold (default: the last enabled mode, else `default_mode`). |
 
 ## Auto-fold mode
 
@@ -95,15 +95,26 @@ require("ownai").toggle("signatures")
 - `enable(mode?)` turns it on, validates that `mode` is `types` or `signatures`
   (`full` is rejected), folds the current buffer immediately, then folds every
   other buffer as it is next entered (`BufWinEnter`) or read (`BufReadPost`).
-  Ineligible buffers (not a file, unnamed, a directory, outside a Git
-  repository) and files whose language the binary does not project are skipped
-  silently; a genuine setup failure such as a missing binary or a schema
-  mismatch warns at most once per enable.
-- `disable()` turns it off and unfolds every buffer the plugin had folded by
-  switching it to `full` locally — no binary call.
-- `toggle(mode?)` disables when on, otherwise enables.
+  `mode` defaults to the mode the last enable used, so `disable()` followed by
+  `enable()` returns to the same depth; `default_mode` applies only before the
+  first enable of the session. Ineligible buffers (not a file, unnamed, a
+  directory, outside a Git repository) and files whose language the binary does
+  not project are skipped silently; a genuine setup failure such as a missing
+  binary or a schema mismatch warns at most once per enable.
+- `disable()` turns it off and unfolds every buffer auto-fold folded by
+  switching it to `full` locally — no binary call. Buffers you folded yourself
+  with `:OwnaiShow`/`:OwnaiFold` keep their folds.
+- `toggle(mode?)` disables when on, otherwise enables. It returns whether
+  auto-fold is on afterwards, so an invalid `mode` leaves it off.
 - The state lives in the plugin module, not in your config, so re-running
-  `setup()` does not reset it.
+  `setup()` does not reset it. It is session-scoped: nothing is persisted, so a
+  Neovim restart starts disabled with no remembered mode.
+
+A non-fatal auto-fold failure (for example an unsupported language inside a Git
+repository) is remembered per `(path, content hash, mode)`, so re-entering an
+unchanged buffer does not re-run `git rev-parse` and the CLI. The memory is
+dropped when the content changes, the buffer is wiped, or a new `enable()`
+starts.
 
 Auto-fold uses the same read-only projection pipeline as `:OwnaiShow`. The
 per-buffer `:OwnaiShow` and `:OwnaiFold` keep working while the toggle is on;

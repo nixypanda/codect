@@ -112,19 +112,22 @@ function M.clear_overrides()
   require("ownai.state").clear_all_overrides()
 end
 
---- Turn global auto-fold on. `mode` defaults to `config().default_mode` and must
---- be `types` or `signatures`; the current buffer folds immediately and every
---- file buffer opened afterwards folds on read. Toggle survives `setup()`.
+--- Turn global auto-fold on. `mode` defaults to the last enabled mode (then
+--- `config().default_mode`) and must be `types` or `signatures`; the current
+--- buffer folds immediately and every file buffer opened afterwards folds on
+--- read. Toggle survives `setup()` but not a Neovim restart.
 function M.enable(mode)
   return require("ownai.view").enable(mode)
 end
 
---- Turn global auto-fold off and unfold every buffer the plugin folded.
+--- Turn global auto-fold off and unfold every buffer auto-fold folded.
+--- Buffers folded with `:OwnaiShow`/`:OwnaiFold` stay folded.
 function M.disable()
   return require("ownai.view").disable()
 end
 
---- Toggle global auto-fold. Enables with `mode` (or the default) when off.
+--- Toggle global auto-fold. Enables with `mode` (or the remembered/default
+--- mode) when off. Returns whether auto-fold is on afterwards.
 function M.toggle(mode)
   return require("ownai.view").toggle(mode)
 end
