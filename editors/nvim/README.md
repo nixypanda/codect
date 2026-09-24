@@ -75,6 +75,39 @@ there is nothing for the plugin to open or close.
 | `:OwnaiShow [types\|signatures]` | Project the current buffer via stdin and fold it to the mode (default `signatures`). Attaches the buffer keymaps. |
 | `:OwnaiFold [types\|signatures\|full]` | Fold to the mode. Reuses the cached projection for the current bytes and path; fetches one only when the mode is not cached or the buffer's file changed. Attaches the buffer keymaps. `full` unfolds everything. |
 | `:OwnaiOutline` | Declaration picker via `vim.ui.select` (no plugin dependencies). |
+| `:OwnaiEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default `signatures`). |
+| `:OwnaiDisable` | Turn global auto-fold off and unfold every buffer the plugin folded. |
+| `:OwnaiToggle [types\|signatures]` | Toggle global auto-fold (default `signatures`). |
+
+## Auto-fold mode
+
+Auto-fold is one persistent toggle. While it is on, every file buffer you open
+is folded to the chosen mode; while it is off, new files open normally and the
+buffers the plugin folded are returned to normal.
+
+```lua
+require("ownai").enable("types") -- omit the mode to use default_mode
+require("ownai").is_enabled()    -- boolean
+require("ownai").disable()
+require("ownai").toggle("signatures")
+```
+
+- `enable(mode?)` turns it on, validates that `mode` is `types` or `signatures`
+  (`full` is rejected), folds the current buffer immediately, then folds every
+  other buffer as it is next entered (`BufWinEnter`) or read (`BufReadPost`).
+  Ineligible buffers (not a file, unnamed, a directory, outside a Git
+  repository) and files whose language the binary does not project are skipped
+  silently; a genuine setup failure such as a missing binary or a schema
+  mismatch warns at most once per enable.
+- `disable()` turns it off and unfolds every buffer the plugin had folded by
+  switching it to `full` locally — no binary call.
+- `toggle(mode?)` disables when on, otherwise enables.
+- The state lives in the plugin module, not in your config, so re-running
+  `setup()` does not reset it.
+
+Auto-fold uses the same read-only projection pipeline as `:OwnaiShow`. The
+per-buffer `:OwnaiShow` and `:OwnaiFold` keep working while the toggle is on;
+they set that buffer's depth until it is next entered.
 
 ## Folding
 

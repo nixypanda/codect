@@ -223,6 +223,9 @@ editors/nvim/                     # later: ownai.nvim
 | `:OwnaiShow [mode]` | Project the current buffer via stdin; fold to `mode` (default `signatures`). Attaches the buffer keymaps. |
 | `:OwnaiFold types\|signatures\|full` | Re-fold the current buffer to `mode`. Reuses the cached projection for the current bytes and path; fetches one on a cache miss (mode or file changed). Attaches the buffer keymaps. |
 | `:OwnaiOutline` | Picker of declarations from the outline. |
+| `:OwnaiEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default `signatures`); new files fold on read. |
+| `:OwnaiDisable` | Turn global auto-fold off and unfold every buffer the plugin folded, without a binary call. |
+| `:OwnaiToggle [types\|signatures]` | Toggle global auto-fold. |
 | `]f` / `[f` | Next/previous declaration. |
 | `zr` / `zm` | Not persistent: each apply resets `foldlevel` to open every fold before re-applying the mode's open/closed state. Use `:OwnaiFold` or the cycle key to change depth. |
 
@@ -246,6 +249,15 @@ editors/nvim/                     # later: ownai.nvim
   does not persist and a repeated apply cannot collapse a retained container.
 - The window-local fold options the plugin replaces are saved and restored
   when the buffer leaves the window.
+- Global auto-fold is a persistent toggle (`:OwnaiEnable` / `:OwnaiDisable` /
+  `:OwnaiToggle`, or `require("ownai").enable/disable/toggle/is_enabled`). While
+  on it folds the current buffer immediately and every other file buffer as it
+  enters a window (`BufWinEnter`) or is read (`BufReadPost`); disabling unfolds
+  every buffer the plugin folded locally, with no binary call. Ineligible
+  buffers (non-file, unnamed, directory, outside a Git repository) and
+  unsupported languages are skipped silently; a genuine setup failure warns at
+  most once. The flag lives in the plugin module, so `setup()` re-invocation
+  preserves it.
 
 ### 4.4 Phase 2 acceptance
 
