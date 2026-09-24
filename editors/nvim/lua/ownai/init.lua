@@ -112,4 +112,26 @@ function M.clear_overrides()
   require("ownai.state").clear_all_overrides()
 end
 
+--- Turn global auto-fold on. `mode` defaults to `config().default_mode` and must
+--- be `types` or `signatures`; the current buffer folds immediately and every
+--- file buffer opened afterwards folds on read. Toggle survives `setup()`.
+function M.enable(mode)
+  return require("ownai.view").enable(mode)
+end
+
+--- Turn global auto-fold off and unfold every buffer the plugin folded.
+function M.disable()
+  return require("ownai.view").disable()
+end
+
+--- Toggle global auto-fold. Enables with `mode` (or the default) when off.
+function M.toggle(mode)
+  return require("ownai.view").toggle(mode)
+end
+
+--- Is global auto-fold on?
+function M.is_enabled()
+  return require("ownai.view").is_enabled()
+end
+
 return M

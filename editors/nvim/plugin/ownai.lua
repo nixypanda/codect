@@ -38,5 +38,28 @@ end, {
   desc = "OwnAI: pick a declaration from the outline",
 })
 
+vim.api.nvim_create_user_command("OwnaiEnable", function(args)
+  require("ownai").enable(args.fargs[1])
+end, {
+  nargs = "?",
+  complete = mode_complete({ "types", "signatures" }),
+  desc = "OwnAI: enable global auto-fold and fold the current buffer (default signatures)",
+})
+
+vim.api.nvim_create_user_command("OwnaiDisable", function()
+  require("ownai").disable()
+end, {
+  nargs = 0,
+  desc = "OwnAI: disable global auto-fold and unfold the buffers it folded",
+})
+
+vim.api.nvim_create_user_command("OwnaiToggle", function(args)
+  require("ownai").toggle(args.fargs[1])
+end, {
+  nargs = "?",
+  complete = mode_complete({ "types", "signatures" }),
+  desc = "OwnAI: toggle global auto-fold (default signatures)",
+})
+
 -- Install default autocmds immediately so commands work without setup().
 require("ownai").setup()

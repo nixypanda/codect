@@ -8,8 +8,22 @@ local M = {}
 
 local VALID_MODES = { types = true, signatures = true, full = true }
 
+--- Modes global auto-fold accepts. `full` is deliberately excluded: it is the
+--- "unfold" target `disable()` uses, not a fold depth to auto-apply.
+local AUTO_MODES = { types = true, signatures = true }
+
 --- Leaf members that are declarations but are not useful ]f/[f targets.
 local NAV_SKIP = { field = true, variant = true }
+
+--- Global auto-fold state. Module-level so it survives `setup()` re-invocation
+--- (setup only replaces `config` and re-registers autocmds). `enabled` is the
+--- toggle; `mode` is the depth auto-fold applies; `warned` throttles genuine
+--- failures to one warning per enable session.
+local auto = {
+  enabled = false,
+  mode = nil,
+  warned = false,
+}
 
 local function config()
   return require("ownai").config
@@ -38,6 +52,9 @@ function M.resolve_target(buf)
   end
 
   local abs = vim.fn.resolve(vim.fn.fnamemodify(name, ":p"))
+  if vim.fn.isdirectory(abs) == 1 then
+    return nil, "cannot project a directory"
+  end
   local dir = vim.fn.fnamemodify(abs, ":h")
   local root_raw = vim.fn.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" })
   if vim.v.shell_error ~= 0 or vim.trim(root_raw) == "" then
@@ -167,6 +184,132 @@ function M.fold(mode)
     return fail(err)
   end
   return st
+end
+
+--- Resolve and validate the mode for an auto-fold request.
+local function resolve_auto_mode(mode)
+  mode = mode or config().default_mode or "signatures"
+  if not AUTO_MODES[mode] then
+    return nil, string.format(":OwnaiEnable expects `types` or `signatures`, got %q", mode)
+  end
+  return mode
+end
+
+--- Errors that mean a genuine setup failure rather than a file the backend
+--- simply cannot project. Only these warrant a (single) warning; an unsupported
+--- language or an ineligible buffer is skipped silently.
+local AUTO_FATAL_ERRORS = {
+  "binary not found",
+  "failed to run",
+  "invalid json",
+  "schema",
+}
+
+local function is_fatal_auto_error(err)
+  if type(err) ~= "string" then
+    return false
+  end
+  local lower = err:lower()
+  for _, needle in ipairs(AUTO_FATAL_ERRORS) do
+    if lower:find(needle, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+--- Warn at most once per enable session about a genuine auto-fold failure.
+local function warn_auto(err)
+  if auto.warned then
+    return
+  end
+  auto.warned = true
+  vim.notify("OwnAI: auto-fold is unavailable: " .. err, vim.log.levels.WARN)
+end
+
+--- Fold `buf` to the active auto-fold mode, if it is not already folded there.
+---
+--- This is the shared body of `enable` and the BufReadPost/BufWinEnter
+--- autocmds. Ineligible buffers (not a file, unnamed, a directory, outside a
+--- Git repository) and languages the CLI rejects are skipped without an error;
+--- a genuine failure (missing binary, schema mismatch) warns at most once.
+function M.auto_fold(buf)
+  if not auto.enabled then
+    return
+  end
+
+  local mode = auto.mode
+  local st = state.get(buf)
+  if st and st.active and st.mode == mode then
+    return
+  end
+
+  if not M.resolve_target(buf) then
+    return
+  end
+
+  local result, err = M.ensure(buf, mode)
+  if not result then
+    if is_fatal_auto_error(err) then
+      warn_auto(err)
+    end
+    return
+  end
+  auto.warned = false
+end
+
+--- Turn global auto-fold on and fold the current buffer to `mode`.
+---
+--- `mode` defaults to `config().default_mode` and must be `types` or
+--- `signatures`. Other already-open buffers fold when next entered; newly
+--- opened files fold on BufReadPost.
+function M.enable(mode)
+  local resolved, err = resolve_auto_mode(mode)
+  if not resolved then
+    return fail(err)
+  end
+
+  auto.enabled = true
+  auto.mode = resolved
+  auto.warned = false
+
+  M.auto_fold(vim.api.nvim_get_current_buf())
+
+  vim.notify(string.format("OwnAI: auto-fold enabled (%s)", resolved), vim.log.levels.INFO)
+  return true
+end
+
+--- Turn global auto-fold off and unfold every buffer the plugin folded.
+---
+--- Buffers are switched to `full` and re-applied locally: no CLI call is made.
+function M.disable()
+  auto.enabled = false
+  auto.warned = false
+
+  for buf in pairs(state.buffers) do
+    if vim.api.nvim_buf_is_valid(buf) and state.is_active(buf) then
+      state.set_mode(buf, "full")
+      folds.apply(buf)
+    end
+  end
+
+  vim.notify("OwnAI: auto-fold disabled", vim.log.levels.INFO)
+  return true
+end
+
+--- Toggle global auto-fold. Enables with `mode` (or the default) when off.
+function M.toggle(mode)
+  if auto.enabled then
+    M.disable()
+    return false
+  end
+  M.enable(mode)
+  return true
+end
+
+--- Is global auto-fold on?
+function M.is_enabled()
+  return auto.enabled
 end
 
 --- Cycle fold depth: types -> signatures -> full -> types.
@@ -387,6 +530,43 @@ function M.setup_autocmds()
       state.clear(event.buf)
     end,
     desc = "OwnAI: drop per-buffer state and sticky overrides",
+  })
+
+  -- Auto-fold: fold a freshly read file buffer to the active mode. Deferred so
+  -- opening a file is never blocked by the synchronous CLI call.
+  vim.api.nvim_create_autocmd("BufReadPost", {
+    group = group,
+    callback = function(event)
+      if not auto.enabled then
+        return
+      end
+      local buf = event.buf
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          M.auto_fold(buf)
+        end
+      end)
+    end,
+    desc = "OwnAI: auto-fold a newly opened file when auto-fold is enabled",
+  })
+
+  -- Auto-fold: cover buffers that were already open when auto-fold was enabled
+  -- and only now enter a window. `auto_fold` is idempotent, so a buffer already
+  -- folded to the active mode is left alone.
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = group,
+    callback = function(event)
+      if not auto.enabled then
+        return
+      end
+      local buf = event.buf
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          M.auto_fold(buf)
+        end
+      end)
+    end,
+    desc = "OwnAI: auto-fold a buffer that enters a window when auto-fold is enabled",
   })
 end
 

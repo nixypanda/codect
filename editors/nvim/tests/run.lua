@@ -49,6 +49,7 @@ local specs = {
   "test_outline.lua",
   "test_schema.lua",
   "test_config.lua",
+  "test_auto.lua",
 }
 
 for _, spec in ipairs(specs) do
