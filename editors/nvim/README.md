@@ -76,7 +76,7 @@ there is nothing for the plugin to open or close.
 | `:OwnaiFold [types\|signatures\|full]` | Fold to the mode. Reuses the cached projection for the current bytes and path; fetches one only when the mode is not cached or the buffer's file changed. Attaches the buffer keymaps. `full` unfolds everything. |
 | `:OwnaiOutline` | Declaration picker via `vim.ui.select` (no plugin dependencies). |
 | `:OwnaiEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default: the last enabled mode, else `default_mode`). |
-| `:OwnaiDisable` | Turn global auto-fold off and unfold the buffers auto-fold folded. Buffers folded with `:OwnaiShow`/`:OwnaiFold` stay folded. |
+| `:OwnaiDisable` | Turn global auto-fold off and unfold the buffers auto-fold folded. An explicitly folded buffer keeps its folds only until auto-fold also folds it; from then on `disable()` unfolds it too. |
 | `:OwnaiToggle [types\|signatures]` | Toggle global auto-fold (default: the last enabled mode, else `default_mode`). |
 
 ## Auto-fold mode
@@ -102,8 +102,12 @@ require("ownai").toggle("signatures")
   not project are skipped silently; a genuine setup failure such as a missing
   binary or a schema mismatch warns at most once per enable.
 - `disable()` turns it off and unfolds every buffer auto-fold folded by
-  switching it to `full` locally — no binary call. Buffers you folded yourself
-  with `:OwnaiShow`/`:OwnaiFold` keep their folds.
+  switching it to `full` locally — no binary call. A buffer you folded yourself
+  with `:OwnaiShow`/`:OwnaiFold` keeps its folds only while auto-fold has not
+  also folded it: auto-fold re-folds a buffer to the active mode when it is
+  entered, and once that happens the buffer counts as auto-folded and
+  `disable()` unfolds it too. A buffer auto-fold never touched is left as you
+  left it.
 - `toggle(mode?)` disables when on, otherwise enables. It returns whether
   auto-fold is on afterwards, so an invalid `mode` leaves it off.
 - The state lives in the plugin module, not in your config, so re-running

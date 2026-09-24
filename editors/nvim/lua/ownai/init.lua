@@ -121,7 +121,8 @@ function M.enable(mode)
 end
 
 --- Turn global auto-fold off and unfold every buffer auto-fold folded.
---- Buffers folded with `:OwnaiShow`/`:OwnaiFold` stay folded.
+--- An explicitly folded buffer keeps its folds only until auto-fold also folds
+--- it (for example on a later entry in another mode).
 function M.disable()
   return require("ownai.view").disable()
 end

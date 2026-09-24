@@ -70,7 +70,17 @@ function M.resolve_target(buf)
     return nil, "cannot project a directory"
   end
   local dir = vim.fn.fnamemodify(abs, ":h")
-  local root_raw = vim.fn.system({ "git", "-C", dir, "rev-parse", "--show-toplevel" })
+  -- A missing/unusable `git` is an ordinary ineligible result, not a thrown
+  -- error: auto-fold must skip the buffer silently, while `:OwnaiShow` reports
+  -- this message. `vim.fn.system` raises E475 for a non-executable cmd, so guard
+  -- with `executable()` and `pcall` rather than letting it escape an autocmd.
+  if vim.fn.executable("git") ~= 1 then
+    return nil, "`git` is not executable; cannot find the repository root"
+  end
+  local ok, root_raw = pcall(vim.fn.system, { "git", "-C", dir, "rev-parse", "--show-toplevel" })
+  if not ok then
+    return nil, "`git` failed to run; cannot find the repository root"
+  end
   if vim.v.shell_error ~= 0 or vim.trim(root_raw) == "" then
     return nil, "this file is not inside a Git repository (" .. abs .. ")"
   end
@@ -331,8 +341,11 @@ end
 --- Turn global auto-fold off and unfold every buffer it folded.
 ---
 --- Only buffers auto-fold actually folded (recorded in `auto.folded`) are
---- unfolded. A buffer the user folded with `:OwnaiShow`/`:OwnaiFold` keeps its
---- folds. Unfolding is local (`full`): no CLI call is made.
+--- unfolded. An explicitly folded buffer (`:OwnaiShow`/`:OwnaiFold`) keeps its
+--- folds only while auto-fold has not also folded it: auto-fold re-folds a
+--- buffer to the active mode on entry, and once that happens the buffer counts
+--- as auto-folded and is unfolded here too. Unfolding is local (`full`): no CLI
+--- call is made.
 function M.disable()
   auto.enabled = false
   auto.warned = false

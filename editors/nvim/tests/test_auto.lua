@@ -271,4 +271,38 @@ return function(H)
       error(err)
     end
   end)
+
+  H.test("a missing git is skipped without an error (P1)", function()
+    H.open_fixture()
+    ownai.disable()
+
+    local saved_path = vim.env.PATH
+    vim.env.PATH = "/nonexistent"
+    local ok, err = pcall(function()
+      local messages = H.capture_notify(function()
+        ownai.enable("types")
+      end)
+      H.truthy(ownai.is_enabled(), "the toggle stays on when git is unavailable")
+      H.eq(#messages, 1, "only the enabled notification, no error")
+      H.contains(messages[1], "auto-fold enabled")
+      H.falsy(state.is_active(vim.api.nvim_get_current_buf()), "the buffer is skipped")
+
+      local show_messages = H.capture_notify(function()
+        vim.cmd("OwnaiShow types")
+      end)
+      H.truthy(#show_messages > 0, ":OwnaiShow reports the failure")
+      H.contains(show_messages[1], "git")
+    end)
+    vim.env.PATH = saved_path
+    if not ok then
+      error(err)
+    end
+
+    -- The toggle recovers once git is available again.
+    H.open_fixture()
+    local buf = vim.api.nvim_get_current_buf()
+    H.truthy(wait_folded(buf, "types"), "an eligible buffer folds once git returns")
+
+    ownai.disable()
+  end)
 end
