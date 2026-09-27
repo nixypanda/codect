@@ -5,6 +5,7 @@
 //! model and writes to the frame, and performs no I/O.
 
 pub(crate) mod chrome;
+pub(crate) mod commits;
 pub(crate) mod diff;
 pub(crate) mod geom;
 pub(crate) mod overlay;
@@ -16,7 +17,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::Block;
 
-use crate::app::{Content, MIN_HEIGHT, Model, Pane, SINGLE_PANE_MIN_WIDTH};
+use crate::app::{Content, DiffView, MIN_HEIGHT, Model, Pane, SINGLE_PANE_MIN_WIDTH};
 
 use diff::Side;
 use geom::{PaneSlot, body_layout, frame_areas, render_divider};
@@ -51,12 +52,19 @@ pub(crate) fn view(model: &Model, frame: &mut Frame) {
 /// Renders the body panes from the same layout mouse hit-testing uses.
 fn render_body(model: &Model, frame: &mut Frame, content: Rect) {
     let is_diff = matches!(model.content, Content::Diff(_));
-    let layout = body_layout(content, model.tree_percent, is_diff, model.focus);
+    let layout = body_layout(
+        content,
+        model.tree_percent,
+        is_diff,
+        model.request.diff_view() == Some(DiffView::Commits),
+        model.focus,
+    );
     let rows = model.diff_rows();
     let diff_focused = model.focus == Pane::Diff;
 
     for slot in &layout.slots {
         match slot.pane {
+            PaneSlot::Commits => commits::render_commits(model, frame, slot.outer, slot.edge),
             PaneSlot::Tree => tree::render_tree(
                 model,
                 frame,

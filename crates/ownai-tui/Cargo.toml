@@ -23,6 +23,7 @@ two-face.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+ownai-git.workspace = true
 tempfile.workspace = true
 criterion.workspace = true
 

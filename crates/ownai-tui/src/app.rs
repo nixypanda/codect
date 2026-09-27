@@ -19,8 +19,8 @@ use crate::icons::Icons;
 use crate::theme::Theme;
 use crate::view::diff::layout_diff;
 use crate::view::geom::{
-    Edge, PaneSlot, body_layout, frame_areas, gutter_width, pane_block, split_with_dividers,
-    window_offset,
+    Edge, PaneSlot, body_layout, commit_offset, frame_areas, gutter_width, pane_block,
+    split_with_dividers, window_offset,
 };
 
 /// At or above this width the tree and content render side by side.
@@ -749,6 +749,27 @@ pub struct Model {
 }
 
 impl Model {
+    /// The revisions currently compared by the visible diff.
+    pub fn diff_revisions(&self) -> Option<(String, String)> {
+        let LoadRequest::Diff {
+            base, target, view, ..
+        } = &self.request
+        else {
+            return None;
+        };
+        if *view == DiffView::Commits {
+            if let Some(step) = self.commits.get(self.commit_cursor) {
+                let parent = step.parent_id.to_string();
+                let commit = step.commit_id.to_string();
+                return Some((
+                    parent[..parent.len().min(7)].to_owned(),
+                    commit[..commit.len().min(7)].to_owned(),
+                ));
+            }
+        }
+        Some((base.clone(), target.clone()))
+    }
+
     /// A model with no projection loaded yet.
     pub fn new(
         root: String,
@@ -1087,7 +1108,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
 
     match msg {
         Msg::Key(key) => handle_key(key, &mut next, &mut cmds),
-        Msg::Mouse(event) => handle_mouse(event, &mut next),
+        Msg::Mouse(event) => handle_mouse(event, &mut next, &mut cmds),
         Msg::Resize { width, height } => {
             next.width = width;
             next.height = height;
@@ -1188,6 +1209,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
                 Ok(content) if request == next.request && index < next.commits.len() => {
                     next.commit_cursor = index;
                     next.install(content, true);
+                    sync_commit_scroll(&mut next);
                     next.diagnostic = None;
                     next.diagnostic_ttl = 0;
                 }
@@ -2050,6 +2072,25 @@ fn select_commit(model: &mut Model, index: usize, cmds: &mut Vec<Cmd>) {
     }
 }
 
+fn sync_commit_scroll(model: &mut Model) {
+    let (_, content, _) = frame_areas(model.width, model.height);
+    let layout = body_layout(content, model.tree_percent, true, true, model.focus);
+    let Some(slot) = layout
+        .slots
+        .iter()
+        .find(|slot| slot.pane == PaneSlot::Commits)
+    else {
+        return;
+    };
+    let inner = pane_block("", false, &model.theme, slot.edge).inner(slot.outer);
+    model.commit_scroll = commit_offset(
+        model.commit_cursor,
+        model.commit_scroll,
+        model.commits.len(),
+        inner.height as usize,
+    );
+}
+
 fn commits_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
     match key {
         Key::Down | Key::Char('j') => {
@@ -2136,14 +2177,20 @@ const MOUSE_SCROLL_STEP: i32 = 3;
 /// The pane under the pointer takes focus, so a click or wheel acts on exactly
 /// what the user points at. Mouse input is ignored while a modal overlay is
 /// open and when the terminal is too small to draw the browser.
-fn handle_mouse(event: Mouse, model: &mut Model) {
+fn handle_mouse(event: Mouse, model: &mut Model, cmds: &mut Vec<Cmd>) {
     if model.overlay.is_some() || model.width < SINGLE_PANE_MIN_WIDTH || model.height < MIN_HEIGHT {
         return;
     }
 
     let is_diff = matches!(model.content, Content::Diff(_));
     let (_, content, _) = frame_areas(model.width, model.height);
-    let layout = body_layout(content, model.tree_percent, is_diff, model.focus);
+    let layout = body_layout(
+        content,
+        model.tree_percent,
+        is_diff,
+        model.request.diff_view() == Some(DiffView::Commits),
+        model.focus,
+    );
     let point = Position {
         x: event.column,
         y: event.row,
@@ -2154,6 +2201,39 @@ fn handle_mouse(event: Mouse, model: &mut Model) {
     let inner = pane_block("", false, &model.theme, slot.edge).inner(slot.outer);
 
     match slot.pane {
+        PaneSlot::Commits => {
+            model.focus = Pane::Commits;
+            match event.kind {
+                MouseKind::Click => {
+                    if inner.contains(point) {
+                        let offset = commit_offset(
+                            model.commit_cursor,
+                            model.commit_scroll,
+                            model.commits.len(),
+                            inner.height as usize,
+                        );
+                        let index = offset + usize::from(event.row - inner.y);
+                        if index < model.commits.len() {
+                            select_commit(model, index, cmds);
+                        }
+                    }
+                }
+                MouseKind::ScrollUp => select_commit(
+                    model,
+                    model
+                        .commit_cursor
+                        .saturating_sub(MOUSE_SCROLL_STEP as usize),
+                    cmds,
+                ),
+                MouseKind::ScrollDown => select_commit(
+                    model,
+                    model
+                        .commit_cursor
+                        .saturating_add(MOUSE_SCROLL_STEP as usize),
+                    cmds,
+                ),
+            }
+        }
         PaneSlot::Tree => {
             model.focus = Pane::Tree;
             match event.kind {
@@ -2423,6 +2503,31 @@ mod tests {
         }
     }
 
+    fn commit_steps(count: usize) -> Vec<CommitStep> {
+        use ownai_git::{HashKind, ObjectId};
+        (0..count)
+            .map(|index| CommitStep {
+                parent_id: ObjectId {
+                    kind: HashKind::Sha1,
+                    bytes: vec![index as u8; 20],
+                },
+                commit_id: ObjectId {
+                    kind: HashKind::Sha1,
+                    bytes: vec![(index + 1) as u8; 20],
+                },
+                subject: format!("Commit subject {index}"),
+            })
+            .collect()
+    }
+
+    fn commits_model(count: usize) -> Model {
+        let mut model = diff_model(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+        model.request = diff_request().with_diff_view(DiffView::Commits);
+        model.commits = commit_steps(count).into();
+        model.focus = Pane::Commits;
+        model
+    }
+
     #[test]
     fn empty_commit_history_installs_a_diff_and_focuses_commits() {
         let model = diff_model(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
@@ -2443,6 +2548,52 @@ mod tests {
         let (unchanged, commands) = update(Msg::Key(Key::Down), &next);
         assert!(commands.is_empty());
         assert_eq!(unchanged.commit_cursor, 0);
+    }
+
+    #[test]
+    fn commit_picker_renders_rows_and_selected_revision_labels() {
+        let model = commits_model(12);
+        let text = buffer_text(&render(&model, 100, 20));
+        assert!(text.contains("Commits"));
+        assert!(text.contains("Files"));
+        assert!(text.contains("Commit sub"));
+        assert!(text.contains("1/12"));
+        assert!(text.contains("0000000..0101010"));
+
+        let mut empty = commits_model(0);
+        empty.content = Content::Diff(Vec::new().into());
+        let text = buffer_text(&render(&empty, 100, 20));
+        assert!(text.contains("no commits in range"));
+    }
+
+    #[test]
+    fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
+        let model = commits_model(12);
+        let (clicked, commands) = update(Msg::Mouse(click(4, 3)), &model);
+        assert_eq!(clicked.focus, Pane::Commits);
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::LoadStep { index: 1, .. }]
+        ));
+
+        let (wheeled, commands) = update(Msg::Mouse(scroll(4, 3, false)), &model);
+        assert_eq!(wheeled.focus, Pane::Commits);
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::LoadStep { index: 3, .. }]
+        ));
+
+        let mut narrow = model.clone();
+        narrow.width = 60;
+        let (_, commands) = update(Msg::Mouse(click(4, 3)), &narrow);
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::LoadStep { index: 1, .. }]
+        ));
+
+        let (files, commands) = update(Msg::Mouse(click(4, 11)), &model);
+        assert_eq!(files.focus, Pane::Tree);
+        assert!(commands.is_empty());
     }
 
     #[test]

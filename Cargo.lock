@@ -2226,6 +2226,7 @@ dependencies = [
  "crossterm",
  "ownai-core",
  "ownai-engine",
+ "ownai-git",
  "ratatui",
  "syntect",
  "tempfile",

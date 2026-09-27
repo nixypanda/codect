@@ -46,7 +46,8 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
         LoadRequest::Show { revision, .. } => {
             right.push(chip(revision, theme.palette.surface_alt, theme));
         }
-        LoadRequest::Diff { base, target, .. } => {
+        LoadRequest::Diff { .. } => {
+            let (base, target) = model.diff_revisions().expect("diff request has revisions");
             right.push(chip(
                 &format!("{base}..{target}"),
                 theme.palette.surface_alt,
