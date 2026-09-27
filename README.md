@@ -151,10 +151,10 @@ file. `tui diff range` compares the two revisions directly. `tui diff commits`
 lists the commits after BASE through TARGET on TARGET's first-parent chain,
 newest first; selecting a commit compares it with its first parent. BASE must
 be on that chain. The commit picker sits above the changed-file tree. Both
-views show a side-by-side projection diff. The diff panes are syntax-highlighted and styled like
-[`delta`](https://github.com/dandavison/delta): per-token syntax colors,
-full-line add/delete backgrounds, brighter intra-line emphasis on the bytes that
-changed, and `@@` hunk headers. `NO_COLOR` disables all styling.
+views show a side-by-side projection diff. The diff panes use Tokyo Night
+night/day syntax colors and added/deleted line backgrounds, brighter intra-line
+emphasis on the bytes that changed, and full-width `@@` hunk bands. `NO_COLOR`
+disables all styling.
 
 A command palette (`Ctrl-P`), a fuzzy file finder (`Ctrl-F`), and in-pane search
 (`/`) make the frontend navigable without memorizing keys. The UI is themed:

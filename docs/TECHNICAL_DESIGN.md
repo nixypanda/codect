@@ -191,9 +191,9 @@ toml = "1"
 # Terminal frontend only. `ratatui` is built without its default feature bundle
 # so the enabled feature set stays auditable; the crossterm backend is the only
 # backend. `syntect` uses the pure-Rust `fancy-regex` backend, and `two-face`
-# supplies the bat syntax and theme assets delta uses. `terminal-colorsaurus`
-# asks the terminal for its background color (OSC 11) to pick the light or dark
-# flavor at startup.
+# supplies bat's syntax grammars; in-crate Tokyo Night night/day themes color
+# tokens. `terminal-colorsaurus` asks the terminal for its background color
+# (OSC 11) to pick the light or dark flavor at startup.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"
 terminal-colorsaurus = "1"
@@ -1180,8 +1180,8 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
   assert the resulting model and effects, and assert that an engine call leaves
   `update` as a `Cmd` rather than being performed inline.
 - `ratatui::TestBackend` covers the file tree, empty states, help, diagnostics,
-  responsive layouts, the modal overlays, syntax coloring, delta diff
-  backgrounds, intra-line emphasis, hunk headers, and side-by-side wrapping. A
+  responsive layouts, the modal overlays, syntax coloring, themed diff
+  backgrounds, intra-line emphasis, hunk bands, and side-by-side wrapping. A
   coverage test renders both flavors and asserts no cell keeps the terminal's
   default background, so the palette is proven to own the whole canvas.
 - Palette, finder, and search are covered by pure `update` tests (filtering,
@@ -1189,7 +1189,7 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
   `TestBackend` tests. The fuzzy matcher has its own unit tests, including a
   scoring order between consecutive and scattered matches.
 - `theme.rs` unit tests cover capability resolution (truecolor, 256, 16, and
-  `NO_COLOR`), the dark palette's delta defaults, and the `OWNAI_THEME` override:
+  `NO_COLOR`), Tokyo Night night/day palette roles, and the `OWNAI_THEME` override:
   `dark`/`light` are explicit and unknown values defer to the terminal query.
 - An injected terminal driver covers partial setup and matching cleanup; a PTY
   smoke test runs where the platform supports one. The PTY test waits for the
@@ -1596,9 +1596,9 @@ no persistent cache.
 ### 21.4 Layout and interaction
 
 - The frame is a one-line header, a content region, and a one-line footer. The
-  header carries the brand, repository, selected path, and mode/revision/scope
-  chips; the footer carries context and key hints that change with the focused
-  pane and the active overlay.
+  header carries the brand, repository, and mode/revision/scope chips. The
+  footer carries the selected path, line or change counts, search status, and
+  key hints that change with the focused pane and active overlay.
 - A file tree sits beside a content region, separated by a shared single-column
   divider (panes drop the borders they share, so no border is drawn twice).
   `Tab` toggles between them in show and range views. In commits view, a
@@ -1614,8 +1614,11 @@ no persistent cache.
   The scope chooser loads areas as an effect and keeps `RepoPath` identity for
   named areas; literal path entry is UTF-8.
 - The file tree renders box-drawing guides, diff `A`/`M`/`D` badges, and a
-  scrollbar. Selection uses a themed highlight with an accent bar rather than
-  reversing the syntax colors.
+  scrollbar. The focused selection uses a themed highlight with an accent bar;
+  the selected file retains a quieter highlight when focus moves to the body.
+- Diff panes use short `BASE` and `TARGET` titles with clipped revision labels;
+  the selected path lives in the footer. Hunk headers fill the pane with a
+  subtle band. Empty tree and content panes center a title and short explanation.
 - Search matches are highlighted in both the projection pane and the diff
   panes; `n`/`N` step through them.
 - The file-tree width is adjustable and clamped.
@@ -1644,14 +1647,12 @@ no persistent cache.
 
 ### 21.6 Syntax highlighting and diff styling
 
-- Syntax foregrounds come from `syntect` with the `two-face` bat assets (Elm,
-  Haskell, Python, and Rust included), using the pure-Rust `fancy-regex`
-  backend. The dark UI flavor pairs with `MonokaiExtended` and the light flavor
-  with `Github`, which is built for a white background and keeps every token
-  dark enough to read.
-- Diff rows use delta's default full-line added and removed backgrounds, with a
+- Syntax grammars come from `two-face`'s bat assets (Elm, Haskell, Python, and
+  Rust included). `syntect` uses the pure-Rust `fancy-regex` backend and
+  in-crate Tokyo Night night/day token colors aligned with the UI flavor.
+- Diff rows use Tokyo Night semantic added and removed backgrounds, with a
   brighter intra-line emphasis on the bytes that differ, `+`/`-` gutter markers,
-  hunk headers, and `⋯ n unchanged lines` indicators for collapsed gaps.
+  full-width hunk bands, and `⋯ n unchanged lines` indicators for collapsed gaps.
 - Hunk headers and the collapsing of long unchanged runs are computed in the
   frontend from `aligned_rows`; core's diff model is untouched.
 - `NO_COLOR` disables all styling; structure such as line numbers, continuation
@@ -1661,9 +1662,9 @@ no persistent cache.
 
 ### 21.7 Design system and theming
 
-- `theme.rs` holds semantic tokens (surfaces, borders, text, accent, status,
-  selection, diff, search, and tree roles) and resolves them through a
-  `Capability`: truecolor, the 256-color xterm palette, the 16 ANSI colors, or
+- `theme.rs` holds Tokyo Night night/day semantic tokens (surfaces, borders,
+  text, accent, status, selection, diff, search, and tree roles) and resolves
+  them through a `Capability`: truecolor, the 256-color xterm palette, the 16 ANSI colors, or
   no color. The theme is part of the `Model`, so `view` never reads the
   environment.
 - The dark or light flavor is chosen at startup: `OWNAI_THEME=dark` and
