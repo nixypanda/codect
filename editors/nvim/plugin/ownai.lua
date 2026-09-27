@@ -61,5 +61,23 @@ end, {
   desc = "OwnAI: toggle global auto-fold (default: last enabled mode, else the configured default)",
 })
 
+vim.api.nvim_create_user_command("OwnaiDiffview", function(args)
+  require("ownai.diffview").set_mode(args.fargs[1])
+end, {
+  nargs = 1,
+  complete = mode_complete({ "types", "signatures", "source" }),
+  desc = "OwnAI: switch the current Diffview tab between focused and source diffs",
+})
+
+-- Diffview emits this before its scheduled file-list update. Loading the
+-- adapter here also works when Diffview is loaded lazily after OwnAI.
+vim.api.nvim_create_autocmd("User", {
+  pattern = "DiffviewViewOpened",
+  callback = function()
+    local ok, lib = pcall(require, "diffview.lib")
+    if ok then require("ownai.diffview").on_view_opened(lib.get_current_view()) end
+  end,
+})
+
 -- Install default autocmds immediately so commands work without setup().
 require("ownai").setup()

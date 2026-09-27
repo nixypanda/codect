@@ -156,6 +156,33 @@ they set that buffer's depth until it is next entered.
 The buffer is only read. The plugin never modifies buffer text, the worktree,
 or the index.
 
+## Diffview integration
+
+When Diffview is installed, `:DiffviewFileHistory` and commit-to-commit
+`:DiffviewOpen` views start in OwnAI's `default_mode`. Their file lists omit
+files whose canonical projections are equal, and their diff panes show only
+projected Types or Signatures. A body-only history commit stays in the commit
+list with Diffview's `No diff` row. The existing Diffview open, close, file
+history, and range commands need no replacement mappings.
+
+Use `:OwnaiDiffview types`, `:OwnaiDiffview signatures`, or
+`:OwnaiDiffview source` in the current Diffview tab. History refreshes preserve
+the selected commit and file when they still exist. The focused panes are
+read-only scratch buffers; source mode restores Diffview's normal content.
+
+Diffview has no public provider for its file list and pane contents. This
+adapter is guarded by source hashes for Diffview commit
+`4516612fe98ff56ae0415a259ff6361a89419b0a`. Pin that revision when using
+the integration. If Diffview's internal files differ, OwnAI warns once and
+leaves Diffview unmodified. The integration is loaded automatically when a
+Diffview tab opens, including when Diffview is lazy loaded after OwnAI.
+
+The current `ownai.diff.v1` CLI compares commits only. A normal
+`:DiffviewOpen` of HEAD, index, and worktree still uses source diffs, with a
+one-time notice in that tab. A root commit compares against Git's empty tree,
+which the current CLI does not accept as a commit; its history entry currently
+falls back to source. These inputs require snapshot support in the CLI.
+
 ## Health
 
 `:checkhealth ownai` reports the resolved binary, its version, the expected
@@ -171,4 +198,13 @@ The suite runs headlessly without extra plugins:
 
 ```sh
 OWNAI_BIN=target/debug/ownai nvim --headless -u NONE -l editors/nvim/tests/run.lua
+```
+
+With the pinned Diffview checkout, run the integration cases separately:
+
+```sh
+OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=history \
+  OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=range \
+  OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
 ```
