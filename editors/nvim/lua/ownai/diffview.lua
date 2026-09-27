@@ -74,6 +74,10 @@ local function projections(doc)
 end
 
 local function release(file)
+  if file._ownai_foldlevel ~= nil then
+    file.winopts.foldlevel = file._ownai_foldlevel
+    file._ownai_foldlevel = nil
+  end
   if file._ownai_projection then
     file:dispose_buffer()
     file._ownai_projection = nil
@@ -92,12 +96,27 @@ end
 local function attach(entry, projected)
   local left = split_lines(type(projected.base) == "table" and projected.base.projection.text)
   local right = split_lines(type(projected.target) == "table" and projected.target.projection.text)
-  for _, file in ipairs(entry.layout:files()) do
-    if file._ownai_projection then file:dispose_buffer() end
-    if file.rev then
-      if not file._ownai_projection then release(file) end
-      file._ownai_projection = file.symbol == "a" and left or right
-      file.get_data = function(_, _, pos) return pos == "left" and left or right end
+  -- A File's `symbol` is assigned only when Diffview selects its layout.
+  -- History entries are projected as they stream in, before that selection,
+  -- so derive the side from the layout slot instead.
+  for _, symbol in ipairs({ "a", "b" }) do
+    local window = entry.layout[symbol]
+    local file = window and window.file
+    if file then
+      if file._ownai_projection then file:dispose_buffer() end
+      if file.rev then
+        if not file._ownai_projection then release(file) end
+        -- Diffview normally starts diff panes at foldlevel=0. A focused
+        -- projection is already short; hiding its unchanged lines can make the
+        -- two sides look like a single collapsed declaration instead of a diff.
+        -- Keep foldmethod=diff for highlights and open every projected line.
+        if file._ownai_foldlevel == nil then
+          file._ownai_foldlevel = file.winopts.foldlevel
+        end
+        file.winopts.foldlevel = 99
+        file._ownai_projection = symbol == "a" and left or right
+        file.get_data = function(_, _, pos) return pos == "left" and left or right end
+      end
     end
   end
 end

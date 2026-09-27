@@ -33,12 +33,15 @@ run({ "git", "init", "-q" }, tmp)
 run({ "git", "config", "user.email", "test@example.com" }, tmp)
 run({ "git", "config", "user.name", "Test" }, tmp)
 local path = tmp .. "/example.rs"
+local other = tmp .. "/other.rs"
 write(path, "pub fn example() -> i32 { 1 }\n")
+write(other, "pub fn other() -> i32 { 1 }\n")
 run({ "git", "add", "." }, tmp)
 run({ "git", "commit", "-qm", "initial" }, tmp)
 write(path, "pub fn example() -> i32 { 2 }\n")
 run({ "git", "commit", "-qam", "body only" }, tmp)
 write(path, "pub fn example(x: i32) -> i32 { x }\n")
+write(other, "pub fn other(x: i32) -> i32 { x }\n")
 run({ "git", "commit", "-qam", "signature" }, tmp)
 
 vim.cmd("cd " .. vim.fn.fnameescape(tmp))
@@ -54,15 +57,58 @@ local view = lib.get_current_view()
 assert(#view.panel.entries >= 3)
 assert(not view.panel.entries[1].nulled, "signature commit was hidden")
 assert(view.panel.entries[2].nulled, "body-only commit was not hidden")
-local file = view.panel.entries[1].files[1]
+assert(#view.panel.entries[1].files == 2, "history did not retain both changed files")
+local file
+for _, candidate in ipairs(view.panel.entries[1].files) do
+  if candidate.path == "example.rs" then file = candidate break end
+end
+assert(file, "example.rs missing from selected commit")
 view:set_file(file)
 assert(vim.wait(10000, function()
-  return file.layout.b.file.bufnr and vim.api.nvim_buf_is_loaded(file.layout.b.file.bufnr)
+  return file.layout.a.file.bufnr and vim.api.nvim_buf_is_loaded(file.layout.a.file.bufnr)
+    and file.layout.b.file.bufnr and vim.api.nvim_buf_is_loaded(file.layout.b.file.bufnr)
 end, 20), "projection buffer did not load")
+local before = table.concat(vim.api.nvim_buf_get_lines(file.layout.a.file.bufnr, 0, -1, false), "\n")
+local after = table.concat(vim.api.nvim_buf_get_lines(file.layout.b.file.bufnr, 0, -1, false), "\n")
+assert(before:find("example%(%)") and not before:find("x: i32", 1, true), "left pane is not the parent projection: " .. before)
+assert(after:find("x: i32", 1, true), "right pane is not the selected commit projection: " .. after)
+assert(before ~= after, "selected commit has identical projection panes")
+assert(file.layout.a.file.winopts.foldlevel == 99 and file.layout.b.file.winopts.foldlevel == 99,
+  "focused diff panes start folded")
+assert(vim.wo[view.cur_layout.a.id].diff and vim.wo[view.cur_layout.b.id].diff,
+  "focused panes are not in diff mode")
+assert(vim.wo[view.cur_layout.a.id].foldlevel == 99 and vim.wo[view.cur_layout.b.id].foldlevel == 99,
+  "projected windows are folded")
 local lines = vim.api.nvim_buf_get_lines(file.layout.b.file.bufnr, 0, -1, false)
 assert(table.concat(lines, "\n"):find("example%(x: i32%)"), "projected signature missing")
 assert(not table.concat(lines, "\n"):find("{ x }", 1, true), "function body leaked")
 assert(not vim.bo[file.layout.b.file.bufnr].modifiable, "history buffer is writable")
+
+local other_file
+for _, candidate in ipairs(view.panel.entries[1].files) do
+  if candidate.path == "other.rs" then other_file = candidate break end
+end
+assert(other_file, "other.rs missing from selected commit")
+view:set_file(other_file)
+assert(vim.wait(10000, function()
+  return other_file.layout.a.file.bufnr and other_file.layout.b.file.bufnr
+    and vim.api.nvim_buf_is_loaded(other_file.layout.a.file.bufnr)
+    and vim.api.nvim_buf_is_loaded(other_file.layout.b.file.bufnr)
+end, 20), "second file's projection panes did not load")
+local other_before = table.concat(vim.api.nvim_buf_get_lines(other_file.layout.a.file.bufnr, 0, -1, false), "\n")
+local other_after = table.concat(vim.api.nvim_buf_get_lines(other_file.layout.b.file.bufnr, 0, -1, false), "\n")
+assert(other_before:find("other%(%)") and other_after:find("other%(x: i32%)"),
+  "second file does not show its per-commit difference")
+
+vim.cmd("OwnaiDiffview types")
+assert(vim.wait(15000, function()
+  return not view.panel.updating and #view.panel.entries >= 3 and view.panel.entries[1].nulled
+end, 20), "Types mode did not hide signature-only commit")
+vim.cmd("OwnaiDiffview signatures")
+assert(vim.wait(15000, function()
+  return not view.panel.updating and #view.panel.entries[1].files == 2
+    and not view.panel.entries[1].nulled
+end, 20), "Signatures mode did not restore both changed files")
 
 view:set_file(view.panel.entries[2].files[1])
 assert(vim.wait(10000, function()
@@ -87,7 +133,7 @@ if test_case == "range" then
 vim.cmd("DiffviewOpen HEAD~1..HEAD")
 assert(vim.wait(15000, function()
   local current = lib.get_current_view()
-  return current and current.files and current.files:len() == 1
+  return current and current.files and current.files:len() == 2
 end, 20), "commit range did not load")
 view = lib.get_current_view()
 file = view.panel:ordered_file_list()[1]
@@ -184,7 +230,7 @@ if test_case == "root" then
   end, 20), "root commit history did not load")
   local current = lib.get_current_view()
   local first = current.panel.entries[1]
-  assert(not first.nulled and #first.files == 1, "root projection missing")
+  assert(not first.nulled and #first.files == 2, "root projection missing")
   current:set_file(first.files[1])
   assert(vim.wait(10000, function()
     return first.files[1].layout.b.file.bufnr
@@ -198,7 +244,7 @@ if test_case == "branch" then
   require("diffview").open({ "HEAD~2...HEAD" })
   assert(vim.wait(15000, function()
     local current = lib.get_current_view()
-    return current and current.files and current.files:len() == 1
+    return current and current.files and current.files:len() == 2
   end, 20), "three-dot branch comparison did not load")
   vim.cmd("DiffviewClose")
   vim.cmd("DiffviewFileHistory --range=HEAD~2..HEAD")
