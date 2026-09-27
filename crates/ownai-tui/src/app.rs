@@ -2606,7 +2606,7 @@ mod tests {
         let mut empty = commits_model(0);
         empty.content = Content::Diff(Vec::new().into());
         let text = buffer_text(&render(&empty, 100, 20));
-        assert!(text.contains("no commits in range"));
+        assert!(text.contains("No commits"));
     }
 
     #[test]
@@ -4009,14 +4009,19 @@ mod tests {
     fn an_empty_result_renders_a_clear_empty_state() {
         let model = model_with(vec![projected("empty.rs", "")]);
         let text = buffer_text(&render(&model, 100, 20));
-        assert!(text.contains("no projected files"), "{text}");
+        assert!(text.contains("No files"), "{text}");
+        assert!(
+            text.contains("No projected file content in this scope."),
+            "{text}"
+        );
     }
 
     #[test]
     fn a_diff_with_no_rows_renders_a_clear_empty_state() {
         let model = diff_model(Vec::new());
         let text = buffer_text(&render(&model, 100, 20));
-        assert!(text.contains("no projected changes"), "{text}");
+        assert!(text.contains("No changes"), "{text}");
+        assert!(text.contains("Body-only edits are omitted."), "{text}");
     }
 
     #[test]

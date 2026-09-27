@@ -14,6 +14,7 @@ use crate::app::{LoadRequest, Model, SearchSide, VisualRow, VisualRowKind};
 use crate::highlight::{self, Run, StyledLine};
 use crate::theme::Theme;
 
+use super::empty::render_empty;
 use super::geom::{Edge, gutter_width, pane_block};
 use super::text::truncate_ellipsis;
 
@@ -48,8 +49,26 @@ pub(crate) fn render_diff_pane(
     frame.render_widget(block, area);
 
     let Some(diff) = model.active_diff() else {
+        let (title, detail) = if model.pending.is_some() && model.rows.is_empty() {
+            ("Loading", "Comparing projections…")
+        } else if model.rows.is_empty() {
+            ("No changes", "Body-only edits are omitted.")
+        } else {
+            ("No file selected", "Select a file to view its diff.")
+        };
+        render_empty(frame, inner, title, detail, &model.theme);
         return;
     };
+    if rows.is_empty() {
+        render_empty(
+            frame,
+            inner,
+            "No text changes",
+            "No projected text to compare for this file.",
+            &model.theme,
+        );
+        return;
+    }
     let gutter = gutter_width(diff);
     let content_width = (inner.width as usize).saturating_sub(gutter);
     let height = inner.height as usize;

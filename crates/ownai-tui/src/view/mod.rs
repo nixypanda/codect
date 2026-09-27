@@ -7,6 +7,7 @@
 pub(crate) mod chrome;
 pub(crate) mod commits;
 pub(crate) mod diff;
+mod empty;
 pub(crate) mod geom;
 pub(crate) mod overlay;
 pub(crate) mod show;

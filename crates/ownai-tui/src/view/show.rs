@@ -9,6 +9,7 @@ use crate::app::{Model, SearchSide};
 use crate::highlight;
 use crate::theme::Theme;
 
+use super::empty::render_empty;
 use super::geom::{Edge, pane_block};
 use super::text::clip_line;
 
@@ -24,11 +25,14 @@ pub(crate) fn render_show_body(
     frame.render_widget(block, area);
 
     let Some(text) = model.active_text() else {
-        frame.render_widget(
-            Paragraph::new("no projected files")
-                .style(model.theme.fg(model.theme.palette.text_muted)),
-            inner,
-        );
+        let (title, detail) = if model.pending.is_some() && model.rows.is_empty() {
+            ("Loading", "Projecting files…")
+        } else if model.rows.is_empty() {
+            ("No files", "No projected file content in this scope.")
+        } else {
+            ("No file selected", "Select a file to view its projection.")
+        };
+        render_empty(frame, inner, title, detail, &model.theme);
         return;
     };
 

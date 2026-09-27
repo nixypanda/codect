@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{ChangeKind, Content, Model, RowKind, TreeRow};
 use crate::theme::Theme;
 
+use super::empty::render_empty;
 use super::geom::{Edge, pane_block, window_offset};
 use super::text::truncate_ellipsis;
 
@@ -19,14 +20,15 @@ pub(crate) fn render_tree(model: &Model, frame: &mut Frame, area: Rect, focused:
     frame.render_widget(block, area);
 
     if model.rows.is_empty() {
-        let empty = match model.content {
-            Content::Show(_) => "no projected files",
-            Content::Diff(_) => "no projected changes",
+        let (title, detail) = if model.pending.is_some() {
+            ("Loading", "Projecting files…")
+        } else {
+            match model.content {
+                Content::Show(_) => ("No files", "No projected file content in this scope."),
+                Content::Diff(_) => ("No changes", "Body-only edits are omitted."),
+            }
         };
-        frame.render_widget(
-            Paragraph::new(empty).style(model.theme.fg(model.theme.palette.text_muted)),
-            inner,
-        );
+        render_empty(frame, inner, title, detail, &model.theme);
         return;
     }
 
