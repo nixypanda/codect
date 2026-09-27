@@ -93,4 +93,11 @@ pub enum GitError {
         repository: PathBuf,
         object_id: ObjectId,
     },
+
+    #[error("the Git index in repository `{repository}` could not be read")]
+    IndexRead {
+        repository: PathBuf,
+        #[source]
+        source: Box<dyn Error + Send + Sync + 'static>,
+    },
 }

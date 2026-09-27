@@ -37,6 +37,11 @@ build-workspace:
 test-workspace:
     cargo test --workspace
 
+# Run the Neovim plugin's headless suite against the built binary.
+test-nvim:
+    cargo build -p ownai-cli
+    OWNAI_BIN="$PWD/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/run.lua
+
 # Benchmark one rendered frame and its per-part seams (criterion).
 bench-tui:
     cargo bench -p ownai-tui --features bench --bench frame

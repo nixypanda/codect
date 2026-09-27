@@ -14,7 +14,7 @@ The MVP supports:
 - Diffing projections from two Git commits.
 - Narrowing a projection to selected repository paths on both commands.
 
-The MVP does not perform type inference, expand macros, inspect function bodies, read the index or working tree, or implement Public and Full modes.
+The MVP does not perform type inference, expand macros, inspect function bodies, or implement Public and Full modes. It reads committed blobs; the one exception is the editor projection surface (section 14.2), which may read the worktree or standard input and remains strictly read-only.
 
 ## 2. Technical decisions
 
@@ -793,6 +793,8 @@ ownai diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <
 Rules:
 
 - `show` defaults `REVISION` to `HEAD`.
+- `show` accepts `--format <text|json>` (default `text`) and the
+  `--stdin`/`--worktree` input forms; section 14.2 defines the JSON document.
 - `--mode` is required; do not introduce a default before product validation.
 - Both diff revisions are required.
 - `--path`/`-p` and `--area`/`-a` are mutually exclusive; passing both is a usage error that exits `2` through `clap`. Each is individually repeatable, and a repeated option forms a union of its selections.
@@ -842,6 +844,122 @@ Rules:
 - `--area` and `--path` are mutually exclusive: the `PathSelection` variants make the two selections disjoint by construction, and `clap` rejects a command that passes both with a usage error (exit `2`).
 - An area is satisfied when any one of its paths names something in the projected revision, or in either side of a diff. A group that matches nothing is fatal; a group that exists but contains no supported files succeeds with empty output.
 - A missing, unreadable, oversized, or malformed config is fatal (exit `1`, empty stdout). An unknown area name is likewise fatal and its diagnostic lists the known names.
+
+### 14.2 Editor projection surface (`ownai.show.v1`)
+
+`ownai show --format json` emits a stable, versioned JSON document so an editor
+can fold a real source buffer by OwnAI's declaration structure. `--format`
+defaults to `text`, whose output is byte-for-byte unchanged. The schema is
+committed at `docs/schema/ownai.show.v1.json`; golden documents live under
+`fixtures/schema/`.
+
+Input forms:
+
+```text
+ownai show --format json --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+ownai show --format json --mode <types|signatures> --stdin --path <PATH>
+ownai show --format json --mode <types|signatures> --worktree --path <PATH>
+```
+
+- `--stdin` reads source bytes from standard input; `--worktree` reads the file
+  at `--path` from disk. Both require exactly one `--path`, which supplies the
+  language and the repository-relative path used to build stable keys, and both
+  are mutually exclusive with `REVISION` and `--area`. A missing or repeated
+  `--path` is a usage error (exit `2`), and so is a `--path` that names a
+  directory: `.` and the repository root resolve to a directory scope, and an
+  existing directory such as `src` is rejected because an editor buffer names a
+  single file.
+- The path is resolved with the same lexical containment rules as `--path`
+  scoping (section 14). `--worktree` additionally refuses a symlinked target and
+  checks the fully-resolved path stays inside the repository, so a read can
+  never leave it even through a symlinked ancestor directory. An unsupported
+  extension, a non-UTF-8 source, a path outside the repository, a symlinked
+  worktree file, or a resolved path that escapes exits `1` with empty stdout.
+- These inputs are read-only. They never write the repository, worktree, or
+  index.
+- JSON is written raw; `--color` never introduces ANSI into it.
+
+Document shape:
+
+```jsonc
+{
+  "schema": "ownai.show.v1",   // a consumer treats any other value as fatal
+  "input": "revision",          // "revision" | "stdin" | "worktree"
+  "revision": "HEAD",           // string, or null for stdin/worktree
+  "mode": "types",              // "types" | "signatures"
+  "files": [                    // raw path byte order for revisions
+    {
+      "path": "src/auth.rs",
+      "language": "rust",
+      "projection": {
+        "text": "<the exact canonical text text mode would emit>",
+        "items": [ { "stable_key", "parent_key", "kind", "name", "span", "canonical_text" } ]
+      },
+      "outline": [
+        {
+          "stable_key": "impl Session::method::refresh",
+          "parent_key": "impl Session",
+          "kind": "method",
+          "name": "refresh",
+          "span": { "start_line": 40, "end_line": 58, "start_byte": 1024, "end_byte": 1580 },
+          "signature": "fn refresh(&mut self, token: Token) -> Result<(), Error>;",
+          "retained_in_mode": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+Contract rules:
+
+- `outline` is mode-independent and complete. It is derived from the Signatures
+  projection (the superset): the requested mode supplies `projection`, and
+  `retained_in_mode` is set by `stable_key` membership. Types can drop an entire
+  `impl` block, so projected items alone cannot locate folds. A corpus test
+  proves the Signatures projection is a superset of Types by `stable_key`.
+- The closed-fold text of a declaration depends on `retained_in_mode`. When the
+  requested mode **retains** the `stable_key`, the mode-correct text is the
+  matching `projection.items[].canonical_text`. When it does not, use
+  `signature`, which is the declaration's canonical fragment from the Signatures
+  superset and is intentionally the superset form. The two differ for container
+  declarations (trait/impl/module): for example, a trait implementation that
+  Types mode retains with only its associated types has a `signature` that also
+  shows the methods Signatures mode adds. A nested declaration's fragment
+  carries its container indentation, and it is single line where the canonical
+  form is single line.
+- `projection.text` is exactly the canonical text text mode emits for that file,
+  so the document and the text view cannot drift.
+- Line numbers are one-based on the wire (the JSON layer adds one to the
+  zero-based adapter span), for editor friendliness; byte offsets are zero-based
+  into the decoded UTF-8 source. A consumer converts byte offsets if needed and
+  does not convert line numbers.
+- `span` starts at the declaration node, so preceding attributes, decorators,
+  `{-# ... #-}` pragmas, and doc comments are excluded even though `signature`
+  may include them. An editor extends a fold start upward over those lines. A
+  `decorator_start_line` field can be added additively within `ownai.show.v1`
+  later.
+- `stable_key` is unique within its file but not necessarily across the
+  repository: Rust `impl` keys are not path-namespaced, so a consumer keys
+  global state (expanded folds, cursors) by `(path, stable_key)`.
+- `kind` is an exhaustive mapping of `ItemKind` with no wildcard arm, so a new
+  kind is a compile error rather than a silent fallback.
+- Unknown fields must be tolerated by consumers, and fields may be added
+  additively within `ownai.show.v1`; the schema permits additional properties
+  while keeping the required fields and value constraints strict. A `schema`
+  value other than `ownai.show.v1` is a fatal, explicit version mismatch.
+
+Crate placement:
+
+- `ownai-core` stays Git-free and serialization-free. The outline is assembled
+  from the existing `ProjectedItem` model, so no core type changed.
+- `ownai-engine` owns outline assembly: `Engine::show_outlines` for a committed
+  revision and the free `project_source(RepoPath, bytes, mode)` for
+  editor-supplied bytes, which needs no repository. `OutlineItem` and
+  `FileOutline` carry no serialization dependency.
+- `ownai-cli` owns the JSON types (`src/json.rs`) and serialization. The schema
+  and golden fixtures are referenced by the CLI test suite, never by
+  `ownai-core`.
 
 ## 15. Diagnostics and failure behavior
 

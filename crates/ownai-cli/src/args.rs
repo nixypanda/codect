@@ -50,9 +50,15 @@ pub enum Command {
         #[arg(long, value_enum)]
         mode: Mode,
 
+        /// Output format. `text` is the canonical projection; `json` is the
+        /// versioned `ownai.show.v1` document with a mode-independent outline.
+        #[arg(long, value_enum, default_value = "text")]
+        format: Format,
+
         /// Revision to project (branch, tag, or object id); defaults to HEAD.
-        #[arg(value_name = "REVISION", default_value = "HEAD")]
-        revision: String,
+        /// Mutually exclusive with `--stdin` and `--worktree`.
+        #[arg(value_name = "REVISION")]
+        revision: Option<String>,
 
         /// Limit the projection to these paths. Repeatable. A directory includes
         /// everything beneath it, and paths are relative to the current directory.
@@ -63,6 +69,26 @@ pub enum Command {
         /// exclusive with `--path`.
         #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
         areas: Vec<String>,
+
+        /// Read the source bytes from standard input instead of a revision.
+        /// Requires exactly one `--path` to supply the language and repository
+        /// context, and is mutually exclusive with `REVISION` and `--area`.
+        #[arg(
+            long,
+            requires = "paths",
+            conflicts_with_all = ["revision", "areas", "worktree"]
+        )]
+        stdin: bool,
+
+        /// Read the source bytes from the file at `--path` on disk instead of a
+        /// revision. Requires exactly one `--path`, and is mutually exclusive
+        /// with `REVISION` and `--area`.
+        #[arg(
+            long,
+            requires = "paths",
+            conflicts_with_all = ["revision", "areas", "stdin"]
+        )]
+        worktree: bool,
     },
 
     /// Show a focused projection diff between two revisions.
@@ -71,6 +97,10 @@ pub enum Command {
         /// Projection mode to compare.
         #[arg(long, value_enum)]
         mode: Mode,
+
+        /// Output format: text hunks or a versioned `ownai.diff.v1` document.
+        #[arg(long, value_enum, default_value = "text")]
+        format: Format,
 
         /// Base revision.
         #[arg(value_name = "BASE")]
@@ -166,6 +196,15 @@ impl From<Mode> for ProjectionMode {
             Mode::Signatures => ProjectionMode::Signatures,
         }
     }
+}
+
+/// The `show` and `diff` output format.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum Format {
+    /// The canonical text projection; byte-for-byte the historical output.
+    Text,
+    /// The versioned `ownai.show.v1` JSON document.
+    Json,
 }
 
 /// Color policy; `auto` defers terminal detection to the output layer.

@@ -42,6 +42,16 @@ pub fn write_document(kind: DocumentKind, document: &str, color: ColorChoice) ->
     stream.flush()
 }
 
+/// Writes a JSON document to stdout with no styling.
+///
+/// JSON is a machine-readable document, so `--color` must never introduce ANSI
+/// sequences into it; this bypasses the styler entirely.
+pub fn write_json(document: &str) -> io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(document.as_bytes())?;
+    out.flush()
+}
+
 /// Renders a fatal error as a miette report for stderr.
 pub fn render_diagnostic(error: &CliError) -> String {
     let mut text = String::new();

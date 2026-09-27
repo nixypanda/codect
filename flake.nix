@@ -79,12 +79,35 @@
             platforms = pkgs.lib.platforms.unix;
           };
         };
+
+      # The Neovim plugin. `buildVimPlugin` copies the source tree verbatim, so
+      # `lua/` and `plugin/` land at the store root. It cannot wrap the binary;
+      # consumers pair it with `pkgs.ownai` on PATH (or set `vim.g.ownai_binary`
+      # / `OWNAI_BIN`).
+      ownaiNvimPackage =
+        pkgs:
+        pkgs.vimUtils.buildVimPlugin {
+          pname = "ownai.nvim";
+          version = "0.1.0";
+          src = ./editors/nvim;
+          meta = {
+            description = "OwnAI semantic fold viewer for Neovim";
+            homepage = "https://github.com/nixypanda/ownai";
+            license = pkgs.lib.licenses.mit;
+          };
+        };
     in
     {
       packages = forAllSystems (pkgs: {
         default = ownaiPackage pkgs;
         ownai = ownaiPackage pkgs;
+        ownai-nvim = ownaiNvimPackage pkgs;
       });
+
+      overlays.default = final: _prev: {
+        ownai = ownaiPackage final;
+        ownai-nvim = ownaiNvimPackage final;
+      };
 
       apps = forAllSystems (pkgs: {
         default = {
@@ -100,12 +123,52 @@
             pkgs.rust-bin.stable.latest.rust-analyzer
             pkgs.cargo-llvm-cov
             pkgs.just
+            pkgs.neovim
+            pkgs.git
           ];
 
           env = {
             RUST_BACKTRACE = "1";
           };
         };
+      });
+
+      # Run the plugin's headless suite in a throwaway Git repository so
+      # `nix flake check` covers the plugin alongside the workspace.
+      checks = forAllSystems (pkgs: {
+        ownai-nvim =
+          pkgs.runCommand "ownai-nvim-check"
+            {
+              nativeBuildInputs = [
+                pkgs.neovim
+                pkgs.git
+                (ownaiPackage pkgs)
+              ];
+            }
+            ''
+              export HOME=$TMPDIR
+              mkdir -p work/editors
+              cp -r ${./editors/nvim} work/editors/nvim
+              chmod -R u+w work/editors/nvim
+              # The plugin tests resolve some fixtures relative to the repository
+              # root, so the check's work dir needs both `editors/nvim` and
+              # `fixtures/` to look like a real checkout.
+              cp -r ${./fixtures} work/fixtures
+              chmod -R u+w work/fixtures
+              cd work
+              git init -q
+              git config user.email check@example.com
+              git config user.name check
+              git add -A
+              git commit -qm fixture
+              export OWNAI_BIN=${ownaiPackage pkgs}/bin/ownai
+              nvim --headless -u NONE -l editors/nvim/tests/run.lua > log.txt 2>&1 || {
+                cat log.txt
+                exit 1
+              }
+              cat log.txt
+              touch $out
+            '';
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt-tree);

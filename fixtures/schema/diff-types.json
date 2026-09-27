@@ -1,0 +1,150 @@
+{
+  "schema": "ownai.diff.v1",
+  "mode": "types",
+  "base": {
+    "kind": "commit",
+    "revision": "BASE",
+    "id": "BASE_ID"
+  },
+  "target": {
+    "kind": "commit",
+    "revision": "TARGET",
+    "id": "TARGET_ID"
+  },
+  "files": [
+    {
+      "path": "lib.rs",
+      "language": "rust",
+      "status": "modified",
+      "base": {
+        "snapshot_id": "BASE_ID",
+        "projection": {
+          "text": "pub struct User {\n    pub id: u32,\n}\n",
+          "items": [
+            {
+              "stable_key": "lib.rs::type::User",
+              "parent_key": null,
+              "kind": "type",
+              "name": "User",
+              "span": {
+                "start_line": 1,
+                "end_line": 1,
+                "start_byte": 0,
+                "end_byte": 31
+              },
+              "canonical_text": "pub struct User {\n    pub id: u32,\n}"
+            },
+            {
+              "stable_key": "lib.rs::type::User::field::id",
+              "parent_key": "lib.rs::type::User",
+              "kind": "field",
+              "name": "id",
+              "span": {
+                "start_line": 1,
+                "end_line": 1,
+                "start_byte": 18,
+                "end_byte": 29
+              },
+              "canonical_text": "    pub id: u32,"
+            }
+          ]
+        },
+        "outline": [
+          {
+            "stable_key": "lib.rs::type::User",
+            "parent_key": null,
+            "kind": "type",
+            "name": "User",
+            "span": {
+              "start_line": 1,
+              "end_line": 1,
+              "start_byte": 0,
+              "end_byte": 31
+            },
+            "signature": "pub struct User {\n    pub id: u32,\n}",
+            "retained_in_mode": true
+          },
+          {
+            "stable_key": "lib.rs::type::User::field::id",
+            "parent_key": "lib.rs::type::User",
+            "kind": "field",
+            "name": "id",
+            "span": {
+              "start_line": 1,
+              "end_line": 1,
+              "start_byte": 18,
+              "end_byte": 29
+            },
+            "signature": "    pub id: u32,",
+            "retained_in_mode": true
+          }
+        ]
+      },
+      "target": {
+        "snapshot_id": "TARGET_ID",
+        "projection": {
+          "text": "pub struct User {\n    pub id: u64,\n}\n",
+          "items": [
+            {
+              "stable_key": "lib.rs::type::User",
+              "parent_key": null,
+              "kind": "type",
+              "name": "User",
+              "span": {
+                "start_line": 1,
+                "end_line": 1,
+                "start_byte": 0,
+                "end_byte": 31
+              },
+              "canonical_text": "pub struct User {\n    pub id: u64,\n}"
+            },
+            {
+              "stable_key": "lib.rs::type::User::field::id",
+              "parent_key": "lib.rs::type::User",
+              "kind": "field",
+              "name": "id",
+              "span": {
+                "start_line": 1,
+                "end_line": 1,
+                "start_byte": 18,
+                "end_byte": 29
+              },
+              "canonical_text": "    pub id: u64,"
+            }
+          ]
+        },
+        "outline": [
+          {
+            "stable_key": "lib.rs::type::User",
+            "parent_key": null,
+            "kind": "type",
+            "name": "User",
+            "span": {
+              "start_line": 1,
+              "end_line": 1,
+              "start_byte": 0,
+              "end_byte": 31
+            },
+            "signature": "pub struct User {\n    pub id: u64,\n}",
+            "retained_in_mode": true
+          },
+          {
+            "stable_key": "lib.rs::type::User::field::id",
+            "parent_key": "lib.rs::type::User",
+            "kind": "field",
+            "name": "id",
+            "span": {
+              "start_line": 1,
+              "end_line": 1,
+              "start_byte": 18,
+              "end_byte": 29
+            },
+            "signature": "    pub id: u64,",
+            "retained_in_mode": true
+          }
+        ]
+      },
+      "equal": false
+    }
+  ]
+}

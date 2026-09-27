@@ -4,7 +4,7 @@
 //! structured context a caller needs to build one, and the underlying error
 //! chain survives so consumers never recover context by parsing a message.
 
-use ownai_core::{DiagnosticContext, ProjectionError};
+use ownai_core::{DiagnosticContext, ProjectionError, RepoPath};
 use ownai_git::GitError;
 
 use crate::config::ConfigError;
@@ -20,6 +20,13 @@ pub enum EngineError {
         revision: Option<String>,
         #[source]
         source: GitError,
+    },
+
+    #[error("could not read worktree file `{path}`")]
+    WorktreeRead {
+        path: RepoPath,
+        #[source]
+        source: std::io::Error,
     },
 
     /// `.ownai.toml` could not supply areas.
@@ -45,6 +52,15 @@ pub enum EngineError {
         revisions: String,
         missing: Vec<SelectionGroup>,
     },
+
+    /// No language adapter supports an explicitly supplied path.
+    ///
+    /// Committed paths with unsupported extensions are silently excluded; this
+    /// variant exists only for the editor-facing [`crate::project_source`]
+    /// path, where the caller supplied the path as the projection context and a
+    /// silent empty result would be indistinguishable from a real failure.
+    #[error("no language adapter supports `{path}`")]
+    UnsupportedPath { path: RepoPath },
 
     /// A selection could not be constructed.
     #[error(transparent)]
