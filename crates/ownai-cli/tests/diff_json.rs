@@ -179,3 +179,70 @@ fn four_languages_have_projected_sides_and_text_mode_is_unchanged() {
     assert_eq!(default.stdout, explicit.stdout);
     assert_eq!(default.stderr, explicit.stderr);
 }
+
+#[test]
+fn staged_and_unstaged_snapshots_are_distinct() {
+    let repo = TestRepo::init();
+    repo.write("lib.rs", "pub struct Item { pub value: u8 }\n");
+    repo.commit("base");
+    repo.write("lib.rs", "pub struct Item { pub value: u16 }\n");
+    repo.git_ok(&["add", "lib.rs"]);
+    repo.write("lib.rs", "pub struct Item { pub value: u32 }\n");
+
+    let staged = run(&repo, "types", "HEAD", ":index");
+    let unstaged = run(&repo, "types", ":index", ":worktree");
+    assert_eq!(staged["target"]["kind"], "index");
+    assert_eq!(unstaged["base"]["kind"], "index");
+    assert_eq!(unstaged["target"]["kind"], "worktree");
+    assert!(
+        staged["files"][0]["target"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("u16")
+    );
+    assert!(
+        unstaged["files"][0]["target"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("u32")
+    );
+    assert!(
+        !unstaged["files"][0]["base"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("u8")
+    );
+    let schema: Value = serde_json::from_str(&doc("schema/ownai.diff.v1.json")).unwrap();
+    support::schema::validate(&schema, &staged).unwrap();
+    support::schema::validate(&schema, &unstaged).unwrap();
+}
+
+#[test]
+fn root_commit_compares_to_empty_tree_and_missing_worktree_side() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", "pub struct First;\n");
+    repo.write("src/empty.py", "# no declarations\n");
+    repo.commit("root");
+    let empty_sha = repo.git_ok(&["hash-object", "-t", "tree", "--stdin"]);
+    let root = run(&repo, "types", empty_sha.trim(), "HEAD");
+    assert_eq!(root["base"]["kind"], "empty");
+    assert_eq!(root["files"].as_array().unwrap().len(), 1);
+    assert_eq!(root["files"][0]["status"], "added");
+    repo.remove("src/lib.rs");
+    let deleted = run(&repo, "types", ":index", ":worktree");
+    assert_eq!(deleted["files"][0]["status"], "deleted");
+    assert!(deleted["files"][0]["target"].is_null());
+}
+
+#[test]
+fn sha256_root_commit_uses_empty_tree_snapshot() {
+    let Some(repo) = TestRepo::init_sha256() else {
+        return;
+    };
+    repo.write("src/lib.rs", "pub struct First;\n");
+    repo.commit("root");
+    let empty_sha = repo.git_ok(&["hash-object", "-t", "tree", "--stdin"]);
+    let root = run(&repo, "types", empty_sha.trim(), "HEAD");
+    assert_eq!(root["base"]["kind"], "empty");
+    assert_eq!(root["files"][0]["status"], "added");
+}

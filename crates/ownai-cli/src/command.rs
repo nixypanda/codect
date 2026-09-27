@@ -171,7 +171,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
                 }
                 Format::Json => {
                     let diff = engine
-                        .diff_outlines(base, target, (*mode).into(), &selection)
+                        .diff_snapshot_outlines(base, target, (*mode).into(), &selection)
                         .map_err(engine_failure)?;
                     output::write_json(&json::diff_document(base, target, (*mode).into(), &diff))
                         .map_err(output_failure)
@@ -533,6 +533,11 @@ fn selection_for(
 fn engine_failure(error: EngineError) -> CliError {
     match error {
         EngineError::Git { source, revision } => git_failure_for(source, revision.as_deref()),
+        EngineError::WorktreeRead { path, source } => CliError {
+            message: format!("could not read worktree file `{path}`"),
+            help: None,
+            source: Box::new(source),
+        },
         EngineError::Config(source) => config_failure(source),
         EngineError::Projection { context, source } => projection_failure(source, *context),
         EngineError::UnsatisfiedSelection { revisions, missing } => {
@@ -707,6 +712,10 @@ fn git_context(error: &GitError) -> DiagnosticContext {
             repository: Some(repository.clone()),
             ..DiagnosticContext::default()
         },
+        GitError::IndexRead { repository, .. } => DiagnosticContext {
+            repository: Some(repository.clone()),
+            ..DiagnosticContext::default()
+        },
     }
 }
 
@@ -722,6 +731,7 @@ fn git_message(error: &GitError) -> &'static str {
         GitError::TreeTraversal { .. } => "a commit tree could not be traversed",
         GitError::InvalidRepoPath { .. } => "a committed entry has an unusable path",
         GitError::InvalidObjectId { .. } => "an object id is invalid",
+        GitError::IndexRead { .. } => "the Git index could not be read",
     }
 }
 

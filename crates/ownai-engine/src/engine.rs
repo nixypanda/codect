@@ -67,6 +67,23 @@ pub struct CommitDiff {
     pub files: Vec<FileOutlineDiff>,
 }
 
+/// A focused comparison whose sides may come from commits, the index, the
+/// working tree, or an empty tree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotDiff {
+    pub base_kind: &'static str,
+    pub target_kind: &'static str,
+    pub base_id: String,
+    pub target_id: String,
+    pub files: Vec<FileOutlineDiff>,
+}
+
+#[derive(Clone, Debug)]
+enum SnapshotEntry {
+    Blob(SourceEntry),
+    Worktree,
+}
+
 /// One declaration in a file's mode-independent outline.
 ///
 /// The outline is derived from the Signatures projection, which is the superset
@@ -449,6 +466,198 @@ impl Engine {
             target_id: target.object_id,
             files,
         })
+    }
+
+    /// Compares any two read-only snapshot sources for the JSON Diffview
+    /// contract. `:index`, `:worktree`, and `:empty` are reserved specifiers;
+    /// the canonical Git empty-tree object id is also accepted as `:empty`.
+    pub fn diff_snapshot_outlines(
+        &self,
+        base_spec: &str,
+        target_spec: &str,
+        mode: ProjectionMode,
+        selection: &Selection,
+    ) -> Result<SnapshotDiff, EngineError> {
+        let (base_kind, base_id, base_entries) = self.snapshot_entries(base_spec)?;
+        let (target_kind, target_id, target_entries) = self.snapshot_entries(target_spec)?;
+        let base_map: BTreeMap<RepoPath, SnapshotEntry> = base_entries.into_iter().collect();
+        let target_map: BTreeMap<RepoPath, SnapshotEntry> = target_entries.into_iter().collect();
+        let mut paths: BTreeSet<RepoPath> = base_map.keys().cloned().collect();
+        paths.extend(target_map.keys().cloned());
+
+        let mut missing = Vec::new();
+        for group in selection.groups() {
+            if !group
+                .paths()
+                .iter()
+                .any(|prefix| paths.iter().any(|path| path.is_within(prefix)))
+            {
+                missing.push(group.clone());
+            }
+        }
+        if !missing.is_empty() {
+            return Err(EngineError::UnsatisfiedSelection {
+                revisions: format!("`{base_spec}` or `{target_spec}`"),
+                missing,
+            });
+        }
+
+        let mut caches = Caches::default();
+        let mut files = Vec::new();
+        for path in paths {
+            if !selection.scope().matches(&path) {
+                continue;
+            }
+            let old = self.snapshot_outline(
+                base_map.get(&path),
+                &path,
+                base_kind,
+                base_spec,
+                mode,
+                &mut caches,
+            )?;
+            let new = self.snapshot_outline(
+                target_map.get(&path),
+                &path,
+                target_kind,
+                target_spec,
+                mode,
+                &mut caches,
+            )?;
+            if old.as_ref().map_or("", |f| f.projection.canonical_text())
+                == new.as_ref().map_or("", |f| f.projection.canonical_text())
+            {
+                continue;
+            }
+            files.push(FileOutlineDiff { path, old, new });
+        }
+        Ok(SnapshotDiff {
+            base_kind,
+            target_kind,
+            base_id,
+            target_id,
+            files,
+        })
+    }
+
+    fn snapshot_entries(
+        &self,
+        spec: &str,
+    ) -> Result<(&'static str, String, Vec<(RepoPath, SnapshotEntry)>), EngineError> {
+        if spec == ":empty"
+            || matches!(
+                spec,
+                "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+                    | "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+            )
+        {
+            return Ok(("empty", spec.to_owned(), Vec::new()));
+        }
+        if spec == ":index" || spec == ":worktree" {
+            let entries = self
+                .repository
+                .index_source_entries()
+                .map_err(|e| EngineError::git(e, Some(spec)))?;
+            let entries = entries
+                .into_iter()
+                .map(|entry| {
+                    let path = entry.path.clone();
+                    let value = if spec == ":index" {
+                        SnapshotEntry::Blob(entry)
+                    } else {
+                        SnapshotEntry::Worktree
+                    };
+                    (path, value)
+                })
+                .collect();
+            return Ok((
+                if spec == ":index" {
+                    "index"
+                } else {
+                    "worktree"
+                },
+                spec.to_owned(),
+                entries,
+            ));
+        }
+        let revision = self.repository.resolve_commit(spec)?;
+        let id = revision.object_id.to_string();
+        let entries = self
+            .repository
+            .source_entries(&revision)
+            .map_err(|e| EngineError::git(e, Some(spec)))?
+            .into_iter()
+            .map(|entry| (entry.path.clone(), SnapshotEntry::Blob(entry)))
+            .collect();
+        Ok(("commit", id, entries))
+    }
+
+    fn snapshot_outline(
+        &self,
+        entry: Option<&SnapshotEntry>,
+        path: &RepoPath,
+        kind: &str,
+        spec: &str,
+        mode: ProjectionMode,
+        caches: &mut Caches,
+    ) -> Result<Option<FileOutline>, EngineError> {
+        match entry {
+            Some(SnapshotEntry::Blob(entry)) => {
+                self.project_entry_outline(&PROJECTORS, caches, spec, entry, mode)
+            }
+            Some(SnapshotEntry::Worktree) => self.project_worktree(path, mode),
+            None if kind == "worktree" => self.project_worktree(path, mode),
+            None => Ok(None),
+        }
+    }
+
+    fn project_worktree(
+        &self,
+        path: &RepoPath,
+        mode: ProjectionMode,
+    ) -> Result<Option<FileOutline>, EngineError> {
+        #[cfg(unix)]
+        let relative = {
+            use std::os::unix::ffi::OsStrExt;
+            std::ffi::OsStr::from_bytes(path.as_bytes()).to_os_string()
+        };
+        #[cfg(not(unix))]
+        let relative = std::ffi::OsString::from(path.to_string());
+        let full = self.root.join(relative);
+        let metadata = match std::fs::symlink_metadata(&full) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(EngineError::WorktreeRead {
+                    path: path.clone(),
+                    source,
+                });
+            }
+        };
+        if !metadata.file_type().is_file() {
+            return Ok(None);
+        }
+        let resolved = full
+            .canonicalize()
+            .map_err(|source| EngineError::WorktreeRead {
+                path: path.clone(),
+                source,
+            })?;
+        let root = self
+            .root
+            .canonicalize()
+            .map_err(|source| EngineError::WorktreeRead {
+                path: path.clone(),
+                source,
+            })?;
+        if !resolved.starts_with(root) {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(resolved).map_err(|source| EngineError::WorktreeRead {
+            path: path.clone(),
+            source,
+        })?;
+        project_source(path, &bytes, mode).map(Some)
     }
 
     /// Fails when a selected group names nothing in `revision`, before any blob

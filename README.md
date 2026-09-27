@@ -91,14 +91,20 @@ result carries the same stable keys as a committed revision. See
 [docs/schema/ownai.show.v1.json](./docs/schema/ownai.show.v1.json) for the
 contract.
 
-`ownai diff --format json` emits `ownai.diff.v1` for two committed revisions.
-It includes the resolved commit IDs and each changed file's projected base and
+`ownai diff --format json` emits `ownai.diff.v1` for commits and the reserved
+snapshot names `:index`, `:worktree`, and `:empty`. The canonical Git empty-tree
+object ID is also accepted, so the initial commit can be compared directly.
+For example, compare staged changes with `ownai diff --format json --mode types HEAD :index`
+and unstaged changes with `ownai diff --format json --mode types :index :worktree`.
+It includes the resolved commit IDs (or mutable snapshot names) and each changed file's projected base and
 target panes with declaration items and outlines. An absent side is `null`.
 Files with equal projected text are omitted, so an empty `files` array means
 there are no focused changes. The JSON contract is specified in
-[docs/schema/ownai.diff.v1.json](./docs/schema/ownai.diff.v1.json). This command
-currently accepts commit snapshots only; index, worktree, and unsaved editor
-buffers require distinct snapshot inputs in a later integration step.
+[docs/schema/ownai.diff.v1.json](./docs/schema/ownai.diff.v1.json). Index reads
+the stage-zero blob bytes; worktree reads tracked regular files on disk and
+does not follow symlinks. Mutable snapshot IDs are labels, so integrations
+must refresh after staging or file writes. Unsaved editor buffer bytes are not
+part of the worktree snapshot.
 
 `--path`/`-p` is repeatable and scopes a command to a file or directory (a
 directory includes everything beneath it); a path that names nothing in the

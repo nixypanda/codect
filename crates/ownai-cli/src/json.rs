@@ -28,27 +28,32 @@
 //! - JSON output contains no ANSI and is unaffected by `--color`.
 
 use ownai_core::{ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, SourceSpan};
-use ownai_engine::{CommitDiff, FileOutline, FileOutlineDiff, OutlineItem};
+use ownai_engine::{FileOutline, FileOutlineDiff, OutlineItem, SnapshotDiff};
 use serde::Serialize;
 
 /// The schema identifier carried by every document.
 pub const SCHEMA: &str = "ownai.show.v1";
 pub const DIFF_SCHEMA: &str = "ownai.diff.v1";
 
-/// Serializes changed committed files for a focused Diffview provider.
-pub fn diff_document(base: &str, target: &str, mode: ProjectionMode, diff: &CommitDiff) -> String {
+/// Serializes changed snapshot files for a focused Diffview provider.
+pub fn diff_document(
+    base: &str,
+    target: &str,
+    mode: ProjectionMode,
+    diff: &SnapshotDiff,
+) -> String {
     let document = DiffDocument {
         schema: DIFF_SCHEMA,
         mode: mode_name(mode),
         base: SnapshotDocument {
-            kind: "commit",
+            kind: diff.base_kind,
             revision: base,
-            id: diff.base_id.to_string(),
+            id: diff.base_id.clone(),
         },
         target: SnapshotDocument {
-            kind: "commit",
+            kind: diff.target_kind,
             revision: target,
-            id: diff.target_id.to_string(),
+            id: diff.target_id.clone(),
         },
         files: diff
             .files
@@ -95,7 +100,7 @@ struct DiffSideDocument {
     outline: Vec<OutlineDocument>,
 }
 
-fn diff_file_document(file: &FileOutlineDiff, diff: &CommitDiff) -> DiffFileDocument {
+fn diff_file_document(file: &FileOutlineDiff, diff: &SnapshotDiff) -> DiffFileDocument {
     let exemplar = file
         .old
         .as_ref()
@@ -114,11 +119,11 @@ fn diff_file_document(file: &FileOutlineDiff, diff: &CommitDiff) -> DiffFileDocu
         base: file
             .old
             .as_ref()
-            .map(|side| diff_side_document(side, diff.base_id.to_string())),
+            .map(|side| diff_side_document(side, diff.base_id.clone())),
         target: file
             .new
             .as_ref()
-            .map(|side| diff_side_document(side, diff.target_id.to_string())),
+            .map(|side| diff_side_document(side, diff.target_id.clone())),
         equal: false,
     }
 }

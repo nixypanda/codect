@@ -20,7 +20,8 @@ pub mod error;
 pub mod selection;
 
 pub use engine::{
-    CommitDiff, Engine, FileDiff, FileOutline, FileOutlineDiff, OutlineItem, project_source,
+    CommitDiff, Engine, FileDiff, FileOutline, FileOutlineDiff, OutlineItem, SnapshotDiff,
+    project_source,
 };
 pub use error::EngineError;
 pub use selection::{Selection, SelectionError, SelectionGroup};

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/nixypanda/ownai/docs/schema/ownai.diff.v1.json",
   "title": "OwnAI diff document v1",
-  "description": "Changed canonical projections between two committed snapshots. Consumers must reject an unknown schema version and may accept additive fields. Files with equal projections are omitted. Paths use OwnAI escaped representation for invalid UTF-8. Lines are one-based and byte offsets zero-based.",
+  "description": "Changed canonical projections between commit, index, worktree, and empty snapshots. Consumers must reject an unknown schema version and may accept additive fields. Files with equal projections are omitted. Paths use OwnAI escaped representation for invalid UTF-8. Lines are one-based and byte offsets zero-based. Mutable snapshot IDs name the input kind, not a durable content hash; consumers must refresh them after writes or staging.",
   "type": "object",
   "required": [
     "schema",
@@ -46,7 +46,7 @@
       "additionalProperties": true,
       "properties": {
         "kind": {
-          "const": "commit"
+          "enum": ["commit", "index", "worktree", "empty"]
         },
         "revision": {
           "type": "string"

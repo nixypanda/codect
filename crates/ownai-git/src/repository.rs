@@ -142,6 +142,40 @@ impl GitRepository {
         self.repo.workdir()
     }
 
+    /// Lists stage-zero regular files from the index. Unmerged entries cannot
+    /// identify one staged version and are deliberately excluded.
+    pub fn index_source_entries(&self) -> Result<Vec<SourceEntry>, GitError> {
+        let index = self
+            .repo
+            .index_or_empty()
+            .map_err(|source| GitError::IndexRead {
+                repository: self.location(),
+                source: Box::new(source),
+            })?;
+        let mut entries = Vec::new();
+        for entry in index.entries() {
+            if entry.stage_raw() != 0 || !matches!(entry.mode.bits(), 0o100644 | 0o100755) {
+                continue;
+            }
+            let raw: &[u8] = entry.path(&index).as_ref();
+            let path =
+                ownai_core::RepoPath::new(raw).map_err(|source| GitError::InvalidRepoPath {
+                    repository: self.location(),
+                    path: bstr::BString::from(raw.to_vec()),
+                    source,
+                })?;
+            if path.language().is_some() {
+                entries.push(SourceEntry {
+                    path,
+                    blob_id: ObjectId::from_gix(&entry.id),
+                    executable: entry.mode.bits() == 0o100755,
+                });
+            }
+        }
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(entries)
+    }
+
     pub(crate) fn gix(&self) -> &gix::Repository {
         &self.repo
     }

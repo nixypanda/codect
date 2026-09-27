@@ -22,6 +22,13 @@ pub enum EngineError {
         source: GitError,
     },
 
+    #[error("could not read worktree file `{path}`")]
+    WorktreeRead {
+        path: RepoPath,
+        #[source]
+        source: std::io::Error,
+    },
+
     /// `.ownai.toml` could not supply areas.
     #[error(transparent)]
     Config(#[from] ConfigError),
