@@ -108,13 +108,20 @@ fn diff_line(
         // Hunk headers and collapse indicators span the whole pane.
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let full = gutter + width;
-        let mut padded = text;
+        let mut padded = if kind == VisualRowKind::Hunk {
+            format!(" {text}")
+        } else {
+            text
+        };
         let used = UnicodeWidthStr::width(padded.as_str());
         if used < full {
             padded.push_str(&" ".repeat(full - used));
         }
         let style = match kind {
-            VisualRowKind::Hunk => theme.fg(theme.palette.hunk).add_modifier(Modifier::BOLD),
+            VisualRowKind::Hunk if theme.colors_enabled() => theme
+                .fg_bg(theme.palette.hunk, theme.palette.surface_alt)
+                .add_modifier(Modifier::BOLD),
+            VisualRowKind::Hunk => Style::default(),
             _ => theme.fg(theme.palette.text_muted),
         };
         return Line::from(Span::styled(padded, style));
@@ -369,5 +376,60 @@ fn styled_line(highlight: &[StyledLine], number: usize, text: &str) -> StyledLin
             style: Style::default(),
             text: text.to_owned(),
         }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{Capability, Flavor};
+
+    #[test]
+    fn hunk_header_fills_the_pane_with_a_subtle_band() {
+        let theme = Theme::dark();
+        let runs = vec![Run {
+            style: Style::default(),
+            text: "@@ -12,3 +12,4 @@".to_owned(),
+        }];
+
+        let line = diff_line(
+            None,
+            false,
+            &runs,
+            VisualRowKind::Hunk,
+            Side::Old,
+            4,
+            24,
+            &theme,
+            &[],
+        );
+        let span = &line.spans[0];
+        assert_eq!(UnicodeWidthStr::width(span.content.as_ref()), 28);
+        assert!(span.content.starts_with(" @@ -12,3 +12,4 @@"));
+        assert_eq!(span.style.fg, Some(theme.color(theme.palette.hunk)));
+        assert_eq!(span.style.bg, Some(theme.color(theme.palette.surface_alt)));
+    }
+
+    #[test]
+    fn hunk_header_keeps_its_range_markers_without_color() {
+        let theme = Theme::new(Flavor::Dark, Capability::NoColor);
+        let runs = vec![Run {
+            style: Style::default(),
+            text: "@@ -1,2 +1,3 @@".to_owned(),
+        }];
+
+        let line = diff_line(
+            None,
+            false,
+            &runs,
+            VisualRowKind::Hunk,
+            Side::New,
+            4,
+            20,
+            &theme,
+            &[],
+        );
+        assert!(line.spans[0].content.starts_with(" @@ -1,2 +1,3 @@"));
+        assert_eq!(line.spans[0].style, Style::default());
     }
 }
