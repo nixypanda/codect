@@ -28,11 +28,108 @@
 //! - JSON output contains no ANSI and is unaffected by `--color`.
 
 use ownai_core::{ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, SourceSpan};
-use ownai_engine::{FileOutline, OutlineItem};
+use ownai_engine::{CommitDiff, FileOutline, FileOutlineDiff, OutlineItem};
 use serde::Serialize;
 
 /// The schema identifier carried by every document.
 pub const SCHEMA: &str = "ownai.show.v1";
+pub const DIFF_SCHEMA: &str = "ownai.diff.v1";
+
+/// Serializes changed committed files for a focused Diffview provider.
+pub fn diff_document(base: &str, target: &str, mode: ProjectionMode, diff: &CommitDiff) -> String {
+    let document = DiffDocument {
+        schema: DIFF_SCHEMA,
+        mode: mode_name(mode),
+        base: SnapshotDocument {
+            kind: "commit",
+            revision: base,
+            id: diff.base_id.to_string(),
+        },
+        target: SnapshotDocument {
+            kind: "commit",
+            revision: target,
+            id: diff.target_id.to_string(),
+        },
+        files: diff
+            .files
+            .iter()
+            .map(|file| diff_file_document(file, diff))
+            .collect(),
+    };
+    let mut text =
+        serde_json::to_string_pretty(&document).expect("serializing the diff document cannot fail");
+    text.push('\n');
+    text
+}
+
+#[derive(Serialize)]
+struct DiffDocument<'a> {
+    schema: &'static str,
+    mode: &'static str,
+    base: SnapshotDocument<'a>,
+    target: SnapshotDocument<'a>,
+    files: Vec<DiffFileDocument>,
+}
+
+#[derive(Serialize)]
+struct SnapshotDocument<'a> {
+    kind: &'static str,
+    revision: &'a str,
+    id: String,
+}
+
+#[derive(Serialize)]
+struct DiffFileDocument {
+    path: String,
+    language: &'static str,
+    status: &'static str,
+    base: Option<DiffSideDocument>,
+    target: Option<DiffSideDocument>,
+    equal: bool,
+}
+
+#[derive(Serialize)]
+struct DiffSideDocument {
+    snapshot_id: String,
+    projection: ProjectionDocument,
+    outline: Vec<OutlineDocument>,
+}
+
+fn diff_file_document(file: &FileOutlineDiff, diff: &CommitDiff) -> DiffFileDocument {
+    let exemplar = file
+        .old
+        .as_ref()
+        .or(file.new.as_ref())
+        .expect("changed file has a present side");
+    let status = match (&file.old, &file.new) {
+        (None, Some(_)) => "added",
+        (Some(_), None) => "deleted",
+        (Some(_), Some(_)) => "modified",
+        (None, None) => unreachable!("changed file has a present side"),
+    };
+    DiffFileDocument {
+        path: file.path.to_string(),
+        language: language_name(exemplar.language),
+        status,
+        base: file
+            .old
+            .as_ref()
+            .map(|side| diff_side_document(side, diff.base_id.to_string())),
+        target: file
+            .new
+            .as_ref()
+            .map(|side| diff_side_document(side, diff.target_id.to_string())),
+        equal: false,
+    }
+}
+
+fn diff_side_document(file: &FileOutline, snapshot_id: String) -> DiffSideDocument {
+    DiffSideDocument {
+        snapshot_id,
+        projection: projection_document(&file.projection),
+        outline: file.outline.iter().map(outline_document).collect(),
+    }
+}
 
 /// Which input produced a document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

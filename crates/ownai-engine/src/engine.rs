@@ -51,6 +51,22 @@ pub struct FileDiff {
     pub new: Option<ProjectedFile>,
 }
 
+/// One changed file with the complete declaration outline for each present side.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileOutlineDiff {
+    pub path: RepoPath,
+    pub old: Option<FileOutline>,
+    pub new: Option<FileOutline>,
+}
+
+/// A commit-to-commit focused comparison with immutable snapshot identities.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitDiff {
+    pub base_id: ObjectId,
+    pub target_id: ObjectId,
+    pub files: Vec<FileOutlineDiff>,
+}
+
 /// One declaration in a file's mode-independent outline.
 ///
 /// The outline is derived from the Signatures projection, which is the superset
@@ -354,6 +370,85 @@ impl Engine {
         }
 
         Ok(diffs)
+    }
+
+    /// Compares committed projections and returns both panes with their outlines.
+    /// Equal projections, unsupported files, and empty added/deleted projections
+    /// are omitted, matching the text diff's focused file-list rule.
+    pub fn diff_outlines(
+        &self,
+        base_spec: &str,
+        target_spec: &str,
+        mode: ProjectionMode,
+        selection: &Selection,
+    ) -> Result<CommitDiff, EngineError> {
+        let base = self.repository.resolve_commit(base_spec)?;
+        let target = self.repository.resolve_commit(target_spec)?;
+        self.ensure_groups_in_diff(&base, &target, base_spec, target_spec, selection.groups())?;
+        let base_entries = self
+            .repository
+            .source_entries(&base)
+            .map_err(|source| EngineError::git(source, Some(base_spec)))?;
+        let target_entries = self
+            .repository
+            .source_entries(&target)
+            .map_err(|source| EngineError::git(source, Some(target_spec)))?;
+        let base_map: BTreeMap<&RepoPath, &SourceEntry> = base_entries
+            .iter()
+            .map(|entry| (&entry.path, entry))
+            .collect();
+        let target_map: BTreeMap<&RepoPath, &SourceEntry> = target_entries
+            .iter()
+            .map(|entry| (&entry.path, entry))
+            .collect();
+        let mut paths: BTreeSet<&RepoPath> = base_map.keys().copied().collect();
+        paths.extend(target_map.keys().copied());
+
+        let mut caches = Caches::default();
+        let mut files = Vec::new();
+        for path in paths {
+            if !selection.scope().matches(path) {
+                continue;
+            }
+            let old_entry = base_map.get(path).copied();
+            let new_entry = target_map.get(path).copied();
+            if let (Some(old), Some(new)) = (old_entry, new_entry)
+                && old.blob_id == new.blob_id
+            {
+                continue;
+            }
+            let old = match old_entry {
+                Some(entry) => {
+                    self.project_entry_outline(&PROJECTORS, &mut caches, base_spec, entry, mode)?
+                }
+                None => None,
+            };
+            let new = match new_entry {
+                Some(entry) => {
+                    self.project_entry_outline(&PROJECTORS, &mut caches, target_spec, entry, mode)?
+                }
+                None => None,
+            };
+            if old
+                .as_ref()
+                .map_or("", |file| file.projection.canonical_text())
+                == new
+                    .as_ref()
+                    .map_or("", |file| file.projection.canonical_text())
+            {
+                continue;
+            }
+            files.push(FileOutlineDiff {
+                path: path.clone(),
+                old,
+                new,
+            });
+        }
+        Ok(CommitDiff {
+            base_id: base.object_id,
+            target_id: target.object_id,
+            files,
+        })
     }
 
     /// Fails when a selected group names nothing in `revision`, before any blob

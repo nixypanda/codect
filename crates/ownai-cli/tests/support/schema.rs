@@ -24,6 +24,18 @@ fn check(root: &Value, schema: &Value, instance: &Value, path: &str) -> Result<(
         return check(root, target, instance, path);
     }
 
+    if let Some(alternatives) = schema.get("oneOf").and_then(Value::as_array) {
+        let matches = alternatives
+            .iter()
+            .filter(|candidate| check(root, candidate, instance, path).is_ok())
+            .count();
+        if matches != 1 {
+            return Err(format!(
+                "{path}: expected exactly one matching oneOf alternative, found {matches}"
+            ));
+        }
+    }
+
     if let Some(constant) = schema.get("const")
         && instance != constant
     {

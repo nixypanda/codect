@@ -98,6 +98,10 @@ pub enum Command {
         #[arg(long, value_enum)]
         mode: Mode,
 
+        /// Output format: text hunks or a versioned `ownai.diff.v1` document.
+        #[arg(long, value_enum, default_value = "text")]
+        format: Format,
+
         /// Base revision.
         #[arg(value_name = "BASE")]
         base: String,
@@ -194,7 +198,7 @@ impl From<Mode> for ProjectionMode {
     }
 }
 
-/// The `show` output format.
+/// The `show` and `diff` output format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Format {
     /// The canonical text projection; byte-for-byte the historical output.

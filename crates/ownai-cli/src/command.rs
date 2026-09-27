@@ -149,18 +149,34 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         }
         CliCommand::Diff {
             mode,
+            format,
             base,
             target,
             paths,
             areas,
         } => {
             let selection = selection_for(paths, areas, &start, &engine)?;
-            let diffs = engine
-                .diff(base, target, (*mode).into(), &selection)
-                .map_err(engine_failure)?;
-            let (old, new) = split_diff(diffs);
-            output::write_document(DocumentKind::Diff, &diff_document(&old, &new), cli.color)
-                .map_err(output_failure)
+            match format {
+                Format::Text => {
+                    let diffs = engine
+                        .diff(base, target, (*mode).into(), &selection)
+                        .map_err(engine_failure)?;
+                    let (old, new) = split_diff(diffs);
+                    output::write_document(
+                        DocumentKind::Diff,
+                        &diff_document(&old, &new),
+                        cli.color,
+                    )
+                    .map_err(output_failure)
+                }
+                Format::Json => {
+                    let diff = engine
+                        .diff_outlines(base, target, (*mode).into(), &selection)
+                        .map_err(engine_failure)?;
+                    output::write_json(&json::diff_document(base, target, (*mode).into(), &diff))
+                        .map_err(output_failure)
+                }
+            }
         }
         #[cfg(feature = "tui")]
         CliCommand::Tui { command } => run_tui(engine, command, &start, cli.icons),

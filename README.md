@@ -78,7 +78,7 @@ Individual recipes are available as `just build`, `just test`, `just format`,
 ownai show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
 ownai show --format json --mode <types|signatures> --stdin    --path <FILE>
 ownai show --format json --mode <types|signatures> --worktree --path <FILE>
-ownai diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+ownai diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 `--format` defaults to `text`, the canonical projection. `--format json` emits
@@ -90,6 +90,15 @@ result carries the same stable keys as a committed revision. See
 [docs/TECHNICAL_DESIGN.md](./docs/TECHNICAL_DESIGN.md) section 14.2 and
 [docs/schema/ownai.show.v1.json](./docs/schema/ownai.show.v1.json) for the
 contract.
+
+`ownai diff --format json` emits `ownai.diff.v1` for two committed revisions.
+It includes the resolved commit IDs and each changed file's projected base and
+target panes with declaration items and outlines. An absent side is `null`.
+Files with equal projected text are omitted, so an empty `files` array means
+there are no focused changes. The JSON contract is specified in
+[docs/schema/ownai.diff.v1.json](./docs/schema/ownai.diff.v1.json). This command
+currently accepts commit snapshots only; index, worktree, and unsaved editor
+buffers require distinct snapshot inputs in a later integration step.
 
 `--path`/`-p` is repeatable and scopes a command to a file or directory (a
 directory includes everything beneath it); a path that names nothing in the

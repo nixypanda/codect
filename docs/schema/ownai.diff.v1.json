@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nixypanda/ownai/docs/schema/ownai.diff.v1.json",
+  "title": "OwnAI diff document v1",
+  "description": "Changed canonical projections between two committed snapshots. Consumers must reject an unknown schema version and may accept additive fields. Files with equal projections are omitted. Paths use OwnAI escaped representation for invalid UTF-8. Lines are one-based and byte offsets zero-based.",
+  "type": "object",
+  "required": [
+    "schema",
+    "mode",
+    "base",
+    "target",
+    "files"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "ownai.diff.v1"
+    },
+    "mode": {
+      "enum": [
+        "types",
+        "signatures"
+      ]
+    },
+    "base": {
+      "$ref": "#/$defs/snapshot"
+    },
+    "target": {
+      "$ref": "#/$defs/snapshot"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diff_file"
+      }
+    }
+  },
+  "$defs": {
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "kind",
+        "revision",
+        "id"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "const": "commit"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "diff_file": {
+      "type": "object",
+      "required": [
+        "path",
+        "language",
+        "status",
+        "base",
+        "target",
+        "equal"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "language": {
+          "enum": [
+            "elm",
+            "haskell",
+            "python",
+            "rust"
+          ]
+        },
+        "status": {
+          "enum": [
+            "added",
+            "deleted",
+            "modified"
+          ]
+        },
+        "base": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/side"
+            }
+          ]
+        },
+        "target": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/side"
+            }
+          ]
+        },
+        "equal": {
+          "const": false
+        }
+      }
+    },
+    "side": {
+      "type": "object",
+      "required": [
+        "snapshot_id",
+        "projection",
+        "outline"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "snapshot_id": {
+          "type": "string"
+        },
+        "projection": {
+          "$ref": "#/$defs/projection"
+        },
+        "outline": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/outline_item"
+          }
+        }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "required": [
+        "text",
+        "items"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "text": {
+          "description": "The exact canonical text this file emits in text mode for the requested mode.",
+          "type": "string"
+        },
+        "items": {
+          "description": "The requested-mode projected items, including index-only nested entries.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/item"
+          }
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": [
+        "stable_key",
+        "parent_key",
+        "kind",
+        "name",
+        "span",
+        "canonical_text"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "stable_key": {
+          "description": "The declaration's identity within its file. Unique within this file, but not necessarily across the repository (Rust impl keys are not path-namespaced), so consumers key global state by (path, stable_key).",
+          "type": "string"
+        },
+        "parent_key": {
+          "description": "The stable_key of the containing declaration, or null at top level.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        },
+        "canonical_text": {
+          "description": "The item's canonical fragment. A nested item's fragment carries its container indentation.",
+          "type": "string"
+        }
+      }
+    },
+    "outline_item": {
+      "type": "object",
+      "required": [
+        "stable_key",
+        "parent_key",
+        "kind",
+        "name",
+        "span",
+        "signature",
+        "retained_in_mode"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "stable_key": {
+          "description": "The declaration's identity within its file. Unique within this file, but not necessarily across the repository (Rust impl keys are not path-namespaced), so consumers key global state by (path, stable_key).",
+          "type": "string"
+        },
+        "parent_key": {
+          "description": "The stable_key of the containing declaration, or null at top level.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        },
+        "signature": {
+          "description": "The declaration's canonical fragment from the Signatures superset projection. A nested declaration's fragment carries its container indentation. Single line where the canonical form is single line. This is the closed-fold text only when `retained_in_mode` is false; when it is true, the mode-correct closed-fold text is the matching `projection.items[].canonical_text`, which differs for container declarations (trait/impl/module) because the requested mode may omit members the superset shows.",
+          "type": "string"
+        },
+        "retained_in_mode": {
+          "description": "True when the requested mode's projection retains this stable_key.",
+          "type": "boolean"
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": [
+        "start_line",
+        "end_line",
+        "start_byte",
+        "end_byte"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "start_line": {
+          "description": "One-based first line of the declaration node. Preceding attributes, decorators, `{-# ... #-}` pragmas, and doc comments are excluded even though `signature` may include them; an editor should extend a fold start upward over those lines. A `decorator_start_line` field may be added additively within `ownai.show.v1` later.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "description": "One-based last line of the declaration, including its body. For a brace language this is the closing brace; for Python it is the last line of the suite.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "start_byte": {
+          "description": "Zero-based first byte of the declaration in the decoded UTF-8 source.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_byte": {
+          "description": "Zero-based end byte (exclusive) of the declaration in the decoded UTF-8 source.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "kind": {
+      "description": "The exhaustive declaration kind. Every ItemKind in ownai-core maps to exactly one value.",
+      "enum": [
+        "module",
+        "type",
+        "type_alias",
+        "constructor",
+        "field",
+        "variant",
+        "trait",
+        "trait_implementation",
+        "associated_type",
+        "type_family",
+        "pattern_synonym",
+        "function",
+        "method",
+        "value",
+        "constant",
+        "static",
+        "port",
+        "operator",
+        "foreign_block"
+      ]
+    }
+  }
+}
