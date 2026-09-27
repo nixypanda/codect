@@ -171,8 +171,9 @@ if test_case == "local" then
     return buf and vim.api.nvim_buf_is_loaded(buf)
       and table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"):find("x: u128", 1, true)
   end, 20), "mutable snapshot refresh reused stale projection")
+  local focused = current.files.working[1].layout.b.file.bufnr
   vim.cmd("DiffviewClose")
-  assert(not vim.api.nvim_buf_is_valid(workbuf), "focused worktree scratch buffer leaked on close")
+  assert(not vim.api.nvim_buf_is_valid(focused), "focused worktree scratch buffer leaked on close")
 end
 if test_case == "root" then
   local root = run({ "git", "rev-list", "--max-parents=0", "HEAD" }, tmp)
