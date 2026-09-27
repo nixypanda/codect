@@ -3864,6 +3864,47 @@ mod tests {
     }
 
     #[test]
+    fn the_tree_keeps_a_quiet_selected_row_when_the_body_has_focus() {
+        use crate::theme::{Capability, Flavor};
+
+        for flavor in [Flavor::Dark, Flavor::Light] {
+            let mut model = two_files();
+            model.theme = Theme::new(flavor, Capability::TrueColor);
+
+            let focused = render(&model, 100, 20);
+            let focused_row = (0..focused.area.height)
+                .find(|&y| {
+                    focused
+                        .cell((2, y))
+                        .is_some_and(|cell| cell.symbol() == "▌")
+                })
+                .expect("selected file row");
+            assert_eq!(focused.cell((2, focused_row)).unwrap().symbol(), "▌");
+            assert_eq!(
+                focused.cell((3, focused_row)).unwrap().bg,
+                model.theme.color(model.theme.palette.selection_bg)
+            );
+
+            model.focus = Pane::Body;
+            let unfocused = render(&model, 100, 20);
+            assert_eq!(unfocused.cell((2, focused_row)).unwrap().symbol(), "▏");
+            assert_eq!(
+                unfocused.cell((3, focused_row)).unwrap().bg,
+                model.theme.color(model.theme.palette.surface_alt)
+            );
+            assert_eq!(
+                unfocused.cell((3, focused_row + 1)).unwrap().bg,
+                model.theme.color(model.theme.palette.bg)
+            );
+        }
+
+        let mut model = two_files();
+        model.theme = Theme::new(Flavor::Dark, Capability::NoColor);
+        model.focus = Pane::Body;
+        assert!(buffer_text(&render(&model, 100, 20)).contains("▏a.rs"));
+    }
+
+    #[test]
     fn nerd_icons_render_and_leave_labels_intact() {
         let build = || {
             model_with(vec![
