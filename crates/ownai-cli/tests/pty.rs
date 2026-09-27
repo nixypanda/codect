@@ -90,7 +90,19 @@ fn tui_diff_starts_and_quits_in_a_pty() {
     repo.commit("type change");
 
     assert_eq!(
-        run_in_pty(&repo, &["tui", "diff", "--mode", "types", "HEAD~1", "HEAD"]),
+        run_in_pty(
+            &repo,
+            &["tui", "diff", "range", "--mode", "types", "HEAD~1", "HEAD"]
+        ),
+        0
+    );
+    assert_eq!(
+        run_in_pty(
+            &repo,
+            &[
+                "tui", "diff", "commits", "--mode", "types", "HEAD~1", "HEAD"
+            ]
+        ),
         0
     );
 }

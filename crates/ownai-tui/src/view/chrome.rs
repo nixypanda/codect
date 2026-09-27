@@ -169,6 +169,9 @@ fn hints(model: &Model) -> String {
         Some(Overlay::Search(_)) => "type to search   Enter next   Esc cancel ".to_owned(),
         Some(Overlay::Help) => "Esc close ".to_owned(),
         None => match (model.focus, &model.content) {
+            (Pane::Commits, _) => {
+                "j/k choose commit   Tab files   Ctrl-P commands   ? help ".to_owned()
+            }
             (Pane::Tree, _) => {
                 "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ".to_owned()
             }
