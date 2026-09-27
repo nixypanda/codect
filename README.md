@@ -22,9 +22,8 @@ shell automatically via `.envrc`.
 
 ## Install with Nix
 
-The flake provides native packages for both Intel (`x86_64-darwin`) and Apple
-Silicon (`aarch64-darwin`) Macs. From a checkout, install the package into your
-user profile with:
+The flake provides native packages for `x86_64` and `aarch64` on both macOS
+and Linux. From a checkout, install the package into your user profile with:
 
 ```sh
 nix profile install .
@@ -37,7 +36,7 @@ nix run . -- --help
 ```
 
 When installing from GitHub, replace `.` with `github:nixypanda/ownai`. Nix
-automatically selects the package matching the Mac on which the command runs.
+automatically selects the package matching the current system.
 To update an installation made from this checkout, run
 `nix profile upgrade ownai`.
 
@@ -54,6 +53,7 @@ This is equivalent to:
 ```text
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p ownai-tui --features bench --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
 cargo tree -e features -p ownai-git
@@ -67,6 +67,10 @@ their unavoidable transitive implications.
 The final `cargo build` proves the terminal frontend is optional: with
 `--no-default-features`, `ratatui`, `crossterm`, `terminal-colorsaurus`,
 `syntect`, and `two-face` must not appear in `ownai-cli`'s dependency tree.
+`just check-workspace-nodefault` also checks this dependency tree.
+
+The Neovim plugin has a separate headless suite (`just test-nvim`) and a Nix
+flake check (`nix flake check`).
 
 Individual recipes are available as `just build`, `just test`, `just format`,
 `just check-workspace-clippy`, `just check-workspace-features`, and
@@ -105,6 +109,11 @@ the stage-zero blob bytes; worktree reads tracked regular files on disk and
 does not follow symlinks. Mutable snapshot IDs are labels, so integrations
 must refresh after staging or file writes. Unsaved editor buffer bytes are not
 part of the worktree snapshot.
+
+The Neovim plugin provides semantic folds over editable source buffers and an
+optional, version-pinned Diffview integration for focused history and local
+changes. See [editors/nvim/README.md](./editors/nvim/README.md) for setup,
+commands, and compatibility details.
 
 `--path`/`-p` is repeatable and scopes a command to a file or directory (a
 directory includes everything beneath it); a path that names nothing in the

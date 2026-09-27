@@ -1,20 +1,26 @@
-# OwnAI MVP Technical Design
+# OwnAI Technical Design
 
 ## 1. Purpose and authority
 
-This document specifies how to implement the OwnAI MVP. It is intended to be detailed enough for an implementation agent to work from without inventing architecture or product behavior.
+This document records the implemented OwnAI architecture and the contracts
+that future changes must preserve. Section 19 retains the original delivery
+sequence as historical context.
 
 [PRODUCT.md](./PRODUCT.md) is authoritative for product behavior and scope. If this document conflicts with the product document, follow the product document and update this document in the same change.
 
-The MVP supports:
+The current implementation supports:
 
 - Elm, Haskell, Python, and Rust source files.
 - Types and Signatures projection modes.
 - Showing a projection for a Git commit.
-- Diffing projections from two Git commits.
+- Diffing projections from two Git commits in text or JSON; JSON also compares
+  the index, tracked worktree, and empty tree.
 - Narrowing a projection to selected repository paths on both commands.
 
-The MVP does not perform type inference, expand macros, inspect function bodies, or implement Public and Full modes. It reads committed blobs; the one exception is the editor projection surface (section 14.2), which may read the worktree or standard input and remains strictly read-only.
+OwnAI does not perform type inference, expand macros, inspect function bodies,
+or implement Public and Full projection modes. The editor projection surface
+(section 14.2) may read the worktree or standard input. JSON snapshot diffs
+(section 14.3) may read the index and tracked worktree. All paths are read-only.
 
 ## 2. Technical decisions
 
@@ -31,11 +37,13 @@ The MVP does not perform type inference, expand macros, inspect function bodies,
 | Errors | Typed library errors with `thiserror`; user-facing reports with `miette` |
 | Testing | Fixture and snapshot tests, plus end-to-end CLI tests over temporary Git repositories |
 
-The engine and CLI are compiled into one executable. There is no daemon, IPC protocol, plugin host, LSP client, or MCP server in the MVP.
+The engine, CLI, and optional terminal frontend are compiled into one
+executable. The Neovim plugin invokes that executable; there is no daemon, IPC
+protocol, plugin host, LSP client, or MCP server.
 
 ## 3. Workspace layout
 
-Create this workspace:
+The workspace is organized as follows:
 
 ```text
 Cargo.toml
@@ -226,7 +234,9 @@ Do not add an async runtime. All MVP work is local and synchronous.
 
 Keep `default-features = false`. Enable only:
 
-- `revision`: revision parsing, peeling, and merge-base support. This currently brings `index` transitively; do not separately use the index in the MVP.
+- `revision`: revision parsing, peeling, and merge-base support. This brings
+  `index` transitively; `ownai-git` reads stage-zero index blobs for JSON
+  snapshot diffs.
 - `sha1`: normal Git object IDs.
 - `sha256`: SHA-256 repositories.
 - `auto-chain-error`: useful error sources for CLI diagnostics.
@@ -427,7 +437,7 @@ repository path + revision + path selection
   → discover repository
   → resolve revision to one commit
   → traverse commit tree
-  → select .elm and .rs blobs
+  → select .elm, .hs, .py, .pyi, and .rs blobs
   → reject selected paths absent from the revision (before any blob read)
   → keep only paths matching the path scope
   → read each remaining blob
@@ -456,9 +466,17 @@ base revision + target revision + path selection
 
 A source blob change that produces the same projection produces no output. This is the defining invariant of focused diffing.
 
+For `diff --format json`, the engine resolves each side as a commit, `:index`,
+`:worktree`, or `:empty`. The canonical Git empty-tree object ID is an alias
+for the empty side. It projects supported paths in raw path-byte order and
+omits equal canonical projections. Index entries come from stage-zero blobs;
+worktree entries come from tracked regular files on disk without following
+symlinks. Mutable snapshot names are labels rather than content hashes.
+
 ## 8. Git layer using `gix`
 
-`ownai-git` is read-only. It owns repository discovery, revision resolution, commit peeling, tree traversal, and blob reads.
+`ownai-git` is read-only. It owns repository discovery, revision resolution,
+commit peeling, tree traversal, stage-zero index enumeration, and blob reads.
 
 Expose OwnAI-owned values:
 
@@ -509,7 +527,7 @@ The concrete implementation wraps `gix::Repository`, but callers must not see th
 
 Use `gix` revision parsing and require the result to identify one object. Peel annotated tags and other commit-ish objects to a commit.
 
-MVP-supported forms:
+Supported commit forms:
 
 - Full and unambiguous abbreviated object IDs.
 - `HEAD`.
@@ -522,7 +540,8 @@ Reject ranges such as `A..B` and `A...B` when passed as one argument. The `diff`
 ### 8.3 Tree traversal
 
 - Recursively visit each commit tree.
-- Retain regular and executable blob entries ending in `.elm` or `.rs`.
+- Retain regular and executable blob entries for supported Elm, Haskell,
+  Python, and Rust paths (including Python `.pyi` stubs).
 - Ignore directories after descending into them.
 - Ignore symlinks, Git links/submodules, and unsupported file types.
 - Do not perform rename detection.
@@ -786,8 +805,8 @@ The binary name is `ownai`.
 Commands:
 
 ```text
-ownai show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-ownai diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+ownai show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+ownai diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 Rules:
@@ -796,7 +815,8 @@ Rules:
 - `show` accepts `--format <text|json>` (default `text`) and the
   `--stdin`/`--worktree` input forms; section 14.2 defines the JSON document.
 - `--mode` is required; do not introduce a default before product validation.
-- Both diff revisions are required.
+- Both diff revisions are required. Text diff requires commits; JSON diff
+  additionally accepts `:index`, `:worktree`, and `:empty`.
 - `--path`/`-p` and `--area`/`-a` are mutually exclusive; passing both is a usage error that exits `2` through `clap`. Each is individually repeatable, and a repeated option forms a union of its selections.
 - `--path`/`-p` narrows the projection to the named files or directories; a directory includes every file beneath it. Matching is byte-exact and boundary-aware.
 - Paths resolve relative to the current directory. An absolute path must be inside the repository, `..` may climb but may not leave it, and in a bare repository relative paths resolve against the repository root. Resolution is lexical and never consults the filesystem.
@@ -960,6 +980,31 @@ Crate placement:
 - `ownai-cli` owns the JSON types (`src/json.rs`) and serialization. The schema
   and golden fixtures are referenced by the CLI test suite, never by
   `ownai-core`.
+
+### 14.3 Focused snapshot diff document (`ownai.diff.v1`)
+
+`ownai diff --format json` emits the schema in
+[`docs/schema/ownai.diff.v1.json`](./schema/ownai.diff.v1.json). The root
+contains `schema`, `mode`, `base`, `target`, and `files`. Each snapshot has
+a `kind` (`commit`, `index`, `worktree`, or `empty`), the requested
+`revision`, and an `id`. A commit ID is resolved; `:index` and
+`:worktree` IDs are mutable labels, so callers must refresh after staging or
+disk writes.
+
+Each changed file has an escaped repository `path`, `language`, `status`
+(`added`, `deleted`, or `modified`), `base` and `target` sides, and
+`equal: false`. An absent side is `null`; a present side contains its
+`snapshot_id`, canonical `projection`, and declaration `outline`. Files
+whose projected text is equal are omitted. The stage-zero index supplies
+`:index`; `:worktree` reads tracked regular files from disk and does not
+include unsaved editor buffers or untracked files. Text diff retains its
+commit-only behavior.
+
+The in-repository Neovim plugin uses this document for Diffview. Its adapter
+is guarded by hashes of a specific Diffview revision because it touches
+private Diffview internals. See
+[`editors/nvim/README.md`](../editors/nvim/README.md) for the pin and
+supported workflows.
 
 ## 15. Diagnostics and failure behavior
 
@@ -1156,6 +1201,16 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
 - No test launches an editor, writes repository data, or depends on the
   developer's terminal configuration.
 
+### 16.7 JSON and Neovim integration tests
+
+The CLI tests compare `ownai.show.v1` and `ownai.diff.v1` documents against
+golden fixtures and their committed JSON schemas. Snapshot diff tests cover
+commit, index, worktree, and empty inputs, including staged and unstaged
+changes. `just test-nvim` runs the plugin's headless Lua suite against the
+built binary. `nix flake check` includes the same plugin suite in a temporary
+Git repository. Diffview integration tests additionally require the pinned
+Diffview checkout described in the plugin README and are run separately.
+
 ## 17. Performance constraints
 
 Correctness and stable output take priority over concurrency in the MVP.
@@ -1344,7 +1399,8 @@ Review the `cargo tree` command whenever dependencies change. It must show no un
 
 ## 19. Implementation sequence
 
-Implement in this order. Do not begin a later phase while the current phase's acceptance gate is failing.
+The following sequence records the completed MVP delivery. It is historical
+context, not a list of unimplemented work.
 
 ### Phase 1: Workspace and core contracts
 
@@ -1445,9 +1501,9 @@ invariance test; a body-only change in either language produces an empty focused
 diff; mixed four-language `show` orders by raw path bytes; the full workspace
 check passes.
 
-## 20. Completion definition
+## 20. Original MVP completion gate (historical)
 
-The MVP implementation is complete when:
+The original MVP gate required:
 
 - Both documented commands operate entirely through `gix` and never invoke Git.
 - Elm, Haskell, Python, and Rust projections satisfy every product rule in both modes.

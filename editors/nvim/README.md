@@ -196,7 +196,9 @@ changes. The dotfiles configuration does not currently install OwnAI itself.
 The `ownai.diff.v1` CLI accepts commits, `:index`, `:worktree`, and Git's empty
 tree. Root commits therefore show focused added-file projections. Rename rows
 currently use Diffview's destination path; rename-aware matching and a separate
-old-path row are not provided.
+old-path row are not provided. Unmerged index entries have no stage-zero
+snapshot mapping in this integration, so conflicting rows are omitted from
+focused file lists.
 
 ## Health
 
