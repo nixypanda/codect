@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use ownai_core::{AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath};
-use ownai_engine::{EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_engine::{CommitStep, EngineError, FileDiff, Selection, SelectionGroup};
 use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
@@ -19,8 +19,8 @@ use crate::icons::Icons;
 use crate::theme::Theme;
 use crate::view::diff::layout_diff;
 use crate::view::geom::{
-    Edge, PaneSlot, body_layout, frame_areas, gutter_width, pane_block, split_with_dividers,
-    window_offset,
+    Edge, PaneSlot, body_layout, commit_offset, frame_areas, gutter_width, pane_block,
+    split_with_dividers, window_offset,
 };
 
 /// At or above this width the tree and content render side by side.
@@ -43,6 +43,7 @@ const TREE_STEP: u16 = 5;
 /// the content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pane {
+    Commits,
     Tree,
     Body,
     Diff,
@@ -168,6 +169,8 @@ pub enum Action {
     Help,
     Scope,
     Mode,
+    SwitchToRange,
+    SwitchToCommits,
     EditShowRevision,
     EditBaseRevision,
     EditTargetRevision,
@@ -314,7 +317,14 @@ pub enum LoadRequest {
         target: String,
         mode: ProjectionMode,
         selection: Selection,
+        view: DiffView,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiffView {
+    Range,
+    Commits,
 }
 
 impl LoadRequest {
@@ -339,12 +349,14 @@ impl LoadRequest {
                 base,
                 target,
                 selection,
+                view,
                 ..
             } => Self::Diff {
                 base: base.clone(),
                 target: target.clone(),
                 mode,
                 selection: selection.clone(),
+                view: *view,
             },
         }
     }
@@ -370,12 +382,14 @@ impl LoadRequest {
                 target,
                 mode,
                 selection,
+                view,
                 ..
             } => Self::Diff {
                 base,
                 target: target.clone(),
                 mode: *mode,
                 selection: selection.clone(),
+                view: *view,
             },
             Self::Show { .. } => self.clone(),
         }
@@ -388,12 +402,14 @@ impl LoadRequest {
                 base,
                 mode,
                 selection,
+                view,
                 ..
             } => Self::Diff {
                 base: base.clone(),
                 target,
                 mode: *mode,
                 selection: selection.clone(),
+                view: *view,
             },
             Self::Show { .. } => self.clone(),
         }
@@ -408,12 +424,17 @@ impl LoadRequest {
                 selection,
             },
             Self::Diff {
-                base, target, mode, ..
+                base,
+                target,
+                mode,
+                view,
+                ..
             } => Self::Diff {
                 base: base.clone(),
                 target: target.clone(),
                 mode: *mode,
                 selection,
+                view: *view,
             },
         }
     }
@@ -422,6 +443,21 @@ impl LoadRequest {
     pub fn selection(&self) -> &Selection {
         match self {
             Self::Show { selection, .. } | Self::Diff { selection, .. } => selection,
+        }
+    }
+
+    pub fn with_diff_view(&self, view: DiffView) -> Self {
+        let mut request = self.clone();
+        if let Self::Diff { view: current, .. } = &mut request {
+            *current = view;
+        }
+        request
+    }
+
+    pub fn diff_view(&self) -> Option<DiffView> {
+        match self {
+            Self::Diff { view, .. } => Some(*view),
+            Self::Show { .. } => None,
         }
     }
 
@@ -493,6 +529,15 @@ pub enum Msg {
         request: LoadRequest,
         result: Result<Content, Box<EngineError>>,
     },
+    HistoryLoaded {
+        request: LoadRequest,
+        result: Result<(Vec<CommitStep>, Content), Box<EngineError>>,
+    },
+    StepLoaded {
+        request: LoadRequest,
+        index: usize,
+        result: Result<Content, Box<EngineError>>,
+    },
     /// The area configuration finished loading for the scope chooser.
     AreasLoaded(Result<AreaSet, Box<EngineError>>),
 }
@@ -501,7 +546,14 @@ pub enum Msg {
 /// `update`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Cmd {
-    Load { request: LoadRequest },
+    Load {
+        request: LoadRequest,
+    },
+    LoadStep {
+        request: LoadRequest,
+        index: usize,
+        step: CommitStep,
+    },
     LoadAreas,
 }
 
@@ -656,6 +708,12 @@ pub struct Model {
     pub mode: ProjectionMode,
     pub scope_label: String,
     pub content: Content,
+    pub commits: Arc<[CommitStep]>,
+    /// Navigation target while input is being batched; the displayed diff still
+    /// belongs to `commit_cursor` until its projection succeeds.
+    pub commit_target: Option<usize>,
+    pub commit_cursor: usize,
+    pub commit_scroll: usize,
     /// Paths the tree shows, in raw path-byte order.
     pub visible: Arc<[RepoPath]>,
     /// Directories the user folded. Everything is expanded by default.
@@ -694,6 +752,31 @@ pub struct Model {
 }
 
 impl Model {
+    fn navigation_commit(&self) -> usize {
+        self.commit_target.unwrap_or(self.commit_cursor)
+    }
+
+    /// The revisions currently compared by the visible diff.
+    pub fn diff_revisions(&self) -> Option<(String, String)> {
+        let LoadRequest::Diff {
+            base, target, view, ..
+        } = &self.request
+        else {
+            return None;
+        };
+        if *view == DiffView::Commits {
+            if let Some(step) = self.commits.get(self.commit_cursor) {
+                let parent = step.parent_id.to_string();
+                let commit = step.commit_id.to_string();
+                return Some((
+                    parent[..parent.len().min(7)].to_owned(),
+                    commit[..commit.len().min(7)].to_owned(),
+                ));
+            }
+        }
+        Some((base.clone(), target.clone()))
+    }
+
     /// A model with no projection loaded yet.
     pub fn new(
         root: String,
@@ -712,6 +795,10 @@ impl Model {
             mode,
             scope_label,
             content: Content::Show(Arc::from(Vec::new())),
+            commits: Arc::from(Vec::new()),
+            commit_target: None,
+            commit_cursor: 0,
+            commit_scroll: 0,
             visible: Arc::from(Vec::new()),
             collapsed: BTreeSet::new(),
             rows: Arc::from(Vec::new()),
@@ -1010,6 +1097,9 @@ impl Model {
 
 /// The panes `Tab` cycles through, for the current content.
 fn focus_order(model: &Model) -> &'static [Pane] {
+    if model.request.diff_view() == Some(DiffView::Commits) {
+        return &[Pane::Commits, Pane::Tree, Pane::Diff];
+    }
     match model.content {
         Content::Show(_) => &[Pane::Tree, Pane::Body],
         Content::Diff(_) => &[Pane::Tree, Pane::Diff],
@@ -1026,7 +1116,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
 
     match msg {
         Msg::Key(key) => handle_key(key, &mut next, &mut cmds),
-        Msg::Mouse(event) => handle_mouse(event, &mut next),
+        Msg::Mouse(event) => handle_mouse(event, &mut next, &mut cmds),
         Msg::Resize { width, height } => {
             next.width = width;
             next.height = height;
@@ -1045,9 +1135,19 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
             next.pending = None;
             match result {
                 Ok(content) => {
+                    let keep_commits = matches!((&next.request, &request),
+                        (LoadRequest::Diff { base: old_base, target: old_target, .. },
+                         LoadRequest::Diff { base: new_base, target: new_target, view: DiffView::Range, .. })
+                         if old_base == new_base && old_target == new_target);
                     next.mode = request.mode();
                     next.scope_label = request.scope_label();
                     next.request = request;
+                    if !keep_commits {
+                        next.commits = Arc::from(Vec::new());
+                        next.commit_target = None;
+                        next.commit_cursor = 0;
+                        next.commit_scroll = 0;
+                    }
                     next.install(content, true);
                     next.diagnostic = None;
                     next.diagnostic_ttl = 0;
@@ -1057,6 +1157,78 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
                     next.diagnostic = Some(error.to_string());
                     next.diagnostic_ttl = DIAGNOSTIC_TICKS;
                 }
+            }
+        }
+        Msg::HistoryLoaded { request, result } => {
+            next.pending = None;
+            match result {
+                Ok((steps, content)) => {
+                    let preferred = match (&next.request, &request) {
+                        (
+                            LoadRequest::Diff {
+                                base: old_base,
+                                target: old_target,
+                                ..
+                            },
+                            LoadRequest::Diff {
+                                base: new_base,
+                                target: new_target,
+                                ..
+                            },
+                        ) if old_base == new_base && old_target == new_target => next
+                            .commits
+                            .get(next.commit_cursor)
+                            .map(|step| step.commit_id.clone()),
+                        _ => None,
+                    };
+                    next.mode = request.mode();
+                    next.scope_label = request.scope_label();
+                    next.request = request;
+                    next.commits = steps.into();
+                    next.commit_target = None;
+                    next.commit_cursor = 0;
+                    next.commit_scroll = 0;
+                    next.install(content, true);
+                    next.diagnostic = None;
+                    next.diagnostic_ttl = 0;
+                    next.focus = Pane::Commits;
+                    if let Some(index) = preferred
+                        .and_then(|id| next.commits.iter().position(|step| step.commit_id == id))
+                        && index > 0
+                    {
+                        cmds.push(Cmd::LoadStep {
+                            request: next.request.clone(),
+                            index,
+                            step: next.commits[index].clone(),
+                        });
+                    }
+                }
+                Err(error) => {
+                    next.diagnostic = Some(error.to_string());
+                    next.diagnostic_ttl = DIAGNOSTIC_TICKS;
+                }
+            }
+        }
+        Msg::StepLoaded {
+            request,
+            index,
+            result,
+        } => {
+            next.pending = None;
+            next.commit_target = None;
+            match result {
+                Ok(content) if request == next.request && index < next.commits.len() => {
+                    next.commit_cursor = index;
+                    next.install(content, true);
+                    sync_commit_scroll(&mut next);
+                    next.diagnostic = None;
+                    next.diagnostic_ttl = 0;
+                }
+                Err(error) => {
+                    next.diagnostic = Some(error.to_string());
+                    next.diagnostic_ttl = DIAGNOSTIC_TICKS;
+                }
+                _ => {}
             }
         }
         Msg::AreasLoaded(result) => {
@@ -1074,11 +1246,43 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
     }
 
     // A newly emitted load marks the model busy so the view can spin.
-    if let Some(Cmd::Load { request }) = cmds.iter().find(|cmd| matches!(cmd, Cmd::Load { .. })) {
+    if let Some(request) = cmds.iter().find_map(|cmd| match cmd {
+        Cmd::Load { request } | Cmd::LoadStep { request, .. } => Some(request),
+        Cmd::LoadAreas => None,
+    }) {
         next.pending = Some(request.clone());
     }
 
     (next, cmds)
+}
+
+/// Replaces all step projections in one input batch with its final target.
+/// A full reload wins when mode, scope, endpoints, or view also changed.
+pub(crate) fn coalesce_commit_loads(model: &mut Model, cmds: &mut Vec<Cmd>) {
+    let had_step = cmds.iter().any(|cmd| matches!(cmd, Cmd::LoadStep { .. }));
+    if !had_step {
+        return;
+    }
+    cmds.retain(|cmd| !matches!(cmd, Cmd::LoadStep { .. }));
+    if let Some(request) = cmds.iter().rev().find_map(|cmd| match cmd {
+        Cmd::Load { request } => Some(request),
+        _ => None,
+    }) {
+        model.commit_target = None;
+        model.pending = Some(request.clone());
+        return;
+    }
+    if let Some(index) = model.commit_target
+        && let Some(step) = model.commits.get(index)
+    {
+        cmds.push(Cmd::LoadStep {
+            request: model.request.clone(),
+            index,
+            step: step.clone(),
+        });
+    } else {
+        model.pending = None;
+    }
 }
 
 /// Runs the selection-dependent work a frame needs, once per input batch.
@@ -1135,6 +1339,7 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
             model.search = None;
         }
         _ => match model.focus {
+            Pane::Commits => commits_key(key, model, cmds),
             Pane::Tree => tree_key(key, model),
             Pane::Body | Pane::Diff => body_key(key, model),
         },
@@ -1188,6 +1393,22 @@ fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
                 .unwrap_or(0);
             model.overlay = Some(Overlay::Mode { cursor });
         }
+        Action::SwitchToRange | Action::SwitchToCommits => {
+            let view = if action == Action::SwitchToRange {
+                DiffView::Range
+            } else {
+                DiffView::Commits
+            };
+            if model
+                .request
+                .diff_view()
+                .is_some_and(|current| current != view)
+            {
+                cmds.push(Cmd::Load {
+                    request: model.request.with_diff_view(view),
+                });
+            }
+        }
         Action::EditShowRevision if matches!(model.content, Content::Show(_)) => {
             model.overlay = Some(Overlay::Revision {
                 field: RevisionField::Show,
@@ -1219,14 +1440,18 @@ fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
         }
         Action::TreeReset => model.tree_percent = TREE_DEFAULT_PERCENT,
         Action::Top => {
-            if model.focus == Pane::Tree {
+            if model.focus == Pane::Commits {
+                select_commit(model, 0, cmds);
+            } else if model.focus == Pane::Tree {
                 move_cursor_to(model, 0);
             } else {
                 model.body_scroll = 0;
             }
         }
         Action::Bottom => {
-            if model.focus == Pane::Tree {
+            if model.focus == Pane::Commits {
+                select_commit(model, model.commits.len().saturating_sub(1), cmds);
+            } else if model.focus == Pane::Tree {
                 let last = model.rows.len().saturating_sub(1);
                 move_cursor_to(model, last);
             } else {
@@ -1235,7 +1460,13 @@ fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
         }
         Action::PageUp => {
             let step = page_step(model);
-            if model.focus == Pane::Tree {
+            if model.focus == Pane::Commits {
+                select_commit(
+                    model,
+                    model.navigation_commit().saturating_sub(step as usize),
+                    cmds,
+                );
+            } else if model.focus == Pane::Tree {
                 move_cursor(model, -i32::from(step));
             } else {
                 model.body_scroll = model.body_scroll.saturating_sub(step);
@@ -1243,7 +1474,13 @@ fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
         }
         Action::PageDown => {
             let step = page_step(model);
-            if model.focus == Pane::Tree {
+            if model.focus == Pane::Commits {
+                select_commit(
+                    model,
+                    model.navigation_commit().saturating_add(step as usize),
+                    cmds,
+                );
+            } else if model.focus == Pane::Tree {
                 move_cursor(model, i32::from(step));
             } else {
                 model.body_scroll = model
@@ -1290,6 +1527,15 @@ pub(crate) fn palette_entries(model: &Model) -> Vec<(Action, &'static str, &'sta
         Content::Diff(_) => {
             entries.push((Action::EditBaseRevision, "Edit base revision", "b"));
             entries.push((Action::EditTargetRevision, "Edit target revision", "t"));
+            match model.request.diff_view() {
+                Some(DiffView::Range) => {
+                    entries.push((Action::SwitchToCommits, "Switch to commits view", ""))
+                }
+                Some(DiffView::Commits) => {
+                    entries.push((Action::SwitchToRange, "Switch to range view", ""))
+                }
+                None => {}
+            }
         }
     }
     entries.extend([
@@ -1852,6 +2098,54 @@ fn cycle_focus(model: &mut Model, forward: bool) {
     model.focus = order[next];
 }
 
+fn select_commit(model: &mut Model, index: usize, cmds: &mut Vec<Cmd>) {
+    if model.request.diff_view() != Some(DiffView::Commits) || model.commits.is_empty() {
+        return;
+    }
+    let index = index.min(model.commits.len() - 1);
+    model.commit_target = (index != model.commit_cursor).then_some(index);
+    if index != model.commit_cursor {
+        cmds.push(Cmd::LoadStep {
+            request: model.request.clone(),
+            index,
+            step: model.commits[index].clone(),
+        });
+    } else {
+        model.pending = None;
+    }
+}
+
+fn sync_commit_scroll(model: &mut Model) {
+    let (_, content, _) = frame_areas(model.width, model.height);
+    let layout = body_layout(content, model.tree_percent, true, true, model.focus);
+    let Some(slot) = layout
+        .slots
+        .iter()
+        .find(|slot| slot.pane == PaneSlot::Commits)
+    else {
+        return;
+    };
+    let inner = pane_block("", false, &model.theme, slot.edge).inner(slot.outer);
+    model.commit_scroll = commit_offset(
+        model.commit_cursor,
+        model.commit_scroll,
+        model.commits.len(),
+        inner.height as usize,
+    );
+}
+
+fn commits_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
+    match key {
+        Key::Down | Key::Char('j') => {
+            select_commit(model, model.navigation_commit().saturating_add(1), cmds)
+        }
+        Key::Up | Key::Char('k') => {
+            select_commit(model, model.navigation_commit().saturating_sub(1), cmds)
+        }
+        _ => {}
+    }
+}
+
 fn tree_key(key: Key, model: &mut Model) {
     match key {
         Key::Down | Key::Char('j') => move_cursor(model, 1),
@@ -1926,14 +2220,20 @@ const MOUSE_SCROLL_STEP: i32 = 3;
 /// The pane under the pointer takes focus, so a click or wheel acts on exactly
 /// what the user points at. Mouse input is ignored while a modal overlay is
 /// open and when the terminal is too small to draw the browser.
-fn handle_mouse(event: Mouse, model: &mut Model) {
+fn handle_mouse(event: Mouse, model: &mut Model, cmds: &mut Vec<Cmd>) {
     if model.overlay.is_some() || model.width < SINGLE_PANE_MIN_WIDTH || model.height < MIN_HEIGHT {
         return;
     }
 
     let is_diff = matches!(model.content, Content::Diff(_));
     let (_, content, _) = frame_areas(model.width, model.height);
-    let layout = body_layout(content, model.tree_percent, is_diff, model.focus);
+    let layout = body_layout(
+        content,
+        model.tree_percent,
+        is_diff,
+        model.request.diff_view() == Some(DiffView::Commits),
+        model.focus,
+    );
     let point = Position {
         x: event.column,
         y: event.row,
@@ -1944,6 +2244,39 @@ fn handle_mouse(event: Mouse, model: &mut Model) {
     let inner = pane_block("", false, &model.theme, slot.edge).inner(slot.outer);
 
     match slot.pane {
+        PaneSlot::Commits => {
+            model.focus = Pane::Commits;
+            match event.kind {
+                MouseKind::Click => {
+                    if inner.contains(point) {
+                        let offset = commit_offset(
+                            model.commit_cursor,
+                            model.commit_scroll,
+                            model.commits.len(),
+                            inner.height as usize,
+                        );
+                        let index = offset + usize::from(event.row - inner.y);
+                        if index < model.commits.len() {
+                            select_commit(model, index, cmds);
+                        }
+                    }
+                }
+                MouseKind::ScrollUp => select_commit(
+                    model,
+                    model
+                        .navigation_commit()
+                        .saturating_sub(MOUSE_SCROLL_STEP as usize),
+                    cmds,
+                ),
+                MouseKind::ScrollDown => select_commit(
+                    model,
+                    model
+                        .navigation_commit()
+                        .saturating_add(MOUSE_SCROLL_STEP as usize),
+                    cmds,
+                ),
+            }
+        }
         PaneSlot::Tree => {
             model.focus = Pane::Tree;
             match event.kind {
@@ -2209,7 +2542,200 @@ mod tests {
             target: "HEAD".to_owned(),
             mode: ProjectionMode::Types,
             selection: Selection::all(),
+            view: DiffView::Range,
         }
+    }
+
+    fn commit_steps(count: usize) -> Vec<CommitStep> {
+        use ownai_git::{HashKind, ObjectId};
+        (0..count)
+            .map(|index| CommitStep {
+                parent_id: ObjectId {
+                    kind: HashKind::Sha1,
+                    bytes: vec![index as u8; 20],
+                },
+                commit_id: ObjectId {
+                    kind: HashKind::Sha1,
+                    bytes: vec![(index + 1) as u8; 20],
+                },
+                subject: format!("Commit subject {index}"),
+            })
+            .collect()
+    }
+
+    fn commits_model(count: usize) -> Model {
+        let mut model = diff_model(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+        model.request = diff_request().with_diff_view(DiffView::Commits);
+        model.commits = commit_steps(count).into();
+        model.focus = Pane::Commits;
+        model
+    }
+
+    #[test]
+    fn empty_commit_history_installs_a_diff_and_focuses_commits() {
+        let model = diff_model(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+        let request = diff_request().with_diff_view(DiffView::Commits);
+        let (next, commands) = update(
+            Msg::HistoryLoaded {
+                request: request.clone(),
+                result: Ok((Vec::new(), Content::Diff(Vec::new().into()))),
+            },
+            &model,
+        );
+        assert!(commands.is_empty());
+        assert_eq!(next.request, request);
+        assert_eq!(next.focus, Pane::Commits);
+        assert!(next.commits.is_empty());
+        assert!(next.visible.is_empty());
+        assert!(next.selected.is_none());
+        let (unchanged, commands) = update(Msg::Key(Key::Down), &next);
+        assert!(commands.is_empty());
+        assert_eq!(unchanged.commit_cursor, 0);
+    }
+
+    #[test]
+    fn commit_picker_renders_rows_and_selected_revision_labels() {
+        let model = commits_model(12);
+        let text = buffer_text(&render(&model, 100, 20));
+        assert!(text.contains("Commits"));
+        assert!(text.contains("Files"));
+        assert!(text.contains("Commit sub"));
+        assert!(text.contains("1/12"));
+        assert!(text.contains("0000000..0101010"));
+
+        let mut empty = commits_model(0);
+        empty.content = Content::Diff(Vec::new().into());
+        let text = buffer_text(&render(&empty, 100, 20));
+        assert!(text.contains("no commits in range"));
+    }
+
+    #[test]
+    fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
+        let model = commits_model(12);
+        let (clicked, commands) = update(Msg::Mouse(click(4, 3)), &model);
+        assert_eq!(clicked.focus, Pane::Commits);
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::LoadStep { index: 1, .. }]
+        ));
+
+        let (wheeled, commands) = update(Msg::Mouse(scroll(4, 3, false)), &model);
+        assert_eq!(wheeled.focus, Pane::Commits);
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::LoadStep { index: 3, .. }]
+        ));
+
+        let mut narrow = model.clone();
+        narrow.width = 60;
+        let (_, commands) = update(Msg::Mouse(click(4, 3)), &narrow);
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::LoadStep { index: 1, .. }]
+        ));
+
+        let (files, commands) = update(Msg::Mouse(click(4, 11)), &model);
+        assert_eq!(files.focus, Pane::Tree);
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_displayed_step() {
+        let mut model = commits_model(6);
+        let displayed = model.content.clone();
+        let displayed_labels = model.diff_revisions();
+        let mut commands = Vec::new();
+        for key in [Key::Down, Key::Char('j'), Key::Down] {
+            let (next, produced) = update(Msg::Key(key), &model);
+            model = next;
+            commands.extend(produced);
+        }
+        assert_eq!(
+            model.commit_cursor, 0,
+            "the visible step is still the loaded one"
+        );
+        assert_eq!(model.commit_target, Some(3));
+        assert_eq!(commands.len(), 3);
+        coalesce_commit_loads(&mut model, &mut commands);
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::LoadStep { index: 3, .. }]
+        ));
+        assert_eq!(model.content, displayed);
+        assert_eq!(model.diff_revisions(), displayed_labels);
+
+        let (loaded, _) = update(
+            Msg::StepLoaded {
+                request: model.request.clone(),
+                index: 3,
+                result: Ok(Content::Diff(
+                    vec![file_diff("a.rs", Some("a\n"), Some("new\n"))].into(),
+                )),
+            },
+            &model,
+        );
+        assert_eq!(loaded.commit_cursor, 3);
+        assert_eq!(loaded.commit_target, None);
+        assert_ne!(loaded.diff_revisions(), displayed_labels);
+        assert_eq!(loaded.selected, model.selected);
+
+        let (failed, commands) = update(
+            Msg::StepLoaded {
+                request: model.request.clone(),
+                index: 3,
+                result: Err(Box::new(EngineError::Selection(
+                    SelectionError::EmptyGroup {
+                        label: "missing".to_owned(),
+                    },
+                ))),
+            },
+            &model,
+        );
+        assert!(commands.is_empty());
+        assert_eq!(failed.commit_cursor, 0);
+        assert_eq!(failed.commit_target, None);
+        assert_eq!(failed.content, displayed);
+        assert_eq!(failed.diff_revisions(), displayed_labels);
+        assert!(failed.diagnostic.is_some());
+    }
+
+    #[test]
+    fn commit_navigation_back_to_loaded_step_cancels_batched_projection() {
+        let mut model = commits_model(3);
+        let mut commands = Vec::new();
+        for key in [Key::Down, Key::Up] {
+            let (next, produced) = update(Msg::Key(key), &model);
+            model = next;
+            commands.extend(produced);
+        }
+        coalesce_commit_loads(&mut model, &mut commands);
+        assert!(commands.is_empty());
+        assert!(model.pending.is_none());
+        assert_eq!(model.commit_target, None);
+    }
+
+    #[test]
+    fn palette_switches_between_range_and_commit_views() {
+        let model = diff_model(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+        assert!(
+            palette_entries(&model)
+                .iter()
+                .any(|(action, ..)| *action == Action::SwitchToCommits)
+        );
+        let mut next = model.clone();
+        let mut commands = Vec::new();
+        apply_action(Action::SwitchToCommits, &mut next, &mut commands);
+        assert_eq!(
+            commands,
+            vec![Cmd::Load {
+                request: diff_request().with_diff_view(DiffView::Commits)
+            }]
+        );
+        assert_eq!(
+            next.request,
+            diff_request(),
+            "view changes after the load succeeds"
+        );
     }
 
     fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {

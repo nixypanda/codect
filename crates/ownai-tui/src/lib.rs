@@ -39,8 +39,8 @@ mod view;
 #[doc(hidden)]
 pub mod bench;
 
-pub use app::LoadRequest;
-use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, settle, update};
+use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, coalesce_commit_loads, settle, update};
+pub use app::{DiffView, LoadRequest};
 pub use icons::IconStyle;
 use icons::Icons;
 use theme::Theme;
@@ -153,6 +153,19 @@ fn run_with<D: Driver>(
         Msg::Loaded {
             result: Err(error), ..
         } => return Err(TuiError::Engine(*error)),
+        Msg::HistoryLoaded {
+            request,
+            result: Ok((steps, content)),
+        } => update(
+            Msg::HistoryLoaded {
+                request,
+                result: Ok((steps, content)),
+            },
+            &model,
+        ),
+        Msg::HistoryLoaded {
+            result: Err(error), ..
+        } => return Err(TuiError::Engine(*error)),
         _ => unreachable!("the startup effect always produces Loaded"),
     };
     model = initial;
@@ -190,15 +203,20 @@ fn run_with<D: Driver>(
             next = updated;
             cmds.extend(produced);
         }
+        coalesce_commit_loads(&mut next, &mut cmds);
         next = settle(next);
         if !cmds.is_empty() {
             // Draw the busy state before a blocking effect runs.
             session.driver().draw(&next)?;
         }
-        for cmd in cmds {
+        let mut index = 0;
+        while index < cmds.len() {
+            let cmd = cmds[index].clone();
             let completed = interpret(&engine, cmd);
-            let (updated, _) = update(completed, &next);
+            let (updated, produced) = update(completed, &next);
             next = updated;
+            cmds.extend(produced);
+            index += 1;
         }
         model = next;
         dirty = true;
@@ -226,12 +244,59 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                     target,
                     mode,
                     selection,
+                    view: DiffView::Range,
                 } => engine
                     .diff(base, target, *mode, selection)
                     .map(Content::from),
+                LoadRequest::Diff {
+                    base,
+                    target,
+                    mode,
+                    selection,
+                    view: DiffView::Commits,
+                } => {
+                    let result = engine.first_parent_steps(base, target).and_then(|steps| {
+                        let content = match steps.first() {
+                            Some(step) => engine
+                                .diff(
+                                    &step.parent_id.to_string(),
+                                    &step.commit_id.to_string(),
+                                    *mode,
+                                    selection,
+                                )?
+                                .into(),
+                            None => Content::Diff(Vec::new().into()),
+                        };
+                        Ok((steps, content))
+                    });
+                    return Msg::HistoryLoaded {
+                        request,
+                        result: result.map_err(Box::new),
+                    };
+                }
             }
             .map_err(Box::new);
             Msg::Loaded { request, result }
+        }
+        Cmd::LoadStep {
+            request,
+            index,
+            step,
+        } => {
+            let result = engine
+                .diff(
+                    &step.parent_id.to_string(),
+                    &step.commit_id.to_string(),
+                    request.mode(),
+                    request.selection(),
+                )
+                .map(Content::from)
+                .map_err(Box::new);
+            Msg::StepLoaded {
+                request,
+                index,
+                result,
+            }
         }
         Cmd::LoadAreas => Msg::AreasLoaded(engine.load_areas().map_err(Box::new)),
     }

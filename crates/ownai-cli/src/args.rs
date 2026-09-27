@@ -156,28 +156,52 @@ pub enum TuiCommand {
 
     /// Browse a focused projection diff between two revisions.
     Diff {
-        /// Projection mode to compare.
-        #[arg(long, value_enum)]
-        mode: Mode,
-
-        /// Base revision.
-        #[arg(value_name = "BASE")]
-        base: String,
-
-        /// Target revision.
-        #[arg(value_name = "TARGET")]
-        target: String,
-
-        /// Limit the projection to these paths. Repeatable. A directory includes
-        /// everything beneath it, and paths are relative to the current directory.
-        #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
-        paths: Vec<std::ffi::OsString>,
-
-        /// Select a named area from `.ownai.toml`. Repeatable, and mutually
-        /// exclusive with `--path`.
-        #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
-        areas: Vec<String>,
+        #[command(subcommand)]
+        command: TuiDiffCommand,
     },
+}
+
+/// How a terminal diff traverses its revisions.
+#[cfg(feature = "tui")]
+#[derive(Debug, Subcommand)]
+pub enum TuiDiffCommand {
+    /// Compare the two revisions directly.
+    Range {
+        #[command(flatten)]
+        args: TuiDiffArgs,
+    },
+    /// Browse first-parent commits between the revisions.
+    Commits {
+        #[command(flatten)]
+        args: TuiDiffArgs,
+    },
+}
+
+/// Arguments common to both terminal diff views.
+#[cfg(feature = "tui")]
+#[derive(Debug, clap::Args)]
+pub struct TuiDiffArgs {
+    /// Projection mode to compare.
+    #[arg(long, value_enum)]
+    pub mode: Mode,
+
+    /// Base revision.
+    #[arg(value_name = "BASE")]
+    pub base: String,
+
+    /// Target revision.
+    #[arg(value_name = "TARGET")]
+    pub target: String,
+
+    /// Limit the projection to these paths. Repeatable. A directory includes
+    /// everything beneath it, and paths are relative to the current directory.
+    #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
+    pub paths: Vec<std::ffi::OsString>,
+
+    /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+    /// exclusive with `--path`.
+    #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
+    pub areas: Vec<String>,
 }
 
 /// The two projection modes exposed on the command line.

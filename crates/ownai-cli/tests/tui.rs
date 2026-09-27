@@ -129,15 +129,38 @@ fn the_top_level_help_lists_the_tui_command() {
 #[test]
 fn tui_diff_without_revisions_is_a_usage_error() {
     let repo = repo_with_change();
-    ownai_in(&repo, &["tui", "diff", "--mode", "types"])
+    ownai_in(&repo, &["tui", "diff", "range", "--mode", "types"])
         .assert()
         .code(2);
 }
 
 #[test]
+fn bare_tui_diff_is_rejected_and_lists_both_views() {
+    let repo = repo_with_change();
+    let output = run(&repo, &["tui", "diff"]);
+    assert_eq!(output.status.code(), Some(2));
+    let diagnostic = stderr(&output);
+    assert!(diagnostic.contains("range"), "{diagnostic}");
+    assert!(diagnostic.contains("commits"), "{diagnostic}");
+}
+
+#[test]
+fn commits_view_parses_then_requires_a_terminal() {
+    let repo = repo_with_change();
+    let output = run(
+        &repo,
+        &[
+            "tui", "diff", "commits", "--mode", "types", "HEAD~1", "HEAD",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("terminal"));
+}
+
+#[test]
 fn tui_diff_without_a_mode_is_a_usage_error() {
     let repo = repo_with_change();
-    ownai_in(&repo, &["tui", "diff", "HEAD~1", "HEAD"])
+    ownai_in(&repo, &["tui", "diff", "range", "HEAD~1", "HEAD"])
         .assert()
         .code(2);
 }
@@ -146,7 +169,10 @@ fn tui_diff_without_a_mode_is_a_usage_error() {
 fn tui_diff_without_a_terminal_exits_one_with_a_clean_stdout() {
     let repo = repo_with_change();
 
-    let output = run(&repo, &["tui", "diff", "--mode", "types", "HEAD~1", "HEAD"]);
+    let output = run(
+        &repo,
+        &["tui", "diff", "range", "--mode", "types", "HEAD~1", "HEAD"],
+    );
     assert_eq!(output.status.code(), Some(1));
     assert!(
         output.stdout.is_empty(),

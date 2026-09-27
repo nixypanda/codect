@@ -21,9 +21,9 @@ use ownai_git::GitError;
 
 #[cfg(feature = "tui")]
 use crate::args::IconChoice;
-#[cfg(feature = "tui")]
-use crate::args::TuiCommand;
 use crate::args::{Cli, Command as CliCommand, Format};
+#[cfg(feature = "tui")]
+use crate::args::{TuiCommand, TuiDiffCommand};
 use crate::json;
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
@@ -420,21 +420,20 @@ fn run_tui(
                 label,
             )
         }
-        TuiCommand::Diff {
-            mode,
-            base,
-            target,
-            paths,
-            areas,
-        } => {
-            let selection = selection_for(paths, areas, start, &engine)?;
+        TuiCommand::Diff { command } => {
+            let (view, args) = match command {
+                TuiDiffCommand::Range { args } => (ownai_tui::DiffView::Range, args),
+                TuiDiffCommand::Commits { args } => (ownai_tui::DiffView::Commits, args),
+            };
+            let selection = selection_for(&args.paths, &args.areas, start, &engine)?;
             let label = scope_label(&selection);
             (
                 ownai_tui::LoadRequest::Diff {
-                    base: base.clone(),
-                    target: target.clone(),
-                    mode: (*mode).into(),
+                    base: args.base.clone(),
+                    target: args.target.clone(),
+                    mode: args.mode.into(),
                     selection,
+                    view,
                 },
                 label,
             )
@@ -706,6 +705,7 @@ fn git_context(error: &GitError) -> DiagnosticContext {
             ..DiagnosticContext::default()
         },
         GitError::ObjectRead { repository, .. }
+        | GitError::CommitDecode { repository, .. }
         | GitError::TreeTraversal { repository, .. }
         | GitError::InvalidRepoPath { repository, .. }
         | GitError::InvalidObjectId { repository, .. } => DiagnosticContext {
@@ -716,6 +716,7 @@ fn git_context(error: &GitError) -> DiagnosticContext {
             repository: Some(repository.clone()),
             ..DiagnosticContext::default()
         },
+        GitError::NotFirstParentAncestor { .. } => DiagnosticContext::default(),
     }
 }
 
@@ -728,6 +729,10 @@ fn git_message(error: &GitError) -> &'static str {
         GitError::RevisionRange { .. } => "a revision range is not supported",
         GitError::NotPeelable { .. } => "the requested revision does not name a commit",
         GitError::ObjectRead { .. } => "a Git object could not be read",
+        GitError::CommitDecode { .. } => "a Git commit could not be decoded",
+        GitError::NotFirstParentAncestor { .. } => {
+            "the base is not on the target's first-parent chain"
+        }
         GitError::TreeTraversal { .. } => "a commit tree could not be traversed",
         GitError::InvalidRepoPath { .. } => "a committed entry has an unusable path",
         GitError::InvalidObjectId { .. } => "an object id is invalid",

@@ -196,8 +196,12 @@ focused views.
 
 - `ownai tui show` presents a file tree beside the canonical projection of the
   selected file.
-- `ownai tui diff` presents a changed-file tree beside a side-by-side comparison
-  of the old and new projections, with `@@` hunk headers.
+- `ownai tui diff range` presents a changed-file tree beside a side-by-side
+  comparison of two revisions, with `@@` hunk headers.
+- `ownai tui diff commits` adds a scrollable commit list above the file tree.
+  It follows the target's first-parent chain after the base, newest first.
+  Selecting a commit compares that commit with its first parent; commits with
+  no focused projection changes remain in the list.
 - Projections and diffs are syntax-highlighted, and diffs use full-line added and
   removed backgrounds with intra-line emphasis on the bytes that changed.
 - The user can switch between Types and Signatures, change the scope
@@ -211,6 +215,8 @@ focused views.
   terminal, and degrades to 256- or 16-color terminals; `NO_COLOR` disables
   styling.
 - The file tree is resizable, and the frontend adapts to the terminal size.
+- The command palette switches between range and commits views without leaving
+  the frontend. In commits view, focus cycles through commits, files, and diff.
 
 The terminal frontend is an additional way to read the same focused views. It
 does not change projection or diff semantics, and it is read-only: it reads

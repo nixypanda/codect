@@ -34,15 +34,12 @@ pub(crate) fn render_diff_pane(
     rows: &[VisualRow],
     edge: Edge,
 ) {
-    let revision = match side {
-        Side::Old => match &model.request {
-            LoadRequest::Diff { base, .. } => base.as_str(),
-            LoadRequest::Show { revision, .. } => revision.as_str(),
-        },
-        Side::New => match &model.request {
-            LoadRequest::Diff { target, .. } => target.as_str(),
-            LoadRequest::Show { revision, .. } => revision.as_str(),
-        },
+    let revisions = model.diff_revisions();
+    let revision = match (side, &model.request, &revisions) {
+        (Side::Old, LoadRequest::Diff { .. }, Some((base, _))) => base.as_str(),
+        (Side::New, LoadRequest::Diff { .. }, Some((_, target))) => target.as_str(),
+        (_, LoadRequest::Show { revision, .. }, _) => revision.as_str(),
+        _ => unreachable!("diff request has revisions"),
     };
     let title = model.selected.as_ref().map_or_else(
         || format!(" {revision} "),

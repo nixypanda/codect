@@ -130,6 +130,7 @@ pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> Model {
         target: "HEAD".to_owned(),
         mode: ProjectionMode::Types,
         selection: Selection::all(),
+        view: crate::DiffView::Range,
     };
     settle(load_diff(diffs, &base(request, width, height)))
 }

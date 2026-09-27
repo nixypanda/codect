@@ -46,7 +46,8 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
         LoadRequest::Show { revision, .. } => {
             right.push(chip(revision, theme.palette.surface_alt, theme));
         }
-        LoadRequest::Diff { base, target, .. } => {
+        LoadRequest::Diff { .. } => {
+            let (base, target) = model.diff_revisions().expect("diff request has revisions");
             right.push(chip(
                 &format!("{base}..{target}"),
                 theme.palette.surface_alt,
@@ -169,6 +170,9 @@ fn hints(model: &Model) -> String {
         Some(Overlay::Search(_)) => "type to search   Enter next   Esc cancel ".to_owned(),
         Some(Overlay::Help) => "Esc close ".to_owned(),
         None => match (model.focus, &model.content) {
+            (Pane::Commits, _) => {
+                "j/k choose commit   Tab files   Ctrl-P commands   ? help ".to_owned()
+            }
             (Pane::Tree, _) => {
                 "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ".to_owned()
             }

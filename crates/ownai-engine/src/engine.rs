@@ -13,7 +13,7 @@ use ownai_core::{
     ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath, SourceSpan,
     decode_source, select_projector,
 };
-use ownai_git::{GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
+use ownai_git::{CommitStep, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
 use ownai_language_haskell::HaskellProjector;
 use ownai_language_python::PythonProjector;
@@ -224,6 +224,19 @@ impl Engine {
     /// The repository root relative paths resolve against.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Resolves both endpoints once and lists the target's first-parent steps
+    /// through the base, newest first. Projection is deferred until a caller
+    /// requests a selected step with [`Self::diff_outlines`].
+    pub fn first_parent_steps(
+        &self,
+        base_spec: &str,
+        target_spec: &str,
+    ) -> Result<Vec<CommitStep>, EngineError> {
+        let base = self.repository.resolve_commit(base_spec)?;
+        let target = self.repository.resolve_commit(target_spec)?;
+        Ok(self.repository.first_parent_steps(&base, &target)?)
     }
 
     /// Reads the current `.ownai.toml` area definitions.

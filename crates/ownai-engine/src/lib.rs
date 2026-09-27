@@ -24,4 +24,5 @@ pub use engine::{
     project_source,
 };
 pub use error::EngineError;
+pub use ownai_git::CommitStep;
 pub use selection::{Selection, SelectionError, SelectionGroup};

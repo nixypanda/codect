@@ -5,7 +5,57 @@ use std::path::Path;
 use bstr::BStr;
 
 use crate::GitError;
-use crate::repository::{GitRepository, ObjectId, Revision};
+use crate::repository::{CommitStep, GitRepository, ObjectId, Revision};
+
+/// Traverses only the first parent of each commit. Reading metadata here does
+/// not inspect trees or project source, so long histories remain cheap to list.
+pub(crate) fn first_parent_steps(
+    repo: &GitRepository,
+    base: &Revision,
+    target: &Revision,
+) -> Result<Vec<CommitStep>, GitError> {
+    let repository = repo.location();
+    let mut current = target.object_id.clone();
+    let mut steps = Vec::new();
+    while current != base.object_id {
+        let commit = repo
+            .gix()
+            .find_commit(current.to_gix(&repository)?)
+            .map_err(|source| GitError::ObjectRead {
+                repository: repository.clone(),
+                object_id: current.clone(),
+                source: Box::new(source),
+            })?;
+        let Some(parent) = commit.parent_ids().next() else {
+            return Err(GitError::NotFirstParentAncestor {
+                base_id: base.object_id.clone(),
+                target_id: target.object_id.clone(),
+            });
+        };
+        let message = commit
+            .message_raw()
+            .map_err(|source| GitError::CommitDecode {
+                repository: repository.clone(),
+                object_id: current.clone(),
+                source: Box::new(source),
+            })?;
+        let message_bytes: &[u8] = message.as_ref();
+        let first_line = message_bytes
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default();
+        let subject = String::from_utf8_lossy(first_line.strip_suffix(b"\r").unwrap_or(first_line))
+            .into_owned();
+        let parent_id = ObjectId::from_gix(&parent.detach());
+        steps.push(CommitStep {
+            parent_id: parent_id.clone(),
+            commit_id: current,
+            subject,
+        });
+        current = parent_id;
+    }
+    Ok(steps)
+}
 
 pub(crate) fn resolve_commit(repo: &GitRepository, spec: &str) -> Result<Revision, GitError> {
     let repository = repo.location();

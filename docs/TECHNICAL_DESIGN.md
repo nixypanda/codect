@@ -1533,10 +1533,15 @@ projections. `ownai-tui` is the only crate that touches the terminal.
 
 ```text
 ownai tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-ownai tui diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+ownai tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+ownai tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 - `show` defaults `REVISION` to `HEAD`; both diff revisions are required.
+  Bare `tui diff` is invalid. Range compares the endpoints directly. Commits
+  requires the base on the target's first-parent chain and lists the steps
+  after the base, newest first. Each selected step compares its first parent
+  with the commit. Equal endpoints yield an empty list.
 - The feature is default-on: `default = ["tui"]`, `tui = ["dep:ownai-tui"]`.
   Without it, `tui` is an unknown command (exit `2`) and no terminal dependency
   is linked.
@@ -1561,7 +1566,8 @@ interpretation.
   drift apart.
 - **update** — a pure `(Msg, &Model) -> (Model, Vec<Cmd>)`. It performs no I/O.
 - **Cmd** — I/O is described as data. `Load` runs `Engine::show` or
-  `Engine::diff`; `LoadAreas` reads `.ownai.toml` through
+  `Engine::diff`; commit history loads the metadata once and projects the
+  selected step lazily. `LoadAreas` reads `.ownai.toml` through
   `Engine::load_areas`.
 - **view** — a pure `&Model -> widgets`.
 - **settle** — a pure `Model -> Model` that runs the selection-dependent work:
@@ -1595,9 +1601,13 @@ no persistent cache.
   pane and the active overlay.
 - A file tree sits beside a content region, separated by a shared single-column
   divider (panes drop the borders they share, so no border is drawn twice).
-  `Tab` toggles between them. For a diff the two sides are one focus unit, and
+  `Tab` toggles between them in show and range views. In commits view, a
+  scrollable commit picker sits above the file tree in the left column, capped
+  at seven visible rows on normal terminals and reduced on short terminals;
+  `Tab` cycles Commits, Files, and Diff. For a diff the two sides are one focus unit, and
   vertical scrolling moves both in lockstep; below 80 columns the sides stack
-  vertically.
+  vertically when Diff is focused, while Commits or Files takes the full width
+  when focused. The same geometry determines drawing and mouse hit testing.
 - Modal overlays capture keys until dismissed: help, revision entry, the scope
   chooser, the mode picker, the command palette (`Ctrl-P`), the fuzzy file
   finder (`Ctrl-F`), and search (`/`). Every overlay dims the frame behind it.
@@ -1611,7 +1621,8 @@ no persistent cache.
 - The file-tree width is adjustable and clamped.
 - `RepoPath` remains the identity; labels are escaped for display only.
 - Mouse capture is enabled. A left click selects a file or folds a directory;
-  the wheel scrolls the pane under the pointer and focuses it. Overlays stay
+  a click in the commit picker selects a commit; the wheel scrolls the pane
+  under the pointer and focuses it. Overlays stay
   keyboard-driven. Only normal tracking and SGR coordinates are turned on, so
   motion and drag never reach the event loop. Because capture takes over the
   terminal's own selection, copying uses the terminal's selection override

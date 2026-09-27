@@ -142,12 +142,16 @@ is a default-on feature of the CLI.
 
 ```text
 ownai tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-ownai tui diff --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+ownai tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+ownai tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 `tui show` opens a file tree beside the canonical projection of the selected
-file. `tui diff` opens a changed-file tree beside a side-by-side projection
-diff. The diff panes are syntax-highlighted and styled like
+file. `tui diff range` compares the two revisions directly. `tui diff commits`
+lists the commits after BASE through TARGET on TARGET's first-parent chain,
+newest first; selecting a commit compares it with its first parent. BASE must
+be on that chain. The commit picker sits above the changed-file tree. Both
+views show a side-by-side projection diff. The diff panes are syntax-highlighted and styled like
 [`delta`](https://github.com/dandavison/delta): per-token syntax colors,
 full-line add/delete backgrounds, brighter intra-line emphasis on the bytes that
 changed, and `@@` hunk headers. `NO_COLOR` disables all styling.
@@ -166,11 +170,11 @@ Keybindings:
 | Key | Action |
 |---|---|
 | `q`, `Ctrl-C` | Quit |
-| `↑`/`↓` or `k`/`j` | Move in the tree, or scroll the focused content |
+| `↑`/`↓` or `k`/`j` | Move in the focused commit list or tree, or scroll the content |
 | `←`/`→` or `h`/`l` | Fold/unfold the tree, or scroll the projection sideways |
 | `g` / `G` | Jump to the top or bottom |
 | `PageUp`/`PageDown`, `Ctrl-U`/`Ctrl-D` | Move or scroll a half page |
-| `Tab`, `Shift-Tab` | Switch between the tree and the content |
+| `Tab`, `Shift-Tab` | Cycle through Commits, Files, and Diff in commits view; switch between tree and content elsewhere |
 | `Enter` | Open a file or fold a directory |
 | `Ctrl-P` | Open the command palette |
 | `Ctrl-F` | Find a file by name |
@@ -188,6 +192,7 @@ Mouse:
 | Input | Action |
 |---|---|
 | Click a file | Select it; clicking a directory folds or unfolds it |
+| Click a commit | Select it and show its parent-to-commit diff |
 | Wheel over a pane | Scroll that pane and focus it |
 
 Mouse capture is enabled so clicks and the wheel work. That takes over the
