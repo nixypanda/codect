@@ -2929,10 +2929,35 @@ mod tests {
     #[test]
     fn the_status_bar_shows_mode_scope_and_hints() {
         let model = model_with(vec![projected("a.rs", "x\n")]);
-        let text = buffer_text(&render(&model, 120, 20));
-        assert!(text.contains("types"), "{text}");
-        assert!(text.contains("scope:"), "{text}");
-        assert!(text.contains("help"), "{text}");
+        let buffer = render(&model, 120, 20);
+        let header = buffer_row(&buffer, 0);
+        let footer = buffer_row(&buffer, 19);
+        assert!(header.contains("types"), "{header}");
+        assert!(header.contains("HEAD"), "{header}");
+        assert!(header.contains("scope:"), "{header}");
+        assert!(!header.contains("a.rs"), "{header}");
+        assert!(footer.contains("a.rs"), "{footer}");
+        assert!(footer.contains("1 lines"), "{footer}");
+        assert!(footer.contains("help"), "{footer}");
+    }
+
+    #[test]
+    fn narrow_chrome_keeps_context_and_the_selected_path() {
+        let model = model_with(vec![projected("src/very/deep/file.rs", "x\n")]);
+        let buffer = render(&model, 60, 20);
+        let header = buffer_row(&buffer, 0);
+        let footer = buffer_row(&buffer, 19);
+        assert!(header.contains("types"), "{header}");
+        assert!(header.contains("HEAD"), "{header}");
+        assert!(footer.contains("file.rs"), "{footer}");
+        assert!(footer.contains("lines"), "{footer}");
+        assert!(footer.contains("help"), "{footer}");
+        assert_eq!(
+            buffer_text(&buffer)
+                .matches("src/very/deep/file.rs")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -3852,6 +3877,13 @@ mod tests {
             text.push('\n');
         }
         text
+    }
+
+    fn buffer_row(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
+        (0..buffer.area.width)
+            .filter_map(|x| buffer.cell((x, y)))
+            .map(|cell| cell.symbol())
+            .collect()
     }
 
     #[test]

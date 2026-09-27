@@ -41,10 +41,7 @@ pub(crate) fn render_diff_pane(
         (_, LoadRequest::Show { revision, .. }, _) => revision.as_str(),
         _ => unreachable!("diff request has revisions"),
     };
-    let title = model.selected.as_ref().map_or_else(
-        || format!(" {revision} "),
-        |path| format!(" {revision} · {path} "),
-    );
+    let title = format!(" {revision} ");
     let block = pane_block(&title, focused, &model.theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);

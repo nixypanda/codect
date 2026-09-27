@@ -19,11 +19,7 @@ pub(crate) fn render_show_body(
     focused: bool,
     edge: Edge,
 ) {
-    let title = model
-        .selected
-        .as_ref()
-        .map_or_else(|| " Projection ".to_owned(), |path| format!(" {path} "));
-    let block = pane_block(&title, focused, &model.theme, edge);
+    let block = pane_block(" Projection ", focused, &model.theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

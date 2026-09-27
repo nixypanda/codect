@@ -13,117 +13,98 @@ use crate::theme::{Rgb, Theme};
 
 use super::text::clip_line;
 
-/// Renders the header: brand, repository, selection, and context chips.
+/// Renders the header: repository identity and projection context.
 pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
     let theme = &model.theme;
     let base = theme.bg(theme.palette.surface);
-    let mut spans = vec![
-        Span::styled(
-            " ◆ ownai ",
-            theme
-                .fg_bg(theme.ink(theme.palette.accent), theme.palette.accent)
-                .add_modifier(Modifier::BOLD),
+    let brand = Span::styled(
+        " ◆ ownai ",
+        theme
+            .fg_bg(theme.ink(theme.palette.accent), theme.palette.accent)
+            .add_modifier(Modifier::BOLD),
+    );
+    let revision = match &model.request {
+        LoadRequest::Show { revision, .. } => revision.clone(),
+        LoadRequest::Diff { .. } => {
+            let (base, target) = model.diff_revisions().expect("diff request has revisions");
+            format!("{base}..{target}")
+        }
+    };
+    let context = [
+        chip(mode_label(model.mode), theme.palette.accent, theme),
+        chip(&revision, theme.palette.surface_alt, theme),
+        chip(
+            &format!("scope: {}", model.scope_label),
+            theme.palette.surface_alt,
+            theme,
         ),
+    ];
+    let area_width = area.width as usize;
+    let brand_width = UnicodeWidthStr::width(brand.content.as_ref());
+    let mut shown = context.len();
+    let context_width = |count: usize| {
+        context[..count]
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()) + 1)
+            .sum::<usize>()
+    };
+    // Leave a useful piece of the repository visible before dropping scope,
+    // then revisions, on narrow terminals.
+    while shown > 0 && brand_width + context_width(shown) + 10 > area_width {
+        shown -= 1;
+    }
+    let right_width = context_width(shown);
+    let root_width = area_width
+        .saturating_sub(brand_width + right_width + 2)
+        .min(40);
+    let mut spans = vec![
+        brand,
         Span::styled(
-            format!(" {} ", clip_tail(&model.root, 40)),
+            format!(" {} ", clip_tail(&model.root, root_width)),
             theme.fg(theme.palette.text_dim),
         ),
     ];
-
-    if let Some(path) = &model.selected {
-        spans.push(Span::styled(
-            "› ".to_owned(),
-            theme.fg(theme.palette.text_muted),
-        ));
-        spans.push(Span::styled(path.to_string(), theme.fg(theme.palette.text)));
-    }
-
-    let mut right = vec![
-        chip(mode_label(model.mode), theme.palette.accent, theme),
-        Span::raw(" "),
-    ];
-    match &model.request {
-        LoadRequest::Show { revision, .. } => {
-            right.push(chip(revision, theme.palette.surface_alt, theme));
-        }
-        LoadRequest::Diff { .. } => {
-            let (base, target) = model.diff_revisions().expect("diff request has revisions");
-            right.push(chip(
-                &format!("{base}..{target}"),
-                theme.palette.surface_alt,
-                theme,
-            ));
-        }
-    }
-    right.push(Span::raw(" "));
-    right.push(chip(
-        &format!("scope: {}", model.scope_label),
-        theme.palette.surface_alt,
-        theme,
+    let used = brand_width + UnicodeWidthStr::width(spans[1].content.as_ref());
+    spans.push(Span::styled(
+        " ".repeat(area_width.saturating_sub(used + right_width)),
+        base,
     ));
-
-    let left_width: usize = spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum();
-    let right_width: usize = right
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum();
-    let area_width = area.width as usize;
-    if left_width + right_width < area_width {
-        spans.push(Span::styled(
-            " ".repeat(area_width - left_width - right_width),
-            base,
-        ));
-    } else {
-        // Not enough room for both; drop the chips and keep the identity.
-        right.clear();
+    for span in context.into_iter().take(shown) {
+        spans.push(Span::raw(" "));
+        spans.push(span);
     }
-    spans.extend(right);
 
     frame.render_widget(Paragraph::new(Line::from(spans)).style(base), area);
 }
 
-/// Renders the footer: status on the left, contextual hints on the right.
+/// Renders the footer: selected file, file status, and contextual hints.
 pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
     let theme = &model.theme;
     let base = theme.bg(theme.palette.surface);
 
-    let mut left: Vec<Span<'static>> = Vec::new();
+    let mut prefix: Vec<Span<'static>> = Vec::new();
     if model.pending.is_some() {
-        left.push(Span::styled(
+        prefix.push(Span::styled(
             format!("{} ", spinner_frame(model.spinner)),
             theme.fg(theme.palette.accent),
         ));
-        left.push(Span::styled(
+        prefix.push(Span::styled(
             "projecting… ".to_owned(),
             theme.fg(theme.palette.text_dim),
         ));
     }
-    if let Some(path) = &model.selected {
-        left.push(Span::styled(
-            format!(" {} ", path),
-            theme.fg(theme.palette.text),
-        ));
-    } else {
-        left.push(Span::styled(
-            " no selection ".to_owned(),
-            theme.fg(theme.palette.text_muted),
-        ));
-    }
-
+    let mut detail: Vec<Span<'static>> = Vec::new();
     if let Some((added, removed)) = diff_stats(model) {
-        left.push(Span::styled(
+        detail.push(Span::styled(
             format!("+{added} "),
             theme.fg(theme.palette.add_fg),
         ));
-        left.push(Span::styled(
+        detail.push(Span::styled(
             format!("−{removed} "),
             theme.fg(theme.palette.del_fg),
         ));
     } else if let Some(text) = model.active_text() {
-        left.push(Span::styled(
+        detail.push(Span::styled(
             format!("{} lines ", text.lines().count()),
             theme.fg(theme.palette.text_muted),
         ));
@@ -132,30 +113,63 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
     if let Some(search) = &model.search {
         let total = search.matches.len();
         let current = if total == 0 { 0 } else { search.cursor + 1 };
-        left.push(Span::styled(
-            format!("/{} {current}/{total} ", search.needle),
+        detail.push(Span::styled(
+            format!("/{} {current}/{total} ", clip_tail(&search.needle, 20)),
             theme.fg(theme.palette.match_fg),
         ));
     }
 
-    let hints = hints(model);
+    let mut hints = hints(model);
     let hints_style = theme.fg(theme.palette.text_muted);
-    let left_width: usize = left
+    let fixed_width: usize = prefix
         .iter()
+        .chain(detail.iter())
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum();
-    let hints_width = UnicodeWidthStr::width(hints.as_str());
     let area_width = area.width as usize;
+    if fixed_width + UnicodeWidthStr::width(hints.as_str()) + 10 > area_width {
+        hints = compact_hints(model).to_owned();
+    }
+    if fixed_width + UnicodeWidthStr::width(hints.as_str()) + 4 > area_width {
+        hints.clear();
+    }
+    let hints_width = UnicodeWidthStr::width(hints.as_str());
+    let path = model
+        .selected
+        .as_ref()
+        .map_or_else(|| "no selection".to_owned(), ToString::to_string);
+    let path_width = area_width.saturating_sub(fixed_width + hints_width + 3);
+    let mut spans = prefix;
+    spans.push(Span::styled(
+        format!(" {} ", clip_tail(&path, path_width)),
+        theme.fg(if model.selected.is_some() {
+            theme.palette.text
+        } else {
+            theme.palette.text_muted
+        }),
+    ));
+    spans.extend(detail);
 
-    let mut spans = left;
-    if left_width + hints_width + 2 <= area_width {
+    if hints_width > 0 {
+        let left_width: usize = spans
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
         spans.push(Span::styled(
-            " ".repeat(area_width - left_width - hints_width),
+            " ".repeat(area_width.saturating_sub(left_width + hints_width)),
             base,
         ));
         spans.push(Span::styled(hints, hints_style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)).style(base), area);
+}
+
+fn compact_hints(model: &Model) -> &'static str {
+    if model.overlay.is_some() {
+        "Esc close "
+    } else {
+        "? help "
+    }
 }
 
 /// The key hints for the current focus, content, and overlay.
