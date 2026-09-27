@@ -185,6 +185,14 @@ the integration. If Diffview's internal files differ, OwnAI warns once and
 leaves Diffview unmodified. The integration is loaded automatically when a
 Diffview tab opens, including when Diffview is lazy loaded after OwnAI.
 
+The linked dotfiles config obtains Diffview from nixpkgs. Its `flake.lock`
+revision `18dd725c29603f582cf1900e0d25f9f1063dbf11` resolves
+`vimPlugins.diffview-nvim.src.rev` to this exact Diffview commit. Add
+`editors/nvim` to Neovim's plugin runtimepath and source its `plugin/ownai.lua`
+to activate the integration there; the five existing Diffview mappings and
+their `after = function() require("diffview").setup({}) end` callback need no
+changes. The dotfiles configuration does not currently install OwnAI itself.
+
 The `ownai.diff.v1` CLI accepts commits, `:index`, `:worktree`, and Git's empty
 tree. Root commits therefore show focused added-file projections. Rename rows
 currently use Diffview's destination path; rename-aware matching and a separate
