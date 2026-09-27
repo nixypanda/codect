@@ -5,22 +5,22 @@
 //! projection string into ordered [`Run`]s carrying a [`Style`], so the render
 //! layer can draw syntax foregrounds and diff backgrounds.
 //!
-//! Syntax colors come from `syntect` using the `two-face` asset bundle (bat's
-//! syntax and theme set), which is what delta itself uses. The dark flavor pairs
-//! with Monokai Extended, and the light flavor with GitHub, which is designed
-//! for a white background and keeps every token dark enough to read. Diff line
-//! backgrounds and the intra-line emphasis colors are delta's documented
-//! defaults.
+//! Syntax grammars come from `two-face` (bat's syntax bundle). Token colors use
+//! Tokyo Night night/day colors so the code agrees with the rest of the UI.
+//! Diff backgrounds and intra-line emphasis come from the semantic palette.
 
 use std::sync::OnceLock;
 
 use ownai_core::Language;
 use ratatui::style::{Color, Modifier, Style};
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, Style as SynStyle, Theme as SynTheme};
+use syntect::highlighting::ScopeSelectors;
+use syntect::highlighting::{
+    Color as SynColor, FontStyle, Style as SynStyle, StyleModifier, Theme as SynTheme, ThemeItem,
+    ThemeSettings,
+};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
-use two_face::theme::EmbeddedThemeName;
 use unicode_width::UnicodeWidthChar;
 
 use crate::theme::{Capability, Flavor, Rgb, Theme};
@@ -48,13 +48,91 @@ fn assets() -> &'static Assets {
     static ASSETS: OnceLock<Assets> = OnceLock::new();
     ASSETS.get_or_init(|| {
         let syntaxes = two_face::syntax::extra_newlines();
-        let themes = two_face::theme::extra();
         Assets {
             syntaxes,
-            dark: themes[EmbeddedThemeName::MonokaiExtended].clone(),
-            light: themes[EmbeddedThemeName::Github].clone(),
+            dark: tokyo_night_theme(Flavor::Dark),
+            light: tokyo_night_theme(Flavor::Light),
         }
     })
+}
+
+fn syn_color(rgb: Rgb) -> SynColor {
+    SynColor {
+        r: rgb.0,
+        g: rgb.1,
+        b: rgb.2,
+        a: 0xff,
+    }
+}
+
+/// TextMate scopes shared by the bat grammars. These are built from Tokyo
+/// Night's night/day colors rather than carrying a second, unrelated theme.
+fn tokyo_night_theme(flavor: Flavor) -> SynTheme {
+    let (foreground, background, comment, red, green, yellow, blue, purple, cyan, orange) =
+        match flavor {
+            Flavor::Dark => (
+                Rgb(0xc0, 0xca, 0xf5),
+                Rgb(0x1a, 0x1b, 0x26),
+                Rgb(0x73, 0x7a, 0xa2),
+                Rgb(0xf7, 0x76, 0x8e),
+                Rgb(0x9e, 0xce, 0x6a),
+                Rgb(0xe0, 0xaf, 0x68),
+                Rgb(0x7a, 0xa2, 0xf7),
+                Rgb(0xbb, 0x9a, 0xf7),
+                Rgb(0x7d, 0xcf, 0xff),
+                Rgb(0xff, 0x9e, 0x64),
+            ),
+            Flavor::Light => (
+                Rgb(0x37, 0x60, 0xbf),
+                Rgb(0xe1, 0xe2, 0xe7),
+                Rgb(0x68, 0x70, 0x9a),
+                Rgb(0xc6, 0x43, 0x43),
+                Rgb(0x58, 0x75, 0x39),
+                Rgb(0x8c, 0x6c, 0x3e),
+                Rgb(0x2e, 0x7d, 0xe9),
+                Rgb(0x78, 0x47, 0xbd),
+                Rgb(0x00, 0x71, 0x97),
+                Rgb(0xb1, 0x5c, 0x00),
+            ),
+        };
+    let mut theme = SynTheme {
+        name: Some(
+            match flavor {
+                Flavor::Dark => "Tokyo Night Night",
+                Flavor::Light => "Tokyo Night Day",
+            }
+            .to_owned(),
+        ),
+        settings: ThemeSettings {
+            foreground: Some(syn_color(foreground)),
+            background: Some(syn_color(background)),
+            ..ThemeSettings::default()
+        },
+        ..SynTheme::default()
+    };
+    for (selectors, color) in [
+        ("comment", comment),
+        ("keyword, storage", purple),
+        ("keyword.operator, punctuation.definition", purple),
+        ("constant.numeric, constant.language", orange),
+        ("string", green),
+        ("entity.name.function, support.function", blue),
+        ("entity.name.type, entity.name.class, support.type", yellow),
+        ("variable.parameter, variable.other.member", red),
+        ("entity.name.tag, entity.other.attribute-name", red),
+        ("support.constant, constant.other", cyan),
+    ] {
+        theme.scopes.push(ThemeItem {
+            scope: selectors
+                .parse::<ScopeSelectors>()
+                .expect("valid TextMate scope"),
+            style: StyleModifier {
+                foreground: Some(syn_color(color)),
+                ..StyleModifier::default()
+            },
+        });
+    }
+    theme
 }
 
 fn syntect_theme(assets: &Assets, flavor: Flavor) -> &SynTheme {
@@ -406,6 +484,60 @@ mod tests {
         );
         let text: String = lines[0].iter().map(|run| run.text.as_str()).collect();
         assert_eq!(text, "pub struct User {");
+    }
+
+    #[test]
+    fn syntax_tokens_match_tokyo_night_in_both_flavors() {
+        for (flavor, keyword, string) in [
+            (
+                Flavor::Dark,
+                Color::Rgb(0xbb, 0x9a, 0xf7),
+                Color::Rgb(0x9e, 0xce, 0x6a),
+            ),
+            (
+                Flavor::Light,
+                Color::Rgb(0x78, 0x47, 0xbd),
+                Color::Rgb(0x58, 0x75, 0x39),
+            ),
+        ] {
+            let theme = Theme::new(flavor, Capability::TrueColor);
+            let lines = highlight(
+                "pub fn main() { let name = \"ownai\"; }",
+                Language::Rust,
+                &theme,
+            );
+            let keyword_run = lines[0]
+                .iter()
+                .find(|run| run.text.contains("pub"))
+                .unwrap();
+            let string_run = lines[0]
+                .iter()
+                .find(|run| run.text.contains("ownai"))
+                .unwrap();
+            assert_eq!(keyword_run.style.fg, Some(keyword));
+            assert_eq!(string_run.style.fg, Some(string));
+        }
+    }
+
+    #[test]
+    fn syntax_respects_no_color_and_limited_palettes() {
+        let text = "pub fn main() {}";
+        let plain = highlight(
+            text,
+            Language::Rust,
+            &Theme::new(Flavor::Dark, Capability::NoColor),
+        );
+        assert_eq!(
+            plain,
+            vec![vec![Run {
+                style: Style::default(),
+                text: text.to_owned()
+            }]]
+        );
+        for capability in [Capability::Ansi16, Capability::Ansi256] {
+            let lines = highlight(text, Language::Rust, &Theme::new(Flavor::Dark, capability));
+            assert!(lines[0].iter().any(|run| run.style.fg.is_some()));
+        }
     }
 
     #[test]
