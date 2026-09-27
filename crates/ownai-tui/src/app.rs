@@ -709,6 +709,9 @@ pub struct Model {
     pub scope_label: String,
     pub content: Content,
     pub commits: Arc<[CommitStep]>,
+    /// Navigation target while input is being batched; the displayed diff still
+    /// belongs to `commit_cursor` until its projection succeeds.
+    pub commit_target: Option<usize>,
     pub commit_cursor: usize,
     pub commit_scroll: usize,
     /// Paths the tree shows, in raw path-byte order.
@@ -749,6 +752,10 @@ pub struct Model {
 }
 
 impl Model {
+    fn navigation_commit(&self) -> usize {
+        self.commit_target.unwrap_or(self.commit_cursor)
+    }
+
     /// The revisions currently compared by the visible diff.
     pub fn diff_revisions(&self) -> Option<(String, String)> {
         let LoadRequest::Diff {
@@ -789,6 +796,7 @@ impl Model {
             scope_label,
             content: Content::Show(Arc::from(Vec::new())),
             commits: Arc::from(Vec::new()),
+            commit_target: None,
             commit_cursor: 0,
             commit_scroll: 0,
             visible: Arc::from(Vec::new()),
@@ -1136,6 +1144,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
                     next.request = request;
                     if !keep_commits {
                         next.commits = Arc::from(Vec::new());
+                        next.commit_target = None;
                         next.commit_cursor = 0;
                         next.commit_scroll = 0;
                     }
@@ -1176,6 +1185,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
                     next.scope_label = request.scope_label();
                     next.request = request;
                     next.commits = steps.into();
+                    next.commit_target = None;
                     next.commit_cursor = 0;
                     next.commit_scroll = 0;
                     next.install(content, true);
@@ -1205,6 +1215,7 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
             result,
         } => {
             next.pending = None;
+            next.commit_target = None;
             match result {
                 Ok(content) if request == next.request && index < next.commits.len() => {
                     next.commit_cursor = index;
@@ -1243,6 +1254,35 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
     }
 
     (next, cmds)
+}
+
+/// Replaces all step projections in one input batch with its final target.
+/// A full reload wins when mode, scope, endpoints, or view also changed.
+pub(crate) fn coalesce_commit_loads(model: &mut Model, cmds: &mut Vec<Cmd>) {
+    let had_step = cmds.iter().any(|cmd| matches!(cmd, Cmd::LoadStep { .. }));
+    if !had_step {
+        return;
+    }
+    cmds.retain(|cmd| !matches!(cmd, Cmd::LoadStep { .. }));
+    if let Some(request) = cmds.iter().rev().find_map(|cmd| match cmd {
+        Cmd::Load { request } => Some(request),
+        _ => None,
+    }) {
+        model.commit_target = None;
+        model.pending = Some(request.clone());
+        return;
+    }
+    if let Some(index) = model.commit_target
+        && let Some(step) = model.commits.get(index)
+    {
+        cmds.push(Cmd::LoadStep {
+            request: model.request.clone(),
+            index,
+            step: step.clone(),
+        });
+    } else {
+        model.pending = None;
+    }
 }
 
 /// Runs the selection-dependent work a frame needs, once per input batch.
@@ -1423,7 +1463,7 @@ fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
             if model.focus == Pane::Commits {
                 select_commit(
                     model,
-                    model.commit_cursor.saturating_sub(step as usize),
+                    model.navigation_commit().saturating_sub(step as usize),
                     cmds,
                 );
             } else if model.focus == Pane::Tree {
@@ -1437,7 +1477,7 @@ fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
             if model.focus == Pane::Commits {
                 select_commit(
                     model,
-                    model.commit_cursor.saturating_add(step as usize),
+                    model.navigation_commit().saturating_add(step as usize),
                     cmds,
                 );
             } else if model.focus == Pane::Tree {
@@ -2063,12 +2103,15 @@ fn select_commit(model: &mut Model, index: usize, cmds: &mut Vec<Cmd>) {
         return;
     }
     let index = index.min(model.commits.len() - 1);
+    model.commit_target = (index != model.commit_cursor).then_some(index);
     if index != model.commit_cursor {
         cmds.push(Cmd::LoadStep {
             request: model.request.clone(),
             index,
             step: model.commits[index].clone(),
         });
+    } else {
+        model.pending = None;
     }
 }
 
@@ -2094,10 +2137,10 @@ fn sync_commit_scroll(model: &mut Model) {
 fn commits_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
     match key {
         Key::Down | Key::Char('j') => {
-            select_commit(model, model.commit_cursor.saturating_add(1), cmds)
+            select_commit(model, model.navigation_commit().saturating_add(1), cmds)
         }
         Key::Up | Key::Char('k') => {
-            select_commit(model, model.commit_cursor.saturating_sub(1), cmds)
+            select_commit(model, model.navigation_commit().saturating_sub(1), cmds)
         }
         _ => {}
     }
@@ -2221,14 +2264,14 @@ fn handle_mouse(event: Mouse, model: &mut Model, cmds: &mut Vec<Cmd>) {
                 MouseKind::ScrollUp => select_commit(
                     model,
                     model
-                        .commit_cursor
+                        .navigation_commit()
                         .saturating_sub(MOUSE_SCROLL_STEP as usize),
                     cmds,
                 ),
                 MouseKind::ScrollDown => select_commit(
                     model,
                     model
-                        .commit_cursor
+                        .navigation_commit()
                         .saturating_add(MOUSE_SCROLL_STEP as usize),
                     cmds,
                 ),
@@ -2594,6 +2637,81 @@ mod tests {
         let (files, commands) = update(Msg::Mouse(click(4, 11)), &model);
         assert_eq!(files.focus, Pane::Tree);
         assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_displayed_step() {
+        let mut model = commits_model(6);
+        let displayed = model.content.clone();
+        let displayed_labels = model.diff_revisions();
+        let mut commands = Vec::new();
+        for key in [Key::Down, Key::Char('j'), Key::Down] {
+            let (next, produced) = update(Msg::Key(key), &model);
+            model = next;
+            commands.extend(produced);
+        }
+        assert_eq!(
+            model.commit_cursor, 0,
+            "the visible step is still the loaded one"
+        );
+        assert_eq!(model.commit_target, Some(3));
+        assert_eq!(commands.len(), 3);
+        coalesce_commit_loads(&mut model, &mut commands);
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::LoadStep { index: 3, .. }]
+        ));
+        assert_eq!(model.content, displayed);
+        assert_eq!(model.diff_revisions(), displayed_labels);
+
+        let (loaded, _) = update(
+            Msg::StepLoaded {
+                request: model.request.clone(),
+                index: 3,
+                result: Ok(Content::Diff(
+                    vec![file_diff("a.rs", Some("a\n"), Some("new\n"))].into(),
+                )),
+            },
+            &model,
+        );
+        assert_eq!(loaded.commit_cursor, 3);
+        assert_eq!(loaded.commit_target, None);
+        assert_ne!(loaded.diff_revisions(), displayed_labels);
+        assert_eq!(loaded.selected, model.selected);
+
+        let (failed, commands) = update(
+            Msg::StepLoaded {
+                request: model.request.clone(),
+                index: 3,
+                result: Err(Box::new(EngineError::Selection(
+                    SelectionError::EmptyGroup {
+                        label: "missing".to_owned(),
+                    },
+                ))),
+            },
+            &model,
+        );
+        assert!(commands.is_empty());
+        assert_eq!(failed.commit_cursor, 0);
+        assert_eq!(failed.commit_target, None);
+        assert_eq!(failed.content, displayed);
+        assert_eq!(failed.diff_revisions(), displayed_labels);
+        assert!(failed.diagnostic.is_some());
+    }
+
+    #[test]
+    fn commit_navigation_back_to_loaded_step_cancels_batched_projection() {
+        let mut model = commits_model(3);
+        let mut commands = Vec::new();
+        for key in [Key::Down, Key::Up] {
+            let (next, produced) = update(Msg::Key(key), &model);
+            model = next;
+            commands.extend(produced);
+        }
+        coalesce_commit_loads(&mut model, &mut commands);
+        assert!(commands.is_empty());
+        assert!(model.pending.is_none());
+        assert_eq!(model.commit_target, None);
     }
 
     #[test]

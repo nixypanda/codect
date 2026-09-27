@@ -39,7 +39,7 @@ mod view;
 #[doc(hidden)]
 pub mod bench;
 
-use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, settle, update};
+use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, coalesce_commit_loads, settle, update};
 pub use app::{DiffView, LoadRequest};
 pub use icons::IconStyle;
 use icons::Icons;
@@ -203,6 +203,7 @@ fn run_with<D: Driver>(
             next = updated;
             cmds.extend(produced);
         }
+        coalesce_commit_loads(&mut next, &mut cmds);
         next = settle(next);
         if !cmds.is_empty() {
             // Draw the busy state before a blocking effect runs.
