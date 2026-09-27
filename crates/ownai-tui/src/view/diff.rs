@@ -15,6 +15,7 @@ use crate::highlight::{self, Run, StyledLine};
 use crate::theme::Theme;
 
 use super::geom::{Edge, gutter_width, pane_block};
+use super::text::truncate_ellipsis;
 
 /// Context lines kept around each change, matching the core diff engine.
 const CONTEXT_RADIUS: usize = 3;
@@ -41,7 +42,7 @@ pub(crate) fn render_diff_pane(
         (_, LoadRequest::Show { revision, .. }, _) => revision.as_str(),
         _ => unreachable!("diff request has revisions"),
     };
-    let title = format!(" {revision} ");
+    let title = pane_title(side, revision, area.width);
     let block = pane_block(&title, focused, &model.theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -80,6 +81,17 @@ pub(crate) fn render_diff_pane(
         ));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn pane_title(side: Side, revision: &str, pane_width: u16) -> String {
+    let label = match side {
+        Side::Old => "BASE",
+        Side::New => "TARGET",
+    };
+    // Leave room for the rounded border corners on a standalone pane. This
+    // also keeps the title within the border in shared-divider layouts.
+    let available = (pane_width as usize).saturating_sub(2);
+    truncate_ellipsis(&format!(" {label} · {revision} "), available)
 }
 
 fn search_side(side: Side) -> SearchSide {
@@ -380,6 +392,17 @@ fn styled_line(highlight: &[StyledLine], number: usize, text: &str) -> StyledLin
 mod tests {
     use super::*;
     use crate::theme::{Capability, Flavor};
+
+    #[test]
+    fn pane_titles_identify_sides_and_fit_narrow_borders() {
+        assert_eq!(pane_title(Side::Old, "main", 20), " BASE · main ");
+        assert_eq!(pane_title(Side::New, "feature", 20), " TARGET · feature ");
+
+        let narrow = pane_title(Side::New, "a-long-feature-branch", 16);
+        assert_eq!(narrow, " TARGET · a-l…");
+        assert_eq!(UnicodeWidthStr::width(narrow.as_str()), 14);
+        assert_eq!(pane_title(Side::Old, "main", 2), "");
+    }
 
     #[test]
     fn hunk_header_fills_the_pane_with_a_subtle_band() {
