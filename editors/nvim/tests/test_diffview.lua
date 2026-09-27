@@ -111,4 +111,102 @@ lines = vim.api.nvim_buf_get_lines(file.layout.b.file.bufnr, 0, -1, false)
 assert(table.concat(lines, "\n"):find("{ x }", 1, true), "source mode did not restore source bytes")
 vim.cmd("DiffviewClose")
 end
+if test_case == "local" then
+  local body = tmp .. "/body.rs"
+  write(body, "pub fn body() -> i32 { 1 }\n")
+  run({ "git", "add", "." }, tmp)
+  run({ "git", "commit", "-qm", "add body file" }, tmp)
+  write(path, "pub fn example(x: u32) -> i32 { x as i32 }\n")
+  write(body, "pub fn body() -> i32 { 2 }\n")
+  run({ "git", "add", "." }, tmp)
+  local index_source = run({ "git", "show", ":example.rs" }, tmp)
+  write(path, "pub fn example(x: u64) -> i32 { x as i32 }\n")
+  write(body, "pub fn body() -> i32 { 3 }\n")
+  local disk_source = vim.trim(assert(io.open(path, "rb")):read("*a"))
+
+  vim.cmd("DiffviewOpen")
+  assert(vim.wait(15000, function()
+    local current = lib.get_current_view()
+    return current and current.files and #current.files.staged == 1 and #current.files.working == 1
+  end, 20), "focused local sections did not load")
+  local current = lib.get_current_view()
+  assert(current.files.staged[1].path == "example.rs", "staged body-only file leaked")
+  assert(current.files.working[1].path == "example.rs", "unstaged body-only file leaked")
+  local staged = current.files.staged[1]
+  current:set_file(staged)
+  assert(vim.wait(10000, function()
+    return staged.layout.b.file.bufnr and vim.api.nvim_buf_is_loaded(staged.layout.b.file.bufnr)
+  end, 20), "staged projection did not load")
+  local stagebuf = staged.layout.b.file.bufnr
+  assert(not vim.bo[stagebuf].modifiable and vim.bo[stagebuf].buftype == "nowrite", "stage pane is editable")
+  assert(table.concat(vim.api.nvim_buf_get_lines(stagebuf, 0, -1, false), "\n"):find("x: u32", 1, true), vim.inspect(vim.api.nvim_buf_get_lines(stagebuf, 0, -1, false)))
+  assert(run({ "git", "show", ":example.rs" }, tmp) == index_source, "index changed by projection")
+
+  local working = current.files.working[1]
+  current:set_file(working)
+  assert(vim.wait(10000, function()
+    return working.layout.b.file.bufnr and vim.api.nvim_buf_is_loaded(working.layout.b.file.bufnr)
+  end, 20), "worktree projection did not load")
+  local workbuf = working.layout.b.file.bufnr
+  assert(not vim.bo[workbuf].modifiable and vim.bo[workbuf].buftype == "nowrite", "worktree pane is editable")
+  assert(table.concat(vim.api.nvim_buf_get_lines(workbuf, 0, -1, false), "\n"):find("x: u64", 1, true))
+  assert(vim.trim(assert(io.open(path, "rb")):read("*a")) == disk_source, "worktree changed by projection")
+
+  vim.cmd("OwnaiDiffview types")
+  assert(vim.wait(10000, function()
+    return #current.files.staged == 0 and #current.files.working == 0
+  end, 20), "Types mode did not filter signature-only files")
+  vim.cmd("OwnaiDiffview source")
+  assert(vim.wait(10000, function()
+    return #current.files.staged == 2 and #current.files.working == 2
+  end, 20), "source mode did not restore ordinary local file lists")
+  vim.cmd("OwnaiDiffview signatures")
+  assert(vim.wait(10000, function() return #current.files.working == 1 end, 20))
+  write(path, "pub fn example(x: u128) -> i32 { x as i32 }\n")
+  current:update_files()
+  assert(vim.wait(10000, function()
+    local entry = current.files.working[1]
+    if not entry then return false end
+    local buf = entry.layout.b.file.bufnr
+    return buf and vim.api.nvim_buf_is_loaded(buf)
+      and table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"):find("x: u128", 1, true)
+  end, 20), "mutable snapshot refresh reused stale projection")
+  vim.cmd("DiffviewClose")
+  assert(not vim.api.nvim_buf_is_valid(workbuf), "focused worktree scratch buffer leaked on close")
+end
+if test_case == "root" then
+  local root = run({ "git", "rev-list", "--max-parents=0", "HEAD" }, tmp)
+  vim.cmd("DiffviewFileHistory --range=" .. root)
+  assert(vim.wait(15000, function()
+    local current = lib.get_current_view()
+    return current and current.panel and not current.panel.updating and #current.panel.entries == 1
+  end, 20), "root commit history did not load")
+  local current = lib.get_current_view()
+  local first = current.panel.entries[1]
+  assert(not first.nulled and #first.files == 1, "root projection missing")
+  current:set_file(first.files[1])
+  assert(vim.wait(10000, function()
+    return first.files[1].layout.b.file.bufnr
+      and vim.api.nvim_buf_is_loaded(first.files[1].layout.b.file.bufnr)
+  end, 20), "root projection buffer did not load")
+  local lines = vim.api.nvim_buf_get_lines(first.files[1].layout.b.file.bufnr, 0, -1, false)
+  assert(table.concat(lines, "\n"):find("example", 1, true), "root signature missing")
+  vim.cmd("DiffviewClose")
+end
+if test_case == "branch" then
+  require("diffview").open({ "HEAD~2...HEAD" })
+  assert(vim.wait(15000, function()
+    local current = lib.get_current_view()
+    return current and current.files and current.files:len() == 1
+  end, 20), "three-dot branch comparison did not load")
+  vim.cmd("DiffviewClose")
+  vim.cmd("DiffviewFileHistory --range=HEAD~2..HEAD")
+  assert(vim.wait(15000, function()
+    local current = lib.get_current_view()
+    return current and current.panel and not current.panel.updating and #current.panel.entries == 2
+  end, 20), "branch history did not load")
+  local entries = lib.get_current_view().panel.entries
+  assert(not entries[1].nulled and entries[2].nulled, "branch commit projections are incorrect")
+  vim.cmd("DiffviewClose")
+end
 print("Diffview integration passed")

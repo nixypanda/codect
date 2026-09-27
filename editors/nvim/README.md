@@ -158,12 +158,20 @@ or the index.
 
 ## Diffview integration
 
-When Diffview is installed, `:DiffviewFileHistory` and commit-to-commit
-`:DiffviewOpen` views start in OwnAI's `default_mode`. Their file lists omit
+When Diffview is installed, `:DiffviewFileHistory` and `:DiffviewOpen`
+views start in OwnAI's `default_mode`. Their file lists omit
 files whose canonical projections are equal, and their diff panes show only
 projected Types or Signatures. A body-only history commit stays in the commit
 list with Diffview's `No diff` row. The existing Diffview open, close, file
 history, and range commands need no replacement mappings.
+
+The ordinary `:DiffviewOpen` keeps Diffview's staged (HEAD versus index) and
+unstaged (index versus worktree) sections. Focused panes use separate read-only
+scratch buffers, so switching modes and closing the view leave editable index
+and worktree buffers intact. Index and worktree projections are refreshed on
+Diffview file-list updates. Git's file list tracks changes on disk and in the
+index; unsaved changes that exist only in an editor buffer do not appear until
+written.
 
 Use `:OwnaiDiffview types`, `:OwnaiDiffview signatures`, or
 `:OwnaiDiffview source` in the current Diffview tab. History refreshes preserve
@@ -177,11 +185,10 @@ the integration. If Diffview's internal files differ, OwnAI warns once and
 leaves Diffview unmodified. The integration is loaded automatically when a
 Diffview tab opens, including when Diffview is lazy loaded after OwnAI.
 
-The current `ownai.diff.v1` CLI compares commits only. A normal
-`:DiffviewOpen` of HEAD, index, and worktree still uses source diffs, with a
-one-time notice in that tab. A root commit compares against Git's empty tree,
-which the current CLI does not accept as a commit; its history entry currently
-falls back to source. These inputs require snapshot support in the CLI.
+The `ownai.diff.v1` CLI accepts commits, `:index`, `:worktree`, and Git's empty
+tree. Root commits therefore show focused added-file projections. Rename rows
+currently use Diffview's destination path; rename-aware matching and a separate
+old-path row are not provided.
 
 ## Health
 
@@ -206,5 +213,9 @@ With the pinned Diffview checkout, run the integration cases separately:
 OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=history \
   OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
 OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=range \
+  OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=local \
+  OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=root \
   OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
 ```

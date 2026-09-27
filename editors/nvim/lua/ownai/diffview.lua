@@ -8,6 +8,7 @@ local cache = {}
 local views = setmetatable({}, { __mode = "v" })
 local installed = false
 local warned = false
+local projection_buffer = 0
 
 local EXPECTED = {
   ["diffview.vcs.adapters.git"] = "5d77fd042d1af44ee97570032fb4823a00809cc60d7e2e1a68a32b88ad20d26c",
@@ -47,7 +48,9 @@ end
 
 local function diff_doc(root, base, target, mode)
   local key = table.concat({ root, base, target, mode }, "\0")
-  if cache[key] then return cache[key] end
+  local immutable = base ~= ":index" and base ~= ":worktree"
+    and target ~= ":index" and target ~= ":worktree"
+  if immutable and cache[key] then return cache[key] end
   local binary = require("ownai.cli").resolve_binary()
   if not binary then return nil, "ownai binary not found" end
   local result = vim.system({ binary, "diff", "--format", "json", "--mode", mode, base, target }, {
@@ -58,7 +61,7 @@ local function diff_doc(root, base, target, mode)
   if not ok or type(doc) ~= "table" or doc.schema ~= "ownai.diff.v1" or type(doc.files) ~= "table" then
     return nil, "invalid or unsupported ownai.diff.v1 document"
   end
-  cache[key] = doc
+  if immutable then cache[key] = doc end
   return doc
 end
 
@@ -70,29 +73,43 @@ local function projections(doc)
   return files
 end
 
+local function release(file)
+  if file._ownai_projection then
+    file:dispose_buffer()
+    file._ownai_projection = nil
+  elseif file.rev and (file.rev.type == require("diffview.vcs.rev").RevType.LOCAL
+      or file.rev.type == require("diffview.vcs.rev").RevType.STAGE) then
+    -- The real worktree or index buffer may contain user edits. Detach it
+    -- without deleting or changing it when entering focused mode.
+    file:detach_buffer()
+    file.bufnr = nil
+  else
+    file:dispose_buffer()
+  end
+  file.get_data = nil
+end
+
 local function attach(entry, projected)
-  local left = split_lines(projected.base and projected.base.projection.text)
-  local right = split_lines(projected.target and projected.target.projection.text)
+  local left = split_lines(type(projected.base) == "table" and projected.base.projection.text)
+  local right = split_lines(type(projected.target) == "table" and projected.target.projection.text)
   for _, file in ipairs(entry.layout:files()) do
-    -- Commit buffers are Diffview-owned, read-only scratch buffers. Never
-    -- install a producer on LOCAL or STAGE: those may be editable buffers.
-    if file.rev and file.rev.commit then
-      file.get_data = function(_, _, pos)
-        return pos == "left" and left or right
-      end
+    if file._ownai_projection then file:dispose_buffer() end
+    if file.rev then
+      if not file._ownai_projection then release(file) end
+      file._ownai_projection = file.symbol == "a" and left or right
+      file.get_data = function(_, _, pos) return pos == "left" and left or right end
     end
   end
 end
 
-local function refresh_existing(view, by_path)
+local function refresh_existing(view, by_section)
   if not view.files then return end
   for _, entry in view.files:iter() do
-    local projected = by_path and by_path[entry.path]
+    local projected = by_section and by_section[entry.kind] and by_section[entry.kind][entry.path]
     if projected then attach(entry, projected) end
-    for _, file in ipairs(entry.layout:files()) do
-      if file.rev and file.rev.commit then
-        if not projected then file.get_data = nil end
-        file:dispose_buffer()
+    if not projected then
+      for _, file in ipairs(entry.layout:files()) do
+        if file._ownai_projection then release(file) end
       end
     end
   end
@@ -119,8 +136,48 @@ function M.install()
   local GitAdapter = require("diffview.vcs.adapters.git").GitAdapter
   local DiffView = require("diffview.scene.views.diff.diff_view").DiffView
   local RevType = require("diffview.vcs.rev").RevType
+  local File = require("diffview.vcs.file").File
   local parse_history = GitAdapter.parse_fh_data
   local get_updated_files = DiffView.get_updated_files
+  local create_buffer = File.create_buffer
+  local destroy = File.destroy
+
+  File.destroy = function(file, force)
+    local projected = file._ownai_projection ~= nil
+    if not projected and not force and file.rev
+        and (file.rev.type == RevType.STAGE or file.rev.type == RevType.LOCAL)
+        and file.bufnr and vim.api.nvim_buf_is_valid(file.bufnr)
+        and vim.bo[file.bufnr].modified then
+      -- A source index/worktree buffer can disappear from the focused list.
+      -- Its unsaved edits still belong to the user, even after the view closes.
+      file:detach_buffer()
+      file.bufnr = nil
+      return
+    end
+    destroy(file, force or projected)
+    file._ownai_projection = nil
+    if projected then file.get_data = nil end
+  end
+
+  -- LOCAL and STAGE normally resolve to editable user buffers. Focused panes
+  -- always get independent scratch buffers, including for those revisions.
+  File.create_buffer = require("diffview.async").wrap(function(file, callback)
+    if not file._ownai_projection or file.nulled or file.binary then
+      return create_buffer(file, callback)
+    end
+    if file:is_valid() then return callback(file.bufnr) end
+    projection_buffer = projection_buffer + 1
+    local bufnr = vim.api.nvim_create_buf(false, false)
+    file.bufnr = bufnr
+    vim.api.nvim_buf_set_name(bufnr, "diffview://ownai/" .. projection_buffer .. "/" .. file.path)
+    for option, value in pairs(File.bufopts) do vim.bo[bufnr][option] = value end
+    vim.bo[bufnr].modifiable = true
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, file._ownai_projection)
+    vim.bo[bufnr].modifiable = false
+    vim.api.nvim_buf_call(bufnr, function() vim.cmd("filetype detect") end)
+    file:post_buf_created()
+    callback(bufnr)
+  end)
 
   GitAdapter.parse_fh_data = function(adapter, data, commit, state)
     local success, entry = parse_history(adapter, data, commit, state)
@@ -168,24 +225,44 @@ function M.install()
       async.await(async.scheduler())
       local mode = modes[view]
       if err or not files or not mode or mode == "source" then return callback(err, files) end
-      if view.left.type ~= RevType.COMMIT or view.right.type ~= RevType.COMMIT then
-        if not view._ownai_mutable_notice then
-          notify("index and worktree comparisons await snapshot support; showing source")
-          view._ownai_mutable_notice = true
+      local function snapshot(rev)
+        if rev.type == RevType.COMMIT then return rev.commit end
+        if rev.type == RevType.STAGE and rev.stage == 0 then return ":index" end
+        if rev.type == RevType.LOCAL then return ":worktree" end
+      end
+      local left, right = snapshot(view.left), snapshot(view.right)
+      if not left or not right then return callback(err, files) end
+      local root = view.adapter.ctx.toplevel
+      local comparisons = {}
+      local function compare(base, target)
+        local key = base .. "\0" .. target
+        if comparisons[key] then return comparisons[key] end
+        local doc, doc_err = diff_doc(root, base, target, mode)
+        if not doc then return nil, doc_err end
+        comparisons[key] = projections(doc)
+        return comparisons[key]
+      end
+      -- Plain DiffviewOpen has separate HEAD/index and index/worktree rows.
+      -- An explicit range is one comparison, even when its target is local.
+      local section_maps = {}
+      for _, section in ipairs({ "working", "staged" }) do
+        local base, target = left, right
+        if left == ":index" and right == ":worktree" and section == "staged" then
+          local head = view.adapter:head_rev()
+          base = head and head.commit or require("diffview.vcs.adapters.git.rev").GitRev.NULL_TREE_SHA
+          target = ":index"
         end
-        return callback(err, files)
+        local map, doc_err = compare(base, target)
+        if not map then notify(doc_err); return callback(err, files) end
+        section_maps[section] = map
       end
-      local doc, doc_err = diff_doc(view.adapter.ctx.toplevel, view.left.commit, view.right.commit, mode)
-      if not doc then
-        notify(doc_err)
-        return callback(err, files)
-      end
-      local by_path = projections(doc)
-      refresh_existing(view, by_path)
+      -- Conflicts use multiple index stages and have no v1 snapshot mapping.
+      section_maps.conflicting = {}
+      refresh_existing(view, section_maps)
       for _, section in ipairs({ "working", "staged", "conflicting" }) do
         local kept = {}
         for _, file in ipairs(files[section]) do
-          local projected = by_path[file.path]
+          local projected = section_maps[section][file.path]
           if projected then
             attach(file, projected)
             kept[#kept + 1] = file
