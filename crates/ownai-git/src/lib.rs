@@ -15,7 +15,7 @@ use bstr::BString;
 use ownai_core::RepoPathError;
 
 pub use repository::{
-    GitRepository, HashKind, ObjectId, Revision, SnapshotRepository, SourceEntry,
+    CommitStep, GitRepository, HashKind, ObjectId, Revision, SnapshotRepository, SourceEntry,
 };
 
 /// A typed failure in the read-only Git layer.
@@ -92,6 +92,20 @@ pub enum GitError {
     InvalidObjectId {
         repository: PathBuf,
         object_id: ObjectId,
+    },
+
+    #[error("base commit {base_id} is not on target commit {target_id}'s first-parent chain")]
+    NotFirstParentAncestor {
+        base_id: ObjectId,
+        target_id: ObjectId,
+    },
+
+    #[error("commit {object_id} in repository `{repository}` could not be decoded")]
+    CommitDecode {
+        repository: PathBuf,
+        object_id: ObjectId,
+        #[source]
+        source: Box<dyn Error + Send + Sync + 'static>,
     },
 
     #[error("the Git index in repository `{repository}` could not be read")]

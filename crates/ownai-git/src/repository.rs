@@ -83,6 +83,14 @@ pub struct Revision {
     pub object_id: ObjectId,
 }
 
+/// One step on the target's first-parent chain, compared with its first parent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitStep {
+    pub parent_id: ObjectId,
+    pub commit_id: ObjectId,
+    pub subject: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceEntry {
     pub path: ownai_core::RepoPath,
@@ -95,6 +103,15 @@ pub trait SnapshotRepository {
     /// Resolves `spec` to exactly one commit, peeling tags and other
     /// commit-ish objects.
     fn resolve_commit(&self, spec: &str) -> Result<Revision, GitError>;
+
+    /// Lists steps after `base` through `target`, newest first. Both inputs
+    /// must already be resolved commits, and `base` must be on the target's
+    /// first-parent chain.
+    fn first_parent_steps(
+        &self,
+        base: &Revision,
+        target: &Revision,
+    ) -> Result<Vec<CommitStep>, GitError>;
 
     /// Lists the supported source entries of `revision`'s tree, sorted by raw
     /// repository path bytes.
@@ -196,6 +213,14 @@ impl fmt::Debug for GitRepository {
 impl SnapshotRepository for GitRepository {
     fn resolve_commit(&self, spec: &str) -> Result<Revision, GitError> {
         crate::revision::resolve_commit(self, spec)
+    }
+
+    fn first_parent_steps(
+        &self,
+        base: &Revision,
+        target: &Revision,
+    ) -> Result<Vec<CommitStep>, GitError> {
+        crate::revision::first_parent_steps(self, base, target)
     }
 
     fn source_entries(&self, revision: &Revision) -> Result<Vec<SourceEntry>, GitError> {

@@ -10,6 +10,18 @@ use ownai_core::{ProjectionMode, RepoPath};
 use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
 use support::TestRepo;
 
+#[test]
+fn first_parent_history_exposes_steps_without_projection() {
+    let repo = TestRepo::init();
+    let base = repo.commit("base");
+    let target = repo.commit("metadata-only step");
+    let steps = engine(&repo).first_parent_steps(&base, "HEAD").unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].parent_id.to_string(), base);
+    assert_eq!(steps[0].commit_id.to_string(), target);
+    assert_eq!(steps[0].subject, "metadata-only step");
+}
+
 const RUST_BASE: &str = "\
 pub struct User {
     pub id: u32,
