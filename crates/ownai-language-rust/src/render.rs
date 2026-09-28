@@ -6,18 +6,32 @@
 //! rebuilt from leaf tokens with fixed spacing rules and fixed structural line
 //! breaks. Terminal width is not consulted anywhere in this module.
 
+use ownai_core::LINE_WIDTH;
 use tree_sitter::Node;
+use unicode_width::UnicodeWidthStr;
 
 use crate::syntax::{field, node};
 
 /// A small layout document. `Indent` is relative, so the same document can be
 /// rendered at any nesting depth and a nested item's own fragment matches the
 /// text embedded in its ancestor.
+///
+/// [`Doc::Group`] is the only width-sensitive construct: it renders flat (soft
+/// breaks as spaces) when the flat form fits within [`LINE_WIDTH`], and broken
+/// (soft breaks as newlines) otherwise.
 #[derive(Clone, Debug)]
 pub(crate) enum Doc {
     Text(String),
     Line,
+    /// A space when flat, a line break when broken.
+    SoftLine,
+    /// Nothing when flat, a line break when broken.
+    SoftNil,
+    /// Text emitted only when the enclosing group is broken, used for the
+    /// trailing comma that keeps an appended list item on a single diff line.
+    Broken(&'static str),
     Indent(Box<Doc>),
+    Group(Box<Doc>),
     Concat(Vec<Doc>),
 }
 
@@ -25,6 +39,7 @@ struct Output {
     text: String,
     depth: usize,
     at_line_start: bool,
+    column: usize,
 }
 
 impl Output {
@@ -33,14 +48,26 @@ impl Output {
             for _ in 0..self.depth {
                 self.text.push_str("    ");
             }
+            self.column = self.depth * 4;
             self.at_line_start = false;
         }
         self.text.push_str(value);
+        self.column += UnicodeWidthStr::width(value);
     }
 
     fn line(&mut self) {
         self.text.push('\n');
         self.at_line_start = true;
+        self.column = 0;
+    }
+
+    /// The column the next written character would land in.
+    fn column_now(&self) -> usize {
+        if self.at_line_start {
+            self.depth * 4
+        } else {
+            self.column
+        }
     }
 }
 
@@ -50,24 +77,66 @@ pub(crate) fn render(doc: &Doc, depth: usize) -> String {
         text: String::new(),
         depth,
         at_line_start: true,
+        column: 0,
     };
-    render_into(doc, &mut output);
+    render_into(doc, &mut output, false);
     output.text
 }
 
-fn render_into(doc: &Doc, output: &mut Output) {
+fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
     match doc {
         Doc::Text(value) => output.write(value),
         Doc::Line => output.line(),
+        Doc::SoftLine => {
+            if flat {
+                output.write(" ");
+            } else {
+                output.line();
+            }
+        }
+        Doc::SoftNil => {
+            if !flat {
+                output.line();
+            }
+        }
+        Doc::Broken(value) => {
+            if !flat {
+                output.write(value);
+            }
+        }
         Doc::Indent(inner) => {
             output.depth += 1;
-            render_into(inner, output);
+            render_into(inner, output, flat);
             output.depth -= 1;
+        }
+        Doc::Group(inner) => {
+            let flat_here = flat
+                || flat_width(inner).is_some_and(|width| output.column_now() + width <= LINE_WIDTH);
+            render_into(inner, output, flat_here);
         }
         Doc::Concat(parts) => {
             for part in parts {
-                render_into(part, output);
+                render_into(part, output, flat);
             }
+        }
+    }
+}
+
+/// The display width of `doc` rendered flat, or `None` when it contains a hard
+/// [`Doc::Line`] and can therefore never be flat.
+fn flat_width(doc: &Doc) -> Option<usize> {
+    match doc {
+        Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
+        Doc::Line => None,
+        Doc::SoftLine => Some(1),
+        Doc::SoftNil | Doc::Broken(_) => Some(0),
+        Doc::Indent(inner) | Doc::Group(inner) => flat_width(inner),
+        Doc::Concat(parts) => {
+            let mut total = 0;
+            for part in parts {
+                total += flat_width(part)?;
+            }
+            Some(total)
         }
     }
 }
@@ -200,10 +269,30 @@ pub(crate) fn child_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> 
         .find(|child| child.kind() == kind)
 }
 
+/// One element of a declaration header: either flattened tokens or a bracketed
+/// list that is allowed to wrap.
+enum Elem {
+    Token(String),
+    List {
+        items: Vec<String>,
+        open: &'static str,
+        close: &'static str,
+    },
+}
+
 /// Renders the declaration prefix up to the first child in `stop_kinds`,
 /// dropping statement terminators that the caller re-emits.
-pub(crate) fn header(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> String {
-    let mut out = Vec::new();
+///
+/// Parameter and type-parameter lists become groups that wrap at [`LINE_WIDTH`];
+/// every other token keeps the fixed spacing rules, so a header that fits is
+/// byte-for-byte the old flat output.
+pub(crate) fn header(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Doc {
+    let elements = header_elements(node, source, stop_kinds);
+    elements_doc(&elements)
+}
+
+fn header_elements(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Vec<Elem> {
+    let mut elements = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         let kind = child.kind();
@@ -213,9 +302,88 @@ pub(crate) fn header(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Strin
         if kind == node::SEMICOLON {
             continue;
         }
-        push_tokens(child, source, &mut out);
+        if kind == node::PARAMETERS {
+            elements.push(list_elem(child, source, "(", ")"));
+        } else if kind == node::TYPE_PARAMETERS {
+            elements.push(list_elem(child, source, "<", ">"));
+        } else {
+            for token in tokens(child, source) {
+                elements.push(Elem::Token(token));
+            }
+        }
     }
-    join(&out)
+    elements
+}
+
+fn list_elem(node: Node<'_>, source: &str, open: &'static str, close: &'static str) -> Elem {
+    let mut items = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        items.push(render_node(child, source));
+    }
+    Elem::List { items, open, close }
+}
+
+fn elements_doc(elements: &[Elem]) -> Doc {
+    let mut parts: Vec<Doc> = Vec::new();
+    let mut previous: Option<&str> = None;
+    for (index, element) in elements.iter().enumerate() {
+        match element {
+            Elem::Token(token) => {
+                if token == "," {
+                    let dropped = match elements.get(index + 1) {
+                        None => true,
+                        Some(Elem::Token(next)) => next == ">",
+                        Some(Elem::List { open, .. }) => *open == ">",
+                    };
+                    if dropped {
+                        continue;
+                    }
+                }
+                if let Some(previous) = previous
+                    && needs_space(previous, token)
+                {
+                    parts.push(Doc::Text(" ".to_owned()));
+                }
+                parts.push(Doc::Text(token.clone()));
+                previous = Some(token);
+            }
+            Elem::List { items, open, close } => {
+                if let Some(previous) = previous
+                    && needs_space(previous, open)
+                {
+                    parts.push(Doc::Text(" ".to_owned()));
+                }
+                parts.push(bracket_list_doc(items, open, close));
+                previous = Some(close);
+            }
+        }
+    }
+    Doc::Concat(parts)
+}
+
+/// A bracketed list rendered inline when it fits [`LINE_WIDTH`] and one item per
+/// indented line otherwise. The trailing comma is emitted only when broken, so
+/// appending an item changes exactly one line.
+fn bracket_list_doc(items: &[String], open: &str, close: &str) -> Doc {
+    if items.is_empty() {
+        return Doc::Text(format!("{open}{close}"));
+    }
+    let mut inner: Vec<Doc> = vec![Doc::SoftNil];
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            inner.push(Doc::Text(",".to_owned()));
+            inner.push(Doc::SoftLine);
+        }
+        inner.push(Doc::Text(item.clone()));
+    }
+    inner.push(Doc::Broken(","));
+    Doc::Group(Box::new(Doc::Concat(vec![
+        Doc::Text(open.to_owned()),
+        Doc::Indent(Box::new(Doc::Concat(inner))),
+        Doc::SoftNil,
+        Doc::Text(close.to_owned()),
+    ])))
 }
 
 pub(crate) fn where_clause_text(node: Node<'_>, source: &str) -> Option<String> {
@@ -227,11 +395,11 @@ pub(crate) fn attribute_text(attribute: Node<'_>, source: &str) -> String {
 }
 
 /// A unit or tuple struct terminator, or any declaration that ends in `;`.
-pub(crate) fn signature_doc(header: String, where_clause: Option<String>) -> Doc {
+pub(crate) fn signature_doc(header: Doc, where_clause: Option<String>) -> Doc {
     match where_clause {
-        None => Doc::Text(format!("{header};")),
+        None => Doc::Concat(vec![header, Doc::Text(";".to_owned())]),
         Some(clause) => Doc::Concat(vec![
-            Doc::Text(header),
+            header,
             Doc::Line,
             Doc::Text(clause),
             Doc::Text(";".to_owned()),
@@ -241,16 +409,12 @@ pub(crate) fn signature_doc(header: String, where_clause: Option<String>) -> Doc
 
 /// A brace-delimited container. A `where` clause pushes the opening brace onto
 /// its own line, matching the canonical examples in section 12.2.
-pub(crate) fn container_doc(
-    header: String,
-    where_clause: Option<String>,
-    members: Vec<Doc>,
-) -> Doc {
+pub(crate) fn container_doc(header: Doc, where_clause: Option<String>, members: Vec<Doc>) -> Doc {
     if members.is_empty() {
         return match where_clause {
-            None => Doc::Text(format!("{header} {{}}")),
+            None => Doc::Concat(vec![header, Doc::Text(" {}".to_owned())]),
             Some(clause) => Doc::Concat(vec![
-                Doc::Text(header),
+                header,
                 Doc::Line,
                 Doc::Text(clause),
                 Doc::Line,
@@ -268,9 +432,9 @@ pub(crate) fn container_doc(
     }
 
     let open = match where_clause {
-        None => vec![Doc::Text(format!("{header} {{")), Doc::Line],
+        None => vec![header, Doc::Text(" {".to_owned()), Doc::Line],
         Some(clause) => vec![
-            Doc::Text(header),
+            header,
             Doc::Line,
             Doc::Text(clause),
             Doc::Line,
@@ -429,5 +593,25 @@ mod tests {
     fn optional_trailing_commas_are_dropped() {
         assert_eq!(spaced(&["Foo", "<", "T", ",", ">"]), "Foo<T>");
         assert_eq!(spaced(&["where", "T", ":", "Clone", ","]), "where T: Clone");
+    }
+
+    #[test]
+    fn bracket_list_stays_inline_when_it_fits() {
+        let items = vec!["a: i32".to_owned(), "b: i32".to_owned()];
+        assert_eq!(
+            render(&bracket_list_doc(&items, "(", ")"), 0),
+            "(a: i32, b: i32)"
+        );
+    }
+
+    #[test]
+    fn bracket_list_wraps_over_the_budget_with_a_trailing_comma() {
+        let first = "x".repeat(40);
+        let second = "y".repeat(40);
+        let items = vec![first.clone(), second.clone()];
+        assert_eq!(
+            render(&bracket_list_doc(&items, "(", ")"), 0),
+            format!("(\n    {first},\n    {second},\n)")
+        );
     }
 }

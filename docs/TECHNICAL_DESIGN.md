@@ -580,16 +580,19 @@ Canonical rendering prevents formatting-only source edits from appearing in focu
 
 Rendering must be independent of original whitespace and comments. It must preserve semantic token order, declaration order, member order, visibility, generic parameters, constraints, and modifiers selected by the product rules.
 
-Do not implement adaptive line wrapping. Terminal width must never change output. Use fixed structural line breaks:
+Line breaks are fixed by declaration shape and by a single compile-time width budget. Terminal width must never change output. A declaration may wrap only at `ownai_core::LINE_WIDTH` (80 display columns), so a focused diff stays readable side by side while remaining deterministic:
 
-- One simple declaration or signature per line.
+- One simple declaration or signature per line, unless its bracketed list or arrow chain does not fit the budget.
+- A bracketed list (function parameters, type parameters, generic arguments, or a class superclass list) that does not fit breaks one item per indented line, with the closing bracket returned to the declaration's indent.
+- An Elm or Haskell type signature whose arrow chain (`->`, and a leading `=>`) does not fit breaks before each arrow, one per indented line.
+- A broken bracketed list emits a trailing comma; an inline list does not.
 - One union constructor, enum variant, struct field, or record field per indented line when a declaration has a body.
 - One trait or implementation member per indented block.
 - Blank line between top-level projected declarations (see section 5.3 for how top-level items assemble into file text).
 - Four spaces per nesting level.
 - Exactly one trailing newline per projected file.
 
-Build a small internal document representation such as `Text`, `Space`, `Line`, `Indent`, and `Concat`, or equivalent direct rendering helpers. Do not add a complete source formatter.
+Build a small internal document representation such as `Text`, `Line`, `Indent`, and `Concat`, plus a width-aware `Group` with soft line breaks for the two shapes above, or equivalent direct rendering helpers. Do not add a complete source formatter.
 
 For type expressions and signature fragments, walk leaf tokens while excluding comments. Normalize spacing with language-specific rules. At minimum:
 

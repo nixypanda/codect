@@ -1,0 +1,11 @@
+class Service:
+    def __init__(
+        self,
+        claims_repo: ClaimsRepo,
+        bookmark_repo: BookmarkRepo,
+        autocharge_service: InsuranceRemitAutochargeService,
+        candid_remit_gate: CandidRemitGate,
+    ): ...
+
+
+def short(a: int, b: int) -> int: ...

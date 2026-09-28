@@ -176,16 +176,15 @@ impl Builder<'_> {
         let key = self.unique(format!("{container_key}::class::{name}"));
         let enum_like = is_enum_like(self.renderer, node);
 
-        let mut header = format!("class {name}");
+        let mut header = vec![Doc::Text(format!("class {name}"))];
         if let Some(parameters) = node.child_by_field_name(FIELD_TYPE_PARAMETERS) {
-            header.push_str(&self.renderer.node_text(parameters));
+            header.push(self.renderer.bracket_list_doc(parameters, "[", "]"));
         }
         if let Some(superclasses) = node.child_by_field_name(FIELD_SUPERCLASSES) {
-            header.push('(');
-            header.push_str(&self.renderer.argument_list_text(superclasses));
-            header.push(')');
+            header.push(self.renderer.bracket_list_doc(superclasses, "(", ")"));
         }
-        header.push(':');
+        header.push(Doc::Text(":".to_owned()));
+        let header = Doc::Concat(header);
 
         let members = match node.child_by_field_name(FIELD_BODY) {
             Some(body) => self.members(body, &key, Scope::Class { enum_like }, depth + 1)?,
@@ -226,28 +225,25 @@ impl Builder<'_> {
         let kind_tag = if is_method { "method" } else { "fn" };
         let key = self.unique(format!("{container_key}::{kind_tag}::{name}"));
 
-        let mut header = String::new();
+        let mut header = Vec::new();
         if self.renderer.has_child_of_kind(node, "async") {
-            header.push_str("async ");
+            header.push(Doc::Text("async ".to_owned()));
         }
-        header.push_str("def ");
-        header.push_str(&name);
+        header.push(Doc::Text(format!("def {name}")));
         if let Some(parameters) = node.child_by_field_name(FIELD_TYPE_PARAMETERS) {
-            header.push_str(&self.renderer.node_text(parameters));
+            header.push(self.renderer.bracket_list_doc(parameters, "[", "]"));
         }
         match node.child_by_field_name("parameters") {
-            Some(parameters) => {
-                header.push_str(&self.renderer.node_text(parameters));
-            }
+            Some(parameters) => header.push(self.renderer.bracket_list_doc(parameters, "(", ")")),
             None => self.invariant(node, "function has no parameter list")?,
         }
         if let Some(return_type) = node.child_by_field_name(FIELD_RETURN_TYPE) {
-            header.push_str(" -> ");
-            header.push_str(&self.renderer.node_text(return_type));
+            header.push(Doc::Text(" -> ".to_owned()));
+            header.push(Doc::Text(self.renderer.node_text(return_type)));
         }
-        header.push_str(": ...");
+        header.push(Doc::Text(": ...".to_owned()));
 
-        let doc = signature_doc(decorators, header);
+        let doc = signature_doc(decorators, Doc::Concat(header));
         let parent = nested_parent(container_key, scope);
         let item_kind = if is_method {
             ItemKind::Method
@@ -509,13 +505,13 @@ fn make_built(
 }
 
 /// A class or def block: decorators, a header, and an indented body.
-fn container_doc(decorators: Vec<Doc>, header: String, members: Vec<Doc>) -> Doc {
+fn container_doc(decorators: Vec<Doc>, header: Doc, members: Vec<Doc>) -> Doc {
     let mut parts = Vec::new();
     for decorator in decorators {
         parts.push(decorator);
         parts.push(Doc::Line);
     }
-    parts.push(Doc::Text(header));
+    parts.push(header);
     if members.is_empty() {
         parts.push(Doc::Text(" ...".to_owned()));
         return Doc::Concat(parts);
@@ -533,16 +529,16 @@ fn container_doc(decorators: Vec<Doc>, header: String, members: Vec<Doc>) -> Doc
 }
 
 /// A function signature, optionally preceded by its preserved decorators.
-fn signature_doc(decorators: Vec<Doc>, header: String) -> Doc {
+fn signature_doc(decorators: Vec<Doc>, header: Doc) -> Doc {
     if decorators.is_empty() {
-        return Doc::Text(header);
+        return header;
     }
     let mut parts = Vec::new();
     for decorator in decorators {
         parts.push(decorator);
         parts.push(Doc::Line);
     }
-    parts.push(Doc::Text(header));
+    parts.push(header);
     Doc::Concat(parts)
 }
 

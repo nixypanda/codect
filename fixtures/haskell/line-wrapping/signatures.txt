@@ -1,0 +1,16 @@
+module Wrapping
+
+combine :: String
+    -> Int
+    -> [String]
+    -> OrganizationId
+    -> AccountSettings
+    -> BillingProfile
+    -> IO (Either Error User)
+
+render :: (Monad m, Show a)
+    => a
+    -> OrganizationId
+    -> AccountSettings
+    -> BillingProfile
+    -> m (Either Error User)

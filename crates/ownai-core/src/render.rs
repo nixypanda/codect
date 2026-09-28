@@ -11,6 +11,14 @@ use crate::diff::unified_hunks;
 use crate::language::{LanguageProjector, ProjectionInput};
 use crate::model::{ProjectedFile, ProjectionMode, RepoPath};
 
+/// The canonical maximum display width of a rendered line.
+///
+/// Language renderers wrap a declaration list or arrow chain only when its flat
+/// form would exceed this budget. The value is a compile-time constant, never a
+/// terminal measurement, so output stays deterministic and identical regardless
+/// of where it is displayed (TECHNICAL_DESIGN.md section 10).
+pub const LINE_WIDTH: usize = 80;
+
 /// Selects the projector that claims `path`, or `None` for an unsupported path.
 ///
 /// Exclusions (unsupported extensions, for example) are silent, not errors

@@ -350,7 +350,7 @@ fn build_struct(
 
     match node.child_by_field_name(field::BODY) {
         None => {
-            let doc = render::with_attributes(attributes, Doc::Text(format!("{header};")));
+            let doc = render::with_attributes(attributes, render::signature_doc(header, None));
             make_built(
                 node,
                 key,
@@ -364,10 +364,9 @@ fn build_struct(
         }
         Some(body) if body.kind() == node::ORDERED_FIELD_DECLARATION_LIST => {
             let fields = render::render_node(body, context.source);
-            let doc = render::with_attributes(
-                attributes,
-                render::signature_doc(format!("{header}{fields}"), where_clause),
-            );
+            let header = Doc::Concat(vec![header, Doc::Text(fields)]);
+            let doc =
+                render::with_attributes(attributes, render::signature_doc(header, where_clause));
             make_built(
                 node,
                 key,
@@ -545,7 +544,10 @@ fn build_type_item(
     let attributes = attribute_docs(declaration, context);
     let header = render::type_alias_text(node, context.source);
     let where_clause = render::where_clause_text(node, context.source);
-    let doc = render::with_attributes(attributes, render::signature_doc(header, where_clause));
+    let doc = render::with_attributes(
+        attributes,
+        render::signature_doc(Doc::Text(header), where_clause),
+    );
     make_built(
         node,
         key,
@@ -571,7 +573,10 @@ fn build_associated_type(
     let attributes = attribute_docs(declaration, context);
     let header = render::associated_type_text(node, context.source);
     let where_clause = render::where_clause_text(node, context.source);
-    let doc = render::with_attributes(attributes, render::signature_doc(header, where_clause));
+    let doc = render::with_attributes(
+        attributes,
+        render::signature_doc(Doc::Text(header), where_clause),
+    );
     make_built(
         node,
         key,

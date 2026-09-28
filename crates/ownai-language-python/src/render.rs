@@ -6,8 +6,9 @@
 //! breaks; source slices are used only for atomic literals such as strings,
 //! where internal bytes carry meaning. Terminal width is never consulted.
 
-use ownai_core::{Language, ProjectionError, RepoPath};
+use ownai_core::{LINE_WIDTH, Language, ProjectionError, RepoPath};
 use tree_sitter::Node;
+use unicode_width::UnicodeWidthStr;
 
 use crate::syntax::{
     self, COMMENT, DEFAULT_PARAMETER, FIELD_NAME, FIELD_VALUE, KEYWORD_ARGUMENT, STRING,
@@ -15,11 +16,24 @@ use crate::syntax::{
 
 /// A small layout document. `Indent` is relative, so the same document can be
 /// rendered at any nesting depth.
+///
+/// [`Doc::Group`] is the only width-sensitive construct: it renders flat (soft
+/// breaks as spaces) when the flat form fits within [`LINE_WIDTH`], and broken
+/// (soft breaks as newlines) otherwise. Hard [`Doc::Line`] breaks are always
+/// newlines and force any enclosing group to break.
 #[derive(Clone, Debug)]
 pub(crate) enum Doc {
     Text(String),
     Line,
+    /// A space when flat, a line break when broken.
+    SoftLine,
+    /// Nothing when flat, a line break when broken.
+    SoftNil,
+    /// Text emitted only when the enclosing group is broken, used for the
+    /// trailing comma that keeps an appended list item on a single diff line.
+    Broken(&'static str),
     Indent(Box<Doc>),
+    Group(Box<Doc>),
     Concat(Vec<Doc>),
 }
 
@@ -27,6 +41,7 @@ struct Output {
     text: String,
     depth: usize,
     at_line_start: bool,
+    column: usize,
 }
 
 impl Output {
@@ -35,14 +50,26 @@ impl Output {
             for _ in 0..self.depth {
                 self.text.push_str("    ");
             }
+            self.column = self.depth * 4;
             self.at_line_start = false;
         }
         self.text.push_str(value);
+        self.column += UnicodeWidthStr::width(value);
     }
 
     fn line(&mut self) {
         self.text.push('\n');
         self.at_line_start = true;
+        self.column = 0;
+    }
+
+    /// The column the next written character would land in.
+    fn column_now(&self) -> usize {
+        if self.at_line_start {
+            self.depth * 4
+        } else {
+            self.column
+        }
     }
 }
 
@@ -52,24 +79,66 @@ pub(crate) fn render(doc: &Doc, depth: usize) -> String {
         text: String::new(),
         depth,
         at_line_start: true,
+        column: 0,
     };
-    render_into(doc, &mut output);
+    render_into(doc, &mut output, false);
     output.text
 }
 
-fn render_into(doc: &Doc, output: &mut Output) {
+fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
     match doc {
         Doc::Text(value) => output.write(value),
         Doc::Line => output.line(),
+        Doc::SoftLine => {
+            if flat {
+                output.write(" ");
+            } else {
+                output.line();
+            }
+        }
+        Doc::SoftNil => {
+            if !flat {
+                output.line();
+            }
+        }
+        Doc::Broken(value) => {
+            if !flat {
+                output.write(value);
+            }
+        }
         Doc::Indent(inner) => {
             output.depth += 1;
-            render_into(inner, output);
+            render_into(inner, output, flat);
             output.depth -= 1;
+        }
+        Doc::Group(inner) => {
+            let flat_here = flat
+                || flat_width(inner).is_some_and(|width| output.column_now() + width <= LINE_WIDTH);
+            render_into(inner, output, flat_here);
         }
         Doc::Concat(parts) => {
             for part in parts {
-                render_into(part, output);
+                render_into(part, output, flat);
             }
+        }
+    }
+}
+
+/// The display width of `doc` rendered flat, or `None` when it contains a hard
+/// [`Doc::Line`] and can therefore never be flat.
+fn flat_width(doc: &Doc) -> Option<usize> {
+    match doc {
+        Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
+        Doc::Line => None,
+        Doc::SoftLine => Some(1),
+        Doc::SoftNil | Doc::Broken(_) => Some(0),
+        Doc::Indent(inner) | Doc::Group(inner) => flat_width(inner),
+        Doc::Concat(parts) => {
+            let mut total = 0;
+            for part in parts {
+                total += flat_width(part)?;
+            }
+            Some(total)
         }
     }
 }
@@ -196,15 +265,38 @@ impl<'a> Renderer<'a> {
         self.child_of_kind(node, kind).is_some()
     }
 
-    /// The comma-separated named children of an `argument_list`, without the
-    /// surrounding parentheses. Keyword arguments render as `name=value`.
-    pub(crate) fn argument_list_text(&self, node: Node<'_>) -> String {
-        let mut parts = Vec::new();
+    /// A bracketed list rendered inline when it fits [`LINE_WIDTH`] and one item
+    /// per indented line otherwise.
+    ///
+    /// `open`/`close` are the delimiters (`()` for parameters, `[]` for type
+    /// parameters). The trailing comma is emitted only when the list breaks, so
+    /// appending an item changes exactly one line.
+    pub(crate) fn bracket_list_doc(&self, node: Node<'_>, open: &str, close: &str) -> Doc {
+        let mut items = Vec::new();
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            parts.push(self.node_text(child));
+            items.push(self.node_text(child));
         }
-        parts.join(", ")
+        if items.is_empty() {
+            return Doc::Text(format!("{open}{close}"));
+        }
+
+        let mut inner: Vec<Doc> = vec![Doc::SoftNil];
+        for (index, item) in items.into_iter().enumerate() {
+            if index > 0 {
+                inner.push(Doc::Text(",".to_owned()));
+                inner.push(Doc::SoftLine);
+            }
+            inner.push(Doc::Text(item));
+        }
+        inner.push(Doc::Broken(","));
+
+        Doc::Group(Box::new(Doc::Concat(vec![
+            Doc::Text(open.to_owned()),
+            Doc::Indent(Box::new(Doc::Concat(inner))),
+            Doc::SoftNil,
+            Doc::Text(close.to_owned()),
+        ])))
     }
 }
 
@@ -316,5 +408,63 @@ mod tests {
     fn glued_equals_has_no_spaces() {
         let tokens = vec![Tok::plain("frozen"), Tok::glued("="), Tok::plain("True")];
         assert_eq!(join(&tokens), "frozen=True");
+    }
+
+    /// The document shape `bracket_list_doc` builds, for width tests.
+    fn list(items: &[String]) -> Doc {
+        let mut inner: Vec<Doc> = vec![Doc::SoftNil];
+        for (index, item) in items.iter().enumerate() {
+            if index > 0 {
+                inner.push(Doc::Text(",".to_owned()));
+                inner.push(Doc::SoftLine);
+            }
+            inner.push(Doc::Text(item.clone()));
+        }
+        inner.push(Doc::Broken(","));
+        Doc::Group(Box::new(Doc::Concat(vec![
+            Doc::Text("(".to_owned()),
+            Doc::Indent(Box::new(Doc::Concat(inner))),
+            Doc::SoftNil,
+            Doc::Text(")".to_owned()),
+        ])))
+    }
+
+    #[test]
+    fn list_stays_inline_when_it_fits_the_budget() {
+        let items = vec!["a: int".to_owned(), "b: int".to_owned()];
+        assert_eq!(render(&list(&items), 0), "(a: int, b: int)");
+    }
+
+    #[test]
+    fn list_breaks_one_item_per_line_over_the_budget() {
+        let first = "x".repeat(40);
+        let second = "y".repeat(40);
+        // Flat width is 1 + 40 + 1 + 1 + 40 + 1 = 84, over LINE_WIDTH.
+        let items = vec![first.clone(), second.clone()];
+        assert_eq!(
+            render(&list(&items), 0),
+            format!("(\n    {first},\n    {second},\n)")
+        );
+    }
+
+    #[test]
+    fn a_broken_list_indents_relative_to_its_depth() {
+        let first = "x".repeat(40);
+        let second = "y".repeat(40);
+        let items = vec![first.clone(), second.clone()];
+        assert_eq!(
+            render(&list(&items), 2),
+            format!("        (\n            {first},\n            {second},\n        )")
+        );
+    }
+
+    #[test]
+    fn flat_width_counts_display_columns_not_bytes() {
+        // Each CJK character is two columns wide. Forty of them overflow the
+        // budget even though the byte length is not what decides.
+        let wide = "名".repeat(40);
+        let items = vec![wide.clone(), wide.clone()];
+        let rendered = render(&list(&items), 0);
+        assert!(rendered.starts_with("(\n"), "expected a broken list");
     }
 }

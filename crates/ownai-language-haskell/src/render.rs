@@ -6,18 +6,26 @@
 //! breaks; source slices are used only for atomic literals. Terminal width is
 //! never consulted.
 
-use ownai_core::RepoPath;
+use ownai_core::{LINE_WIDTH, RepoPath};
 use tree_sitter::Node;
+use unicode_width::UnicodeWidthStr;
 
 use crate::syntax;
 
 /// A small layout document. `Indent` is relative, so the same document can be
 /// rendered at any nesting depth.
+///
+/// [`Doc::Group`] is the only width-sensitive construct: it renders flat (soft
+/// breaks as spaces) when the flat form fits within [`LINE_WIDTH`], and broken
+/// (soft breaks as newlines) otherwise.
 #[derive(Clone, Debug)]
 pub(crate) enum Doc {
     Text(String),
     Line,
+    /// A space when flat, a line break when broken.
+    SoftLine,
     Indent(Box<Doc>),
+    Group(Box<Doc>),
     Concat(Vec<Doc>),
 }
 
@@ -25,6 +33,7 @@ struct Output {
     text: String,
     depth: usize,
     at_line_start: bool,
+    column: usize,
 }
 
 impl Output {
@@ -33,14 +42,26 @@ impl Output {
             for _ in 0..self.depth {
                 self.text.push_str("    ");
             }
+            self.column = self.depth * 4;
             self.at_line_start = false;
         }
         self.text.push_str(value);
+        self.column += UnicodeWidthStr::width(value);
     }
 
     fn line(&mut self) {
         self.text.push('\n');
         self.at_line_start = true;
+        self.column = 0;
+    }
+
+    /// The column the next written character would land in.
+    fn column_now(&self) -> usize {
+        if self.at_line_start {
+            self.depth * 4
+        } else {
+            self.column
+        }
     }
 }
 
@@ -50,24 +71,55 @@ pub(crate) fn render(doc: &Doc, depth: usize) -> String {
         text: String::new(),
         depth,
         at_line_start: true,
+        column: 0,
     };
-    render_into(doc, &mut output);
+    render_into(doc, &mut output, false);
     output.text
 }
 
-fn render_into(doc: &Doc, output: &mut Output) {
+fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
     match doc {
         Doc::Text(value) => output.write(value),
         Doc::Line => output.line(),
+        Doc::SoftLine => {
+            if flat {
+                output.write(" ");
+            } else {
+                output.line();
+            }
+        }
         Doc::Indent(inner) => {
             output.depth += 1;
-            render_into(inner, output);
+            render_into(inner, output, flat);
             output.depth -= 1;
+        }
+        Doc::Group(inner) => {
+            let flat_here = flat
+                || flat_width(inner).is_some_and(|width| output.column_now() + width <= LINE_WIDTH);
+            render_into(inner, output, flat_here);
         }
         Doc::Concat(parts) => {
             for part in parts {
-                render_into(part, output);
+                render_into(part, output, flat);
             }
+        }
+    }
+}
+
+/// The display width of `doc` rendered flat, or `None` when it contains a hard
+/// [`Doc::Line`] and can therefore never be flat.
+fn flat_width(doc: &Doc) -> Option<usize> {
+    match doc {
+        Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
+        Doc::Line => None,
+        Doc::SoftLine => Some(1),
+        Doc::Indent(inner) | Doc::Group(inner) => flat_width(inner),
+        Doc::Concat(parts) => {
+            let mut total = 0;
+            for part in parts {
+                total += flat_width(part)?;
+            }
+            Some(total)
         }
     }
 }
@@ -383,9 +435,81 @@ impl<'a> Renderer<'a> {
         format!("{keyword} {context}{forall}{name}{params}{fundeps}")
     }
 
-    /// A signature declaration, e.g. `f, g :: Int -> Int`.
-    pub(crate) fn signature_text(&self, node: Node<'_>) -> String {
-        self.node_text(node)
+    /// A signature declaration, e.g. `f, g :: Int -> Int`, wrapping the type's
+    /// top-level arrows when it does not fit the line budget.
+    pub(crate) fn signature_doc(&self, node: Node<'_>) -> Doc {
+        let names = match self.field(node, "names") {
+            Some(names) => self.node_text(names),
+            None => self
+                .field_text(node, syntax::FIELD_NAME_FIELD)
+                .unwrap_or_default(),
+        };
+        let Some(type_node) = self.field(node, syntax::FIELD_TYPE) else {
+            return Doc::Text(format!("{names} ::"));
+        };
+        Doc::Concat(vec![
+            Doc::Text(format!("{names} :: ")),
+            self.signature_type_doc(type_node),
+        ])
+    }
+
+    /// A type rendered with its top-level arrows (and a leading `=>`) as break
+    /// points, so a long signature wraps one arrow per line.
+    fn signature_type_doc(&self, node: Node<'_>) -> Doc {
+        let mut node = node;
+        let mut head = None;
+        if node.kind() == syntax::CONTEXT {
+            let context = self
+                .field(node, "context")
+                .map(|context| self.node_text(context))
+                .unwrap_or_default();
+            head = Some(Doc::Text(context));
+            match self.field(node, syntax::FIELD_TYPE) {
+                Some(inner) => node = inner,
+                None => return head.unwrap_or_else(|| Doc::Text(String::new())),
+            }
+        }
+
+        let mut atoms = Vec::new();
+        let mut current = node;
+        loop {
+            if current.kind() == syntax::FUNCTION {
+                if let Some(parameter) = self.field(current, "parameter") {
+                    atoms.push(self.node_text(parameter));
+                }
+                match self.field(current, "result") {
+                    Some(result) => current = result,
+                    None => break,
+                }
+            } else {
+                atoms.push(self.node_text(current));
+                break;
+            }
+        }
+
+        let mut atoms = atoms.into_iter();
+        let mut rest: Vec<Doc> = Vec::new();
+        let head = match head {
+            Some(head) => {
+                rest.push(Doc::SoftLine);
+                rest.push(Doc::Text("=> ".to_owned()));
+                if let Some(first) = atoms.next() {
+                    rest.push(Doc::Text(first));
+                }
+                head
+            }
+            None => Doc::Text(atoms.next().unwrap_or_default()),
+        };
+        for atom in atoms {
+            rest.push(Doc::SoftLine);
+            rest.push(Doc::Text("-> ".to_owned()));
+            rest.push(Doc::Text(atom));
+        }
+
+        Doc::Group(Box::new(Doc::Concat(vec![
+            head,
+            Doc::Indent(Box::new(Doc::Concat(rest))),
+        ])))
     }
 
     /// The written head of a function definition, without the body.

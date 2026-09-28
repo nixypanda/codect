@@ -19,4 +19,6 @@ pub use model::{
     ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath, SourceSpan,
 };
 pub use path::{Area, AreaError, AreaSet, PathScope, PathSelection, PathSelectionError};
-pub use render::{diff_document, project_all, select_projector, show_document, sort_files};
+pub use render::{
+    LINE_WIDTH, diff_document, project_all, select_projector, show_document, sort_files,
+};
