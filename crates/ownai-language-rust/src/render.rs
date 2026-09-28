@@ -286,11 +286,12 @@ enum Elem {
 /// Parameter and type-parameter lists become groups that wrap at [`LINE_WIDTH`];
 /// every other token keeps the fixed spacing rules, so a header that fits is
 /// byte-for-byte the old flat output.
+/// The declaration prefix as an ungrouped document. The caller groups it
+/// together with whatever shares its first line, so the fit check counts the
+/// terminator or opening brace too.
 pub(crate) fn header(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Doc {
     let elements = header_elements(node, source, stop_kinds);
-    // Group the whole header so a list breaks when the header, including any
-    // return type, does not fit (not just the list alone).
-    Doc::Group(Box::new(elements_doc(&elements)))
+    elements_doc(&elements)
 }
 
 fn header_elements(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Vec<Elem> {
@@ -410,11 +411,18 @@ pub(crate) fn attribute_text(attribute: Node<'_>, source: &str) -> String {
 }
 
 /// A unit or tuple struct terminator, or any declaration that ends in `;`.
+///
+/// Without a `where` clause the header shares its line with the `;`, so both
+/// form one group. With a clause the header sits alone and the `;` follows the
+/// clause on its own line.
 pub(crate) fn signature_doc(header: Doc, where_clause: Option<String>) -> Doc {
     match where_clause {
-        None => Doc::Concat(vec![header, Doc::Text(";".to_owned())]),
-        Some(clause) => Doc::Concat(vec![
+        None => Doc::Group(Box::new(Doc::Concat(vec![
             header,
+            Doc::Text(";".to_owned()),
+        ]))),
+        Some(clause) => Doc::Concat(vec![
+            Doc::Group(Box::new(header)),
             Doc::Line,
             Doc::Text(clause),
             Doc::Text(";".to_owned()),
@@ -427,9 +435,12 @@ pub(crate) fn signature_doc(header: Doc, where_clause: Option<String>) -> Doc {
 pub(crate) fn container_doc(header: Doc, where_clause: Option<String>, members: Vec<Doc>) -> Doc {
     if members.is_empty() {
         return match where_clause {
-            None => Doc::Concat(vec![header, Doc::Text(" {}".to_owned())]),
-            Some(clause) => Doc::Concat(vec![
+            None => Doc::Group(Box::new(Doc::Concat(vec![
                 header,
+                Doc::Text(" {}".to_owned()),
+            ]))),
+            Some(clause) => Doc::Concat(vec![
+                Doc::Group(Box::new(header)),
                 Doc::Line,
                 Doc::Text(clause),
                 Doc::Line,
@@ -447,9 +458,15 @@ pub(crate) fn container_doc(header: Doc, where_clause: Option<String>, members: 
     }
 
     let open = match where_clause {
-        None => vec![header, Doc::Text(" {".to_owned()), Doc::Line],
+        None => vec![
+            Doc::Group(Box::new(Doc::Concat(vec![
+                header,
+                Doc::Text(" {".to_owned()),
+            ]))),
+            Doc::Line,
+        ],
         Some(clause) => vec![
-            header,
+            Doc::Group(Box::new(header)),
             Doc::Line,
             Doc::Text(clause),
             Doc::Line,
@@ -490,25 +507,47 @@ fn field_texts(list: Node<'_>, source: &str) -> Vec<String> {
     out
 }
 
-pub(crate) fn variant_text(variant: Node<'_>, source: &str) -> String {
+/// A variant body as an ungrouped document. A struct-like variant's field list
+/// is a brace list the caller can group with the trailing comma.
+pub(crate) fn variant_doc(variant: Node<'_>, source: &str) -> Doc {
     let name = child_by_field_name(variant, field::NAME)
         .map(|node| render_node(node, source))
         .unwrap_or_default();
 
     match child_by_field_name(variant, field::BODY) {
-        None => render_node(variant, source),
+        None => Doc::Text(render_node(variant, source)),
         Some(body) if body.kind() == node::ORDERED_FIELD_DECLARATION_LIST => {
-            format!("{name}{}", render_node(body, source))
+            Doc::Text(format!("{name}{}", render_node(body, source)))
         }
         Some(body) => {
             let fields = field_texts(body, source);
             if fields.is_empty() {
-                format!("{name} {{}}")
+                Doc::Text(format!("{name} {{}}"))
             } else {
-                format!("{name} {{ {} }}", fields.join(", "))
+                Doc::Concat(vec![Doc::Text(name), brace_list(&fields)])
             }
         }
     }
+}
+
+/// A brace-delimited field list, spaced inline (`{ a: A, b: B }`) and one field
+/// per indented line when broken.
+fn brace_list(fields: &[String]) -> Doc {
+    let mut inner: Vec<Doc> = vec![Doc::SoftLine];
+    for (index, field) in fields.iter().enumerate() {
+        if index > 0 {
+            inner.push(Doc::Text(",".to_owned()));
+            inner.push(Doc::SoftLine);
+        }
+        inner.push(Doc::Text(field.clone()));
+    }
+    inner.push(Doc::Broken(","));
+    Doc::Concat(vec![
+        Doc::Text(" {".to_owned()),
+        Doc::Indent(Box::new(Doc::Concat(inner))),
+        Doc::SoftLine,
+        Doc::Text("}".to_owned()),
+    ])
 }
 
 pub(crate) fn field_text(field: Node<'_>, source: &str) -> String {

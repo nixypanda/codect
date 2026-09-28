@@ -511,8 +511,13 @@ fn build_variant(
     let name = field_name(node, context.source).unwrap_or_default();
     let key = context.unique(format!("{container_key}::variant::{name}"));
     let attributes = attribute_docs(declaration, context);
-    let text = render::variant_text(node, context.source);
-    let doc = render::with_attributes(attributes, Doc::Text(format!("{text},")));
+    let doc = render::with_attributes(
+        attributes,
+        Doc::Group(Box::new(Doc::Concat(vec![
+            render::variant_doc(node, context.source),
+            Doc::Text(",".to_owned()),
+        ]))),
+    );
     make_built(
         node,
         key,

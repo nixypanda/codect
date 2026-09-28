@@ -583,8 +583,10 @@ Rendering must be independent of original whitespace and comments. It must prese
 Line breaks are fixed by declaration shape and by a single compile-time width budget. Terminal width must never change output. A declaration may wrap only at `ownai_core::LINE_WIDTH` (80 display columns), so a focused diff stays readable side by side while remaining deterministic:
 
 - One simple declaration or signature per line, unless the whole line would exceed the budget.
-- When a declaration line exceeds the budget, its primary bracketed list (a function's parameters, or a class's superclass list, else its type parameters) breaks one item per indented line, with the closing bracket returned to the declaration's indent. The fit is measured for the whole line, so a long return type still breaks the parameter list. Any earlier list breaks only when it does not fit on its own.
+- When a declaration line exceeds the budget, its primary bracketed list (a function's parameters, or a class's superclass list, else its type parameters) breaks one item per indented line, with the closing bracket returned to the declaration's indent. The fit is measured for the whole line, including the terminator or opening brace, so a long return type still breaks the parameter list. Any earlier list breaks only when it does not fit on its own.
+- A struct-like enum variant whose field list does not fit breaks one field per indented line.
 - An Elm or Haskell type signature whose arrow chain (`->`, and a leading `=>`) does not fit breaks before each arrow, one per indented line.
+- Atomic tokens are never split: a line dominated by one long string literal, identifier, or macro attribute body may still exceed the budget, exactly as a conventional formatter leaves it.
 - A broken bracketed list emits a trailing comma; an inline list does not.
 - One union constructor, enum variant, struct field, or record field per indented line when a declaration has a body.
 - One trait or implementation member per indented block.
