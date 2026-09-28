@@ -8,6 +8,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::Model;
 
+use super::empty::render_empty;
 use super::geom::{Edge, commit_offset, pane_block};
 use super::text::truncate_ellipsis;
 
@@ -21,11 +22,12 @@ pub(crate) fn render_commits(model: &Model, frame: &mut Frame, area: Rect, edge:
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if model.commits.is_empty() {
-        frame.render_widget(
-            Paragraph::new("no commits in range")
-                .style(model.theme.fg(model.theme.palette.text_muted)),
-            inner,
-        );
+        let (title, detail) = if model.pending.is_some() {
+            ("Loading", "Loading commits…")
+        } else {
+            ("No commits", "No commits in the selected range.")
+        };
+        render_empty(frame, inner, title, detail, &model.theme);
         return;
     }
 

@@ -2606,7 +2606,7 @@ mod tests {
         let mut empty = commits_model(0);
         empty.content = Content::Diff(Vec::new().into());
         let text = buffer_text(&render(&empty, 100, 20));
-        assert!(text.contains("no commits in range"));
+        assert!(text.contains("No commits"));
     }
 
     #[test]
@@ -2929,10 +2929,35 @@ mod tests {
     #[test]
     fn the_status_bar_shows_mode_scope_and_hints() {
         let model = model_with(vec![projected("a.rs", "x\n")]);
-        let text = buffer_text(&render(&model, 120, 20));
-        assert!(text.contains("types"), "{text}");
-        assert!(text.contains("scope:"), "{text}");
-        assert!(text.contains("help"), "{text}");
+        let buffer = render(&model, 120, 20);
+        let header = buffer_row(&buffer, 0);
+        let footer = buffer_row(&buffer, 19);
+        assert!(header.contains("types"), "{header}");
+        assert!(header.contains("HEAD"), "{header}");
+        assert!(header.contains("scope:"), "{header}");
+        assert!(!header.contains("a.rs"), "{header}");
+        assert!(footer.contains("a.rs"), "{footer}");
+        assert!(footer.contains("1 lines"), "{footer}");
+        assert!(footer.contains("help"), "{footer}");
+    }
+
+    #[test]
+    fn narrow_chrome_keeps_context_and_the_selected_path() {
+        let model = model_with(vec![projected("src/very/deep/file.rs", "x\n")]);
+        let buffer = render(&model, 60, 20);
+        let header = buffer_row(&buffer, 0);
+        let footer = buffer_row(&buffer, 19);
+        assert!(header.contains("types"), "{header}");
+        assert!(header.contains("HEAD"), "{header}");
+        assert!(footer.contains("file.rs"), "{footer}");
+        assert!(footer.contains("lines"), "{footer}");
+        assert!(footer.contains("help"), "{footer}");
+        assert_eq!(
+            buffer_text(&buffer)
+                .matches("src/very/deep/file.rs")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -3854,6 +3879,13 @@ mod tests {
         text
     }
 
+    fn buffer_row(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
+        (0..buffer.area.width)
+            .filter_map(|x| buffer.cell((x, y)))
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
     #[test]
     fn a_wide_terminal_shows_the_tree_and_the_projection() {
         let model = model_with(vec![projected("a.rs", "pub fn a();\n")]);
@@ -3861,6 +3893,47 @@ mod tests {
 
         assert!(text.contains("Files"), "tree pane missing: {text}");
         assert!(text.contains("pub fn a();"), "body missing: {text}");
+    }
+
+    #[test]
+    fn the_tree_keeps_a_quiet_selected_row_when_the_body_has_focus() {
+        use crate::theme::{Capability, Flavor};
+
+        for flavor in [Flavor::Dark, Flavor::Light] {
+            let mut model = two_files();
+            model.theme = Theme::new(flavor, Capability::TrueColor);
+
+            let focused = render(&model, 100, 20);
+            let focused_row = (0..focused.area.height)
+                .find(|&y| {
+                    focused
+                        .cell((2, y))
+                        .is_some_and(|cell| cell.symbol() == "▌")
+                })
+                .expect("selected file row");
+            assert_eq!(focused.cell((2, focused_row)).unwrap().symbol(), "▌");
+            assert_eq!(
+                focused.cell((3, focused_row)).unwrap().bg,
+                model.theme.color(model.theme.palette.selection_bg)
+            );
+
+            model.focus = Pane::Body;
+            let unfocused = render(&model, 100, 20);
+            assert_eq!(unfocused.cell((2, focused_row)).unwrap().symbol(), "▏");
+            assert_eq!(
+                unfocused.cell((3, focused_row)).unwrap().bg,
+                model.theme.color(model.theme.palette.surface_alt)
+            );
+            assert_eq!(
+                unfocused.cell((3, focused_row + 1)).unwrap().bg,
+                model.theme.color(model.theme.palette.bg)
+            );
+        }
+
+        let mut model = two_files();
+        model.theme = Theme::new(Flavor::Dark, Capability::NoColor);
+        model.focus = Pane::Body;
+        assert!(buffer_text(&render(&model, 100, 20)).contains("▏a.rs"));
     }
 
     #[test]
@@ -3936,14 +4009,19 @@ mod tests {
     fn an_empty_result_renders_a_clear_empty_state() {
         let model = model_with(vec![projected("empty.rs", "")]);
         let text = buffer_text(&render(&model, 100, 20));
-        assert!(text.contains("no projected files"), "{text}");
+        assert!(text.contains("No files"), "{text}");
+        assert!(
+            text.contains("No projected file content in this scope."),
+            "{text}"
+        );
     }
 
     #[test]
     fn a_diff_with_no_rows_renders_a_clear_empty_state() {
         let model = diff_model(Vec::new());
         let text = buffer_text(&render(&model, 100, 20));
-        assert!(text.contains("no projected changes"), "{text}");
+        assert!(text.contains("No changes"), "{text}");
+        assert!(text.contains("Body-only edits are omitted."), "{text}");
     }
 
     #[test]

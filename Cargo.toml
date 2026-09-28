@@ -64,9 +64,9 @@ crossterm = "0.29"
 terminal-colorsaurus = "1"
 unicode-width = "0.2"
 
-# Delta-style syntax highlighting. Confined to `ownai-tui`; the pure-Rust
-# `fancy-regex` backend avoids an Oniguruma C toolchain, and `two-face` adds
-# the bat syntax/theme assets (Elm, Monokai Extended) that delta uses.
+# Syntax highlighting for the TUI. The pure-Rust `fancy-regex` backend avoids
+# an Oniguruma C toolchain; `two-face` supplies bat's syntax grammars, including
+# Elm. Token colors use in-crate Tokyo Night night/day themes.
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 

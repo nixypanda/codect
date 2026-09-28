@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{ChangeKind, Content, Model, RowKind, TreeRow};
 use crate::theme::Theme;
 
+use super::empty::render_empty;
 use super::geom::{Edge, pane_block, window_offset};
 use super::text::truncate_ellipsis;
 
@@ -19,14 +20,15 @@ pub(crate) fn render_tree(model: &Model, frame: &mut Frame, area: Rect, focused:
     frame.render_widget(block, area);
 
     if model.rows.is_empty() {
-        let empty = match model.content {
-            Content::Show(_) => "no projected files",
-            Content::Diff(_) => "no projected changes",
+        let (title, detail) = if model.pending.is_some() {
+            ("Loading", "Projecting files…")
+        } else {
+            match model.content {
+                Content::Show(_) => ("No files", "No projected file content in this scope."),
+                Content::Diff(_) => ("No changes", "Body-only edits are omitted."),
+            }
         };
-        frame.render_widget(
-            Paragraph::new(empty).style(model.theme.fg(model.theme.palette.text_muted)),
-            inner,
-        );
+        render_empty(frame, inner, title, detail, &model.theme);
         return;
     }
 
@@ -42,7 +44,8 @@ pub(crate) fn render_tree(model: &Model, frame: &mut Frame, area: Rect, focused:
             model,
             row,
             index,
-            focused && index == model.cursor,
+            index == model.cursor,
+            focused,
             width,
             theme,
         ));
@@ -69,11 +72,17 @@ fn tree_line(
     row: &TreeRow,
     index: usize,
     selected: bool,
+    focused: bool,
     width: usize,
     theme: &Theme,
 ) -> Line<'static> {
     let base = if selected {
-        theme.fg_bg(theme.palette.selection_fg, theme.palette.selection_bg)
+        let background = if focused {
+            theme.palette.selection_bg
+        } else {
+            theme.palette.surface_alt
+        };
+        theme.fg_bg(theme.palette.selection_fg, background)
     } else {
         Style::default()
     };
@@ -82,10 +91,12 @@ fn tree_line(
 
     // The selection bar reserves its column on every row so labels stay aligned.
     if selected {
-        spans.push(Span::styled(
-            "▌".to_owned(),
-            theme.fg_bg(theme.palette.selection_bar, theme.palette.selection_bg),
-        ));
+        let (bar, color) = if focused {
+            ("▌", theme.palette.selection_bar)
+        } else {
+            ("▏", theme.palette.text_muted)
+        };
+        spans.push(Span::styled(bar.to_owned(), base.fg(theme.color(color))));
     } else {
         spans.push(Span::styled(" ".to_owned(), base));
     }
@@ -147,14 +158,7 @@ fn tree_line(
     if let Some((label, color)) = badge {
         spans.push(Span::styled(
             format!(" {label}"),
-            theme.fg_bg(
-                color,
-                if selected {
-                    theme.palette.selection_bg
-                } else {
-                    theme.palette.bg
-                },
-            ),
+            base.fg(theme.color(color)),
         ));
     }
 
@@ -164,6 +168,10 @@ fn tree_line(
         .sum();
     if used < width {
         spans.push(Span::styled(" ".repeat(width - used), base));
+    }
+    // Keep the selection fill behind guides and icons as well as the label.
+    for span in &mut spans {
+        span.style = base.patch(span.style);
     }
     Line::from(spans)
 }

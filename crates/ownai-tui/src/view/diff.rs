@@ -14,7 +14,9 @@ use crate::app::{LoadRequest, Model, SearchSide, VisualRow, VisualRowKind};
 use crate::highlight::{self, Run, StyledLine};
 use crate::theme::Theme;
 
+use super::empty::render_empty;
 use super::geom::{Edge, gutter_width, pane_block};
+use super::text::truncate_ellipsis;
 
 /// Context lines kept around each change, matching the core diff engine.
 const CONTEXT_RADIUS: usize = 3;
@@ -41,17 +43,32 @@ pub(crate) fn render_diff_pane(
         (_, LoadRequest::Show { revision, .. }, _) => revision.as_str(),
         _ => unreachable!("diff request has revisions"),
     };
-    let title = model.selected.as_ref().map_or_else(
-        || format!(" {revision} "),
-        |path| format!(" {revision} · {path} "),
-    );
+    let title = pane_title(side, revision, area.width);
     let block = pane_block(&title, focused, &model.theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let Some(diff) = model.active_diff() else {
+        let (title, detail) = if model.pending.is_some() && model.rows.is_empty() {
+            ("Loading", "Comparing projections…")
+        } else if model.rows.is_empty() {
+            ("No changes", "Body-only edits are omitted.")
+        } else {
+            ("No file selected", "Select a file to view its diff.")
+        };
+        render_empty(frame, inner, title, detail, &model.theme);
         return;
     };
+    if rows.is_empty() {
+        render_empty(
+            frame,
+            inner,
+            "No text changes",
+            "No projected text to compare for this file.",
+            &model.theme,
+        );
+        return;
+    }
     let gutter = gutter_width(diff);
     let content_width = (inner.width as usize).saturating_sub(gutter);
     let height = inner.height as usize;
@@ -85,6 +102,17 @@ pub(crate) fn render_diff_pane(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+fn pane_title(side: Side, revision: &str, pane_width: u16) -> String {
+    let label = match side {
+        Side::Old => "BASE",
+        Side::New => "TARGET",
+    };
+    // Leave room for the rounded border corners on a standalone pane. This
+    // also keeps the title within the border in shared-divider layouts.
+    let available = (pane_width as usize).saturating_sub(2);
+    truncate_ellipsis(&format!(" {label} · {revision} "), available)
+}
+
 fn search_side(side: Side) -> SearchSide {
     match side {
         Side::Old => SearchSide::Old,
@@ -108,13 +136,20 @@ fn diff_line(
         // Hunk headers and collapse indicators span the whole pane.
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let full = gutter + width;
-        let mut padded = text;
+        let mut padded = if kind == VisualRowKind::Hunk {
+            format!(" {text}")
+        } else {
+            text
+        };
         let used = UnicodeWidthStr::width(padded.as_str());
         if used < full {
             padded.push_str(&" ".repeat(full - used));
         }
         let style = match kind {
-            VisualRowKind::Hunk => theme.fg(theme.palette.hunk).add_modifier(Modifier::BOLD),
+            VisualRowKind::Hunk if theme.colors_enabled() => theme
+                .fg_bg(theme.palette.hunk, theme.palette.surface_alt)
+                .add_modifier(Modifier::BOLD),
+            VisualRowKind::Hunk => Style::default(),
             _ => theme.fg(theme.palette.text_muted),
         };
         return Line::from(Span::styled(padded, style));
@@ -369,5 +404,71 @@ fn styled_line(highlight: &[StyledLine], number: usize, text: &str) -> StyledLin
             style: Style::default(),
             text: text.to_owned(),
         }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{Capability, Flavor};
+
+    #[test]
+    fn pane_titles_identify_sides_and_fit_narrow_borders() {
+        assert_eq!(pane_title(Side::Old, "main", 20), " BASE · main ");
+        assert_eq!(pane_title(Side::New, "feature", 20), " TARGET · feature ");
+
+        let narrow = pane_title(Side::New, "a-long-feature-branch", 16);
+        assert_eq!(narrow, " TARGET · a-l…");
+        assert_eq!(UnicodeWidthStr::width(narrow.as_str()), 14);
+        assert_eq!(pane_title(Side::Old, "main", 2), "");
+    }
+
+    #[test]
+    fn hunk_header_fills_the_pane_with_a_subtle_band() {
+        let theme = Theme::dark();
+        let runs = vec![Run {
+            style: Style::default(),
+            text: "@@ -12,3 +12,4 @@".to_owned(),
+        }];
+
+        let line = diff_line(
+            None,
+            false,
+            &runs,
+            VisualRowKind::Hunk,
+            Side::Old,
+            4,
+            24,
+            &theme,
+            &[],
+        );
+        let span = &line.spans[0];
+        assert_eq!(UnicodeWidthStr::width(span.content.as_ref()), 28);
+        assert!(span.content.starts_with(" @@ -12,3 +12,4 @@"));
+        assert_eq!(span.style.fg, Some(theme.color(theme.palette.hunk)));
+        assert_eq!(span.style.bg, Some(theme.color(theme.palette.surface_alt)));
+    }
+
+    #[test]
+    fn hunk_header_keeps_its_range_markers_without_color() {
+        let theme = Theme::new(Flavor::Dark, Capability::NoColor);
+        let runs = vec![Run {
+            style: Style::default(),
+            text: "@@ -1,2 +1,3 @@".to_owned(),
+        }];
+
+        let line = diff_line(
+            None,
+            false,
+            &runs,
+            VisualRowKind::Hunk,
+            Side::New,
+            4,
+            20,
+            &theme,
+            &[],
+        );
+        assert!(line.spans[0].content.starts_with(" @@ -1,2 +1,3 @@"));
+        assert_eq!(line.spans[0].style, Style::default());
     }
 }
