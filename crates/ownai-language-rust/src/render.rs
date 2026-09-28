@@ -288,7 +288,9 @@ enum Elem {
 /// byte-for-byte the old flat output.
 pub(crate) fn header(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Doc {
     let elements = header_elements(node, source, stop_kinds);
-    elements_doc(&elements)
+    // Group the whole header so a list breaks when the header, including any
+    // return type, does not fit (not just the list alone).
+    Doc::Group(Box::new(elements_doc(&elements)))
 }
 
 fn header_elements(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Vec<Elem> {
@@ -325,6 +327,13 @@ fn list_elem(node: Node<'_>, source: &str, open: &'static str, close: &'static s
 }
 
 fn elements_doc(elements: &[Elem]) -> Doc {
+    // The last list is the primary break point: it stays ungrouped so the
+    // enclosing header group's fit check includes any trailing return type.
+    // Earlier lists (generics before parameters) stay grouped so they re-decide
+    // and remain inline when they fit on their own.
+    let primary = elements
+        .iter()
+        .rposition(|element| matches!(element, Elem::List { .. }));
     let mut parts: Vec<Doc> = Vec::new();
     let mut previous: Option<&str> = None;
     for (index, element) in elements.iter().enumerate() {
@@ -354,7 +363,12 @@ fn elements_doc(elements: &[Elem]) -> Doc {
                 {
                     parts.push(Doc::Text(" ".to_owned()));
                 }
-                parts.push(bracket_list_doc(items, open, close));
+                let list = bracket_list(items, open, close);
+                if Some(index) == primary {
+                    parts.push(list);
+                } else {
+                    parts.push(Doc::Group(Box::new(list)));
+                }
                 previous = Some(close);
             }
         }
@@ -362,10 +376,11 @@ fn elements_doc(elements: &[Elem]) -> Doc {
     Doc::Concat(parts)
 }
 
-/// A bracketed list rendered inline when it fits [`LINE_WIDTH`] and one item per
-/// indented line otherwise. The trailing comma is emitted only when broken, so
-/// appending an item changes exactly one line.
-fn bracket_list_doc(items: &[String], open: &str, close: &str) -> Doc {
+/// A bracketed list body: inline while the enclosing [`Doc::Group`] fits, one
+/// item per indented line when it breaks. The trailing comma is emitted only
+/// when broken, so appending an item changes exactly one line. This is
+/// deliberately ungrouped so the caller can group the whole header.
+fn bracket_list(items: &[String], open: &str, close: &str) -> Doc {
     if items.is_empty() {
         return Doc::Text(format!("{open}{close}"));
     }
@@ -378,12 +393,12 @@ fn bracket_list_doc(items: &[String], open: &str, close: &str) -> Doc {
         inner.push(Doc::Text(item.clone()));
     }
     inner.push(Doc::Broken(","));
-    Doc::Group(Box::new(Doc::Concat(vec![
+    Doc::Concat(vec![
         Doc::Text(open.to_owned()),
         Doc::Indent(Box::new(Doc::Concat(inner))),
         Doc::SoftNil,
         Doc::Text(close.to_owned()),
-    ])))
+    ])
 }
 
 pub(crate) fn where_clause_text(node: Node<'_>, source: &str) -> Option<String> {
@@ -595,13 +610,14 @@ mod tests {
         assert_eq!(spaced(&["where", "T", ":", "Clone", ","]), "where T: Clone");
     }
 
+    fn grouped_list(items: &[String]) -> Doc {
+        Doc::Group(Box::new(bracket_list(items, "(", ")")))
+    }
+
     #[test]
     fn bracket_list_stays_inline_when_it_fits() {
         let items = vec!["a: i32".to_owned(), "b: i32".to_owned()];
-        assert_eq!(
-            render(&bracket_list_doc(&items, "(", ")"), 0),
-            "(a: i32, b: i32)"
-        );
+        assert_eq!(render(&grouped_list(&items), 0), "(a: i32, b: i32)");
     }
 
     #[test]
@@ -610,8 +626,25 @@ mod tests {
         let second = "y".repeat(40);
         let items = vec![first.clone(), second.clone()];
         assert_eq!(
-            render(&bracket_list_doc(&items, "(", ")"), 0),
+            render(&grouped_list(&items), 0),
             format!("(\n    {first},\n    {second},\n)")
+        );
+    }
+
+    #[test]
+    fn a_header_group_counts_a_trailing_return_type() {
+        // The list alone fits, but the whole header (with the return type) does
+        // not, so the list must break.
+        let items = vec!["a: i32".to_owned()];
+        let head = Doc::Group(Box::new(Doc::Concat(vec![
+            Doc::Text("pub fn f".to_owned()),
+            bracket_list(&items, "(", ")"),
+            Doc::Text(format!(" -> {}", "R".repeat(80))),
+        ])));
+        let rendered = render(&head, 0);
+        assert!(
+            rendered.starts_with("pub fn f(\n    a: i32,\n) -> "),
+            "expected a broken list, got {rendered:?}"
         );
     }
 }

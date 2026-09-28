@@ -265,13 +265,15 @@ impl<'a> Renderer<'a> {
         self.child_of_kind(node, kind).is_some()
     }
 
-    /// A bracketed list rendered inline when it fits [`LINE_WIDTH`] and one item
-    /// per indented line otherwise.
+    /// A bracketed list body: inline while the enclosing [`Doc::Group`] fits,
+    /// one item per indented line when it breaks.
     ///
     /// `open`/`close` are the delimiters (`()` for parameters, `[]` for type
-    /// parameters). The trailing comma is emitted only when the list breaks, so
-    /// appending an item changes exactly one line.
-    pub(crate) fn bracket_list_doc(&self, node: Node<'_>, open: &str, close: &str) -> Doc {
+    /// parameters). The trailing comma is emitted only when the group breaks, so
+    /// appending an item changes exactly one line. This is deliberately ungrouped
+    /// so the caller can group the whole declaration header, letting the fit
+    /// check see the return type and other trailing text.
+    pub(crate) fn bracket_list(&self, node: Node<'_>, open: &str, close: &str) -> Doc {
         let mut items = Vec::new();
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
@@ -291,12 +293,12 @@ impl<'a> Renderer<'a> {
         }
         inner.push(Doc::Broken(","));
 
-        Doc::Group(Box::new(Doc::Concat(vec![
+        Doc::Concat(vec![
             Doc::Text(open.to_owned()),
             Doc::Indent(Box::new(Doc::Concat(inner))),
             Doc::SoftNil,
             Doc::Text(close.to_owned()),
-        ])))
+        ])
     }
 }
 

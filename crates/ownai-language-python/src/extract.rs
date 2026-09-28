@@ -177,14 +177,23 @@ impl Builder<'_> {
         let enum_like = is_enum_like(self.renderer, node);
 
         let mut header = vec![Doc::Text(format!("class {name}"))];
-        if let Some(parameters) = node.child_by_field_name(FIELD_TYPE_PARAMETERS) {
-            header.push(self.renderer.bracket_list_doc(parameters, "[", "]"));
+        let type_parameters = node.child_by_field_name(FIELD_TYPE_PARAMETERS);
+        let superclasses = node.child_by_field_name(FIELD_SUPERCLASSES);
+        if let Some(parameters) = type_parameters {
+            let list = self.renderer.bracket_list(parameters, "[", "]");
+            // The last list is the primary break point; an earlier list stays
+            // grouped so it remains inline when it fits on its own.
+            header.push(if superclasses.is_some() {
+                Doc::Group(Box::new(list))
+            } else {
+                list
+            });
         }
-        if let Some(superclasses) = node.child_by_field_name(FIELD_SUPERCLASSES) {
-            header.push(self.renderer.bracket_list_doc(superclasses, "(", ")"));
+        if let Some(superclasses) = superclasses {
+            header.push(self.renderer.bracket_list(superclasses, "(", ")"));
         }
         header.push(Doc::Text(":".to_owned()));
-        let header = Doc::Concat(header);
+        let header = Doc::Group(Box::new(Doc::Concat(header)));
 
         let members = match node.child_by_field_name(FIELD_BODY) {
             Some(body) => self.members(body, &key, Scope::Class { enum_like }, depth + 1)?,
@@ -230,11 +239,20 @@ impl Builder<'_> {
             header.push(Doc::Text("async ".to_owned()));
         }
         header.push(Doc::Text(format!("def {name}")));
-        if let Some(parameters) = node.child_by_field_name(FIELD_TYPE_PARAMETERS) {
-            header.push(self.renderer.bracket_list_doc(parameters, "[", "]"));
+        let type_parameters = node.child_by_field_name(FIELD_TYPE_PARAMETERS);
+        let parameters = node.child_by_field_name("parameters");
+        if let Some(type_parameters) = type_parameters {
+            let list = self.renderer.bracket_list(type_parameters, "[", "]");
+            // The parameter list is the primary break point; type parameters
+            // stay grouped so they remain inline when they fit on their own.
+            header.push(if parameters.is_some() {
+                Doc::Group(Box::new(list))
+            } else {
+                list
+            });
         }
-        match node.child_by_field_name("parameters") {
-            Some(parameters) => header.push(self.renderer.bracket_list_doc(parameters, "(", ")")),
+        match parameters {
+            Some(parameters) => header.push(self.renderer.bracket_list(parameters, "(", ")")),
             None => self.invariant(node, "function has no parameter list")?,
         }
         if let Some(return_type) = node.child_by_field_name(FIELD_RETURN_TYPE) {
@@ -243,7 +261,9 @@ impl Builder<'_> {
         }
         header.push(Doc::Text(": ...".to_owned()));
 
-        let doc = signature_doc(decorators, Doc::Concat(header));
+        // Group the whole header so the parameter list breaks when the header,
+        // including the return type, does not fit (not just the list alone).
+        let doc = signature_doc(decorators, Doc::Group(Box::new(Doc::Concat(header))));
         let parent = nested_parent(container_key, scope);
         let item_kind = if is_method {
             ItemKind::Method
