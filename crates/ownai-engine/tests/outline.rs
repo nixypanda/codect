@@ -94,7 +94,7 @@ fn signatures_projection_is_a_superset_of_types_over_the_fixture_corpus() {
             types
                 .outline
                 .iter()
-                .map(|item| item.stable_key.clone())
+                .map(|item| item.item.stable_key.clone())
                 .collect::<Vec<_>>(),
             keys(signatures.projection.items()),
             "{display}: the Types-mode outline must enumerate the Signatures superset"
@@ -104,9 +104,9 @@ fn signatures_projection_is_a_superset_of_types_over_the_fixture_corpus() {
         // requested mode is the superset.
         for item in &signatures.outline {
             assert!(
-                item.retained_in_mode,
+                signatures.retained_in_mode(item),
                 "{display}: Signatures mode must retain `{}`",
-                item.stable_key
+                item.item.stable_key
             );
         }
 
@@ -120,17 +120,21 @@ fn signatures_projection_is_a_superset_of_types_over_the_fixture_corpus() {
             .collect();
         for item in &types.outline {
             assert_eq!(
-                item.retained_in_mode,
-                types_keys.contains(item.stable_key.as_str()),
+                types.retained_in_mode(item),
+                types_keys.contains(item.item.stable_key.as_str()),
                 "{display}: retained_in_mode disagrees with the Types projection for `{}`",
-                item.stable_key
+                item.item.stable_key
             );
         }
 
         // The outline is not just a relabelled projection: the corpus must
         // contain declarations the requested mode drops, so these assertions
         // are not vacuous.
-        if types.outline.iter().any(|item| !item.retained_in_mode) {
+        if types
+            .outline
+            .iter()
+            .any(|item| !types.retained_in_mode(item))
+        {
             saw_dropped = true;
         }
     }

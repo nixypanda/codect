@@ -8,37 +8,47 @@
 use std::collections::BTreeSet;
 
 use crate::diagnostic::ProjectionError;
-use crate::model::{ItemKind, Language, ProjectedFile, ProjectedItem, RepoPath, SourceSpan};
+use crate::model::{Language, ProjectedFile, ProjectedItem, RepoPath};
 
 /// One declaration in a file's mode-independent outline.
 ///
 /// The outline is derived from the Signatures projection, which is the superset
 /// of the Types projection, so it can locate a declaration the requested mode
-/// drops entirely (for example an inherent `impl` in Types mode).
+/// drops entirely (for example an inherent `impl` in Types mode). The item is
+/// the Signatures-superset declaration itself, so it cannot disagree with the
+/// projection it came from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutlineItem {
-    pub stable_key: String,
-    /// The `stable_key` of the containing declaration, or `None` at top level.
-    pub parent_key: Option<String>,
-    pub kind: ItemKind,
-    pub name: String,
-    /// The declaration's source span, as produced by the adapter (zero-based
-    /// lines; the JSON layer converts them).
-    pub span: SourceSpan,
-    /// The declaration's canonical fragment from the Signatures projection.
-    /// For a nested declaration this carries its container indentation.
-    pub signature: String,
-    /// Whether the requested mode's projection retains this `stable_key`.
-    pub retained_in_mode: bool,
+    /// The declaration from the Signatures superset; `canonical_text` is the
+    /// outline's `signature`.
+    pub item: ProjectedItem,
 }
 
 /// A requested-mode projection paired with the file's complete outline.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileOutline {
-    pub path: RepoPath,
-    pub language: Language,
     pub projection: ProjectedFile,
+    /// The `stable_key`s the requested mode retains.
+    pub retained: BTreeSet<String>,
+    /// The Signatures superset, in source order.
     pub outline: Vec<OutlineItem>,
+}
+
+impl FileOutline {
+    /// The file's path, taken from the projection so it cannot disagree.
+    pub fn path(&self) -> &RepoPath {
+        self.projection.path()
+    }
+
+    /// The file's language, taken from the projection so it cannot disagree.
+    pub fn language(&self) -> Language {
+        self.projection.language()
+    }
+
+    /// Whether the requested mode's projection retains `item`'s `stable_key`.
+    pub fn retained_in_mode(&self, item: &OutlineItem) -> bool {
+        self.retained.contains(&item.item.stable_key)
+    }
 }
 
 /// One changed file with the complete declaration outline for each present side.
@@ -60,43 +70,40 @@ impl FileOutlineDiff {
     /// disagree with the variant.
     pub fn path(&self) -> &RepoPath {
         match self {
-            Self::Added { new } => &new.path,
-            Self::Deleted { old } => &old.path,
-            Self::Modified { old, .. } => &old.path,
+            Self::Added { new } => new.path(),
+            Self::Deleted { old } => old.path(),
+            Self::Modified { old, .. } => old.path(),
         }
     }
 }
 
 /// Builds a [`FileOutline`] from the requested-mode and Signatures projections.
 ///
-/// `retained_in_mode` is set by `stable_key` membership in `projection`, so a
-/// declaration the requested mode drops is still located through `superset`.
+/// Retention is `stable_key` membership in `projection`, so a declaration the
+/// requested mode drops is still located through `superset`. Both projections
+/// are validated, so the outline cannot carry a malformed parent forest.
 pub fn assemble_outline(
     path: &RepoPath,
     language: Language,
     projection: Vec<ProjectedItem>,
     superset: Vec<ProjectedItem>,
 ) -> Result<FileOutline, ProjectionError> {
-    let retained: BTreeSet<&str> = projection
+    let projection = ProjectedFile::try_new(path.clone(), language, projection)?;
+    let superset = ProjectedFile::try_new(path.clone(), language, superset)?;
+    let retained = projection
+        .items()
         .iter()
-        .map(|item| item.stable_key.as_str())
+        .map(|item| item.stable_key.clone())
         .collect();
     let outline = superset
+        .items()
         .iter()
-        .map(|item| OutlineItem {
-            stable_key: item.stable_key.clone(),
-            parent_key: item.parent_key.clone(),
-            kind: item.kind,
-            name: item.name.clone(),
-            span: item.span,
-            signature: item.canonical_text.clone(),
-            retained_in_mode: retained.contains(item.stable_key.as_str()),
-        })
+        .cloned()
+        .map(|item| OutlineItem { item })
         .collect();
     Ok(FileOutline {
-        path: path.clone(),
-        language,
-        projection: ProjectedFile::try_new(path.clone(), language, projection)?,
+        projection,
+        retained,
         outline,
     })
 }
@@ -104,6 +111,7 @@ pub fn assemble_outline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{ItemKind, SourceSpan};
 
     fn item(key: &str, parent: Option<&str>, text: &str) -> ProjectedItem {
         ProjectedItem {
@@ -130,11 +138,13 @@ mod tests {
 
         assert_eq!(file.projection.canonical_text(), "impl User {\n}\n");
         assert_eq!(file.outline.len(), 2);
-        assert!(file.outline[0].retained_in_mode);
+        assert!(file.retained_in_mode(&file.outline[0]));
         assert!(
-            !file.outline[1].retained_in_mode,
+            !file.retained_in_mode(&file.outline[1]),
             "a declaration the requested mode drops must still appear in the outline"
         );
-        assert_eq!(file.outline[1].signature, "    fn id(&self);");
+        assert_eq!(file.outline[1].item.canonical_text, "    fn id(&self);");
+        assert_eq!(file.path(), file.projection.path());
+        assert_eq!(file.language(), file.projection.language());
     }
 }

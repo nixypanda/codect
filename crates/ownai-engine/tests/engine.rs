@@ -372,11 +372,11 @@ fn identical_blobs_at_different_paths_get_path_correct_stable_keys() {
     let keys_of = |raw: &str| -> Vec<String> {
         let file = files
             .iter()
-            .find(|file| file.path.to_string() == raw)
+            .find(|file| file.path().to_string() == raw)
             .unwrap_or_else(|| panic!("no outline for {raw}"));
         file.outline
             .iter()
-            .map(|item| item.stable_key.clone())
+            .map(|item| item.item.stable_key.clone())
             .collect()
     };
 

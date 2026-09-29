@@ -126,7 +126,7 @@ fn diff_file_document(file: &FileOutlineDiff, diff: &SnapshotDiff) -> DiffFileDo
     };
     DiffFileDocument {
         path: file.path().to_string(),
-        language: language_name(exemplar.language),
+        language: language_name(exemplar.language()),
         status,
         base,
         target,
@@ -138,7 +138,11 @@ fn diff_side_document(file: &FileOutline, snapshot_id: String) -> DiffSideDocume
     DiffSideDocument {
         snapshot_id,
         projection: projection_document(&file.projection),
-        outline: file.outline.iter().map(outline_document).collect(),
+        outline: file
+            .outline
+            .iter()
+            .map(|item| outline_document(file, item))
+            .collect(),
     }
 }
 
@@ -240,10 +244,14 @@ struct SpanDocument {
 
 fn file_document(file: &FileOutline) -> FileDocument {
     FileDocument {
-        path: file.path.to_string(),
-        language: language_name(file.language),
+        path: file.path().to_string(),
+        language: language_name(file.language()),
         projection: projection_document(&file.projection),
-        outline: file.outline.iter().map(outline_document).collect(),
+        outline: file
+            .outline
+            .iter()
+            .map(|item| outline_document(file, item))
+            .collect(),
     }
 }
 
@@ -265,15 +273,15 @@ fn item_document(item: &ProjectedItem) -> ItemDocument {
     }
 }
 
-fn outline_document(item: &OutlineItem) -> OutlineDocument {
+fn outline_document(file: &FileOutline, item: &OutlineItem) -> OutlineDocument {
     OutlineDocument {
-        stable_key: item.stable_key.clone(),
-        parent_key: item.parent_key.clone(),
-        kind: kind_name(item.kind),
-        name: item.name.clone(),
-        span: span_document(&item.span),
-        signature: item.signature.clone(),
-        retained_in_mode: item.retained_in_mode,
+        stable_key: item.item.stable_key.clone(),
+        parent_key: item.item.parent_key.clone(),
+        kind: kind_name(item.item.kind),
+        name: item.item.name.clone(),
+        span: span_document(&item.item.span),
+        signature: item.item.canonical_text.clone(),
+        retained_in_mode: file.retained_in_mode(item),
     }
 }
 
