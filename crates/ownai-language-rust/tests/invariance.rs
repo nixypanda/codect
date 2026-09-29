@@ -142,3 +142,38 @@ fn erroneous_syntax_is_fatal_instead_of_partial() {
         ownai_core::ProjectionError::ErroneousSyntax { .. }
     ));
 }
+
+#[test]
+fn every_nested_item_reaches_a_top_level_ancestor() {
+    // A struct with a field produces a nested item whose `parent_key` names the
+    // struct, so this fixture exercises the invariant `ProjectedFile::try_new`
+    // now enforces.
+    let source = "pub struct S {\n    pub a: u32,\n}\n";
+    let path = RepoPath::new("src/lib.rs").expect("path");
+    let file = RustProjector
+        .project(ProjectionInput {
+            path: &path,
+            source,
+            mode: ProjectionMode::Signatures,
+        })
+        .expect("projection");
+
+    assert!(
+        file.items().iter().any(|item| item.parent_key.is_some()),
+        "the fixture must exercise a nested declaration"
+    );
+    for item in file.items() {
+        let mut current = item.parent_key.as_deref();
+        let mut steps = 0;
+        while let Some(parent) = current {
+            let container = file
+                .items()
+                .iter()
+                .find(|candidate| candidate.stable_key == parent)
+                .expect("every parent_key must resolve to an item");
+            current = container.parent_key.as_deref();
+            steps += 1;
+            assert!(steps <= file.items().len(), "a parent chain must terminate");
+        }
+    }
+}

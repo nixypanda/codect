@@ -128,11 +128,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         }
     }
 
-    Ok(ProjectedFile::new(
-        input.path.clone(),
-        Language::Elm,
-        builder.items,
-    ))
+    ProjectedFile::try_new(input.path.clone(), Language::Elm, builder.items)
 }
 
 fn module_name(renderer: &Renderer<'_>, root: Node<'_>) -> Result<String, ProjectionError> {

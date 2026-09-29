@@ -46,11 +46,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         keys: HashMap::new(),
     };
     builder.run(root)?;
-    Ok(ProjectedFile::new(
-        input.path.clone(),
-        Language::Haskell,
-        builder.items,
-    ))
+    ProjectedFile::try_new(input.path.clone(), Language::Haskell, builder.items)
 }
 
 impl Builder<'_> {

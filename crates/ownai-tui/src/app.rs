@@ -2520,10 +2520,11 @@ mod tests {
 
     fn projected(path: &str, text: &str) -> ProjectedFile {
         let path = RepoPath::new(path).expect("valid path");
+        let language = path.language().expect("test path is supported");
         if text.is_empty() {
-            return ProjectedFile::new(path, Language::Rust, Vec::new());
+            return ProjectedFile::try_new(path, language, Vec::new()).expect("valid fixture");
         }
-        ProjectedFile::new(path, Language::Rust, vec![item(text)])
+        ProjectedFile::try_new(path, language, vec![item(text)]).expect("valid fixture")
     }
 
     fn show_request() -> LoadRequest {
@@ -4349,7 +4350,8 @@ mod tests {
     #[test]
     fn non_utf8_path_components_render_escaped() {
         let path = RepoPath::new(b"src/\xFF/lib.rs".as_slice()).expect("valid path");
-        let file = ProjectedFile::new(path, Language::Rust, vec![item("x\n")]);
+        let file =
+            ProjectedFile::try_new(path, Language::Rust, vec![item("x\n")]).expect("valid fixture");
         let model = model_with(vec![file]);
 
         let labels: Vec<String> = model.rows.iter().map(|row| row.label.clone()).collect();

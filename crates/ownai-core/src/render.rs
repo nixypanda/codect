@@ -166,7 +166,8 @@ mod tests {
         // An item whose fragment is empty still yields a bare "\n" canonical
         // text, so an empty projection is modeled with no items.
         if text.is_empty() {
-            return ProjectedFile::new(path, Language::Rust, Vec::new());
+            return ProjectedFile::try_new(path, Language::Rust, Vec::new())
+                .expect("valid fixture");
         }
 
         let item = ProjectedItem {
@@ -184,7 +185,7 @@ mod tests {
             },
             canonical_text: text.to_owned(),
         };
-        ProjectedFile::new(path, Language::Rust, vec![item])
+        ProjectedFile::try_new(path, Language::Rust, vec![item]).expect("valid fixture")
     }
 
     #[test]
@@ -324,7 +325,7 @@ mod tests {
         }
 
         fn project(&self, input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
-            Ok(ProjectedFile::new(
+            ProjectedFile::try_new(
                 input.path.clone(),
                 Language::Rust,
                 vec![ProjectedItem {
@@ -335,7 +336,7 @@ mod tests {
                     span: span(),
                     canonical_text: input.source.to_owned(),
                 }],
-            ))
+            )
         }
     }
 

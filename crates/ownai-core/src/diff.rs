@@ -221,7 +221,7 @@ mod tests {
 
     fn projected(path: &str, text: &str) -> ProjectedFile {
         let path = RepoPath::new(path).expect("valid test path");
-        ProjectedFile::new(
+        ProjectedFile::try_new(
             path,
             Language::Rust,
             vec![ProjectedItem {
@@ -240,6 +240,7 @@ mod tests {
                 canonical_text: text.to_owned(),
             }],
         )
+        .expect("valid fixture")
     }
 
     #[test]

@@ -93,7 +93,7 @@ pub fn project_source(
         project_items(projector, path, source, ProjectionMode::Signatures)
             .map_err(source_projection_failure)?
     };
-    Ok(assemble_outline(path, language, projection, superset))
+    assemble_outline(path, language, projection, superset).map_err(source_projection_failure)
 }
 
 fn project_items(
@@ -692,11 +692,9 @@ impl Engine {
         let language = projector.language();
         let items =
             self.project_items_cached(projector, caches, revision_spec, entry, language, mode)?;
-        Ok(Some(ProjectedFile::new(
-            entry.path.clone(),
-            language,
-            items,
-        )))
+        ProjectedFile::try_new(entry.path.clone(), language, items)
+            .map(Some)
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))
     }
 
     /// Projects one entry's items in `mode`, reading the blob once and reusing
@@ -783,12 +781,9 @@ impl Engine {
                 ProjectionMode::Signatures,
             )?
         };
-        Ok(Some(assemble_outline(
-            &entry.path,
-            language,
-            projection,
-            superset,
-        )))
+        assemble_outline(&entry.path, language, projection, superset)
+            .map(Some)
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))
     }
 
     fn projection_failure(

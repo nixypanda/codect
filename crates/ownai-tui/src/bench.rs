@@ -94,7 +94,7 @@ pub fn projected(path: &str, language: Language, text: &str) -> ProjectedFile {
             canonical_text: text.to_owned(),
         }]
     };
-    ProjectedFile::new(path, language, items)
+    ProjectedFile::try_new(path, language, items).expect("valid benchmark projection")
 }
 
 /// A one-path diff with the given old and new projections.

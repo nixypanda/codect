@@ -338,7 +338,7 @@ pub struct ProjectedFile {
 
 The exact enum can grow while implementing fixtures, but do not store language AST nodes, Tree-sitter nodes, or `gix` handles in it.
 
-`ProjectedFile::canonical_text` must be derived from `items` by a constructor and must not be independently mutable. Keep fields private where doing so enforces this invariant. `SourceSpan` line and column values are zero-based; CLI diagnostics may convert them to one-based display values.
+`ProjectedFile::canonical_text` must be derived from `items` by a constructor and must not be independently mutable. Keep fields private where doing so enforces this invariant. `ProjectedFile::try_new` is that constructor; it also rejects an unsupported path extension and a `language` that disagrees with `path`, so the stored language can never contradict the extension. `SourceSpan` line and column values are zero-based; CLI diagnostics may convert them to one-based display values.
 
 ### 5.1 Repository paths
 
@@ -384,7 +384,7 @@ If two declarations produce the same key, append a deterministic source-order or
 2. An item whose `parent_key` is `Some(_)` is an index-only entry. Its text is already contained in the fragment of the ancestor that owns it. It is never emitted as its own top-level block.
 3. Every item's `canonical_text` is a self-contained fragment. A top-level fragment includes the canonical rendering of its nested members, indented four spaces per nesting level (section 10). A nested item's text appears exactly once in the file text, inside its ancestor.
 4. The `parent_key` relationship is independent of the container naming used in stable keys (section 5.2). Naming a container in a stable key does not suppress emission; only `parent_key == Some(_)` does. An adapter marks each declaration it wants emitted as top-level.
-5. Every nested item must have a top-level ancestor, and an adapter must not produce an item whose `parent_key` refers to a non-existent item. This is a documented adapter obligation; core does not validate it at runtime.
+5. Every nested item must have a top-level ancestor, and an adapter must not produce an item whose `parent_key` refers to a non-existent item. `ProjectedFile::try_new`, the only way to construct a file, rejects a dangling, self-referential, or cyclic `parent_key` and a duplicate `stable_key`, so canonical-text assembly can never silently drop an item.
 
 Nested items remain in `items` so that stable keys and later per-declaration comparisons can address them, even though their text is emitted through an ancestor.
 

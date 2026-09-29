@@ -110,7 +110,7 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
         items.extend(built.items);
     }
 
-    Ok(ProjectedFile::new(path.clone(), language, items))
+    ProjectedFile::try_new(path.clone(), language, items)
 }
 
 fn is_comment(kind: &str) -> bool {

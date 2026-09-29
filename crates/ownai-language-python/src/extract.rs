@@ -63,11 +63,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         }
     }
 
-    Ok(ProjectedFile::new(
-        input.path.clone(),
-        Language::Python,
-        builder.items,
-    ))
+    ProjectedFile::try_new(input.path.clone(), Language::Python, builder.items)
 }
 
 impl Builder<'_> {

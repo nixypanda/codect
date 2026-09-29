@@ -7,6 +7,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::diagnostic::ProjectionError;
 use crate::model::{ItemKind, Language, ProjectedFile, ProjectedItem, RepoPath, SourceSpan};
 
 /// One declaration in a file's mode-independent outline.
@@ -75,7 +76,7 @@ pub fn assemble_outline(
     language: Language,
     projection: Vec<ProjectedItem>,
     superset: Vec<ProjectedItem>,
-) -> FileOutline {
+) -> Result<FileOutline, ProjectionError> {
     let retained: BTreeSet<&str> = projection
         .iter()
         .map(|item| item.stable_key.as_str())
@@ -92,12 +93,12 @@ pub fn assemble_outline(
             retained_in_mode: retained.contains(item.stable_key.as_str()),
         })
         .collect();
-    FileOutline {
+    Ok(FileOutline {
         path: path.clone(),
         language,
-        projection: ProjectedFile::new(path.clone(), language, projection),
+        projection: ProjectedFile::try_new(path.clone(), language, projection)?,
         outline,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -131,7 +132,8 @@ mod tests {
             item("impl User::id", Some("impl User"), "    fn id(&self);"),
         ];
 
-        let file = assemble_outline(&path, Language::Rust, requested, superset);
+        let file = assemble_outline(&path, Language::Rust, requested, superset)
+            .expect("valid outline fixture");
 
         assert_eq!(file.projection.canonical_text(), "impl User {\n}\n");
         assert_eq!(file.outline.len(), 2);
