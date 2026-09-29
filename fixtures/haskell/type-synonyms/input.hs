@@ -1,0 +1,9 @@
+module Synonyms where
+
+type UserId = Int
+
+type Pair a = (a, a)
+
+type API = "api" :> "v1" :> Header "X-Request-ID" Text :> (SystemAPI :<|> AccountsAPI :<|> TransactionsAPI)
+
+type GenResponse = Gen (Text.Text, AssetClassMappings, InvestmentMappings, Maybe Text.Text, Extra, More)

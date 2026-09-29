@@ -164,7 +164,7 @@ impl Builder<'_> {
         let built = match node.kind() {
             DATA_TYPE => Some(self.data_decl(node, prefixes, "data")),
             NEWTYPE => Some(self.data_decl(node, prefixes, "newtype")),
-            TYPE_SYNONYM => Some(self.simple_decl(node, prefixes, ItemKind::TypeAlias, "alias")),
+            TYPE_SYNONYM => Some(self.type_synonym_decl(node, prefixes)),
             KIND_SIGNATURE => Some(self.simple_decl(node, prefixes, ItemKind::Type, "kind")),
             TYPE_ROLE => Some(self.simple_decl(node, prefixes, ItemKind::Type, "role")),
             TYPE_FAMILY | DATA_FAMILY => {
@@ -275,6 +275,24 @@ impl Builder<'_> {
             kind,
             name,
             with_prefix(prefixes, Doc::Text(text)),
+            0,
+            Vec::new(),
+        )
+    }
+
+    /// A `type` synonym, whose right-hand side wraps through the renderer's
+    /// recursive type document.
+    fn type_synonym_decl(&mut self, node: Node<'_>, prefixes: Vec<String>) -> Built {
+        let name = self.name_of(node);
+        let key = self.unique(format!("{}::alias::{name}", self.renderer.path()));
+        let doc = with_prefix(prefixes, self.renderer.type_synonym_doc(node));
+        self.make(
+            node,
+            key,
+            None,
+            ItemKind::TypeAlias,
+            name,
+            doc,
             0,
             Vec::new(),
         )

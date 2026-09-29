@@ -24,6 +24,10 @@ pub(crate) enum Doc {
     Line,
     /// A space when flat, a line break when broken.
     SoftLine,
+    /// Nothing when flat, a line break when broken.
+    SoftNil,
+    /// Emitted only when the enclosing group is broken.
+    Broken(&'static str),
     Indent(Box<Doc>),
     Group(Box<Doc>),
     Concat(Vec<Doc>),
@@ -88,6 +92,16 @@ fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
                 output.line();
             }
         }
+        Doc::SoftNil => {
+            if !flat {
+                output.line();
+            }
+        }
+        Doc::Broken(value) => {
+            if !flat {
+                output.write(value);
+            }
+        }
         Doc::Indent(inner) => {
             output.depth += 1;
             render_into(inner, output, flat);
@@ -113,6 +127,7 @@ fn flat_width(doc: &Doc) -> Option<usize> {
         Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
         Doc::Line => None,
         Doc::SoftLine => Some(1),
+        Doc::SoftNil | Doc::Broken(_) => Some(0),
         Doc::Indent(inner) | Doc::Group(inner) => flat_width(inner),
         Doc::Concat(parts) => {
             let mut total = 0;
@@ -447,15 +462,64 @@ impl<'a> Renderer<'a> {
         let Some(type_node) = self.field(node, syntax::FIELD_TYPE) else {
             return Doc::Text(format!("{names} ::"));
         };
+        if matches!(type_node.kind(), syntax::FUNCTION | syntax::CONTEXT) {
+            // Arrow chains (and a leading context) already break at their own
+            // `->`/`=>` structure, so keep the type on the `::` line.
+            return Doc::Concat(vec![
+                Doc::Text(format!("{names} :: ")),
+                self.type_doc(type_node),
+            ]);
+        }
+        // A single non-arrow atom cannot break internally in the common case,
+        // so allow it to move to an indented line after `::`.
         Doc::Concat(vec![
-            Doc::Text(format!("{names} :: ")),
-            self.signature_type_doc(type_node),
+            Doc::Text(format!("{names} ::")),
+            Doc::Group(Box::new(Doc::Indent(Box::new(Doc::Concat(vec![
+                Doc::SoftLine,
+                self.type_doc(type_node),
+            ]))))),
         ])
     }
 
-    /// A type rendered with its top-level arrows (and a leading `=>`) as break
-    /// points, so a long signature wraps one arrow per line.
-    fn signature_type_doc(&self, node: Node<'_>) -> Doc {
+    /// A recursive type document. Long bracketed atoms (`parens`, `tuple`,
+    /// `list`, `apply`, `infix`) and arrow chains break at their own structure
+    /// when they do not fit; every other node kind stays flat.
+    pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
+        match node.kind() {
+            syntax::FUNCTION | syntax::CONTEXT => self.arrow_type_doc(node),
+            "parens" => self.parens_type_doc(node),
+            "tuple" => self.bracket_elements_doc(node, "element", "(", ")", true),
+            "unboxed_tuple" => self.bracket_elements_doc(node, "element", "(# ", " #)", false),
+            "list" => self.list_type_doc(node),
+            "apply" => self.apply_type_doc(node),
+            "infix" => self.infix_type_doc(node),
+            _ => Doc::Text(self.node_text(node)),
+        }
+    }
+
+    /// A type synonym: `type Name params =` followed by an indented, wrapped
+    /// right-hand side.
+    pub(crate) fn type_synonym_doc(&self, node: Node<'_>) -> Doc {
+        let name = self
+            .field_text(node, syntax::FIELD_NAME_FIELD)
+            .unwrap_or_default();
+        let params = self.params_text(self.field(node, "patterns"));
+        let header = format!("type {name}{params} =");
+        let Some(rhs) = self.field(node, syntax::FIELD_TYPE) else {
+            return Doc::Text(header);
+        };
+        Doc::Group(Box::new(Doc::Concat(vec![
+            Doc::Text(header),
+            Doc::Indent(Box::new(Doc::Concat(vec![
+                Doc::SoftLine,
+                Doc::Group(Box::new(self.type_doc(rhs))),
+            ]))),
+        ])))
+    }
+
+    /// A function type's top-level arrow chain (and a leading `C a =>` context),
+    /// rendered with each parameter and result as a recursive [`type_doc`].
+    fn arrow_type_doc(&self, node: Node<'_>) -> Doc {
         let mut node = node;
         let mut head = None;
         if node.kind() == syntax::CONTEXT {
@@ -470,19 +534,19 @@ impl<'a> Renderer<'a> {
             }
         }
 
-        let mut atoms = Vec::new();
+        let mut atoms: Vec<Doc> = Vec::new();
         let mut current = node;
         loop {
             if current.kind() == syntax::FUNCTION {
                 if let Some(parameter) = self.field(current, "parameter") {
-                    atoms.push(self.node_text(parameter));
+                    atoms.push(self.type_doc(parameter));
                 }
                 match self.field(current, "result") {
                     Some(result) => current = result,
                     None => break,
                 }
             } else {
-                atoms.push(self.node_text(current));
+                atoms.push(self.type_doc(current));
                 break;
             }
         }
@@ -494,20 +558,138 @@ impl<'a> Renderer<'a> {
                 rest.push(Doc::SoftLine);
                 rest.push(Doc::Text("=> ".to_owned()));
                 if let Some(first) = atoms.next() {
-                    rest.push(Doc::Text(first));
+                    rest.push(first);
                 }
                 head
             }
-            None => Doc::Text(atoms.next().unwrap_or_default()),
+            None => atoms.next().unwrap_or_else(|| Doc::Text(String::new())),
         };
         for atom in atoms {
             rest.push(Doc::SoftLine);
             rest.push(Doc::Text("-> ".to_owned()));
-            rest.push(Doc::Text(atom));
+            rest.push(atom);
         }
 
         Doc::Group(Box::new(Doc::Concat(vec![
             head,
+            Doc::Indent(Box::new(Doc::Concat(rest))),
+        ])))
+    }
+
+    fn parens_type_doc(&self, node: Node<'_>) -> Doc {
+        let Some(inner) = self.field(node, syntax::FIELD_TYPE) else {
+            return Doc::Text(self.node_text(node));
+        };
+        Doc::Group(Box::new(Doc::Concat(vec![
+            Doc::Text("(".to_owned()),
+            Doc::Indent(Box::new(Doc::Concat(vec![
+                Doc::SoftNil,
+                self.type_doc(inner),
+            ]))),
+            Doc::SoftNil,
+            Doc::Text(")".to_owned()),
+        ])))
+    }
+
+    /// A bracketed list of `field` elements in the leading-comma block shape:
+    /// `(A, B)` flat, `( A\n, B\n)` broken. `spaced_open` adds a space after the
+    /// open delimiter only when broken.
+    fn bracket_elements_doc(
+        &self,
+        node: Node<'_>,
+        field: &str,
+        open: &str,
+        close: &str,
+        spaced_open: bool,
+    ) -> Doc {
+        let mut cursor = node.walk();
+        let elements: Vec<Node<'_>> = node.children_by_field_name(field, &mut cursor).collect();
+        if elements.is_empty() {
+            return Doc::Text(self.node_text(node));
+        }
+
+        let mut inner: Vec<Doc> = Vec::new();
+        if spaced_open {
+            inner.push(Doc::Broken(" "));
+        }
+        inner.push(self.type_doc(elements[0]));
+        for element in &elements[1..] {
+            inner.push(Doc::SoftNil);
+            inner.push(Doc::Text(", ".to_owned()));
+            inner.push(self.type_doc(*element));
+        }
+        inner.push(Doc::SoftNil);
+        inner.push(Doc::Text(close.to_owned()));
+
+        Doc::Group(Box::new(Doc::Concat(vec![
+            Doc::Text(open.to_owned()),
+            Doc::Indent(Box::new(Doc::Concat(inner))),
+        ])))
+    }
+
+    fn list_type_doc(&self, node: Node<'_>) -> Doc {
+        let Some(element) = self.field(node, "element") else {
+            return Doc::Text(self.node_text(node));
+        };
+        Doc::Group(Box::new(Doc::Concat(vec![
+            Doc::Text("[".to_owned()),
+            Doc::Indent(Box::new(Doc::Concat(vec![
+                Doc::SoftNil,
+                self.type_doc(element),
+            ]))),
+            Doc::SoftNil,
+            Doc::Text("]".to_owned()),
+        ])))
+    }
+
+    fn apply_type_doc(&self, node: Node<'_>) -> Doc {
+        match (
+            self.field(node, "constructor"),
+            self.field(node, "argument"),
+        ) {
+            (Some(constructor), Some(argument)) => Doc::Concat(vec![
+                self.type_doc(constructor),
+                Doc::Text(" ".to_owned()),
+                self.type_doc(argument),
+            ]),
+            _ => Doc::Text(self.node_text(node)),
+        }
+    }
+
+    /// An infix type chain, breaking before each operator like the arrow layout.
+    fn infix_type_doc(&self, node: Node<'_>) -> Doc {
+        let mut operands: Vec<Doc> = Vec::new();
+        let mut operators: Vec<String> = Vec::new();
+        let mut current = node;
+        loop {
+            if current.kind() == "infix" {
+                if let Some(left) = self.field(current, "left_operand") {
+                    operands.push(self.type_doc(left));
+                }
+                if let Some(operator) = self.field(current, "operator") {
+                    operators.push(self.node_text(operator));
+                }
+                match self.field(current, "right_operand") {
+                    Some(right) => current = right,
+                    None => break,
+                }
+            } else {
+                operands.push(self.type_doc(current));
+                break;
+            }
+        }
+
+        let mut operands = operands.into_iter();
+        let first = operands.next().unwrap_or_else(|| Doc::Text(String::new()));
+        let mut rest: Vec<Doc> = Vec::new();
+        for (operand, operator) in operands.zip(operators) {
+            rest.push(Doc::SoftLine);
+            rest.push(Doc::Text(format!("{operator} ")));
+            rest.push(operand);
+        }
+
+        Doc::Group(Box::new(Doc::Concat(vec![
+            first,
             Doc::Indent(Box::new(Doc::Concat(rest))),
         ])))
     }
@@ -640,6 +822,151 @@ mod tests {
     fn spaced(parts: &[&str]) -> String {
         let tokens: Vec<String> = parts.iter().map(|part| (*part).to_owned()).collect();
         join(&tokens)
+    }
+
+    /// Renders the first `type` synonym in `source` at the top level.
+    fn render_type_synonym(source: &str) -> String {
+        let path = RepoPath::new("Temp.hs").expect("valid path");
+        let tree = syntax::parse(source, &path).expect("the source parses");
+        let renderer = Renderer::new(&path, source);
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if node.kind() == syntax::TYPE_SYNONYM {
+                return render(&renderer.type_synonym_doc(node), 0);
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        panic!("no type synonym in {source:?}");
+    }
+
+    /// Renders the first `signature` in `source` at the top level.
+    fn render_signature(source: &str) -> String {
+        let path = RepoPath::new("Temp.hs").expect("valid path");
+        let tree = syntax::parse(source, &path).expect("the source parses");
+        let renderer = Renderer::new(&path, source);
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if node.kind() == syntax::SIGNATURE {
+                return render(&renderer.signature_doc(node), 0);
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        panic!("no signature in {source:?}");
+    }
+
+    #[test]
+    fn short_single_atom_signature_stays_inline() {
+        assert_eq!(render_signature("f :: Maybe a"), "f :: Maybe a");
+    }
+
+    #[test]
+    fn long_parenthesized_signature_breaks_after_the_double_colon() {
+        let source = "journalWithHistoricalCostsUsing :: (Day -> Hledger.MixedAmount -> Hledger.MixedAmount)";
+        assert_eq!(
+            render_signature(source),
+            concat!(
+                "journalWithHistoricalCostsUsing ::\n",
+                "    (Day -> Hledger.MixedAmount -> Hledger.MixedAmount)",
+            )
+        );
+    }
+
+    #[test]
+    fn arrow_signature_breaks_before_the_arrows() {
+        let source = "combine :: String -> Int -> [String] -> OrganizationId -> AccountSettings -> BillingProfile -> IO (Either Error User)";
+        assert_eq!(
+            render_signature(source),
+            concat!(
+                "combine :: String\n",
+                "    -> Int\n",
+                "    -> [String]\n",
+                "    -> OrganizationId\n",
+                "    -> AccountSettings\n",
+                "    -> BillingProfile\n",
+                "    -> IO (Either Error User)",
+            )
+        );
+    }
+
+    #[test]
+    fn short_type_synonym_stays_inline() {
+        assert_eq!(
+            render_type_synonym("type UserId = Int"),
+            "type UserId = Int"
+        );
+    }
+
+    #[test]
+    fn short_type_atoms_stay_inline() {
+        assert_eq!(
+            render_type_synonym("type Pair a = (a, a)"),
+            "type Pair a = (a, a)"
+        );
+        assert_eq!(
+            render_type_synonym("type Wrap a = Gen (a, a)"),
+            "type Wrap a = Gen (a, a)"
+        );
+        assert_eq!(
+            render_type_synonym("type F = (Int -> Bool)"),
+            "type F = (Int -> Bool)"
+        );
+    }
+
+    #[test]
+    fn long_type_synonym_breaks_before_the_operators() {
+        let source = "type API = \"api\" :> \"v1\" :> Header \"X-Request-ID\" Text :> (SystemAPI :<|> AccountsAPI :<|> TransactionsAPI)";
+        assert_eq!(
+            render_type_synonym(source),
+            concat!(
+                "type API =\n",
+                "    \"api\"\n",
+                "        :> \"v1\"\n",
+                "        :> Header \"X-Request-ID\" Text\n",
+                "        :> (SystemAPI :<|> AccountsAPI :<|> TransactionsAPI)",
+            )
+        );
+    }
+
+    #[test]
+    fn long_tuple_type_uses_the_leading_comma_block() {
+        let source = "type Big = (Text.Text, AssetClassMappings, InvestmentMappings, Maybe Text.Text, Extra, More)";
+        assert_eq!(
+            render_type_synonym(source),
+            concat!(
+                "type Big =\n",
+                "    ( Text.Text\n",
+                "        , AssetClassMappings\n",
+                "        , InvestmentMappings\n",
+                "        , Maybe Text.Text\n",
+                "        , Extra\n",
+                "        , More\n",
+                "        )",
+            )
+        );
+    }
+
+    #[test]
+    fn long_application_breaks_its_tuple_argument() {
+        let source = "type GenResponse = Gen (Text.Text, AssetClassMappings, InvestmentMappings, Maybe Text.Text, Extra, More)";
+        assert_eq!(
+            render_type_synonym(source),
+            concat!(
+                "type GenResponse =\n",
+                "    Gen ( Text.Text\n",
+                "        , AssetClassMappings\n",
+                "        , InvestmentMappings\n",
+                "        , Maybe Text.Text\n",
+                "        , Extra\n",
+                "        , More\n",
+                "        )",
+            )
+        );
     }
 
     #[test]
