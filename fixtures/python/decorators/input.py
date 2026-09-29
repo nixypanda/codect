@@ -13,3 +13,7 @@ class Service:
     @app.route("/health")
     async def health(self) -> dict[str, str]:
         ...
+
+    @app.get("/very/long/path/here", response_model=VeryLongResponseModel, status_code=200)
+    def create(self, request: Request) -> Response:
+        ...

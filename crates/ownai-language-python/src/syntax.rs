@@ -25,6 +25,8 @@ pub const COMMENT: &str = "comment";
 pub const STRING: &str = "string";
 pub const IDENTIFIER: &str = "identifier";
 pub const TYPE: &str = "type";
+pub const GENERIC_TYPE: &str = "generic_type";
+pub const BINARY_OPERATOR: &str = "binary_operator";
 pub const TYPE_PARAMETER: &str = "type_parameter";
 pub const PARAMETERS: &str = "parameters";
 pub const TYPED_PARAMETER: &str = "typed_parameter";
@@ -162,6 +164,8 @@ mod tests {
             STRING,
             IDENTIFIER,
             TYPE,
+            GENERIC_TYPE,
+            BINARY_OPERATOR,
             TYPE_PARAMETER,
             PARAMETERS,
             TYPED_PARAMETER,

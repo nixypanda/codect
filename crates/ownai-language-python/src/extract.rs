@@ -154,7 +154,7 @@ impl Builder<'_> {
         let mut cursor = definition.walk();
         for child in definition.children(&mut cursor) {
             if child.kind() == DECORATOR {
-                docs.push(Doc::Text(self.renderer.node_text(child)));
+                docs.push(self.renderer.decorator_doc(child));
             }
         }
         docs
@@ -180,7 +180,7 @@ impl Builder<'_> {
         let type_parameters = node.child_by_field_name(FIELD_TYPE_PARAMETERS);
         let superclasses = node.child_by_field_name(FIELD_SUPERCLASSES);
         if let Some(parameters) = type_parameters {
-            let list = self.renderer.bracket_list(parameters, "[", "]");
+            let list = self.renderer.node_bracket_list(parameters, "[", "]");
             // The last list is the primary break point; an earlier list stays
             // grouped so it remains inline when it fits on its own.
             header.push(if superclasses.is_some() {
@@ -190,7 +190,7 @@ impl Builder<'_> {
             });
         }
         if let Some(superclasses) = superclasses {
-            header.push(self.renderer.bracket_list(superclasses, "(", ")"));
+            header.push(self.renderer.node_bracket_list(superclasses, "(", ")"));
         }
         header.push(Doc::Text(":".to_owned()));
         let header = Doc::Group(Box::new(Doc::Concat(header)));
@@ -242,7 +242,7 @@ impl Builder<'_> {
         let type_parameters = node.child_by_field_name(FIELD_TYPE_PARAMETERS);
         let parameters = node.child_by_field_name("parameters");
         if let Some(type_parameters) = type_parameters {
-            let list = self.renderer.bracket_list(type_parameters, "[", "]");
+            let list = self.renderer.node_bracket_list(type_parameters, "[", "]");
             // The parameter list is the primary break point; type parameters
             // stay grouped so they remain inline when they fit on their own.
             header.push(if parameters.is_some() {
@@ -252,12 +252,12 @@ impl Builder<'_> {
             });
         }
         match parameters {
-            Some(parameters) => header.push(self.renderer.bracket_list(parameters, "(", ")")),
+            Some(parameters) => header.push(self.renderer.parameters_doc(parameters)),
             None => self.invariant(node, "function has no parameter list")?,
         }
         if let Some(return_type) = node.child_by_field_name(FIELD_RETURN_TYPE) {
             header.push(Doc::Text(" -> ".to_owned()));
-            header.push(Doc::Text(self.renderer.node_text(return_type)));
+            header.push(self.renderer.type_doc(return_type));
         }
         header.push(Doc::Text(": ...".to_owned()));
 
@@ -294,10 +294,10 @@ impl Builder<'_> {
             .ok_or_else(|| self.missing(node, "type alias has no left side"))?;
         let name = self.renderer.node_text(left);
         let key = self.unique(format!("{container_key}::alias::{name}"));
-        let mut text = format!("type {name}");
+        let mut parts = vec![Doc::Text(format!("type {name}"))];
         if let Some(right) = node.child_by_field_name(FIELD_RIGHT) {
-            text.push_str(" = ");
-            text.push_str(&self.renderer.node_text(right));
+            parts.push(Doc::Text(" = ".to_owned()));
+            parts.push(self.renderer.type_doc(right));
         }
         Ok(make_built(
             node,
@@ -305,7 +305,7 @@ impl Builder<'_> {
             parent_key_for(container_key, scope),
             ItemKind::TypeAlias,
             name,
-            Doc::Text(text),
+            Doc::Concat(parts),
             depth,
             Vec::new(),
         ))
@@ -363,7 +363,10 @@ impl Builder<'_> {
         let type_annotation = node.child_by_field_name(FIELD_TYPE);
 
         if let Some(annotation) = type_annotation {
-            let text = format!("{left_text}: {}", self.renderer.node_text(annotation));
+            let doc = Doc::Concat(vec![
+                Doc::Text(format!("{left_text}: ")),
+                self.renderer.type_doc(annotation),
+            ]);
             let in_class = matches!(scope, Scope::Class { .. });
             let (kind, tag) = if in_class {
                 (ItemKind::Field, "field")
@@ -382,7 +385,7 @@ impl Builder<'_> {
                 parent_key_for(container_key, scope),
                 kind,
                 left_text,
-                Doc::Text(text),
+                doc,
                 depth,
                 Vec::new(),
             )));

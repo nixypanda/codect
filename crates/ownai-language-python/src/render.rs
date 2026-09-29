@@ -11,7 +11,8 @@ use tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
 use crate::syntax::{
-    self, COMMENT, DEFAULT_PARAMETER, FIELD_NAME, FIELD_VALUE, KEYWORD_ARGUMENT, STRING,
+    self, BINARY_OPERATOR, CALL, COMMENT, DEFAULT_PARAMETER, FIELD_NAME, FIELD_TYPE, FIELD_VALUE,
+    GENERIC_TYPE, KEYWORD_ARGUMENT, STRING, TYPE, TYPE_PARAMETER,
 };
 
 /// A small layout document. `Indent` is relative, so the same document can be
@@ -255,6 +256,32 @@ impl<'a> Renderer<'a> {
         join(&tokens)
     }
 
+    /// A decorator, with a breakable argument list when its expression is a
+    /// call. A bare decorator (`@property`) or any other expression stays flat.
+    ///
+    /// The `decorator` node has no fields; its first named child is the
+    /// expression. When that expression is a `call`, the call's `arguments`
+    /// (`argument_list`) named children are the items, rendered through
+    /// [`Renderer::bracket_list`] so a long decorator breaks one argument per
+    /// indented line with a trailing comma while a short one stays inline.
+    pub(crate) fn decorator_doc(&self, node: Node<'_>) -> Doc {
+        let mut cursor = node.walk();
+        let expression = node.named_children(&mut cursor).next();
+        if let Some(call) = expression.filter(|child| child.kind() == CALL)
+            && let (Some(function), Some(arguments)) = (
+                call.child_by_field_name("function"),
+                call.child_by_field_name("arguments"),
+            )
+        {
+            return Doc::Group(Box::new(Doc::Concat(vec![
+                Doc::Text("@".to_owned()),
+                Doc::Text(self.node_text(function)),
+                self.node_bracket_list(arguments, "(", ")"),
+            ])));
+        }
+        Doc::Text(self.node_text(node))
+    }
+
     pub(crate) fn child_of_kind<'t>(&self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
         let mut cursor = node.walk();
         node.children(&mut cursor)
@@ -273,12 +300,10 @@ impl<'a> Renderer<'a> {
     /// appending an item changes exactly one line. This is deliberately ungrouped
     /// so the caller can group the whole declaration header, letting the fit
     /// check see the return type and other trailing text.
-    pub(crate) fn bracket_list(&self, node: Node<'_>, open: &str, close: &str) -> Doc {
-        let mut items = Vec::new();
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            items.push(self.node_text(child));
-        }
+    ///
+    /// Items are [`Doc`]s so a nested list (a subscript inside a type, or a long
+    /// parameter type) re-decides at its own column after the outer list breaks.
+    pub(crate) fn bracket_list(&self, items: Vec<Doc>, open: &str, close: &str) -> Doc {
         if items.is_empty() {
             return Doc::Text(format!("{open}{close}"));
         }
@@ -289,7 +314,7 @@ impl<'a> Renderer<'a> {
                 inner.push(Doc::Text(",".to_owned()));
                 inner.push(Doc::SoftLine);
             }
-            inner.push(Doc::Text(item));
+            inner.push(item);
         }
         inner.push(Doc::Broken(","));
 
@@ -299,6 +324,193 @@ impl<'a> Renderer<'a> {
             Doc::SoftNil,
             Doc::Text(close.to_owned()),
         ])
+    }
+
+    /// [`Renderer::bracket_list`] over a node's named children rendered as flat
+    /// text. Used for lists whose items have no internal break points (call
+    /// arguments, superclasses, type parameters).
+    pub(crate) fn node_bracket_list(&self, node: Node<'_>, open: &str, close: &str) -> Doc {
+        let mut items = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            items.push(Doc::Text(self.node_text(child)));
+        }
+        self.bracket_list(items, open, close)
+    }
+
+    /// A function's parameter list, with each parameter rendered by
+    /// [`Renderer::parameter_doc`] so a long parameter type can break once the
+    /// parameter list itself breaks.
+    pub(crate) fn parameters_doc(&self, node: Node<'_>) -> Doc {
+        let mut items = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            items.push(self.parameter_doc(child));
+        }
+        self.bracket_list(items, "(", ")")
+    }
+
+    /// A parameter, keeping its declared type as a nested [`Doc`].
+    ///
+    /// Only a `typed_parameter` or `typed_default_parameter` (one with a `type`
+    /// field) is split; every other parameter stays flat. The split renders the
+    /// tokens before and after the type node separately, re-inserting the exact
+    /// boundary space, so the flat form is byte-identical to
+    /// [`Renderer::node_text`].
+    fn parameter_doc(&self, node: Node<'_>) -> Doc {
+        let Some(type_node) = node.child_by_field_name(FIELD_TYPE) else {
+            return Doc::Text(self.node_text(node));
+        };
+
+        let type_id = type_node.id();
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        let mut seen_type = false;
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.id() == type_id {
+                seen_type = true;
+            } else if seen_type {
+                self.push_tokens(child, &mut after);
+            } else {
+                self.push_tokens(child, &mut before);
+            }
+        }
+
+        let mut type_tokens = Vec::new();
+        self.push_tokens(type_node, &mut type_tokens);
+        if type_tokens.is_empty() {
+            return Doc::Text(self.node_text(node));
+        }
+
+        let mut before_text = join(&before);
+        if let (Some(left), Some(first)) = (before.last(), type_tokens.first())
+            && !left.glue_after
+            && !first.glue_before
+            && needs_space(&left.text, &first.text)
+        {
+            before_text.push(' ');
+        }
+
+        let mut after_text = join(&after);
+        if let (Some(last), Some(right)) = (type_tokens.last(), after.first())
+            && !last.glue_after
+            && !right.glue_before
+            && needs_space(&last.text, &right.text)
+        {
+            after_text.insert(0, ' ');
+        }
+
+        Doc::Concat(vec![
+            Doc::Text(before_text),
+            self.type_doc(type_node),
+            Doc::Text(after_text),
+        ])
+    }
+
+    /// A recursive type [`Doc`].
+    ///
+    /// Only the node kinds that appear in Python type positions are handled:
+    /// the `type` wrapper, `generic_type` subscripts, and `binary_operator`
+    /// unions. Every other kind falls back to flat text, so an unmodeled type
+    /// cannot regress and always renders byte-identically to
+    /// [`Renderer::node_text`].
+    ///
+    /// This grammar (tree-sitter-python 0.25) represents annotations with a
+    /// `type` wrapper around a `generic_type` (`list[int]`) rather than a
+    /// `subscript`; a bare `subscript` in an expression position is left flat.
+    pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
+        match node.kind() {
+            TYPE => {
+                let mut cursor = node.walk();
+                let named: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
+                match named.as_slice() {
+                    [only] => self.type_doc(*only),
+                    _ => Doc::Text(self.node_text(node)),
+                }
+            }
+            GENERIC_TYPE => self.generic_type_doc(node),
+            BINARY_OPERATOR => self.binary_operator_type_doc(node),
+            _ => Doc::Text(self.node_text(node)),
+        }
+    }
+
+    /// A subscript type such as `dict[str, int]` or `tuple[A, B]`.
+    ///
+    /// The value (`dict`, `tuple`, or a dotted attribute) stays flat and each
+    /// bracketed argument group becomes a breakable list whose items are
+    /// recursively typed. The whole node is grouped so it re-decides at its own
+    /// column after an enclosing parameter list breaks.
+    fn generic_type_doc(&self, node: Node<'_>) -> Doc {
+        let mut cursor = node.walk();
+        let mut named = node.named_children(&mut cursor);
+        let Some(value) = named.next() else {
+            return Doc::Text(self.node_text(node));
+        };
+        let mut parts = vec![Doc::Text(self.node_text(value))];
+        for parameter in named {
+            if parameter.kind() != TYPE_PARAMETER {
+                return Doc::Text(self.node_text(node));
+            }
+            let mut cursor = parameter.walk();
+            let items: Vec<Doc> = parameter
+                .named_children(&mut cursor)
+                .map(|child| self.type_doc(child))
+                .collect();
+            parts.push(self.bracket_list(items, "[", "]"));
+        }
+        Doc::Group(Box::new(Doc::Concat(parts)))
+    }
+
+    /// A union such as `A | B | C`, breaking before each `|`. Any other operator
+    /// (or a non-union shape) stays flat.
+    fn binary_operator_type_doc(&self, node: Node<'_>) -> Doc {
+        let is_union = node
+            .child_by_field_name("operator")
+            .is_some_and(|operator| self.slice(operator) == "|");
+        if !is_union {
+            return Doc::Text(self.node_text(node));
+        }
+
+        let mut operands = Vec::new();
+        self.collect_union_operands(node, &mut operands);
+        if operands.len() < 2 {
+            return Doc::Text(self.node_text(node));
+        }
+
+        let mut docs: Vec<Doc> = operands
+            .into_iter()
+            .map(|operand| self.type_doc(operand))
+            .collect();
+        let first = docs.remove(0);
+        let mut rest = Vec::new();
+        for atom in docs {
+            rest.push(Doc::SoftLine);
+            rest.push(Doc::Text("| ".to_owned()));
+            rest.push(atom);
+        }
+        Doc::Group(Box::new(Doc::Concat(vec![
+            first,
+            Doc::Indent(Box::new(Doc::Concat(rest))),
+        ])))
+    }
+
+    /// Flattens a `|` chain (left- or right-leaning) into its operands.
+    fn collect_union_operands<'t>(&self, node: Node<'t>, out: &mut Vec<Node<'t>>) {
+        let is_union = node.kind() == BINARY_OPERATOR
+            && node
+                .child_by_field_name("operator")
+                .is_some_and(|operator| self.slice(operator) == "|");
+        if !is_union {
+            out.push(node);
+            return;
+        }
+        if let Some(left) = node.child_by_field_name("left") {
+            self.collect_union_operands(left, out);
+        }
+        if let Some(right) = node.child_by_field_name("right") {
+            self.collect_union_operands(right, out);
+        }
     }
 }
 
@@ -468,5 +680,115 @@ mod tests {
         let items = vec![wide.clone(), wide.clone()];
         let rendered = render(&list(&items), 0);
         assert!(rendered.starts_with("(\n"), "expected a broken list");
+    }
+
+    fn decorator_doc_for(source: &str) -> Doc {
+        let path = RepoPath::new(b"fixtures/python/decorators/input.py").expect("fixture path");
+        let tree = syntax::parse(source, &path).expect("decorated source parses");
+        let renderer = Renderer::new(&path, source);
+        let mut stack = vec![tree.root_node()];
+        let mut decorator = None;
+        while let Some(node) = stack.pop() {
+            if node.kind() == crate::syntax::DECORATOR {
+                decorator = Some(node);
+                break;
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        renderer.decorator_doc(decorator.expect("source contains a decorator"))
+    }
+
+    #[test]
+    fn short_decorator_stays_flat_and_byte_identical() {
+        assert_eq!(
+            render(
+                &decorator_doc_for("@app.route(\"/health\")\ndef f(): ...\n"),
+                0
+            ),
+            "@app.route(\"/health\")"
+        );
+        assert_eq!(
+            render(&decorator_doc_for("@property\ndef f(): ...\n"), 0),
+            "@property"
+        );
+    }
+
+    /// The `type_doc` for the return annotation of the first function in
+    /// `source`, alongside its flat `node_text`.
+    fn return_type_doc_for(source: &str) -> (Doc, String) {
+        let path = RepoPath::new("src/sample.py").expect("sample path");
+        let tree = syntax::parse(source, &path).expect("annotated source parses");
+        let renderer = Renderer::new(&path, source);
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if node.kind() == crate::syntax::FUNCTION_DEFINITION {
+                let return_type = node
+                    .child_by_field_name(crate::syntax::FIELD_RETURN_TYPE)
+                    .expect("function has a return type");
+                return (
+                    renderer.type_doc(return_type),
+                    renderer.node_text(return_type),
+                );
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        panic!("source contains no function");
+    }
+
+    #[test]
+    fn type_doc_flat_matches_node_text_for_short_types() {
+        for (source, expected) in [
+            ("def f() -> list[A | B]: ...\n", "list[A | B]"),
+            ("def f() -> dict[str, int]: ...\n", "dict[str, int]"),
+            ("def f() -> tuple[A, B]: ...\n", "tuple[A, B]"),
+            ("def f() -> list[X]: ...\n", "list[X]"),
+        ] {
+            let (doc, flat) = return_type_doc_for(source);
+            assert_eq!(flat, expected, "node_text for {source:?}");
+            assert_eq!(render(&doc, 0), expected, "type_doc for {source:?}");
+        }
+    }
+
+    #[test]
+    fn type_doc_breaks_a_long_nested_subscript() {
+        let (doc, _) = return_type_doc_for(
+            "def f() -> dict[str, tuple[AutochargeInsuranceRemitsCron, PatientArAutochargeCron, OrganizationBillingProfile]]: ...\n",
+        );
+        assert_eq!(
+            render(&doc, 0),
+            concat!(
+                "dict[\n",
+                "    str,\n",
+                "    tuple[\n",
+                "        AutochargeInsuranceRemitsCron,\n",
+                "        PatientArAutochargeCron,\n",
+                "        OrganizationBillingProfile,\n",
+                "    ],\n",
+                "]",
+            )
+        );
+    }
+
+    #[test]
+    fn long_decorator_breaks_one_argument_per_line_with_a_trailing_comma() {
+        let doc = decorator_doc_for(
+            "@app.get(\"/very/long/path/here\", response_model=VeryLongResponseModel, status_code=200)\ndef handler(): ...\n",
+        );
+        assert_eq!(
+            render(&doc, 0),
+            concat!(
+                "@app.get(\n",
+                "    \"/very/long/path/here\",\n",
+                "    response_model=VeryLongResponseModel,\n",
+                "    status_code=200,\n",
+                ")",
+            )
+        );
     }
 }
