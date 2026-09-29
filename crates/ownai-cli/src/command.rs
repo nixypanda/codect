@@ -12,11 +12,12 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use ownai_core::{
-    AreaSet, DiagnosticContext, PathSelection, PathSelectionError, ProjectedFile, ProjectionError,
-    ProjectionMode, RepoPath, SourceSpan, diff_document, show_document,
+    AreaSet, DiagnosticContext, FileDiff, PathSelection, ProjectedFile, ProjectionError,
+    ProjectionMode, RepoPath, Selection, SelectionError, SelectionGroup, SourceSpan, diff_document,
+    show_document,
 };
 use ownai_engine::config::ConfigError;
-use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_engine::{Engine, EngineError};
 use ownai_git::GitError;
 
 #[cfg(feature = "tui")]
@@ -480,49 +481,28 @@ fn scope_label(selection: &Selection) -> String {
 /// projection will use.
 ///
 /// Only an `--area` invocation may touch `.ownai.toml`, so a malformed config
-/// can never break `--path` or unscoped runs.
+/// can never break `--path` or unscoped runs. Resolution records one group per
+/// literal path or named area in a single step, so an unknown or empty area is
+/// reported while the same call builds the scope.
 fn selection_for(
     paths: &[OsString],
     areas: &[String],
     cwd: &Path,
     engine: &Engine,
 ) -> Result<Selection, CliError> {
-    if !areas.is_empty() {
-        let area_set = engine.load_areas().map_err(engine_failure)?;
-        // Resolve first so an unknown or empty area produces the same
-        // diagnostic as before, then keep the structured groups for existence
-        // checking.
-        PathSelection::Areas(areas.to_vec())
-            .resolve(&area_set)
-            .map_err(|error| path_selection_failure(error, &area_set))?;
+    let (path_selection, area_set) = if areas.is_empty() {
+        let selection =
+            pathspec::build_selection(paths, cwd, engine.root()).map_err(path_arg_failure)?;
+        (selection, AreaSet::default())
+    } else {
+        (
+            PathSelection::Areas(areas.to_vec()),
+            engine.load_areas().map_err(engine_failure)?,
+        )
+    };
 
-        let mut groups = Vec::with_capacity(areas.len());
-        for name in areas {
-            let Some(area) = area_set.get(name) else {
-                continue;
-            };
-            groups.push(SelectionGroup::Area {
-                name: name.clone(),
-                paths: area.paths.clone(),
-            });
-        }
-        return Selection::new(groups).map_err(|error| engine_failure(error.into()));
-    }
-
-    let path_selection =
-        pathspec::build_selection(paths, cwd, engine.root()).map_err(path_arg_failure)?;
-    let scope = path_selection
-        .resolve(&AreaSet::default())
-        .map_err(|error| path_selection_failure(error, &AreaSet::default()))?;
-    let groups = scope
-        .paths()
-        .iter()
-        .map(|path| SelectionGroup::Path {
-            label: path.to_string(),
-            path: path.clone(),
-        })
-        .collect();
-    Selection::new(groups).map_err(|error| engine_failure(error.into()))
+    Selection::resolve(&path_selection, &area_set)
+        .map_err(|error| selection_failure(error, &area_set))
 }
 
 /// Converts an engine failure into the CLI's reportable error.
@@ -654,9 +634,9 @@ fn config_failure(error: ConfigError) -> CliError {
 
 /// The area seam is reachable through `--area`; an unknown name lists the
 /// defined areas so a typo is correctable without opening the config file.
-fn path_selection_failure(error: PathSelectionError, areas: &AreaSet) -> CliError {
+fn selection_failure(error: SelectionError, areas: &AreaSet) -> CliError {
     let help = match &error {
-        PathSelectionError::UnknownArea { .. } => {
+        SelectionError::UnknownArea { .. } => {
             let names: Vec<&str> = areas.names().collect();
             if names.is_empty() {
                 Some("no areas are defined in `.ownai.toml`".to_owned())
@@ -664,7 +644,7 @@ fn path_selection_failure(error: PathSelectionError, areas: &AreaSet) -> CliErro
                 Some(format!("known areas: {}", names.join(", ")))
             }
         }
-        PathSelectionError::EmptyArea { .. } => None,
+        SelectionError::EmptyArea { .. } | SelectionError::EmptyGroup { .. } => None,
     };
     CliError {
         message: error.to_string(),

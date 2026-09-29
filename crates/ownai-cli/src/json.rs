@@ -27,8 +27,11 @@
 //!   `(path, stable_key)`.
 //! - JSON output contains no ANSI and is unaffected by `--color`.
 
-use ownai_core::{ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, SourceSpan};
-use ownai_engine::{FileOutline, FileOutlineDiff, OutlineItem, SnapshotDiff};
+use ownai_core::{
+    FileOutline, FileOutlineDiff, ItemKind, Language, OutlineItem, ProjectedFile, ProjectedItem,
+    ProjectionMode, SourceSpan,
+};
+use ownai_engine::SnapshotDiff;
 use serde::Serialize;
 
 /// The schema identifier carried by every document.

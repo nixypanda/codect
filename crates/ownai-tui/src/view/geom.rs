@@ -1,7 +1,7 @@
 //! Pure geometry and panel chrome shared by the view and the derived-layout
 //! cache. Nothing here reads the terminal or the model's behaviour.
 
-use ownai_engine::FileDiff;
+use ownai_core::FileDiff;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Span;

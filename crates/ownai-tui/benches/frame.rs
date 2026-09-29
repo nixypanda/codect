@@ -35,8 +35,7 @@ use criterion::measurement::WallTime;
 use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
 };
-use ownai_core::{Language, ProjectedFile};
-use ownai_engine::FileDiff;
+use ownai_core::{FileDiff, Language, ProjectedFile};
 use ownai_tui::bench::{self, Key, Model, Msg};
 
 /// A wide terminal: tree and content side by side.

@@ -8,8 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use ownai_core::{AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath};
-use ownai_engine::{CommitStep, EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_core::{
+    AreaSet, DiffRowKind, FileDiff, Language, ProjectedFile, ProjectionMode, RepoPath, Selection,
+    SelectionGroup,
+};
+use ownai_engine::{CommitStep, EngineError};
 use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
@@ -764,15 +767,15 @@ impl Model {
         else {
             return None;
         };
-        if *view == DiffView::Commits {
-            if let Some(step) = self.commits.get(self.commit_cursor) {
-                let parent = step.parent_id.to_string();
-                let commit = step.commit_id.to_string();
-                return Some((
-                    parent[..parent.len().min(7)].to_owned(),
-                    commit[..commit.len().min(7)].to_owned(),
-                ));
-            }
+        if *view == DiffView::Commits
+            && let Some(step) = self.commits.get(self.commit_cursor)
+        {
+            let parent = step.parent_id.to_string();
+            let commit = step.commit_id.to_string();
+            return Some((
+                parent[..parent.len().min(7)].to_owned(),
+                commit[..commit.len().min(7)].to_owned(),
+            ));
         }
         Some((base.clone(), target.clone()))
     }
@@ -2498,8 +2501,7 @@ mod tests {
     use crate::view::geom::{centered, window_offset};
     use crate::view::text::clip_line;
     use crate::view::view;
-    use ownai_core::{Area, ItemKind, Language, ProjectedItem, SourceSpan};
-    use ownai_engine::SelectionError;
+    use ownai_core::{Area, ItemKind, Language, ProjectedItem, SelectionError, SourceSpan};
     use ratatui::style::Color;
 
     fn item(text: &str) -> ProjectedItem {

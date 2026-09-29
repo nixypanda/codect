@@ -1,8 +1,7 @@
 //! Side-by-side diff rendering: aligned rows, hunk headers, line-number gutters,
 //! and delta-style backgrounds.
 
-use ownai_core::{AlignedRow, DiffRowKind, ProjectedFile};
-use ownai_engine::FileDiff;
+use ownai_core::{AlignedRow, DiffRowKind, FileDiff, ProjectedFile};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

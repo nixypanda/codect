@@ -13,9 +13,9 @@
 #![doc(hidden)]
 
 use ownai_core::{
-    ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath, SourceSpan,
+    FileDiff, ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath,
+    Selection, SourceSpan,
 };
-use ownai_engine::{FileDiff, Selection};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
