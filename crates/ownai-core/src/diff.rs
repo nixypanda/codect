@@ -5,6 +5,20 @@
 
 use similar::{Algorithm, DiffOp, DiffableStr, TextDiff};
 
+use crate::model::{ProjectedFile, RepoPath};
+
+/// One projected file comparison between two revisions.
+///
+/// A path present on only one side is an addition or a deletion and carries
+/// `None` for the absent projection. The comparison carries no Git identity;
+/// the engine pairs it with the snapshot it came from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDiff {
+    pub path: RepoPath,
+    pub old: Option<ProjectedFile>,
+    pub new: Option<ProjectedFile>,
+}
+
 /// Context lines emitted around each change. Three is the conventional default
 /// and keeps focused diffs readable without depending on terminal width
 /// (TECHNICAL_DESIGN.md section 13).
