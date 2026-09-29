@@ -133,6 +133,23 @@ fn show_wraps_a_long_python_signature_within_the_line_budget() {
 }
 
 #[test]
+fn show_wraps_a_nested_rust_return_type_within_the_line_budget() {
+    let repo = TestRepo::init();
+    repo.write("src/registry.rs", &fixture("rust/nested-return/input.rs"));
+    repo.commit("base");
+
+    let expected = format!(
+        "== src/registry.rs ==\n{}",
+        fixture("rust/nested-return/signatures.txt")
+    );
+    ownai_in(&repo, &["show", "--mode", "signatures"])
+        .assert()
+        .success()
+        .stdout(predicates::str::diff(expected))
+        .stderr(predicates::str::is_empty());
+}
+
+#[test]
 fn show_all_four_languages_in_byte_order() {
     let repo = TestRepo::init();
     repo.write("src/App.elm", &fixture("elm/normal-module/input.elm"));
