@@ -731,12 +731,12 @@ fn context_help(context: &DiagnosticContext) -> Option<String> {
     if let Some(revision) = &context.revision {
         lines.push(format!("revision: {revision}"));
     }
-    if let Some(path) = &context.path {
-        lines.push(format!("path: {}", path.path()));
-        lines.push(format!("language: {:?}", path.language()));
-    }
-    if let Some(range) = &context.range {
-        lines.push(format!("range: {}", format_range(range)));
+    if let Some(location) = &context.location {
+        lines.push(format!("path: {}", location.path.path()));
+        lines.push(format!("language: {:?}", location.path.language()));
+        if let Some(range) = &location.range {
+            lines.push(format!("range: {}", format_range(range)));
+        }
     }
 
     (!lines.is_empty()).then(|| lines.join("\n"))

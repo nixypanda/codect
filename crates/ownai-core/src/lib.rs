@@ -13,7 +13,7 @@ pub mod render;
 pub mod selection;
 
 pub use diagnostic::{
-    Diagnostic, DiagnosticContext, ProjectionError, RepoPathError, decode_source,
+    Diagnostic, DiagnosticContext, Location, ProjectionError, RepoPathError, decode_source,
 };
 pub use diff::{AlignedRow, DiffLine, DiffRowKind, FileDiff, aligned_rows, unified_hunks};
 pub use language::{LanguageProjector, ProjectionInput};

@@ -129,8 +129,15 @@ pub fn decode_source<'a>(
 pub struct DiagnosticContext {
     pub repository: Option<PathBuf>,
     pub revision: Option<String>,
-    /// The path and its derived language, present together or not at all.
-    pub path: Option<SupportedPath>,
+    /// The file location, when the failure has one. A range implies a path.
+    pub location: Option<Location>,
+}
+
+/// The source file a failure occurred in, and the range within it when one is
+/// meaningful.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Location {
+    pub path: SupportedPath,
     pub range: Option<SourceSpan>,
 }
 
@@ -190,7 +197,7 @@ mod tests {
         let diagnostic = Diagnostic::new(
             DiagnosticContext {
                 revision: Some("HEAD".to_owned()),
-                path: Some(path),
+                location: Some(Location { path, range: None }),
                 ..DiagnosticContext::default()
             },
             error,
@@ -198,5 +205,21 @@ mod tests {
 
         assert_eq!(diagnostic.context.revision.as_deref(), Some("HEAD"));
         assert!(diagnostic.source_error().source().is_some());
+    }
+
+    #[test]
+    fn a_context_without_a_location_keeps_the_other_fields() {
+        let context = DiagnosticContext {
+            repository: Some(PathBuf::from("/repo")),
+            revision: Some("HEAD".to_owned()),
+            ..DiagnosticContext::default()
+        };
+
+        assert!(context.location.is_none());
+        assert_eq!(
+            context.repository.as_deref(),
+            Some(std::path::Path::new("/repo"))
+        );
+        assert_eq!(context.revision.as_deref(), Some("HEAD"));
     }
 }

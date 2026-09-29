@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use ownai_core::{
     AreaSet, DiagnosticContext, FileDiff, FileOutline, FileOutlineDiff, LanguageProjector,
-    ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
-    Selection, SelectionGroup, SupportedPath, assemble_outline, decode_source, select_projector,
+    Location, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
+    RepoPath, Selection, SelectionGroup, SupportedPath, assemble_outline, decode_source,
+    select_projector,
 };
 use ownai_git::{CommitStep, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
@@ -112,8 +113,10 @@ fn project_items(
 /// [`project_source`].
 fn source_projection_failure(error: ProjectionError) -> EngineError {
     let context = DiagnosticContext {
-        path: Some(error.supported_path().clone()),
-        range: error.range().cloned(),
+        location: Some(Location {
+            path: error.supported_path().clone(),
+            range: error.range().cloned(),
+        }),
         ..DiagnosticContext::default()
     };
     EngineError::Projection {
@@ -791,8 +794,10 @@ impl Engine {
         let context = DiagnosticContext {
             repository: Some(self.repository.git_dir().to_path_buf()),
             revision: revision_spec.map(str::to_owned),
-            path: Some(error.supported_path().clone()),
-            range: error.range().cloned(),
+            location: Some(Location {
+                path: error.supported_path().clone(),
+                range: error.range().cloned(),
+            }),
         };
         EngineError::Projection {
             context: Box::new(context),
