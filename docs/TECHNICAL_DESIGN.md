@@ -586,8 +586,12 @@ Line breaks are fixed by declaration shape and by a single compile-time width bu
 - When a declaration line exceeds the budget, its primary bracketed list (a function's parameters, or a class's superclass list, else its type parameters) breaks one item per indented line, with the closing bracket returned to the declaration's indent. The fit is measured for the whole line, including the terminator or opening brace, so a long return type still breaks the parameter list. Any earlier list breaks only when it does not fit on its own.
 - A struct-like enum variant whose field list does not fit breaks one field per indented line.
 - An Elm or Haskell type signature whose arrow chain (`->`, and a leading `=>`) does not fit breaks before each arrow, one per indented line.
+- A bracketed construct nested inside a type breaks one item per indented line when its own flat form does not fit, and re-decides at its own column after an enclosing list breaks: a Python subscript or `|` union, a Rust generic argument list, tuple, reference, or `Fn(...)`, a Haskell `parens`/`tuple`/`list`/`apply`, or an Elm record or tuple.
+- A multi-argument Rust attribute (`#[command(...)]`, `#[arg(...)]`) or Python decorator (`@app.get(...)`) whose argument list does not fit breaks one argument per indented line.
+- A Haskell `type` synonym whose right-hand side does not fit breaks after `=` and then before each type operator, one operator-led item per indented line.
 - Atomic tokens are never split: a line dominated by one long string literal, identifier, or macro attribute body may still exceed the budget, exactly as a conventional formatter leaves it.
-- A broken bracketed list emits a trailing comma; an inline list does not.
+- A broken Python or Rust bracketed list emits a trailing comma; an inline list does not.
+- Haskell and Elm never emit a trailing comma: broken lists and records use a leading-comma block (`( a\n, b\n)`), matching their existing record style.
 - One union constructor, enum variant, struct field, or record field per indented line when a declaration has a body.
 - One trait or implementation member per indented block.
 - Blank line between top-level projected declarations (see section 5.3 for how top-level items assemble into file text).
@@ -655,7 +659,10 @@ Include:
 
 A record renders in block form, one field per indented line, when it is the
 complete right-hand side of a `type alias`. A record nested inside another type
-expression renders inline as `{ name : Type, ... }`.
+expression stays inline as `{ name : Type, ... }` only while it fits; otherwise
+it breaks one field per indented line with leading commas and no trailing
+comma. Records in type annotations and constructor argument positions wrap the
+same way.
 
 Render examples:
 
