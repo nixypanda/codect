@@ -17,6 +17,14 @@ pub mod node {
     pub const ATTRIBUTE_ITEM: &str = "attribute_item";
     pub const INNER_ATTRIBUTE_ITEM: &str = "inner_attribute_item";
     pub const ATTRIBUTE: &str = "attribute";
+    pub const TOKEN_TREE: &str = "token_tree";
+
+    pub const OPEN_PAREN: &str = "(";
+    pub const CLOSE_PAREN: &str = ")";
+    pub const OPEN_BRACKET: &str = "[";
+    pub const CLOSE_BRACKET: &str = "]";
+    pub const OPEN_BRACE: &str = "{";
+    pub const CLOSE_BRACE: &str = "}";
 
     pub const VISIBILITY_MODIFIER: &str = "visibility_modifier";
     pub const MUTABLE_SPECIFIER: &str = "mutable_specifier";
@@ -63,6 +71,12 @@ pub mod node {
     pub const FIELD_IDENTIFIER: &str = "field_identifier";
     pub const PRIMITIVE_TYPE: &str = "primitive_type";
 
+    pub const GENERIC_TYPE: &str = "generic_type";
+    pub const TUPLE_TYPE: &str = "tuple_type";
+    pub const REFERENCE_TYPE: &str = "reference_type";
+    pub const FUNCTION_TYPE: &str = "function_type";
+    pub const TYPE_ARGUMENTS: &str = "type_arguments";
+
     pub const STRING_LITERAL: &str = "string_literal";
     pub const RAW_STRING_LITERAL: &str = "raw_string_literal";
     pub const CHAR_LITERAL: &str = "char_literal";
@@ -88,6 +102,11 @@ pub mod field {
     pub const TYPE: &str = "type";
     pub const BODY: &str = "body";
     pub const TRAIT: &str = "trait";
+    pub const ARGUMENTS: &str = "arguments";
+    pub const TYPE_ARGUMENTS: &str = "type_arguments";
+    pub const PARAMETERS: &str = "parameters";
+    pub const RETURN_TYPE: &str = "return_type";
+    pub const PATTERN: &str = "pattern";
 }
 
 /// The Rust grammar, loaded through the native Tree-sitter runtime.

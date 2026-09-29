@@ -154,7 +154,7 @@ impl Builder<'_> {
         let mut cursor = definition.walk();
         for child in definition.children(&mut cursor) {
             if child.kind() == DECORATOR {
-                docs.push(Doc::Text(self.renderer.node_text(child)));
+                docs.push(self.renderer.decorator_doc(child));
             }
         }
         docs
@@ -176,16 +176,24 @@ impl Builder<'_> {
         let key = self.unique(format!("{container_key}::class::{name}"));
         let enum_like = is_enum_like(self.renderer, node);
 
-        let mut header = format!("class {name}");
-        if let Some(parameters) = node.child_by_field_name(FIELD_TYPE_PARAMETERS) {
-            header.push_str(&self.renderer.node_text(parameters));
+        let mut header = vec![Doc::Text(format!("class {name}"))];
+        let type_parameters = node.child_by_field_name(FIELD_TYPE_PARAMETERS);
+        let superclasses = node.child_by_field_name(FIELD_SUPERCLASSES);
+        if let Some(parameters) = type_parameters {
+            let list = self.renderer.node_bracket_list(parameters, "[", "]");
+            // The last list is the primary break point; an earlier list stays
+            // grouped so it remains inline when it fits on its own.
+            header.push(if superclasses.is_some() {
+                Doc::Group(Box::new(list))
+            } else {
+                list
+            });
         }
-        if let Some(superclasses) = node.child_by_field_name(FIELD_SUPERCLASSES) {
-            header.push('(');
-            header.push_str(&self.renderer.argument_list_text(superclasses));
-            header.push(')');
+        if let Some(superclasses) = superclasses {
+            header.push(self.renderer.node_bracket_list(superclasses, "(", ")"));
         }
-        header.push(':');
+        header.push(Doc::Text(":".to_owned()));
+        let header = Doc::Group(Box::new(Doc::Concat(header)));
 
         let members = match node.child_by_field_name(FIELD_BODY) {
             Some(body) => self.members(body, &key, Scope::Class { enum_like }, depth + 1)?,
@@ -226,28 +234,36 @@ impl Builder<'_> {
         let kind_tag = if is_method { "method" } else { "fn" };
         let key = self.unique(format!("{container_key}::{kind_tag}::{name}"));
 
-        let mut header = String::new();
+        let mut header = Vec::new();
         if self.renderer.has_child_of_kind(node, "async") {
-            header.push_str("async ");
+            header.push(Doc::Text("async ".to_owned()));
         }
-        header.push_str("def ");
-        header.push_str(&name);
-        if let Some(parameters) = node.child_by_field_name(FIELD_TYPE_PARAMETERS) {
-            header.push_str(&self.renderer.node_text(parameters));
+        header.push(Doc::Text(format!("def {name}")));
+        let type_parameters = node.child_by_field_name(FIELD_TYPE_PARAMETERS);
+        let parameters = node.child_by_field_name("parameters");
+        if let Some(type_parameters) = type_parameters {
+            let list = self.renderer.node_bracket_list(type_parameters, "[", "]");
+            // The parameter list is the primary break point; type parameters
+            // stay grouped so they remain inline when they fit on their own.
+            header.push(if parameters.is_some() {
+                Doc::Group(Box::new(list))
+            } else {
+                list
+            });
         }
-        match node.child_by_field_name("parameters") {
-            Some(parameters) => {
-                header.push_str(&self.renderer.node_text(parameters));
-            }
+        match parameters {
+            Some(parameters) => header.push(self.renderer.parameters_doc(parameters)),
             None => self.invariant(node, "function has no parameter list")?,
         }
         if let Some(return_type) = node.child_by_field_name(FIELD_RETURN_TYPE) {
-            header.push_str(" -> ");
-            header.push_str(&self.renderer.node_text(return_type));
+            header.push(Doc::Text(" -> ".to_owned()));
+            header.push(self.renderer.type_doc(return_type));
         }
-        header.push_str(": ...");
+        header.push(Doc::Text(": ...".to_owned()));
 
-        let doc = signature_doc(decorators, header);
+        // Group the whole header so the parameter list breaks when the header,
+        // including the return type, does not fit (not just the list alone).
+        let doc = signature_doc(decorators, Doc::Group(Box::new(Doc::Concat(header))));
         let parent = nested_parent(container_key, scope);
         let item_kind = if is_method {
             ItemKind::Method
@@ -278,10 +294,10 @@ impl Builder<'_> {
             .ok_or_else(|| self.missing(node, "type alias has no left side"))?;
         let name = self.renderer.node_text(left);
         let key = self.unique(format!("{container_key}::alias::{name}"));
-        let mut text = format!("type {name}");
+        let mut parts = vec![Doc::Text(format!("type {name}"))];
         if let Some(right) = node.child_by_field_name(FIELD_RIGHT) {
-            text.push_str(" = ");
-            text.push_str(&self.renderer.node_text(right));
+            parts.push(Doc::Text(" = ".to_owned()));
+            parts.push(self.renderer.type_doc(right));
         }
         Ok(make_built(
             node,
@@ -289,7 +305,7 @@ impl Builder<'_> {
             parent_key_for(container_key, scope),
             ItemKind::TypeAlias,
             name,
-            Doc::Text(text),
+            Doc::Concat(parts),
             depth,
             Vec::new(),
         ))
@@ -347,7 +363,10 @@ impl Builder<'_> {
         let type_annotation = node.child_by_field_name(FIELD_TYPE);
 
         if let Some(annotation) = type_annotation {
-            let text = format!("{left_text}: {}", self.renderer.node_text(annotation));
+            let doc = Doc::Concat(vec![
+                Doc::Text(format!("{left_text}: ")),
+                self.renderer.type_doc(annotation),
+            ]);
             let in_class = matches!(scope, Scope::Class { .. });
             let (kind, tag) = if in_class {
                 (ItemKind::Field, "field")
@@ -366,7 +385,7 @@ impl Builder<'_> {
                 parent_key_for(container_key, scope),
                 kind,
                 left_text,
-                Doc::Text(text),
+                doc,
                 depth,
                 Vec::new(),
             )));
@@ -509,13 +528,13 @@ fn make_built(
 }
 
 /// A class or def block: decorators, a header, and an indented body.
-fn container_doc(decorators: Vec<Doc>, header: String, members: Vec<Doc>) -> Doc {
+fn container_doc(decorators: Vec<Doc>, header: Doc, members: Vec<Doc>) -> Doc {
     let mut parts = Vec::new();
     for decorator in decorators {
         parts.push(decorator);
         parts.push(Doc::Line);
     }
-    parts.push(Doc::Text(header));
+    parts.push(header);
     if members.is_empty() {
         parts.push(Doc::Text(" ...".to_owned()));
         return Doc::Concat(parts);
@@ -533,16 +552,16 @@ fn container_doc(decorators: Vec<Doc>, header: String, members: Vec<Doc>) -> Doc
 }
 
 /// A function signature, optionally preceded by its preserved decorators.
-fn signature_doc(decorators: Vec<Doc>, header: String) -> Doc {
+fn signature_doc(decorators: Vec<Doc>, header: Doc) -> Doc {
     if decorators.is_empty() {
-        return Doc::Text(header);
+        return header;
     }
     let mut parts = Vec::new();
     for decorator in decorators {
         parts.push(decorator);
         parts.push(Doc::Line);
     }
-    parts.push(Doc::Text(header));
+    parts.push(header);
     Doc::Concat(parts)
 }
 

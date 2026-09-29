@@ -1,0 +1,16 @@
+pub struct Registry {
+    pub index: HashMap<
+        String,
+        Result<(&'static str, Vec<(RepoPath, SnapshotEntry)>), EngineError>,
+    >,
+}
+
+impl Registry {
+    pub fn snapshot_entries(
+        &self,
+        spec: &str,
+    ) -> Result<
+        (&'static str, String, Vec<(RepoPath, SnapshotEntry)>),
+        EngineError,
+    >;
+}

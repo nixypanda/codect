@@ -275,7 +275,7 @@ fn attribute_docs(declaration: &Declaration<'_>, context: &Context<'_>) -> Vec<D
     declaration
         .attributes
         .iter()
-        .map(|attribute| Doc::Text(render::attribute_text(*attribute, context.source)))
+        .map(|attribute| render::attribute_doc(*attribute, context.source))
         .collect()
 }
 
@@ -350,7 +350,7 @@ fn build_struct(
 
     match node.child_by_field_name(field::BODY) {
         None => {
-            let doc = render::with_attributes(attributes, Doc::Text(format!("{header};")));
+            let doc = render::with_attributes(attributes, render::signature_doc(header, None));
             make_built(
                 node,
                 key,
@@ -364,10 +364,9 @@ fn build_struct(
         }
         Some(body) if body.kind() == node::ORDERED_FIELD_DECLARATION_LIST => {
             let fields = render::render_node(body, context.source);
-            let doc = render::with_attributes(
-                attributes,
-                render::signature_doc(format!("{header}{fields}"), where_clause),
-            );
+            let header = Doc::Concat(vec![header, Doc::Text(fields)]);
+            let doc =
+                render::with_attributes(attributes, render::signature_doc(header, where_clause));
             make_built(
                 node,
                 key,
@@ -487,8 +486,13 @@ fn build_field(
     let name = field_name(node, context.source).unwrap_or_default();
     let key = context.unique(format!("{container_key}::field::{name}"));
     let attributes = attribute_docs(declaration, context);
-    let text = render::field_text(node, context.source);
-    let doc = render::with_attributes(attributes, Doc::Text(format!("{text},")));
+    let doc = render::with_attributes(
+        attributes,
+        Doc::Group(Box::new(Doc::Concat(vec![
+            render::field_doc(node, context.source),
+            Doc::Text(",".to_owned()),
+        ]))),
+    );
     make_built(
         node,
         key,
@@ -512,8 +516,13 @@ fn build_variant(
     let name = field_name(node, context.source).unwrap_or_default();
     let key = context.unique(format!("{container_key}::variant::{name}"));
     let attributes = attribute_docs(declaration, context);
-    let text = render::variant_text(node, context.source);
-    let doc = render::with_attributes(attributes, Doc::Text(format!("{text},")));
+    let doc = render::with_attributes(
+        attributes,
+        Doc::Group(Box::new(Doc::Concat(vec![
+            render::variant_doc(node, context.source),
+            Doc::Text(",".to_owned()),
+        ]))),
+    );
     make_built(
         node,
         key,
@@ -571,7 +580,10 @@ fn build_associated_type(
     let attributes = attribute_docs(declaration, context);
     let header = render::associated_type_text(node, context.source);
     let where_clause = render::where_clause_text(node, context.source);
-    let doc = render::with_attributes(attributes, render::signature_doc(header, where_clause));
+    let doc = render::with_attributes(
+        attributes,
+        render::signature_doc(Doc::Text(header), where_clause),
+    );
     make_built(
         node,
         key,

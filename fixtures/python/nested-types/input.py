@@ -1,0 +1,11 @@
+def f() -> dict[str, tuple[AutochargeInsuranceRemitsCron, PatientArAutochargeCron, OrganizationBillingProfile]]: ...
+
+
+def g(patient_ar_active: dict[str, tuple[AutochargeInsuranceRemitsCron, PatientArAutochargeCron, OrganizationBillingProfile]]) -> None: ...
+
+
+class CronIndex:
+    entries: dict[str, tuple[AutochargeInsuranceRemitsCron, PatientArAutochargeCron, OrganizationBillingProfile]]
+
+
+type CronMap = dict[str, tuple[AutochargeInsuranceRemitsCron, PatientArAutochargeCron, OrganizationBillingProfile]]

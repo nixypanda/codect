@@ -7,8 +7,9 @@
 //! and whitespace inside a declaration cannot leak into output. Line breaks are
 //! fixed by declaration shape; nothing here consults terminal width.
 
-use ownai_core::{Language, ProjectionError, RepoPath};
+use ownai_core::{LINE_WIDTH, Language, ProjectionError, RepoPath};
 use tree_sitter::Node;
+use unicode_width::UnicodeWidthStr;
 
 use crate::syntax::{
     self, ARROW, DOT, FIELD_ASSOCIATIVITY, FIELD_BASE_RECORD, FIELD_FIELD_TYPE, FIELD_NAME,
@@ -22,34 +23,128 @@ const INDENT: &str = "    ";
 
 /// A minimal document representation: this is a structural pretty-printer for a
 /// handful of declaration shapes, not a general Elm source formatter.
+///
+/// [`Doc::Group`] is the only width-sensitive construct: it renders flat (soft
+/// breaks as spaces) when the flat form fits within [`LINE_WIDTH`], and broken
+/// (soft breaks as newlines) otherwise.
 pub(crate) enum Doc {
     Text(String),
     Line,
+    /// A space when flat, a line break when broken.
+    SoftLine,
+    /// Nothing when flat, a line break when broken.
+    SoftNil,
+    /// Emitted only when the enclosing group is broken.
+    Broken(&'static str),
     Indent(Box<Doc>),
+    Group(Box<Doc>),
     Concat(Vec<Doc>),
+}
+
+struct Writer {
+    out: String,
+    indent: usize,
+    column: usize,
+    at_line_start: bool,
+}
+
+impl Writer {
+    fn write(&mut self, value: &str) {
+        if self.at_line_start {
+            for _ in 0..self.indent {
+                self.out.push_str(INDENT);
+            }
+            self.column = self.indent * INDENT.len();
+            self.at_line_start = false;
+        }
+        self.out.push_str(value);
+        self.column += UnicodeWidthStr::width(value);
+    }
+
+    fn line(&mut self) {
+        self.out.push('\n');
+        self.at_line_start = true;
+        self.column = 0;
+    }
+
+    /// The column the next written character would land in.
+    fn column_now(&self) -> usize {
+        if self.at_line_start {
+            self.indent * INDENT.len()
+        } else {
+            self.column
+        }
+    }
 }
 
 impl Doc {
     pub(crate) fn render(&self) -> String {
-        let mut out = String::new();
-        self.write(&mut out, 0);
-        out
+        let mut writer = Writer {
+            out: String::new(),
+            indent: 0,
+            column: 0,
+            at_line_start: true,
+        };
+        self.write(&mut writer, false);
+        writer.out
     }
 
-    fn write(&self, out: &mut String, indent: usize) {
+    fn write(&self, writer: &mut Writer, flat: bool) {
         match self {
-            Doc::Text(value) => out.push_str(value),
-            Doc::Line => {
-                out.push('\n');
-                for _ in 0..indent {
-                    out.push_str(INDENT);
+            Doc::Text(value) => writer.write(value),
+            Doc::Line => writer.line(),
+            Doc::SoftLine => {
+                if flat {
+                    writer.write(" ");
+                } else {
+                    writer.line();
                 }
             }
-            Doc::Indent(inner) => inner.write(out, indent + 1),
+            Doc::SoftNil => {
+                if !flat {
+                    writer.line();
+                }
+            }
+            Doc::Broken(value) => {
+                if !flat {
+                    writer.write(value);
+                }
+            }
+            Doc::Indent(inner) => {
+                writer.indent += 1;
+                inner.write(writer, flat);
+                writer.indent -= 1;
+            }
+            Doc::Group(inner) => {
+                let flat_here = flat
+                    || inner
+                        .flat_width()
+                        .is_some_and(|width| writer.column_now() + width <= LINE_WIDTH);
+                inner.write(writer, flat_here);
+            }
             Doc::Concat(parts) => {
                 for part in parts {
-                    part.write(out, indent);
+                    part.write(writer, flat);
                 }
+            }
+        }
+    }
+
+    /// The display width of the document rendered flat, or `None` when it
+    /// contains a hard [`Doc::Line`] and can therefore never be flat.
+    fn flat_width(&self) -> Option<usize> {
+        match self {
+            Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
+            Doc::Line => None,
+            Doc::SoftLine => Some(1),
+            Doc::SoftNil | Doc::Broken(_) => Some(0),
+            Doc::Indent(inner) | Doc::Group(inner) => inner.flat_width(),
+            Doc::Concat(parts) => {
+                let mut total = 0;
+                for part in parts {
+                    total += part.flat_width()?;
+                }
+                Some(total)
             }
         }
     }
@@ -57,17 +152,6 @@ impl Doc {
 
 fn text(value: impl Into<String>) -> Doc {
     Doc::Text(value.into())
-}
-
-fn join(parts: Vec<Doc>, separator: &str) -> Doc {
-    let mut out = Vec::new();
-    for (index, part) in parts.into_iter().enumerate() {
-        if index > 0 {
-            out.push(text(separator));
-        }
-        out.push(part);
-    }
-    Doc::Concat(out)
 }
 
 pub(crate) struct Renderer<'a> {
@@ -326,17 +410,25 @@ impl<'a> Renderer<'a> {
         }
 
         if !block {
-            let mut parts = Vec::new();
-            if let Some(base) = base {
-                parts.push(text(self.source_text(base)?));
-                parts.push(text(" | "));
+            let opening = match base {
+                Some(base) => format!("{{ {} | ", self.source_text(base)?),
+                None => "{ ".to_owned(),
+            };
+            let mut inner = Vec::new();
+            let mut fields = rendered.into_iter();
+            let first = fields.next().expect("fields is non-empty");
+            inner.push(first);
+            for field in fields {
+                inner.push(Doc::SoftNil);
+                inner.push(text(", "));
+                inner.push(field);
             }
-            parts.push(join(rendered, ", "));
-            return Ok(Doc::Concat(vec![
-                text("{ "),
-                Doc::Concat(parts),
-                text(" }"),
-            ]));
+            inner.push(Doc::SoftLine);
+            inner.push(text("}"));
+            return Ok(Doc::Group(Box::new(Doc::Concat(vec![
+                text(opening),
+                Doc::Indent(Box::new(Doc::Concat(inner))),
+            ]))));
         }
 
         let first_prefix = match base {
@@ -377,7 +469,23 @@ impl<'a> Renderer<'a> {
             }
             parts.push(self.type_atom(child)?);
         }
-        Ok(join(parts, " -> "))
+
+        // An arrow chain breaks before each `->` only when it does not fit the
+        // line budget (TECHNICAL_DESIGN.md 11.3).
+        let mut parts = parts.into_iter();
+        let Some(first) = parts.next() else {
+            return Ok(text(""));
+        };
+        let mut rest = Vec::new();
+        for part in parts {
+            rest.push(Doc::SoftLine);
+            rest.push(text("-> "));
+            rest.push(part);
+        }
+        Ok(Doc::Group(Box::new(Doc::Concat(vec![
+            first,
+            Doc::Indent(Box::new(Doc::Concat(rest))),
+        ]))))
     }
 
     fn type_atom(&self, node: Node<'_>) -> Result<Doc, ProjectionError> {
@@ -421,6 +529,127 @@ impl<'a> Renderer<'a> {
         for member in node.children_by_field_name(FIELD_TYPE_EXPRESSION, &mut cursor) {
             members.push(self.type_expression(member)?);
         }
-        Ok(Doc::Concat(vec![text("("), join(members, ", "), text(")")]))
+
+        let mut members = members.into_iter();
+        let Some(first) = members.next() else {
+            return Ok(text("()"));
+        };
+        let mut inner = vec![Doc::Broken(" "), first];
+        for member in members {
+            inner.push(Doc::SoftNil);
+            inner.push(text(", "));
+            inner.push(member);
+        }
+        inner.push(Doc::SoftNil);
+        inner.push(text(")"));
+        Ok(Doc::Group(Box::new(Doc::Concat(vec![
+            text("("),
+            Doc::Indent(Box::new(Doc::Concat(inner))),
+        ]))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The document shape `type_expression` builds for an arrow chain.
+    fn arrow_chain(parts: &[String]) -> Doc {
+        let mut iter = parts.iter();
+        let first = text(iter.next().expect("at least one atom").clone());
+        let mut rest = Vec::new();
+        for part in iter {
+            rest.push(Doc::SoftLine);
+            rest.push(text("-> "));
+            rest.push(text(part.clone()));
+        }
+        Doc::Group(Box::new(Doc::Concat(vec![
+            first,
+            Doc::Indent(Box::new(Doc::Concat(rest))),
+        ])))
+    }
+
+    #[test]
+    fn arrow_chain_stays_inline_when_it_fits() {
+        let doc = arrow_chain(&["Int".to_owned(), "Int".to_owned(), "Int".to_owned()]);
+        assert_eq!(doc.render(), "Int -> Int -> Int");
+    }
+
+    #[test]
+    fn arrow_chain_wraps_over_the_budget() {
+        let long = "Long".repeat(20);
+        let doc = arrow_chain(&[long.clone(), "Short".to_owned(), "Other".to_owned()]);
+        assert_eq!(doc.render(), format!("{long}\n    -> Short\n    -> Other"));
+    }
+
+    /// The first node of `kind` in a depth-first walk of `root`.
+    fn find<'a>(root: Node<'a>, kind: &str) -> Node<'a> {
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if node.kind() == kind {
+                return node;
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        panic!("no `{kind}` node in the parsed tree");
+    }
+
+    fn render_record(source: &str) -> String {
+        let path = RepoPath::new("input.elm").expect("valid path");
+        let tree = syntax::parse(source, &path).expect("the source parses");
+        let renderer = Renderer::new(&path, source);
+        renderer
+            .record_type(find(tree.root_node(), RECORD_TYPE), false)
+            .expect("record type renders")
+            .render()
+    }
+
+    fn render_tuple(source: &str) -> String {
+        let path = RepoPath::new("input.elm").expect("valid path");
+        let tree = syntax::parse(source, &path).expect("the source parses");
+        let renderer = Renderer::new(&path, source);
+        renderer
+            .tuple_type(find(tree.root_node(), TUPLE_TYPE))
+            .expect("tuple type renders")
+            .render()
+    }
+
+    #[test]
+    fn short_record_type_stays_inline() {
+        let source = "module M exposing (..)\n\nf : { a : Int, b : String } -> Int\n";
+        assert_eq!(render_record(source), "{ a : Int, b : String }");
+    }
+
+    #[test]
+    fn long_record_type_uses_the_leading_comma_block() {
+        let source = concat!(
+            "module M exposing (..)\n\n",
+            "f : { title : String, subtitle : String, healthStatus : String, isHealthy : Bool, windowWidth : Int } -> Int\n",
+        );
+        assert_eq!(
+            render_record(source),
+            "{ title : String\n    , subtitle : String\n    , healthStatus : String\n    , isHealthy : Bool\n    , windowWidth : Int\n    }"
+        );
+    }
+
+    #[test]
+    fn short_tuple_type_stays_inline() {
+        let source = "module M exposing (..)\n\nf : ( String, Int ) -> Int\n";
+        assert_eq!(render_tuple(source), "(String, Int)");
+    }
+
+    #[test]
+    fn long_tuple_type_wraps_one_element_per_line() {
+        let source = concat!(
+            "module M exposing (..)\n\n",
+            "f : ( String, Int, Float, Bool, Char, List String, Maybe Int, Html msg, Dict String Int ) -> Int\n",
+        );
+        assert_eq!(
+            render_tuple(source),
+            "( String\n    , Int\n    , Float\n    , Bool\n    , Char\n    , List String\n    , Maybe Int\n    , Html msg\n    , Dict String Int\n    )"
+        );
     }
 }

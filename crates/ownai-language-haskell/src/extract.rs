@@ -164,7 +164,7 @@ impl Builder<'_> {
         let built = match node.kind() {
             DATA_TYPE => Some(self.data_decl(node, prefixes, "data")),
             NEWTYPE => Some(self.data_decl(node, prefixes, "newtype")),
-            TYPE_SYNONYM => Some(self.simple_decl(node, prefixes, ItemKind::TypeAlias, "alias")),
+            TYPE_SYNONYM => Some(self.type_synonym_decl(node, prefixes)),
             KIND_SIGNATURE => Some(self.simple_decl(node, prefixes, ItemKind::Type, "kind")),
             TYPE_ROLE => Some(self.simple_decl(node, prefixes, ItemKind::Type, "role")),
             TYPE_FAMILY | DATA_FAMILY => {
@@ -191,7 +191,7 @@ impl Builder<'_> {
                         node,
                         prefixes,
                         ItemKind::Function,
-                        self.renderer.signature_text(node),
+                        self.renderer.signature_doc(node),
                     ))
                 } else {
                     None
@@ -207,7 +207,7 @@ impl Builder<'_> {
                     if head.is_empty() || signed.contains(&name) {
                         None
                     } else {
-                        Some(self.value_decl(node, prefixes, ItemKind::Function, head))
+                        Some(self.value_decl(node, prefixes, ItemKind::Function, Doc::Text(head)))
                     }
                 } else {
                     None
@@ -217,7 +217,7 @@ impl Builder<'_> {
                 if self.mode == ProjectionMode::Signatures {
                     match self.renderer.bind_name(node) {
                         Some(name) if !signed.contains(&name) => {
-                            Some(self.value_decl(node, prefixes, ItemKind::Value, name))
+                            Some(self.value_decl(node, prefixes, ItemKind::Value, Doc::Text(name)))
                         }
                         _ => None,
                     }
@@ -280,12 +280,30 @@ impl Builder<'_> {
         )
     }
 
+    /// A `type` synonym, whose right-hand side wraps through the renderer's
+    /// recursive type document.
+    fn type_synonym_decl(&mut self, node: Node<'_>, prefixes: Vec<String>) -> Built {
+        let name = self.name_of(node);
+        let key = self.unique(format!("{}::alias::{name}", self.renderer.path()));
+        let doc = with_prefix(prefixes, self.renderer.type_synonym_doc(node));
+        self.make(
+            node,
+            key,
+            None,
+            ItemKind::TypeAlias,
+            name,
+            doc,
+            0,
+            Vec::new(),
+        )
+    }
+
     fn value_decl(
         &mut self,
         node: Node<'_>,
         prefixes: Vec<String>,
         kind: ItemKind,
-        text: String,
+        doc: Doc,
     ) -> Built {
         let name = self.name_of(node);
         let key = self.unique(format!(
@@ -299,7 +317,7 @@ impl Builder<'_> {
             None,
             kind,
             name,
-            with_prefix(prefixes, Doc::Text(text)),
+            with_prefix(prefixes, doc),
             0,
             Vec::new(),
         )
@@ -372,7 +390,7 @@ impl Builder<'_> {
                 COMMENT | HADDOCK => None,
                 SIGNATURE | "default_signature" => {
                     if self.mode == ProjectionMode::Signatures {
-                        Some(self.member(child, container_key, self.renderer.signature_text(child)))
+                        Some(self.member(child, container_key, self.renderer.signature_doc(child)))
                     } else {
                         None
                     }
@@ -387,7 +405,7 @@ impl Builder<'_> {
                         if head.is_empty() || signed.contains(&name) {
                             None
                         } else {
-                            Some(self.member(child, container_key, head))
+                            Some(self.member(child, container_key, Doc::Text(head)))
                         }
                     } else {
                         None
@@ -397,7 +415,7 @@ impl Builder<'_> {
                     if self.mode == ProjectionMode::Signatures {
                         match self.renderer.bind_name(child) {
                             Some(name) if !signed.contains(&name) => {
-                                Some(self.member(child, container_key, name))
+                                Some(self.member(child, container_key, Doc::Text(name)))
                             }
                             _ => None,
                         }
@@ -405,9 +423,11 @@ impl Builder<'_> {
                         None
                     }
                 }
-                TYPE_INSTANCE | DATA_INSTANCE => {
-                    Some(self.member(child, container_key, self.renderer.node_text(child)))
-                }
+                TYPE_INSTANCE | DATA_INSTANCE => Some(self.member(
+                    child,
+                    container_key,
+                    Doc::Text(self.renderer.node_text(child)),
+                )),
                 _ => None,
             };
             if let Some(built) = built {
@@ -417,7 +437,7 @@ impl Builder<'_> {
         Ok(members)
     }
 
-    fn member(&mut self, node: Node<'_>, container_key: &str, text: String) -> Built {
+    fn member(&mut self, node: Node<'_>, container_key: &str, doc: Doc) -> Built {
         let name = self.name_of(node);
         let key = self.unique(format!("{container_key}::method::{name}"));
         self.make(
@@ -426,7 +446,7 @@ impl Builder<'_> {
             Some(container_key.to_owned()),
             ItemKind::Method,
             name,
-            Doc::Text(text),
+            doc,
             1,
             Vec::new(),
         )

@@ -2186,6 +2186,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
  "tree-sitter-elm",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -2196,6 +2197,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
  "tree-sitter-haskell",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -2206,6 +2208,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
  "tree-sitter-python",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -2216,6 +2219,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
  "tree-sitter-rust",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

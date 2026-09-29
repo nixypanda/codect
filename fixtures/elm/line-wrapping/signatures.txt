@@ -1,0 +1,9 @@
+module Wrapping
+
+create : UserId
+    -> Profile
+    -> Permissions
+    -> Organization
+    -> AccountSettings
+    -> BillingProfile
+    -> Result Error User

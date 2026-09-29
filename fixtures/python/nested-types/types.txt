@@ -1,0 +1,18 @@
+class CronIndex:
+    entries: dict[
+        str,
+        tuple[
+            AutochargeInsuranceRemitsCron,
+            PatientArAutochargeCron,
+            OrganizationBillingProfile,
+        ],
+    ]
+
+type CronMap = dict[
+    str,
+    tuple[
+        AutochargeInsuranceRemitsCron,
+        PatientArAutochargeCron,
+        OrganizationBillingProfile,
+    ],
+]
