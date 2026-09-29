@@ -857,14 +857,14 @@ fn kind_token(kind: ItemKind) -> &'static str {
 fn span_of(node: Node<'_>) -> SourceSpan {
     let start = node.start_position();
     let end = node.end_position();
-    SourceSpan {
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: start.row,
-        start_column: start.column,
-        end_line: end.row,
-        end_column: end.column,
-    }
+    SourceSpan::new(
+        node.start_byte(),
+        node.end_byte(),
+        start.row,
+        start.column,
+        end.row,
+        end.column,
+    )
 }
 
 fn whole_span(source: &str) -> SourceSpan {
@@ -879,14 +879,7 @@ fn whole_span(source: &str) -> SourceSpan {
             column += 1;
         }
     }
-    SourceSpan {
-        start_byte: 0,
-        end_byte: source.len(),
-        start_line: 0,
-        start_column: 0,
-        end_line: line,
-        end_column: column,
-    }
+    SourceSpan::new(0, source.len(), 0, 0, line, column)
 }
 
 /// The first `ERROR` or missing node in source order, used for the diagnostic

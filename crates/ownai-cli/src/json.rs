@@ -280,10 +280,10 @@ fn outline_document(item: &OutlineItem) -> OutlineDocument {
 /// Converts an adapter span to the wire form: one-based lines, zero-based bytes.
 fn span_document(span: &SourceSpan) -> SpanDocument {
     SpanDocument {
-        start_line: span.start_line + 1,
-        end_line: span.end_line + 1,
-        start_byte: span.start_byte,
-        end_byte: span.end_byte,
+        start_line: span.start_line() + 1,
+        end_line: span.end_line() + 1,
+        start_byte: span.start_byte(),
+        end_byte: span.end_byte(),
     }
 }
 

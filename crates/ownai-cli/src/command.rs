@@ -748,9 +748,9 @@ fn context_help(context: &DiagnosticContext) -> Option<String> {
 fn format_range(range: &SourceSpan) -> String {
     format!(
         "{}:{}-{}:{}",
-        range.start_line + 1,
-        range.start_column + 1,
-        range.end_line + 1,
-        range.end_column + 1
+        range.start_line() + 1,
+        range.start_column() + 1,
+        range.end_line() + 1,
+        range.end_column() + 1
     )
 }

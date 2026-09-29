@@ -88,7 +88,7 @@ pub fn assemble_outline(
             parent_key: item.parent_key.clone(),
             kind: item.kind,
             name: item.name.clone(),
-            span: item.span.clone(),
+            span: item.span,
             signature: item.canonical_text.clone(),
             retained_in_mode: retained.contains(item.stable_key.as_str()),
         })
@@ -111,14 +111,7 @@ mod tests {
             parent_key: parent.map(str::to_owned),
             kind: ItemKind::Function,
             name: key.to_owned(),
-            span: SourceSpan {
-                start_byte: 0,
-                end_byte: 0,
-                start_line: 0,
-                start_column: 0,
-                end_line: 0,
-                end_column: 0,
-            },
+            span: SourceSpan::new(0, 0, 0, 0, 0, 0),
             canonical_text: text.to_owned(),
         }
     }

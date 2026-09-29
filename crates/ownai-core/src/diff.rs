@@ -229,14 +229,7 @@ mod tests {
                 parent_key: None,
                 kind: ItemKind::Function,
                 name: "item".to_owned(),
-                span: SourceSpan {
-                    start_byte: 0,
-                    end_byte: 0,
-                    start_line: 0,
-                    start_column: 0,
-                    end_line: 0,
-                    end_column: 0,
-                },
+                span: SourceSpan::new(0, 0, 0, 0, 0, 0),
                 canonical_text: text.to_owned(),
             }],
         )

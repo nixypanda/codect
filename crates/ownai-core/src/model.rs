@@ -50,16 +50,66 @@ pub enum ItemKind {
     ForeignBlock,
 }
 
-/// Byte offsets are into the decoded UTF-8 source; line and column values are
-/// zero-based.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// A half-open byte range and its zero-based start/end line-column positions.
+///
+/// Byte offsets index the decoded UTF-8 source; line and column values are
+/// zero-based. `start_byte <= end_byte` and the start position is not after the
+/// end position; [`SourceSpan::new`] establishes this.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceSpan {
-    pub start_byte: usize,
-    pub end_byte: usize,
-    pub start_line: usize,
-    pub start_column: usize,
-    pub end_line: usize,
-    pub end_column: usize,
+    start_byte: usize,
+    end_byte: usize,
+    start_line: usize,
+    start_column: usize,
+    end_line: usize,
+    end_column: usize,
+}
+
+impl SourceSpan {
+    /// All positions must come from one parse of the same source.
+    pub fn new(
+        start_byte: usize,
+        end_byte: usize,
+        start_line: usize,
+        start_column: usize,
+        end_line: usize,
+        end_column: usize,
+    ) -> Self {
+        debug_assert!(start_byte <= end_byte);
+        debug_assert!((start_line, start_column) <= (end_line, end_column));
+        Self {
+            start_byte,
+            end_byte,
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+        }
+    }
+
+    pub fn start_byte(&self) -> usize {
+        self.start_byte
+    }
+
+    pub fn end_byte(&self) -> usize {
+        self.end_byte
+    }
+
+    pub fn start_line(&self) -> usize {
+        self.start_line
+    }
+
+    pub fn start_column(&self) -> usize {
+        self.start_column
+    }
+
+    pub fn end_line(&self) -> usize {
+        self.end_line
+    }
+
+    pub fn end_column(&self) -> usize {
+        self.end_column
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -134,7 +184,7 @@ impl ProjectedFile {
     ) -> Result<Self, ProjectionError> {
         let range = items
             .first()
-            .map(|item| item.span.clone())
+            .map(|item| item.span)
             .unwrap_or_else(empty_span);
         let Some(derived) = path.language() else {
             return Err(ast_invariant(
@@ -161,7 +211,7 @@ impl ProjectedFile {
                 return Err(ast_invariant(
                     path,
                     language,
-                    item.span.clone(),
+                    item.span,
                     format!("duplicate stable key `{}`", item.stable_key),
                 ));
             }
@@ -178,7 +228,7 @@ impl ProjectedFile {
                     return Err(ast_invariant(
                         path,
                         language,
-                        item.span.clone(),
+                        item.span,
                         format!("`{}` is its own parent", item.stable_key),
                     ));
                 }
@@ -186,7 +236,7 @@ impl ProjectedFile {
                     return Err(ast_invariant(
                         path,
                         language,
-                        item.span.clone(),
+                        item.span,
                         format!("`parent_key` chain for `{}` is cyclic", item.stable_key),
                     ));
                 }
@@ -194,7 +244,7 @@ impl ProjectedFile {
                     return Err(ast_invariant(
                         path,
                         language,
-                        item.span.clone(),
+                        item.span,
                         format!("`{}` refers to unknown parent `{parent}`", item.stable_key),
                     ));
                 };
@@ -235,14 +285,7 @@ impl ProjectedFile {
 
 /// A zero-width span used when an invariant failure is not tied to one item.
 fn empty_span() -> SourceSpan {
-    SourceSpan {
-        start_byte: 0,
-        end_byte: 0,
-        start_line: 0,
-        start_column: 0,
-        end_line: 0,
-        end_column: 0,
-    }
+    SourceSpan::new(0, 0, 0, 0, 0, 0)
 }
 
 fn ast_invariant(
@@ -404,14 +447,7 @@ mod tests {
             parent_key: parent_key.map(str::to_owned),
             kind: ItemKind::Function,
             name: key.to_owned(),
-            span: SourceSpan {
-                start_byte: 0,
-                end_byte: 0,
-                start_line: 0,
-                start_column: 0,
-                end_line: 0,
-                end_column: 0,
-            },
+            span: SourceSpan::new(0, 0, 0, 0, 0, 0),
             canonical_text: canonical_text.to_owned(),
         }
     }
@@ -681,5 +717,16 @@ mod tests {
         )
         .expect_err("an unsupported extension must be rejected");
         assert!(matches!(error, ProjectionError::AstInvariant { .. }));
+    }
+
+    #[test]
+    fn source_span_accessors_return_the_constructed_positions() {
+        let span = SourceSpan::new(4, 12, 1, 4, 2, 3);
+        assert_eq!(span.start_byte(), 4);
+        assert_eq!(span.end_byte(), 12);
+        assert_eq!(span.start_line(), 1);
+        assert_eq!(span.start_column(), 4);
+        assert_eq!(span.end_line(), 2);
+        assert_eq!(span.end_column(), 3);
     }
 }
