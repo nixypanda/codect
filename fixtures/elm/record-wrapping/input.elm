@@ -1,0 +1,14 @@
+module RecordWrapping exposing (..)
+
+
+type AccountNodeDto
+    = AccountNodeDto { path : String, name : String, accountType : Maybe AccountType, directBalances : List Quantity }
+
+
+type alias BigTuple =
+    ( String, Int, Float, Bool, Char, List String, Maybe Int, Html msg, Dict String Int )
+
+
+view : { title : String, subtitle : String, healthStatus : String, isHealthy : Bool, windowWidth : Int, children : List (Element msg) }
+view =
+    Debug.todo "view"

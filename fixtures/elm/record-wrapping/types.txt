@@ -1,0 +1,19 @@
+module RecordWrapping
+
+type AccountNodeDto
+    = AccountNodeDto { path : String
+        , name : String
+        , accountType : Maybe AccountType
+        , directBalances : List Quantity
+        }
+
+type alias BigTuple = ( String
+    , Int
+    , Float
+    , Bool
+    , Char
+    , List String
+    , Maybe Int
+    , Html msg
+    , Dict String Int
+    )
