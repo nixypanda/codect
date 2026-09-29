@@ -1840,17 +1840,9 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                     if let Some(input) = chooser.input.take() {
                         match RepoPath::new(input.value()) {
                             Ok(path) => {
-                                let label = path.to_string();
-                                match Selection::new(vec![SelectionGroup::Path { label, path }]) {
-                                    Ok(selection) => {
-                                        apply_selection(model, cmds, selection);
-                                        reopen = false;
-                                    }
-                                    Err(error) => {
-                                        chooser.error = Some(error.to_string());
-                                        chooser.input = Some(input);
-                                    }
-                                }
+                                let selection = Selection::new(vec![SelectionGroup::Path(path)]);
+                                apply_selection(model, cmds, selection);
+                                reopen = false;
                             }
                             Err(error) => {
                                 chooser.error = Some(error.to_string());
@@ -1866,24 +1858,14 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                         apply_selection(model, cmds, Selection::all());
                         reopen = false;
                     } else if cursor <= area_count {
-                        if let Some(area) = chooser
-                            .areas
-                            .as_ref()
-                            .and_then(|areas| areas.names().nth(cursor - 1).map(str::to_owned))
-                        {
-                            let paths = chooser
-                                .areas
-                                .as_ref()
-                                .and_then(|areas| areas.get(&area))
-                                .map(|area| area.paths.clone())
-                                .unwrap_or_default();
-                            match Selection::new(vec![SelectionGroup::Area { name: area, paths }]) {
-                                Ok(selection) => {
-                                    apply_selection(model, cmds, selection);
-                                    reopen = false;
-                                }
-                                Err(error) => chooser.error = Some(error.to_string()),
-                            }
+                        let area = chooser.areas.as_ref().and_then(|areas| {
+                            let name = areas.names().nth(cursor - 1)?;
+                            areas.get(name)
+                        });
+                        if let Some(area) = area.cloned() {
+                            let selection = Selection::new(vec![SelectionGroup::Area(area)]);
+                            apply_selection(model, cmds, selection);
+                            reopen = false;
                         }
                     } else {
                         chooser.input = Some(TextInput::new(""));
@@ -2700,8 +2682,8 @@ mod tests {
                 request: model.request.clone(),
                 index: 3,
                 result: Err(Box::new(EngineError::Selection(
-                    SelectionError::EmptyGroup {
-                        label: "missing".to_owned(),
+                    SelectionError::UnknownArea {
+                        name: "missing".to_owned(),
                     },
                 ))),
             },
@@ -3031,8 +3013,8 @@ mod tests {
     #[test]
     fn a_tick_advances_the_spinner_and_expires_a_diagnostic() {
         let mut model = two_files();
-        let error = EngineError::Selection(SelectionError::EmptyGroup {
-            label: "x".to_owned(),
+        let error = EngineError::Selection(SelectionError::UnknownArea {
+            name: "x".to_owned(),
         });
         let (failed, _) = update(
             Msg::Loaded {
@@ -3359,8 +3341,8 @@ mod tests {
     #[test]
     fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
         let model = two_files();
-        let error = EngineError::Selection(SelectionError::EmptyGroup {
-            label: "x".to_owned(),
+        let error = EngineError::Selection(SelectionError::UnknownArea {
+            name: "x".to_owned(),
         });
         let (next, _) = update(
             Msg::Loaded {
@@ -3626,14 +3608,8 @@ mod tests {
 
     fn area_set() -> AreaSet {
         AreaSet::new([
-            Area {
-                name: "core".to_owned(),
-                paths: vec![RepoPath::new("src/core").unwrap()],
-            },
-            Area {
-                name: "web".to_owned(),
-                paths: vec![RepoPath::new("src/web").unwrap()],
-            },
+            Area::new("core", [RepoPath::new("src/core").unwrap()]).unwrap(),
+            Area::new("web", [RepoPath::new("src/web").unwrap()]).unwrap(),
         ])
         .unwrap()
     }
@@ -3671,11 +3647,9 @@ mod tests {
 
         let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
         assert_eq!(chosen.overlay, None);
-        let expected = Selection::new(vec![SelectionGroup::Area {
-            name: "core".to_owned(),
-            paths: vec![RepoPath::new("src/core").unwrap()],
-        }])
-        .unwrap();
+        let expected = Selection::new(vec![SelectionGroup::Area(
+            Area::new("core", [RepoPath::new("src/core").unwrap()]).unwrap(),
+        )]);
         assert_eq!(
             cmds,
             vec![Cmd::Load {
@@ -3688,8 +3662,8 @@ mod tests {
     fn a_config_error_keeps_the_chooser_open_with_a_message() {
         let model = two_files();
         let (opened, _) = update(Msg::Key(Key::Char('s')), &model);
-        let error = EngineError::Selection(SelectionError::EmptyGroup {
-            label: "x".to_owned(),
+        let error = EngineError::Selection(SelectionError::UnknownArea {
+            name: "x".to_owned(),
         });
         let (loaded, _) = update(Msg::AreasLoaded(Err(Box::new(error))), &opened);
 
@@ -3720,11 +3694,9 @@ mod tests {
 
         let (chosen, cmds) = update(Msg::Key(Key::Enter), &typed);
         assert_eq!(chosen.overlay, None);
-        let expected = Selection::new(vec![SelectionGroup::Path {
-            label: "src/lib.rs".to_owned(),
-            path: RepoPath::new("src/lib.rs").unwrap(),
-        }])
-        .unwrap();
+        let expected = Selection::new(vec![SelectionGroup::Path(
+            RepoPath::new("src/lib.rs").unwrap(),
+        )]);
         assert_eq!(
             cmds,
             vec![Cmd::Load {

@@ -81,21 +81,17 @@ struct ConfigFile {
 }
 
 fn build_area(file: PathBuf, name: String, paths: Vec<String>) -> Result<Area, ConfigError> {
+    // Whitespace-only names are config-specific: `Area::new` rejects only a
+    // truly empty name, so the trim check stays here.
     if name.trim().is_empty() {
         return Err(ConfigError::EmptyName { file });
-    }
-    if paths.is_empty() {
-        return Err(ConfigError::EmptyArea { file, area: name });
     }
 
     let mut resolved = Vec::with_capacity(paths.len());
     for value in paths {
         resolved.push(normalize_path(&file, &name, &value)?);
     }
-    Ok(Area {
-        name,
-        paths: resolved,
-    })
+    Area::new(name, resolved).map_err(|source| ConfigError::from_area(&file, source))
 }
 
 /// Normalizes one area path leniently: the only hard failures are being
@@ -175,6 +171,13 @@ pub enum ConfigError {
 impl ConfigError {
     fn from_area(file: &Path, error: AreaError) -> Self {
         match error {
+            AreaError::EmptyName => Self::EmptyName {
+                file: file.to_path_buf(),
+            },
+            AreaError::EmptyPaths { name } => Self::EmptyArea {
+                file: file.to_path_buf(),
+                area: name,
+            },
             AreaError::DuplicateName { name } => Self::DuplicateArea {
                 file: file.to_path_buf(),
                 name,
@@ -200,7 +203,7 @@ mod tests {
             .areas()
             .get(name)
             .expect("area is defined")
-            .paths
+            .paths()
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -308,7 +311,8 @@ mod tests {
         let dir = temp();
         write_config(dir.path(), "[areas]\nfrontend = [\"src/\", \"./src\"]\n");
         let config = Config::load(dir.path()).expect("load config");
-        assert_eq!(area_paths(&config, "frontend"), vec!["src", "src"]);
+        // Both entries normalize to `src`, which `Area::new` then deduplicates.
+        assert_eq!(area_paths(&config, "frontend"), vec!["src"]);
     }
 
     #[test]

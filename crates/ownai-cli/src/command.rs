@@ -638,18 +638,15 @@ fn config_failure(error: ConfigError) -> CliError {
 }
 
 /// The area seam is reachable through `--area`; an unknown name lists the
-/// defined areas so a typo is correctable without opening the config file.
+/// defined areas so a typo is correctable without opening the config file. An
+/// unknown area is now the only way resolution can fail, so the list is always
+/// the right help.
 fn selection_failure(error: SelectionError, areas: &AreaSet) -> CliError {
-    let help = match &error {
-        SelectionError::UnknownArea { .. } => {
-            let names: Vec<&str> = areas.names().collect();
-            if names.is_empty() {
-                Some("no areas are defined in `.ownai.toml`".to_owned())
-            } else {
-                Some(format!("known areas: {}", names.join(", ")))
-            }
-        }
-        SelectionError::EmptyArea { .. } | SelectionError::EmptyGroup { .. } => None,
+    let names: Vec<&str> = areas.names().collect();
+    let help = if names.is_empty() {
+        Some("no areas are defined in `.ownai.toml`".to_owned())
+    } else {
+        Some(format!("known areas: {}", names.join(", ")))
     };
     CliError {
         message: error.to_string(),

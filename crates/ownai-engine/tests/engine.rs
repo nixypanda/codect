@@ -6,7 +6,7 @@
 
 mod support;
 
-use ownai_core::{FileDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
+use ownai_core::{Area, FileDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
 use ownai_engine::{Engine, EngineError};
 use support::TestRepo;
 
@@ -73,24 +73,18 @@ fn engine(repo: &TestRepo) -> Engine {
 fn path_selection(paths: &[&str]) -> Selection {
     let groups = paths
         .iter()
-        .map(|raw| SelectionGroup::Path {
-            label: (*raw).to_owned(),
-            path: RepoPath::new(*raw).expect("valid path"),
-        })
+        .map(|raw| SelectionGroup::Path(RepoPath::new(*raw).expect("valid path")))
         .collect();
-    Selection::new(groups).expect("valid selection")
+    Selection::new(groups)
 }
 
 fn area_selection(name: &str, paths: &[&str]) -> Selection {
-    let paths = paths
+    let paths: Vec<RepoPath> = paths
         .iter()
         .map(|raw| RepoPath::new(*raw).expect("valid path"))
         .collect();
-    Selection::new(vec![SelectionGroup::Area {
-        name: name.to_owned(),
-        paths,
-    }])
-    .expect("valid selection")
+    let area = Area::new(name, paths).expect("valid area");
+    Selection::new(vec![SelectionGroup::Area(area)])
 }
 
 fn paths_of(diffs: &[FileDiff]) -> Vec<String> {

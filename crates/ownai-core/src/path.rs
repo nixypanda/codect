@@ -42,10 +42,45 @@ impl PathScope {
 
 /// A named, repository-defined group of paths. Areas are data only; this crate
 /// never reads a config file.
+///
+/// The name is non-empty and the path list is non-empty, sorted, and
+/// deduplicated; [`Area::new`] establishes all three, so a constructed `Area`
+/// always satisfies them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Area {
-    pub name: String,
-    pub paths: Vec<RepoPath>,
+    name: String,
+    paths: Vec<RepoPath>,
+}
+
+impl Area {
+    /// Rejects an empty name or an empty path list, then sorts and deduplicates
+    /// the paths so the stored order is deterministic.
+    pub fn new(
+        name: impl Into<String>,
+        paths: impl IntoIterator<Item = RepoPath>,
+    ) -> Result<Self, AreaError> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(AreaError::EmptyName);
+        }
+
+        let mut paths: Vec<RepoPath> = paths.into_iter().collect();
+        if paths.is_empty() {
+            return Err(AreaError::EmptyPaths { name });
+        }
+        paths.sort();
+        paths.dedup();
+
+        Ok(Self { name, paths })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn paths(&self) -> &[RepoPath] {
+        &self.paths
+    }
 }
 
 /// A lookup of areas by name, sorted by name for deterministic iteration.
@@ -100,6 +135,12 @@ pub enum PathSelection {
 /// A rejected area definition.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum AreaError {
+    #[error("area name is empty")]
+    EmptyName,
+
+    #[error("area `{name}` defines no paths")]
+    EmptyPaths { name: String },
+
     #[error("duplicate area name `{name}`")]
     DuplicateName { name: String },
 }
@@ -113,10 +154,7 @@ mod tests {
     }
 
     fn area(name: &str, paths: &[&str]) -> Area {
-        Area {
-            name: name.to_owned(),
-            paths: paths.iter().map(|raw| path(raw)).collect(),
-        }
+        Area::new(name, paths.iter().map(|raw| path(raw))).expect("valid area")
     }
 
     #[test]
@@ -164,6 +202,32 @@ mod tests {
 
         assert!(scope.matches(&raw));
         assert!(!scope.matches(&other));
+    }
+
+    #[test]
+    fn area_new_rejects_an_empty_name() {
+        let error = Area::new("", [path("src")]).unwrap_err();
+        assert_eq!(error, AreaError::EmptyName);
+    }
+
+    #[test]
+    fn area_new_rejects_an_empty_path_list() {
+        let error = Area::new("core", Vec::new()).unwrap_err();
+        assert_eq!(
+            error,
+            AreaError::EmptyPaths {
+                name: "core".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn area_new_sorts_and_dedupes_paths() {
+        let area = Area::new("core", [path("b.rs"), path("a.rs"), path("b.rs")]).unwrap();
+
+        assert_eq!(area.name(), "core");
+        let ordered: Vec<String> = area.paths().iter().map(ToString::to_string).collect();
+        assert_eq!(ordered, vec!["a.rs", "b.rs"]);
     }
 
     #[test]

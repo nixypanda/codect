@@ -10,39 +10,42 @@
 //! areas and records one group per literal path or area in one step, so callers
 //! never resolve a scope and then rebuild its groups by hand.
 
+use std::borrow::Cow;
+
 use crate::model::RepoPath;
-use crate::path::{AreaSet, PathScope, PathSelection};
+use crate::path::{Area, AreaSet, PathScope, PathSelection};
 
 /// One user-visible unit of selection. A literal path is its own group; a named
 /// area is one group however many paths it defines.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SelectionGroup {
-    Path { label: String, path: RepoPath },
-    Area { name: String, paths: Vec<RepoPath> },
+    Path(RepoPath),
+    Area(Area),
 }
 
 impl SelectionGroup {
     /// The diagnostic key for this group: `path` or `area`.
     pub fn kind_label(&self) -> &'static str {
         match self {
-            Self::Path { .. } => "path",
-            Self::Area { .. } => "area",
+            Self::Path(_) => "path",
+            Self::Area(_) => "area",
         }
     }
 
-    /// The label the user wrote on the command line.
-    pub fn label(&self) -> &str {
+    /// The label the user wrote on the command line. A literal path's label is
+    /// its escaped display form; an area's is its name.
+    pub fn label(&self) -> Cow<'_, str> {
         match self {
-            Self::Path { label, .. } => label,
-            Self::Area { name, .. } => name,
+            Self::Path(path) => Cow::Owned(path.to_string()),
+            Self::Area(area) => Cow::Borrowed(area.name()),
         }
     }
 
     /// The repository paths this group contributes to the scope.
     pub fn paths(&self) -> &[RepoPath] {
         match self {
-            Self::Path { path, .. } => std::slice::from_ref(path),
-            Self::Area { paths, .. } => paths,
+            Self::Path(path) => std::slice::from_ref(path),
+            Self::Area(area) => area.paths(),
         }
     }
 }
@@ -64,16 +67,15 @@ impl Selection {
     }
 
     /// Builds a selection from its groups. The scope is the union of every
-    /// group's paths, so an empty group list selects everything.
-    pub fn new(groups: Vec<SelectionGroup>) -> Result<Self, SelectionError> {
-        for group in &groups {
-            if group.paths().is_empty() {
-                return Err(SelectionError::EmptyGroup {
-                    label: group.label().to_owned(),
-                });
-            }
-        }
-        Ok(Self::from_groups(groups))
+    /// group's paths, so an empty group list selects everything. Every group is
+    /// non-empty by construction, so this cannot fail.
+    pub fn new(groups: Vec<SelectionGroup>) -> Self {
+        let scope = PathScope::from_paths(
+            groups
+                .iter()
+                .flat_map(|group| group.paths().iter().cloned()),
+        );
+        Self { scope, groups }
     }
 
     /// Resolves a raw [`PathSelection`] against the repository's areas in one
@@ -82,7 +84,7 @@ impl Selection {
     /// `All` (and an empty literal list) selects everything. Literal paths are
     /// sorted and deduplicated, matching the scope they produce, and each keeps
     /// its escaped display form as its diagnostic label. A named area must
-    /// exist and define at least one path.
+    /// exist; it is non-empty by construction.
     pub fn resolve(selection: &PathSelection, areas: &AreaSet) -> Result<Self, SelectionError> {
         match selection {
             PathSelection::All => Ok(Self::all()),
@@ -90,14 +92,8 @@ impl Selection {
                 let mut unique: Vec<RepoPath> = paths.clone();
                 unique.sort();
                 unique.dedup();
-                let groups = unique
-                    .into_iter()
-                    .map(|path| {
-                        let label = path.to_string();
-                        SelectionGroup::Path { label, path }
-                    })
-                    .collect();
-                Ok(Self::from_groups(groups))
+                let groups = unique.into_iter().map(SelectionGroup::Path).collect();
+                Ok(Self::new(groups))
             }
             PathSelection::Areas(names) => {
                 let mut groups = Vec::with_capacity(names.len());
@@ -105,27 +101,11 @@ impl Selection {
                     let area = areas
                         .get(name)
                         .ok_or_else(|| SelectionError::UnknownArea { name: name.clone() })?;
-                    if area.paths.is_empty() {
-                        return Err(SelectionError::EmptyArea { name: name.clone() });
-                    }
-                    groups.push(SelectionGroup::Area {
-                        name: name.clone(),
-                        paths: area.paths.clone(),
-                    });
+                    groups.push(SelectionGroup::Area(area.clone()));
                 }
-                Ok(Self::from_groups(groups))
+                Ok(Self::new(groups))
             }
         }
-    }
-
-    /// Builds the scope from already-validated groups.
-    fn from_groups(groups: Vec<SelectionGroup>) -> Self {
-        let scope = PathScope::from_paths(
-            groups
-                .iter()
-                .flat_map(|group| group.paths().iter().cloned()),
-        );
-        Self { scope, groups }
     }
 
     pub fn scope(&self) -> &PathScope {
@@ -140,14 +120,8 @@ impl Selection {
 /// A selection that cannot be constructed or resolved.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SelectionError {
-    #[error("selection group `{label}` defines no paths")]
-    EmptyGroup { label: String },
-
     #[error("no area named `{name}` is defined")]
     UnknownArea { name: String },
-
-    #[error("area `{name}` defines no paths")]
-    EmptyArea { name: String },
 }
 
 #[cfg(test)]
@@ -159,10 +133,7 @@ mod tests {
     }
 
     fn area(name: &str, paths: &[&str]) -> crate::path::Area {
-        crate::path::Area {
-            name: name.to_owned(),
-            paths: paths.iter().map(|raw| path(raw)).collect(),
-        }
+        crate::path::Area::new(name, paths.iter().map(|raw| path(raw))).expect("valid area")
     }
 
     #[test]
@@ -175,26 +146,21 @@ mod tests {
 
     #[test]
     fn a_path_group_scopes_to_that_path() {
-        let selection = Selection::new(vec![SelectionGroup::Path {
-            label: "src/lib.rs".to_owned(),
-            path: path("src/lib.rs"),
-        }])
-        .unwrap();
+        let selection = Selection::new(vec![SelectionGroup::Path(path("src/lib.rs"))]);
 
         assert!(selection.scope().matches(&path("src/lib.rs")));
         assert!(!selection.scope().matches(&path("src/main.rs")));
         assert_eq!(selection.groups().len(), 1);
         assert_eq!(selection.groups()[0].kind_label(), "path");
-        assert_eq!(selection.groups()[0].label(), "src/lib.rs");
+        assert_eq!(selection.groups()[0].label().to_string(), "src/lib.rs");
     }
 
     #[test]
     fn an_area_group_scopes_to_all_its_paths() {
-        let selection = Selection::new(vec![SelectionGroup::Area {
-            name: "frontend".to_owned(),
-            paths: vec![path("apps/web"), path("packages/ui")],
-        }])
-        .unwrap();
+        let selection = Selection::new(vec![SelectionGroup::Area(area(
+            "frontend",
+            &["apps/web", "packages/ui"],
+        ))]);
 
         assert!(selection.scope().matches(&path("apps/web/src/App.elm")));
         assert!(selection.scope().matches(&path("packages/ui/src/lib.rs")));
@@ -203,37 +169,18 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_group_is_rejected() {
-        let error = Selection::new(vec![SelectionGroup::Area {
-            name: "empty".to_owned(),
-            paths: Vec::new(),
-        }])
-        .unwrap_err();
-
-        assert_eq!(
-            error,
-            SelectionError::EmptyGroup {
-                label: "empty".to_owned()
-            }
-        );
-    }
-
-    #[test]
     fn an_empty_group_list_is_match_all() {
-        let selection = Selection::new(Vec::new()).unwrap();
+        let selection = Selection::new(Vec::new());
         assert!(selection.scope().is_match_all());
     }
 
     #[test]
     fn non_utf8_path_groups_keep_their_identity() {
         let raw = RepoPath::new(b"src/\xFF/lib.rs".as_slice()).unwrap();
-        let selection = Selection::new(vec![SelectionGroup::Path {
-            label: raw.to_string(),
-            path: raw.clone(),
-        }])
-        .unwrap();
+        let selection = Selection::new(vec![SelectionGroup::Path(raw.clone())]);
 
         assert!(selection.scope().matches(&raw));
+        assert_eq!(selection.groups()[0].label().to_string(), raw.to_string());
     }
 
     #[test]
@@ -257,10 +204,10 @@ mod tests {
         )
         .unwrap();
 
-        let labels: Vec<&str> = selection
+        let labels: Vec<String> = selection
             .groups()
             .iter()
-            .map(SelectionGroup::label)
+            .map(|group| group.label().to_string())
             .collect();
         assert_eq!(labels, vec!["a.rs", "a/x.rs", "b.rs"]);
         assert_eq!(selection.groups()[0].kind_label(), "path");
@@ -285,7 +232,7 @@ mod tests {
         assert!(selection.scope().matches(&path("bin/ownai")));
         assert!(!selection.scope().matches(&path("docs/readme.md")));
         assert_eq!(selection.groups()[0].kind_label(), "area");
-        assert_eq!(selection.groups()[0].label(), "core");
+        assert_eq!(selection.groups()[0].label().to_string(), "core");
     }
 
     #[test]
@@ -300,20 +247,6 @@ mod tests {
             error,
             SelectionError::UnknownArea {
                 name: "ghost".to_owned()
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_reports_an_empty_area() {
-        let areas = AreaSet::new([area("empty", &[])]).unwrap();
-        let error = Selection::resolve(&PathSelection::Areas(vec!["empty".to_owned()]), &areas)
-            .unwrap_err();
-
-        assert_eq!(
-            error,
-            SelectionError::EmptyArea {
-                name: "empty".to_owned()
             }
         );
     }
