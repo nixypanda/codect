@@ -6,8 +6,8 @@
 
 mod support;
 
-use ownai_core::{ProjectionMode, RepoPath};
-use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_core::{FileDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
+use ownai_engine::{Engine, EngineError};
 use support::TestRepo;
 
 #[test]

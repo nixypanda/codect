@@ -4,11 +4,10 @@
 //! structured context a caller needs to build one, and the underlying error
 //! chain survives so consumers never recover context by parsing a message.
 
-use ownai_core::{DiagnosticContext, ProjectionError, RepoPath};
+use ownai_core::{DiagnosticContext, ProjectionError, RepoPath, SelectionError, SelectionGroup};
 use ownai_git::GitError;
 
 use crate::config::ConfigError;
-use crate::selection::{SelectionError, SelectionGroup};
 
 /// A failure while projecting or diffing a committed revision.
 #[derive(Debug, thiserror::Error)]

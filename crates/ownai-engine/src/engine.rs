@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ownai_core::{
-    AreaSet, DiagnosticContext, ItemKind, Language, LanguageProjector, ProjectedFile,
-    ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath, SourceSpan,
-    decode_source, select_projector,
+    AreaSet, DiagnosticContext, FileDiff, FileOutline, FileOutlineDiff, Language,
+    LanguageProjector, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
+    ProjectionMode, RepoPath, Selection, SelectionGroup, assemble_outline, decode_source,
+    select_projector,
 };
 use ownai_git::{CommitStep, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
@@ -21,7 +22,6 @@ use ownai_language_rust::RustProjector;
 
 use crate::config;
 use crate::error::EngineError;
-use crate::selection::{Selection, SelectionGroup};
 
 // ZST projectors are shared as statics so the pipeline never has to own them
 // or negotiate a borrow of a longer-lived value.
@@ -39,25 +39,6 @@ const PROJECTORS: [&dyn LanguageProjector; 4] = [
     &PYTHON_PROJECTOR,
     &RUST_PROJECTOR,
 ];
-
-/// One projected file comparison between two revisions.
-///
-/// A path present on only one side is an addition or a deletion and carries
-/// `None` for the absent projection.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileDiff {
-    pub path: RepoPath,
-    pub old: Option<ProjectedFile>,
-    pub new: Option<ProjectedFile>,
-}
-
-/// One changed file with the complete declaration outline for each present side.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileOutlineDiff {
-    pub path: RepoPath,
-    pub old: Option<FileOutline>,
-    pub new: Option<FileOutline>,
-}
 
 /// A commit-to-commit focused comparison with immutable snapshot identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,37 +65,8 @@ enum SnapshotEntry {
     Worktree,
 }
 
-/// One declaration in a file's mode-independent outline.
-///
-/// The outline is derived from the Signatures projection, which is the superset
-/// of the Types projection, so it can locate a declaration the requested mode
-/// drops entirely (for example an inherent `impl` in Types mode). The engine
-/// keeps this value free of serialization concerns; the CLI owns the JSON form.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutlineItem {
-    pub stable_key: String,
-    /// The `stable_key` of the containing declaration, or `None` at top level.
-    pub parent_key: Option<String>,
-    pub kind: ItemKind,
-    pub name: String,
-    /// The declaration's source span, as produced by the adapter (zero-based
-    /// lines; the JSON layer converts them).
-    pub span: SourceSpan,
-    /// The declaration's canonical fragment from the Signatures projection.
-    /// For a nested declaration this carries its container indentation.
-    pub signature: String,
-    /// Whether the requested mode's projection retains this `stable_key`.
-    pub retained_in_mode: bool,
-}
-
-/// A requested-mode projection paired with the file's complete outline.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileOutline {
-    pub path: RepoPath,
-    pub language: Language,
-    pub projection: ProjectedFile,
-    pub outline: Vec<OutlineItem>,
-}
+/// A resolved snapshot: its kind, its id, and its path-keyed entries.
+type SnapshotEntries = (&'static str, String, Vec<(RepoPath, SnapshotEntry)>);
 
 /// Projects explicit source bytes for `path`, returning the requested-mode
 /// projection plus a mode-independent outline.
@@ -142,37 +94,6 @@ pub fn project_source(
             .map_err(source_projection_failure)?
     };
     Ok(assemble_outline(path, language, projection, superset))
-}
-
-/// Builds a [`FileOutline`] from the requested-mode and Signatures projections.
-fn assemble_outline(
-    path: &RepoPath,
-    language: Language,
-    projection: Vec<ProjectedItem>,
-    superset: Vec<ProjectedItem>,
-) -> FileOutline {
-    let retained: BTreeSet<&str> = projection
-        .iter()
-        .map(|item| item.stable_key.as_str())
-        .collect();
-    let outline = superset
-        .iter()
-        .map(|item| OutlineItem {
-            stable_key: item.stable_key.clone(),
-            parent_key: item.parent_key.clone(),
-            kind: item.kind,
-            name: item.name.clone(),
-            span: item.span.clone(),
-            signature: item.canonical_text.clone(),
-            retained_in_mode: retained.contains(item.stable_key.as_str()),
-        })
-        .collect();
-    FileOutline {
-        path: path.clone(),
-        language,
-        projection: ProjectedFile::new(path.clone(), language, projection),
-        outline,
-    }
 }
 
 fn project_items(
@@ -553,10 +474,7 @@ impl Engine {
         })
     }
 
-    fn snapshot_entries(
-        &self,
-        spec: &str,
-    ) -> Result<(&'static str, String, Vec<(RepoPath, SnapshotEntry)>), EngineError> {
+    fn snapshot_entries(&self, spec: &str) -> Result<SnapshotEntries, EngineError> {
         if spec == ":empty"
             || matches!(
                 spec,
