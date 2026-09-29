@@ -41,11 +41,29 @@ pub struct FileOutline {
 }
 
 /// One changed file with the complete declaration outline for each present side.
+///
+/// The variant says which sides exist, so a comparison with neither side, or a
+/// path that disagrees with a present side, is not representable.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileOutlineDiff {
-    pub path: RepoPath,
-    pub old: Option<FileOutline>,
-    pub new: Option<FileOutline>,
+pub enum FileOutlineDiff {
+    /// Only the new side is present.
+    Added { new: FileOutline },
+    /// Only the old side is present.
+    Deleted { old: FileOutline },
+    /// Both sides are present and differ in their requested-mode projection.
+    Modified { old: FileOutline, new: FileOutline },
+}
+
+impl FileOutlineDiff {
+    /// The compared file's path, taken from a present side so it can never
+    /// disagree with the variant.
+    pub fn path(&self) -> &RepoPath {
+        match self {
+            Self::Added { new } => &new.path,
+            Self::Deleted { old } => &old.path,
+            Self::Modified { old, .. } => &old.path,
+        }
+    }
 }
 
 /// Builds a [`FileOutline`] from the requested-mode and Signatures projections.

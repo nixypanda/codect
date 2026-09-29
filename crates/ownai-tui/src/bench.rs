@@ -103,11 +103,18 @@ pub fn file_diff(
     old: Option<(&str, Language)>,
     new: Option<(&str, Language)>,
 ) -> FileDiff {
-    let repo_path = RepoPath::new(path).expect("benchmark path is valid");
-    FileDiff {
-        path: repo_path,
-        old: old.map(|(text, language)| projected(path, language, text)),
-        new: new.map(|(text, language)| projected(path, language, text)),
+    match (old, new) {
+        (None, Some((text, language))) => FileDiff::Added {
+            new: projected(path, language, text),
+        },
+        (Some((text, language)), None) => FileDiff::Deleted {
+            old: projected(path, language, text),
+        },
+        (Some((old_text, old_language)), Some((new_text, new_language))) => FileDiff::Modified {
+            old: projected(path, old_language, old_text),
+            new: projected(path, new_language, new_text),
+        },
+        (None, None) => panic!("a benchmark diff needs at least one side"),
     }
 }
 

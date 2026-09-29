@@ -1,7 +1,7 @@
 //! Side-by-side diff rendering: aligned rows, hunk headers, line-number gutters,
 //! and delta-style backgrounds.
 
-use ownai_core::{AlignedRow, DiffRowKind, FileDiff, ProjectedFile};
+use ownai_core::{AlignedRow, DiffRowKind, FileDiff};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -241,8 +241,11 @@ pub(crate) fn layout_diff(
     new_highlight: &[StyledLine],
     theme: &Theme,
 ) -> Vec<VisualRow> {
-    let old_text = diff.old.as_ref().map_or("", ProjectedFile::canonical_text);
-    let new_text = diff.new.as_ref().map_or("", ProjectedFile::canonical_text);
+    let (old_text, new_text) = match diff {
+        FileDiff::Added { new } => ("", new.canonical_text()),
+        FileDiff::Deleted { old } => (old.canonical_text(), ""),
+        FileDiff::Modified { old, new } => (old.canonical_text(), new.canonical_text()),
+    };
     let rows = ownai_core::aligned_rows(old_text, new_text);
 
     let mut visual = Vec::new();

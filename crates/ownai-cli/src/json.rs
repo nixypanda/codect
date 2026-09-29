@@ -104,29 +104,32 @@ struct DiffSideDocument {
 }
 
 fn diff_file_document(file: &FileOutlineDiff, diff: &SnapshotDiff) -> DiffFileDocument {
-    let exemplar = file
-        .old
-        .as_ref()
-        .or(file.new.as_ref())
-        .expect("changed file has a present side");
-    let status = match (&file.old, &file.new) {
-        (None, Some(_)) => "added",
-        (Some(_), None) => "deleted",
-        (Some(_), Some(_)) => "modified",
-        (None, None) => unreachable!("changed file has a present side"),
+    let (exemplar, status, base, target) = match file {
+        FileOutlineDiff::Added { new } => (
+            new,
+            "added",
+            None,
+            Some(diff_side_document(new, diff.target_id.clone())),
+        ),
+        FileOutlineDiff::Deleted { old } => (
+            old,
+            "deleted",
+            Some(diff_side_document(old, diff.base_id.clone())),
+            None,
+        ),
+        FileOutlineDiff::Modified { old, new } => (
+            old,
+            "modified",
+            Some(diff_side_document(old, diff.base_id.clone())),
+            Some(diff_side_document(new, diff.target_id.clone())),
+        ),
     };
     DiffFileDocument {
-        path: file.path.to_string(),
+        path: file.path().to_string(),
         language: language_name(exemplar.language),
         status,
-        base: file
-            .old
-            .as_ref()
-            .map(|side| diff_side_document(side, diff.base_id.clone())),
-        target: file
-            .new
-            .as_ref()
-            .map(|side| diff_side_document(side, diff.target_id.clone())),
+        base,
+        target,
         equal: false,
     }
 }

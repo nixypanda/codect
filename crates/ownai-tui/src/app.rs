@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use ownai_core::{
-    AreaSet, DiffRowKind, FileDiff, Language, ProjectedFile, ProjectionMode, RepoPath, Selection,
+    AreaSet, DiffRowKind, FileDiff, ProjectedFile, ProjectionMode, RepoPath, Selection,
     SelectionGroup,
 };
 use ownai_engine::{CommitStep, EngineError};
@@ -511,7 +511,7 @@ impl Content {
                 .filter(|file| !file.canonical_text().is_empty())
                 .map(|file| file.path().clone())
                 .collect(),
-            Self::Diff(diffs) => diffs.iter().map(|diff| diff.path.clone()).collect(),
+            Self::Diff(diffs) => diffs.iter().map(|diff| diff.path().clone()).collect(),
         }
     }
 }
@@ -844,7 +844,7 @@ impl Model {
     pub fn active_diff(&self) -> Option<&FileDiff> {
         let path = self.selected.as_ref()?;
         match &self.content {
-            Content::Diff(diffs) => diffs.iter().find(|diff| &diff.path == path),
+            Content::Diff(diffs) => diffs.iter().find(|diff| diff.path() == path),
             Content::Show(_) => None,
         }
     }
@@ -871,11 +871,11 @@ impl Model {
         let Content::Diff(diffs) = &self.content else {
             return None;
         };
-        let diff = diffs.iter().find(|diff| &diff.path == path)?;
-        Some(match (&diff.old, &diff.new) {
-            (None, Some(_)) => ChangeKind::Added,
-            (Some(_), None) => ChangeKind::Deleted,
-            _ => ChangeKind::Modified,
+        let diff = diffs.iter().find(|diff| diff.path() == path)?;
+        Some(match diff {
+            FileDiff::Added { .. } => ChangeKind::Added,
+            FileDiff::Deleted { .. } => ChangeKind::Deleted,
+            FileDiff::Modified { .. } => ChangeKind::Modified,
         })
     }
 
@@ -927,20 +927,22 @@ impl Model {
                 if self.highlights.diff.contains_key(&path) {
                     return;
                 }
-                let Some(diff) = diffs.iter().find(|diff| diff.path == path) else {
+                let Some(diff) = diffs.iter().find(|diff| *diff.path() == path) else {
                     return;
                 };
-                let language = diff
-                    .old
-                    .as_ref()
-                    .or(diff.new.as_ref())
-                    .map_or(Language::Rust, ProjectedFile::language);
-                let old = diff.old.as_ref().map_or_else(Vec::new, |file| {
+                let language = match diff {
+                    FileDiff::Added { new } => new.language(),
+                    FileDiff::Deleted { old } => old.language(),
+                    FileDiff::Modified { old, .. } => old.language(),
+                };
+                let highlight_side = |file: &ProjectedFile| {
                     highlight::highlight(file.canonical_text(), language, &self.theme)
-                });
-                let new = diff.new.as_ref().map_or_else(Vec::new, |file| {
-                    highlight::highlight(file.canonical_text(), language, &self.theme)
-                });
+                };
+                let (old, new) = match diff {
+                    FileDiff::Added { new } => (Vec::new(), highlight_side(new)),
+                    FileDiff::Deleted { old } => (highlight_side(old), Vec::new()),
+                    FileDiff::Modified { old, new } => (highlight_side(old), highlight_side(new)),
+                };
                 self.highlights
                     .diff
                     .insert(path, Arc::new(DiffHighlight { old, new }));
@@ -1661,21 +1663,33 @@ fn search_matches(model: &Model, needle: &str) -> Vec<SearchMatch> {
         }
         Content::Diff(_) => {
             if let Some(diff) = model.active_diff() {
-                if let Some(old) = &diff.old {
-                    collect_matches(
-                        old.canonical_text(),
-                        &needle_lower,
-                        SearchSide::Old,
-                        &mut matches,
-                    );
-                }
-                if let Some(new) = &diff.new {
-                    collect_matches(
+                match diff {
+                    FileDiff::Added { new } => collect_matches(
                         new.canonical_text(),
                         &needle_lower,
                         SearchSide::New,
                         &mut matches,
-                    );
+                    ),
+                    FileDiff::Deleted { old } => collect_matches(
+                        old.canonical_text(),
+                        &needle_lower,
+                        SearchSide::Old,
+                        &mut matches,
+                    ),
+                    FileDiff::Modified { old, new } => {
+                        collect_matches(
+                            old.canonical_text(),
+                            &needle_lower,
+                            SearchSide::Old,
+                            &mut matches,
+                        );
+                        collect_matches(
+                            new.canonical_text(),
+                            &needle_lower,
+                            SearchSide::New,
+                            &mut matches,
+                        );
+                    }
                 }
             }
         }
@@ -2741,10 +2755,18 @@ mod tests {
     }
 
     fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
-        FileDiff {
-            path: RepoPath::new(path).expect("valid path"),
-            old: old.map(|text| projected(path, text)),
-            new: new.map(|text| projected(path, text)),
+        match (old, new) {
+            (None, Some(text)) => FileDiff::Added {
+                new: projected(path, text),
+            },
+            (Some(text), None) => FileDiff::Deleted {
+                old: projected(path, text),
+            },
+            (Some(old_text), Some(new_text)) => FileDiff::Modified {
+                old: projected(path, old_text),
+                new: projected(path, new_text),
+            },
+            (None, None) => panic!("a test diff needs at least one side"),
         }
     }
 

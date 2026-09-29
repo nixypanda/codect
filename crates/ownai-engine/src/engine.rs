@@ -313,10 +313,11 @@ impl Engine {
             if old_text == new_text {
                 continue;
             }
-            diffs.push(FileDiff {
-                path: path.clone(),
-                old,
-                new,
+            diffs.push(match (old, new) {
+                (None, Some(new)) => FileDiff::Added { new },
+                (Some(old), None) => FileDiff::Deleted { old },
+                (Some(old), Some(new)) => FileDiff::Modified { old, new },
+                (None, None) => continue, // unreachable after the entry checks
             });
         }
 
@@ -389,10 +390,11 @@ impl Engine {
             {
                 continue;
             }
-            files.push(FileOutlineDiff {
-                path: path.clone(),
-                old,
-                new,
+            files.push(match (old, new) {
+                (None, Some(new)) => FileOutlineDiff::Added { new },
+                (Some(old), None) => FileOutlineDiff::Deleted { old },
+                (Some(old), Some(new)) => FileOutlineDiff::Modified { old, new },
+                (None, None) => continue, // unreachable after the entry checks
             });
         }
         Ok(CommitDiff {
@@ -463,7 +465,12 @@ impl Engine {
             {
                 continue;
             }
-            files.push(FileOutlineDiff { path, old, new });
+            files.push(match (old, new) {
+                (None, Some(new)) => FileOutlineDiff::Added { new },
+                (Some(old), None) => FileOutlineDiff::Deleted { old },
+                (Some(old), Some(new)) => FileOutlineDiff::Modified { old, new },
+                (None, None) => continue, // unreachable after the entry checks
+            });
         }
         Ok(SnapshotDiff {
             base_kind,

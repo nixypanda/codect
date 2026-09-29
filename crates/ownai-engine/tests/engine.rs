@@ -94,7 +94,7 @@ fn area_selection(name: &str, paths: &[&str]) -> Selection {
 }
 
 fn paths_of(diffs: &[FileDiff]) -> Vec<String> {
-    diffs.iter().map(|diff| diff.path.to_string()).collect()
+    diffs.iter().map(|diff| diff.path().to_string()).collect()
 }
 
 #[test]
@@ -238,7 +238,7 @@ fn diff_keeps_only_changed_projections() {
         .diff("HEAD~1", "HEAD", ProjectionMode::Types, &Selection::all())
         .expect("diff types");
     assert_eq!(paths_of(&types), vec!["src/lib.rs"]);
-    assert!(types[0].old.is_some() && types[0].new.is_some());
+    assert!(matches!(types[0], FileDiff::Modified { .. }));
 }
 
 #[test]
@@ -272,8 +272,8 @@ fn diff_marks_added_and_deleted_files() {
         .expect("diff");
 
     assert_eq!(paths_of(&diffs), vec!["fresh.rs", "gone.rs"]);
-    assert!(diffs[0].old.is_none() && diffs[0].new.is_some());
-    assert!(diffs[1].old.is_some() && diffs[1].new.is_none());
+    assert!(matches!(diffs[0], FileDiff::Added { .. }));
+    assert!(matches!(diffs[1], FileDiff::Deleted { .. }));
 }
 
 #[test]
@@ -337,7 +337,7 @@ fn diff_accepts_a_path_deleted_by_the_target() {
         .expect("diff");
 
     assert_eq!(paths_of(&diffs), vec!["a.rs"]);
-    assert!(diffs[0].old.is_some() && diffs[0].new.is_none());
+    assert!(matches!(diffs[0], FileDiff::Deleted { .. }));
 }
 
 #[test]

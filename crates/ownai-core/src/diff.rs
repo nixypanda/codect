@@ -9,14 +9,36 @@ use crate::model::{ProjectedFile, RepoPath};
 
 /// One projected file comparison between two revisions.
 ///
-/// A path present on only one side is an addition or a deletion and carries
-/// `None` for the absent projection. The comparison carries no Git identity;
-/// the engine pairs it with the snapshot it came from.
+/// The variant says which sides exist, so a comparison with neither side, or a
+/// path that disagrees with a present side, is not representable. The comparison
+/// carries no Git identity; the engine pairs it with the snapshot it came from.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileDiff {
-    pub path: RepoPath,
-    pub old: Option<ProjectedFile>,
-    pub new: Option<ProjectedFile>,
+pub enum FileDiff {
+    /// Only the new side is present.
+    Added { new: ProjectedFile },
+    /// Only the old side is present.
+    Deleted { old: ProjectedFile },
+    /// Both sides are present. They may still be textually equal; the engine
+    /// omits equal projections before constructing a diff, so `Modified` never
+    /// means "no visible change" (its focused file-list policy, not core).
+    Modified {
+        old: ProjectedFile,
+        new: ProjectedFile,
+    },
+}
+
+impl FileDiff {
+    /// The compared file's path.
+    ///
+    /// It is taken from a present side, so it can never disagree with the
+    /// variant. A future variant with two paths (a rename) must revisit this.
+    pub fn path(&self) -> &RepoPath {
+        match self {
+            Self::Added { new } => new.path(),
+            Self::Deleted { old } => old.path(),
+            Self::Modified { old, .. } => old.path(),
+        }
+    }
 }
 
 /// Context lines emitted around each change. Three is the conventional default
@@ -195,6 +217,51 @@ pub fn unified_hunks(old: &str, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{ItemKind, Language, ProjectedItem, SourceSpan};
+
+    fn projected(path: &str, text: &str) -> ProjectedFile {
+        let path = RepoPath::new(path).expect("valid test path");
+        ProjectedFile::new(
+            path,
+            Language::Rust,
+            vec![ProjectedItem {
+                stable_key: "item".to_owned(),
+                parent_key: None,
+                kind: ItemKind::Function,
+                name: "item".to_owned(),
+                span: SourceSpan {
+                    start_byte: 0,
+                    end_byte: 0,
+                    start_line: 0,
+                    start_column: 0,
+                    end_line: 0,
+                    end_column: 0,
+                },
+                canonical_text: text.to_owned(),
+            }],
+        )
+    }
+
+    #[test]
+    fn file_diff_path_agrees_with_each_present_side() {
+        let old = projected("src/lib.rs", "fn a() {}\n");
+        let new = projected("src/lib.rs", "fn a() -> u8 {}\n");
+        let cases = [
+            FileDiff::Added { new: new.clone() },
+            FileDiff::Deleted { old: old.clone() },
+            FileDiff::Modified { old, new },
+        ];
+        for diff in &cases {
+            match diff {
+                FileDiff::Added { new } => assert_eq!(diff.path(), new.path()),
+                FileDiff::Deleted { old } => assert_eq!(diff.path(), old.path()),
+                FileDiff::Modified { old, new } => {
+                    assert_eq!(diff.path(), old.path());
+                    assert_eq!(old.path(), new.path());
+                }
+            }
+        }
+    }
 
     #[test]
     fn equal_texts_produce_no_hunks() {

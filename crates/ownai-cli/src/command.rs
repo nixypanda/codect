@@ -385,11 +385,16 @@ fn split_diff(diffs: Vec<FileDiff>) -> (Vec<ProjectedFile>, Vec<ProjectedFile>) 
     let mut old = Vec::new();
     let mut new = Vec::new();
     for diff in diffs {
-        if let Some(file) = diff.old {
-            old.push(file);
-        }
-        if let Some(file) = diff.new {
-            new.push(file);
+        match diff {
+            FileDiff::Deleted { old: file } => old.push(file),
+            FileDiff::Added { new: file } => new.push(file),
+            FileDiff::Modified {
+                old: old_file,
+                new: new_file,
+            } => {
+                old.push(old_file);
+                new.push(new_file);
+            }
         }
     }
     (old, new)
