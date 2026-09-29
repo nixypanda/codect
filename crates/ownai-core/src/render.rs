@@ -9,7 +9,7 @@
 use crate::diagnostic::ProjectionError;
 use crate::diff::unified_hunks;
 use crate::language::{LanguageProjector, ProjectionInput};
-use crate::model::{ProjectedFile, ProjectionMode, RepoPath};
+use crate::model::{ProjectedFile, ProjectionMode, RepoPath, SupportedPath};
 
 /// The canonical maximum display width of a rendered line.
 ///
@@ -60,7 +60,13 @@ where
         let Some(projector) = select_projector(projectors, path) else {
             continue;
         };
-        files.push(projector.project(ProjectionInput { path, source, mode })?);
+        let path = SupportedPath::new(path.clone())
+            .expect("a selected projector implies a supported path");
+        files.push(projector.project(ProjectionInput {
+            path: &path,
+            source,
+            mode,
+        })?);
     }
     sort_files(&mut files);
     Ok(files)
@@ -162,12 +168,11 @@ mod tests {
     use crate::model::{ItemKind, Language, ProjectedItem, SourceSpan};
 
     fn projected(path: &str, text: &str) -> ProjectedFile {
-        let path = RepoPath::new(path).unwrap();
+        let path = SupportedPath::new(RepoPath::new(path).unwrap()).unwrap();
         // An item whose fragment is empty still yields a bare "\n" canonical
         // text, so an empty projection is modeled with no items.
         if text.is_empty() {
-            return ProjectedFile::try_new(path, Language::Rust, Vec::new())
-                .expect("valid fixture");
+            return ProjectedFile::try_new(path, Vec::new()).expect("valid fixture");
         }
 
         let item = ProjectedItem {
@@ -178,7 +183,7 @@ mod tests {
             span: SourceSpan::new(0, 0, 0, 0, 0, 0),
             canonical_text: text.to_owned(),
         };
-        ProjectedFile::try_new(path, Language::Rust, vec![item]).expect("valid fixture")
+        ProjectedFile::try_new(path, vec![item]).expect("valid fixture")
     }
 
     #[test]
@@ -313,7 +318,6 @@ mod tests {
         fn project(&self, input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
             ProjectedFile::try_new(
                 input.path.clone(),
-                Language::Rust,
                 vec![ProjectedItem {
                     stable_key: "item".to_owned(),
                     parent_key: None,
@@ -340,7 +344,6 @@ mod tests {
         fn project(&self, input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
             Err(ProjectionError::ErroneousSyntax {
                 path: input.path.clone(),
-                language: Language::Rust,
                 range: span(),
             })
         }

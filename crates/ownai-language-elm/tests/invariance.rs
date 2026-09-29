@@ -1,8 +1,12 @@
-use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath};
+use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
 use ownai_language_elm::ElmProjector;
 
+fn supported(raw: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(raw).expect("test path is valid")).expect("supported path")
+}
+
 fn project(source: &str, mode: ProjectionMode) -> String {
-    let path = RepoPath::new("input.elm").expect("test path is valid");
+    let path = supported("input.elm");
     ElmProjector::new()
         .project(ProjectionInput {
             path: &path,

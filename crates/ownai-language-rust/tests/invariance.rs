@@ -1,11 +1,15 @@
 //! Projection invariance and exclusion tests (TECHNICAL_DESIGN.md sections 16.3
 //! and 12.1).
 
-use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath};
+use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
 use ownai_language_rust::RustProjector;
 
+fn supported(raw: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(raw).expect("path")).expect("supported path")
+}
+
 fn project(source: &str, mode: ProjectionMode) -> String {
-    let path = RepoPath::new("src/lib.rs").expect("path");
+    let path = supported("src/lib.rs");
     RustProjector
         .project(ProjectionInput {
             path: &path,
@@ -101,7 +105,7 @@ fn local_items_and_closures_are_excluded() {
 #[test]
 fn macro_definitions_and_invocations_produce_no_items() {
     let source = "macro_rules! m { () => { pub struct Generated; }; }\nm!();\n";
-    let path = RepoPath::new("src/lib.rs").expect("path");
+    let path = supported("src/lib.rs");
     for mode in [ProjectionMode::Types, ProjectionMode::Signatures] {
         let file = RustProjector
             .project(ProjectionInput {
@@ -129,7 +133,7 @@ fn derive_and_attribute_macros_are_not_expanded() {
 
 #[test]
 fn erroneous_syntax_is_fatal_instead_of_partial() {
-    let path = RepoPath::new("src/lib.rs").expect("path");
+    let path = supported("src/lib.rs");
     let error = RustProjector
         .project(ProjectionInput {
             path: &path,
@@ -149,7 +153,7 @@ fn every_nested_item_reaches_a_top_level_ancestor() {
     // struct, so this fixture exercises the invariant `ProjectedFile::try_new`
     // now enforces.
     let source = "pub struct S {\n    pub a: u32,\n}\n";
-    let path = RepoPath::new("src/lib.rs").expect("path");
+    let path = supported("src/lib.rs");
     let file = RustProjector
         .project(ProjectionInput {
             path: &path,

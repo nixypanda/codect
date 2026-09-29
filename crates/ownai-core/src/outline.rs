@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use crate::diagnostic::ProjectionError;
-use crate::model::{Language, ProjectedFile, ProjectedItem, RepoPath};
+use crate::model::{Language, ProjectedFile, ProjectedItem, RepoPath, SupportedPath};
 
 /// One declaration in a file's mode-independent outline.
 ///
@@ -83,13 +83,12 @@ impl FileOutlineDiff {
 /// requested mode drops is still located through `superset`. Both projections
 /// are validated, so the outline cannot carry a malformed parent forest.
 pub fn assemble_outline(
-    path: &RepoPath,
-    language: Language,
+    path: &SupportedPath,
     projection: Vec<ProjectedItem>,
     superset: Vec<ProjectedItem>,
 ) -> Result<FileOutline, ProjectionError> {
-    let projection = ProjectedFile::try_new(path.clone(), language, projection)?;
-    let superset = ProjectedFile::try_new(path.clone(), language, superset)?;
+    let projection = ProjectedFile::try_new(path.clone(), projection)?;
+    let superset = ProjectedFile::try_new(path.clone(), superset)?;
     let retained = projection
         .items()
         .iter()
@@ -111,7 +110,11 @@ pub fn assemble_outline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ItemKind, SourceSpan};
+    use crate::model::{ItemKind, SourceSpan, SupportedPath};
+
+    fn supported(raw: &str) -> SupportedPath {
+        SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+    }
 
     fn item(key: &str, parent: Option<&str>, text: &str) -> ProjectedItem {
         ProjectedItem {
@@ -126,14 +129,13 @@ mod tests {
 
     #[test]
     fn outline_is_the_signatures_superset_with_retention_from_the_requested_mode() {
-        let path = RepoPath::new("src/lib.rs").unwrap();
         let requested = vec![item("impl User", None, "impl User {\n}")];
         let superset = vec![
             item("impl User", None, "impl User {\n    fn id(&self);\n}"),
             item("impl User::id", Some("impl User"), "    fn id(&self);"),
         ];
 
-        let file = assemble_outline(&path, Language::Rust, requested, superset)
+        let file = assemble_outline(&supported("src/lib.rs"), requested, superset)
             .expect("valid outline fixture");
 
         assert_eq!(file.projection.canonical_text(), "impl User {\n}\n");

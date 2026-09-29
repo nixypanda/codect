@@ -7,7 +7,7 @@
 //! `block` nodes, so extraction never consults raw indentation (except when a
 //! `block` is reconstructed, where four spaces per level are emitted).
 
-use ownai_core::{Language, ProjectionError, RepoPath, SourceSpan};
+use ownai_core::{ProjectionError, SourceSpan, SupportedPath};
 use tree_sitter::{Node, Parser};
 
 // Visible node kinds.
@@ -61,13 +61,15 @@ pub const FIELD_VALUE: &str = "value";
 /// Parses one Python source file and rejects any tree containing `ERROR` or
 /// missing nodes. `None` parse results and error nodes are fatal so that no
 /// caller can emit a partial projection (TECHNICAL_DESIGN.md section 9).
-pub(crate) fn parse(source: &str, path: &RepoPath) -> Result<tree_sitter::Tree, ProjectionError> {
+pub(crate) fn parse(
+    source: &str,
+    path: &SupportedPath,
+) -> Result<tree_sitter::Tree, ProjectionError> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_python::LANGUAGE.into())
         .map_err(|_| ProjectionError::AstInvariant {
             path: path.clone(),
-            language: Language::Python,
             range: whole_file_span(source),
             detail: "the Python grammar could not be assigned to a parser".to_owned(),
         })?;
@@ -76,7 +78,6 @@ pub(crate) fn parse(source: &str, path: &RepoPath) -> Result<tree_sitter::Tree, 
         .parse(source, None)
         .ok_or_else(|| ProjectionError::ParseFailed {
             path: path.clone(),
-            language: Language::Python,
             range: whole_file_span(source),
         })?;
 
@@ -84,7 +85,6 @@ pub(crate) fn parse(source: &str, path: &RepoPath) -> Result<tree_sitter::Tree, 
         let range = first_error_range(tree.root_node()).unwrap_or_else(|| whole_file_span(source));
         return Err(ProjectionError::ErroneousSyntax {
             path: path.clone(),
-            language: Language::Python,
             range,
         });
     }

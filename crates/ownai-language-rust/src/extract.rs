@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use ownai_core::{
-    ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
-    ProjectionMode, SourceSpan,
+    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
+    SourceSpan,
 };
 use tree_sitter::Node;
 
@@ -71,11 +71,9 @@ impl Context<'_> {
 pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
     let path = input.path;
     let source = input.source;
-    let language = Language::Rust;
 
     let mut parser = syntax::parser().map_err(|_| ProjectionError::ParseFailed {
         path: path.clone(),
-        language,
         range: whole_span(source),
     })?;
 
@@ -84,7 +82,6 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
             .parse(source.as_bytes(), None)
             .ok_or_else(|| ProjectionError::ParseFailed {
                 path: path.clone(),
-                language,
                 range: whole_span(source),
             })?;
 
@@ -93,7 +90,6 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
         let range = first_error_span(root).unwrap_or_else(|| whole_span(source));
         return Err(ProjectionError::ErroneousSyntax {
             path: path.clone(),
-            language,
             range,
         });
     }
@@ -110,7 +106,7 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
         items.extend(built.items);
     }
 
-    ProjectedFile::try_new(path.clone(), language, items)
+    ProjectedFile::try_new(path.clone(), items)
 }
 
 fn is_comment(kind: &str) -> bool {

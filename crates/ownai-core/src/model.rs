@@ -160,57 +160,31 @@ pub struct ProjectedItem {
 ///    `stable_key`, so canonical-text assembly cannot silently drop an item.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectedFile {
-    path: RepoPath,
-    language: Language,
+    path: SupportedPath,
     items: Vec<ProjectedItem>,
     canonical_text: String,
 }
 
 impl ProjectedFile {
-    /// Builds a projected file, validating the `parent_key` forest and the
-    /// `path`/`language` pairing.
+    /// Builds a projected file, validating the `parent_key` forest.
     ///
     /// Rejects a duplicate `stable_key`, a `parent_key` with no matching item,
-    /// a self-parent, a cycle, an unsupported extension, and a `language` that
-    /// disagrees with `path`. On success every nested item has a top-level
+    /// a self-parent, and a cycle. On success every nested item has a top-level
     /// ancestor, so no item is silently dropped by canonical-text assembly.
     ///
     /// A failure here means an adapter produced a value it should not have; see
     /// [`ProjectionError::AstInvariant`].
     pub fn try_new(
-        path: RepoPath,
-        language: Language,
+        path: SupportedPath,
         items: Vec<ProjectedItem>,
     ) -> Result<Self, ProjectionError> {
-        let range = items
-            .first()
-            .map(|item| item.span)
-            .unwrap_or_else(empty_span);
-        let Some(derived) = path.language() else {
-            return Err(ast_invariant(
-                path,
-                language,
-                range,
-                "path has no supported source extension",
-            ));
-        };
-        if derived != language {
-            return Err(ast_invariant(
-                path,
-                language,
-                range,
-                format!("path maps to {derived:?}, not {language:?}"),
-            ));
-        }
-
         // A duplicate key makes outline retention and per-declaration addressing
         // ambiguous, so the item list must name each declaration once.
         let mut index: HashMap<&str, usize> = HashMap::with_capacity(items.len());
         for (position, item) in items.iter().enumerate() {
             if index.insert(item.stable_key.as_str(), position).is_some() {
                 return Err(ast_invariant(
-                    path,
-                    language,
+                    path.clone(),
                     item.span,
                     format!("duplicate stable key `{}`", item.stable_key),
                 ));
@@ -226,24 +200,21 @@ impl ProjectedFile {
             while let Some(parent) = current {
                 if parent == item.stable_key {
                     return Err(ast_invariant(
-                        path,
-                        language,
+                        path.clone(),
                         item.span,
                         format!("`{}` is its own parent", item.stable_key),
                     ));
                 }
                 if !visited.insert(parent) {
                     return Err(ast_invariant(
-                        path,
-                        language,
+                        path.clone(),
                         item.span,
                         format!("`parent_key` chain for `{}` is cyclic", item.stable_key),
                     ));
                 }
                 let Some(&position) = index.get(parent) else {
                     return Err(ast_invariant(
-                        path,
-                        language,
+                        path.clone(),
                         item.span,
                         format!("`{}` refers to unknown parent `{parent}`", item.stable_key),
                     ));
@@ -252,26 +223,25 @@ impl ProjectedFile {
             }
         }
 
-        Ok(Self::assemble(path, language, items))
+        Ok(Self::assemble(path, items))
     }
 
     /// Assembles a file whose invariants are already established.
-    fn assemble(path: RepoPath, language: Language, items: Vec<ProjectedItem>) -> Self {
+    fn assemble(path: SupportedPath, items: Vec<ProjectedItem>) -> Self {
         let canonical_text = derive_canonical_text(&items);
         Self {
             path,
-            language,
             items,
             canonical_text,
         }
     }
 
     pub fn path(&self) -> &RepoPath {
-        &self.path
+        self.path.path()
     }
 
     pub fn language(&self) -> Language {
-        self.language
+        self.path.language()
     }
 
     pub fn items(&self) -> &[ProjectedItem] {
@@ -283,20 +253,13 @@ impl ProjectedFile {
     }
 }
 
-/// A zero-width span used when an invariant failure is not tied to one item.
-fn empty_span() -> SourceSpan {
-    SourceSpan::new(0, 0, 0, 0, 0, 0)
-}
-
 fn ast_invariant(
-    path: RepoPath,
-    language: Language,
+    path: SupportedPath,
     range: SourceSpan,
     detail: impl Into<String>,
 ) -> ProjectionError {
     ProjectionError::AstInvariant {
         path,
-        language,
         range,
         detail: detail.into(),
     }
@@ -429,6 +392,39 @@ impl fmt::Display for RepoPath {
     }
 }
 
+/// A repository path whose extension names a supported language.
+///
+/// Constructed only through [`SupportedPath::new`], so [`SupportedPath::language`]
+/// can never disagree with [`SupportedPath::path`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SupportedPath {
+    path: RepoPath,
+    language: Language,
+}
+
+impl SupportedPath {
+    /// `None` when the path's extension names no supported language.
+    pub fn new(path: RepoPath) -> Option<Self> {
+        path.language().map(|language| Self { path, language })
+    }
+
+    pub fn path(&self) -> &RepoPath {
+        &self.path
+    }
+
+    pub fn language(&self) -> Language {
+        self.language
+    }
+}
+
+impl fmt::Display for SupportedPath {
+    /// Delegates to the path so diagnostics render exactly as they did when the
+    /// path and language were stored separately.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.path.fmt(f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +446,26 @@ mod tests {
             span: SourceSpan::new(0, 0, 0, 0, 0, 0),
             canonical_text: canonical_text.to_owned(),
         }
+    }
+
+    fn supported(raw: &str) -> SupportedPath {
+        SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn supported_path_pairs_every_supported_extension_with_its_language() {
+        for (raw, language) in [
+            ("src/User.elm", Language::Elm),
+            ("src/lib.rs", Language::Rust),
+            ("src/Main.hs", Language::Haskell),
+            ("src/app.py", Language::Python),
+            ("src/app.pyi", Language::Python),
+        ] {
+            let path = supported(raw);
+            assert_eq!(path.path().to_string(), raw);
+            assert_eq!(path.language(), language);
+        }
+        assert!(SupportedPath::new(RepoPath::new("README.md").unwrap()).is_none());
     }
 
     #[test]
@@ -589,8 +605,7 @@ mod tests {
     #[test]
     fn projected_file_separates_top_level_items_with_one_blank_line() {
         let file = ProjectedFile::try_new(
-            RepoPath::new("src/lib.rs").unwrap(),
-            Language::Rust,
+            supported("src/lib.rs"),
             vec![item("a", "pub fn a();"), item("b", "pub fn b();")],
         )
         .expect("valid fixture");
@@ -605,12 +620,8 @@ mod tests {
         let top = item_with_parent("impl User", None, "impl User {\n    fn id(&self);\n}");
         let nested = item_with_parent("impl User::id", Some("impl User"), "    fn id(&self);");
 
-        let file = ProjectedFile::try_new(
-            RepoPath::new("src/lib.rs").unwrap(),
-            Language::Rust,
-            vec![top, nested],
-        )
-        .expect("valid fixture");
+        let file = ProjectedFile::try_new(supported("src/lib.rs"), vec![top, nested])
+            .expect("valid fixture");
 
         // The nested fragment appears once, inside its ancestor, not as its own
         // block.
@@ -622,8 +633,7 @@ mod tests {
     #[test]
     fn projected_file_normalizes_trailing_newlines() {
         let file = ProjectedFile::try_new(
-            RepoPath::new("src/lib.rs").unwrap(),
-            Language::Rust,
+            supported("src/lib.rs"),
             vec![item("a", "pub fn a();\n\n\n")],
         )
         .expect("valid fixture");
@@ -632,12 +642,8 @@ mod tests {
 
     #[test]
     fn projected_file_with_no_items_has_empty_text() {
-        let file = ProjectedFile::try_new(
-            RepoPath::new("src/lib.rs").unwrap(),
-            Language::Rust,
-            Vec::new(),
-        )
-        .expect("valid fixture");
+        let file =
+            ProjectedFile::try_new(supported("src/lib.rs"), Vec::new()).expect("valid fixture");
         assert!(file.items().is_empty());
         assert_eq!(file.canonical_text(), "");
     }
@@ -645,8 +651,7 @@ mod tests {
     #[test]
     fn projected_file_rejects_a_dangling_parent_key() {
         let error = ProjectedFile::try_new(
-            RepoPath::new("src/lib.rs").unwrap(),
-            Language::Rust,
+            supported("src/lib.rs"),
             vec![item_with_parent(
                 "impl User::id",
                 Some("impl User"),
@@ -660,8 +665,7 @@ mod tests {
     #[test]
     fn projected_file_rejects_a_self_parent() {
         let error = ProjectedFile::try_new(
-            RepoPath::new("src/lib.rs").unwrap(),
-            Language::Rust,
+            supported("src/lib.rs"),
             vec![item_with_parent(
                 "impl User",
                 Some("impl User"),
@@ -675,8 +679,7 @@ mod tests {
     #[test]
     fn projected_file_rejects_a_parent_cycle() {
         let error = ProjectedFile::try_new(
-            RepoPath::new("src/lib.rs").unwrap(),
-            Language::Rust,
+            supported("src/lib.rs"),
             vec![
                 item_with_parent("a", Some("b"), "a"),
                 item_with_parent("b", Some("a"), "b"),
@@ -689,33 +692,10 @@ mod tests {
     #[test]
     fn projected_file_rejects_a_duplicate_stable_key() {
         let error = ProjectedFile::try_new(
-            RepoPath::new("src/lib.rs").unwrap(),
-            Language::Rust,
+            supported("src/lib.rs"),
             vec![item("a", "pub fn a();"), item("a", "pub fn a();")],
         )
         .expect_err("a duplicate stable key must be rejected");
-        assert!(matches!(error, ProjectionError::AstInvariant { .. }));
-    }
-
-    #[test]
-    fn projected_file_rejects_a_path_language_mismatch() {
-        let error = ProjectedFile::try_new(
-            RepoPath::new("src/app.py").unwrap(),
-            Language::Rust,
-            vec![item("a", "def a(): ...")],
-        )
-        .expect_err("a language that disagrees with the extension must be rejected");
-        assert!(matches!(error, ProjectionError::AstInvariant { .. }));
-    }
-
-    #[test]
-    fn projected_file_rejects_an_unsupported_extension() {
-        let error = ProjectedFile::try_new(
-            RepoPath::new("README.md").unwrap(),
-            Language::Rust,
-            Vec::new(),
-        )
-        .expect_err("an unsupported extension must be rejected");
         assert!(matches!(error, ProjectionError::AstInvariant { .. }));
     }
 

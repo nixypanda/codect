@@ -217,13 +217,13 @@ pub fn unified_hunks(old: &str, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ItemKind, Language, ProjectedItem, SourceSpan};
+    use crate::model::{ItemKind, ProjectedItem, SourceSpan, SupportedPath};
 
     fn projected(path: &str, text: &str) -> ProjectedFile {
-        let path = RepoPath::new(path).expect("valid test path");
+        let path = SupportedPath::new(RepoPath::new(path).expect("valid test path"))
+            .expect("supported test path");
         ProjectedFile::try_new(
             path,
-            Language::Rust,
             vec![ProjectedItem {
                 stable_key: "item".to_owned(),
                 parent_key: None,

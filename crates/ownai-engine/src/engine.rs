@@ -9,10 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ownai_core::{
-    AreaSet, DiagnosticContext, FileDiff, FileOutline, FileOutlineDiff, Language,
-    LanguageProjector, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
-    ProjectionMode, RepoPath, Selection, SelectionGroup, assemble_outline, decode_source,
-    select_projector,
+    AreaSet, DiagnosticContext, FileDiff, FileOutline, FileOutlineDiff, LanguageProjector,
+    ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
+    Selection, SelectionGroup, SupportedPath, assemble_outline, decode_source, select_projector,
 };
 use ownai_git::{CommitStep, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
@@ -83,22 +82,23 @@ pub fn project_source(
     let Some(projector) = select_projector(&PROJECTORS, path) else {
         return Err(EngineError::UnsupportedPath { path: path.clone() });
     };
-    let language = projector.language();
-    let source = decode_source(path, language, bytes).map_err(source_projection_failure)?;
+    let path =
+        SupportedPath::new(path.clone()).expect("a selected projector implies a supported path");
+    let source = decode_source(&path, bytes).map_err(source_projection_failure)?;
     let projection =
-        project_items(projector, path, source, mode).map_err(source_projection_failure)?;
+        project_items(projector, &path, source, mode).map_err(source_projection_failure)?;
     let superset = if mode == ProjectionMode::Signatures {
         projection.clone()
     } else {
-        project_items(projector, path, source, ProjectionMode::Signatures)
+        project_items(projector, &path, source, ProjectionMode::Signatures)
             .map_err(source_projection_failure)?
     };
-    assemble_outline(path, language, projection, superset).map_err(source_projection_failure)
+    assemble_outline(&path, projection, superset).map_err(source_projection_failure)
 }
 
 fn project_items(
     projector: &dyn LanguageProjector,
-    path: &RepoPath,
+    path: &SupportedPath,
     source: &str,
     mode: ProjectionMode,
 ) -> Result<Vec<ProjectedItem>, ProjectionError> {
@@ -112,8 +112,7 @@ fn project_items(
 /// [`project_source`].
 fn source_projection_failure(error: ProjectionError) -> EngineError {
     let context = DiagnosticContext {
-        path: Some(error.path().clone()),
-        language: Some(error.language()),
+        path: Some(error.supported_path().clone()),
         range: error.range().cloned(),
         ..DiagnosticContext::default()
     };
@@ -689,45 +688,43 @@ impl Engine {
         let Some(projector) = select_projector(projectors, &entry.path) else {
             return Ok(None);
         };
-        let language = projector.language();
+        let path = SupportedPath::new(entry.path.clone())
+            .expect("a selected projector implies a supported path");
         let items =
-            self.project_items_cached(projector, caches, revision_spec, entry, language, mode)?;
-        ProjectedFile::try_new(entry.path.clone(), language, items)
+            self.project_items_cached(projector, caches, revision_spec, entry, &path, mode)?;
+        ProjectedFile::try_new(path, items)
             .map(Some)
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))
     }
 
     /// Projects one entry's items in `mode`, reading the blob once and reusing
-    /// the `(blob id, path, language, mode)` cache.
+    /// the `(blob id, path, mode)` cache.
     ///
     /// The cache key includes the path because `stable_key` is path-namespaced
     /// for several languages (Python, Haskell, Elm, and Rust `mod`): those keys
     /// embed the repository path, so items projected for one path are not valid
     /// for a different path that happens to share the same blob. Blob bytes are
-    /// still cached on the blob id alone, so an identical blob is read once.
+    /// still cached on the blob id alone, so an identical blob is read once. The
+    /// path carries its derived language, so the key also distinguishes
+    /// languages without a separate field.
     fn project_items_cached(
         &self,
         projector: &dyn LanguageProjector,
         caches: &mut Caches,
         revision_spec: &str,
         entry: &SourceEntry,
-        language: Language,
+        path: &SupportedPath,
         mode: ProjectionMode,
     ) -> Result<Vec<ProjectedItem>, EngineError> {
-        if let Some(items) = lookup_projection(caches, &entry.blob_id, &entry.path, language, mode)
-        {
+        if let Some(items) = lookup_projection(caches, &entry.blob_id, path, mode) {
             return Ok(items);
         }
 
         let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
-        let source = decode_source(&entry.path, language, &bytes)
+        let source = decode_source(path, &bytes)
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
         let items = projector
-            .project(ProjectionInput {
-                path: &entry.path,
-                source,
-                mode,
-            })
+            .project(ProjectionInput { path, source, mode })
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))?
             .items()
             .to_vec();
@@ -737,8 +734,7 @@ impl Engine {
             .entry(entry.blob_id.clone())
             .or_default()
             .push(CachedProjection {
-                path: entry.path.clone(),
-                language,
+                path: path.clone(),
                 mode,
                 items: items.clone(),
             });
@@ -748,9 +744,9 @@ impl Engine {
     /// Reads, decodes, and projects one entry in both the requested mode and the
     /// Signatures superset, assembling the file's outline.
     ///
-    /// Both projections go through the shared `(blob id, path, language, mode)`
-    /// cache, so a blob is read once and each mode is computed at most once per
-    /// path and operation.
+    /// Both projections go through the shared `(blob id, path, mode)` cache, so
+    /// a blob is read once and each mode is computed at most once per path and
+    /// operation.
     ///
     /// Returns `None` for an unsupported path, which is an exclusion rather
     /// than a failure.
@@ -765,10 +761,11 @@ impl Engine {
         let Some(projector) = select_projector(projectors, &entry.path) else {
             return Ok(None);
         };
-        let language = projector.language();
+        let path = SupportedPath::new(entry.path.clone())
+            .expect("a selected projector implies a supported path");
 
         let projection =
-            self.project_items_cached(projector, caches, revision_spec, entry, language, mode)?;
+            self.project_items_cached(projector, caches, revision_spec, entry, &path, mode)?;
         let superset = if mode == ProjectionMode::Signatures {
             projection.clone()
         } else {
@@ -777,11 +774,11 @@ impl Engine {
                 caches,
                 revision_spec,
                 entry,
-                language,
+                &path,
                 ProjectionMode::Signatures,
             )?
         };
-        assemble_outline(&entry.path, language, projection, superset)
+        assemble_outline(&path, projection, superset)
             .map(Some)
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))
     }
@@ -794,8 +791,7 @@ impl Engine {
         let context = DiagnosticContext {
             repository: Some(self.repository.git_dir().to_path_buf()),
             revision: revision_spec.map(str::to_owned),
-            path: Some(error.path().clone()),
-            language: Some(error.language()),
+            path: Some(error.supported_path().clone()),
             range: error.range().cloned(),
         };
         EngineError::Projection {
@@ -813,8 +809,7 @@ struct Caches {
 }
 
 struct CachedProjection {
-    path: RepoPath,
-    language: Language,
+    path: SupportedPath,
     mode: ProjectionMode,
     items: Vec<ProjectedItem>,
 }
@@ -822,14 +817,13 @@ struct CachedProjection {
 fn lookup_projection(
     caches: &Caches,
     id: &ObjectId,
-    path: &RepoPath,
-    language: Language,
+    path: &SupportedPath,
     mode: ProjectionMode,
 ) -> Option<Vec<ProjectedItem>> {
     caches.projections.get(id).and_then(|entries| {
         entries
             .iter()
-            .find(|entry| entry.path == *path && entry.language == language && entry.mode == mode)
+            .find(|entry| entry.path == *path && entry.mode == mode)
             .map(|entry| entry.items.clone())
     })
 }

@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath};
+use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
 use ownai_language_haskell::HaskellProjector;
 
 fn fixture_root() -> PathBuf {
@@ -38,7 +38,8 @@ fn haskell_fixtures_match_expected_projections() {
         let source = fs::read_to_string(&input)
             .unwrap_or_else(|error| panic!("read {}: {error}", input.display()));
         let relative = format!("fixtures/haskell/{name}/input.hs");
-        let path = RepoPath::new(relative.as_bytes()).expect("fixture path");
+        let path = SupportedPath::new(RepoPath::new(relative.as_bytes()).expect("fixture path"))
+            .expect("fixture path has a supported extension");
 
         for (mode, expected_file) in [
             (ProjectionMode::Types, "types.txt"),

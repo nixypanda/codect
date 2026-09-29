@@ -4,7 +4,7 @@
 
 use ownai_core::{
     Language, LanguageProjector, ProjectedFile, ProjectionInput, ProjectionMode, RepoPath,
-    diff_document,
+    SupportedPath, diff_document,
 };
 use ownai_language_elm::ElmProjector;
 use ownai_language_rust::RustProjector;
@@ -17,7 +17,8 @@ fn project(
     source: &str,
     mode: ProjectionMode,
 ) -> ProjectedFile {
-    let path = RepoPath::new(path).expect("source path is valid");
+    let path = SupportedPath::new(RepoPath::new(path).expect("source path is valid"))
+        .expect("source path has a supported extension");
     projector
         .project(ProjectionInput {
             path: &path,

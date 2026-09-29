@@ -71,9 +71,9 @@ fn enumerates_and_reads_elm_and_rust_from_two_commits() {
 
     for entry in &second_entries {
         let path = entry.path.to_string();
-        let language = entry.path.language().expect("supported path");
+        let supported = ownai_core::SupportedPath::new(entry.path.clone()).expect("supported path");
         let bytes = discovered.read_blob(&entry.blob_id).expect("read blob");
-        let source = ownai_core::decode_source(&entry.path, language, &bytes).expect("utf-8");
+        let source = ownai_core::decode_source(&supported, &bytes).expect("utf-8");
         assert_eq!(source, expected[path.as_str()], "contents of {path}");
     }
 

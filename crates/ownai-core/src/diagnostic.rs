@@ -5,7 +5,7 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use crate::model::{Language, RepoPath, SourceSpan};
+use crate::model::{Language, RepoPath, SourceSpan, SupportedPath};
 
 /// A rejected repository-relative path (TECHNICAL_DESIGN.md section 5.1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -34,31 +34,27 @@ pub enum ProjectionError {
     /// TECHNICAL_DESIGN.md section 5.1.
     #[error("source file `{path}` is not valid UTF-8")]
     InvalidUtf8 {
-        path: RepoPath,
-        language: Language,
+        path: SupportedPath,
         #[source]
         source: std::str::Utf8Error,
     },
 
-    #[error("`{path}` could not be parsed as valid {language:?} source")]
+    #[error("`{path}` could not be parsed as valid {language:?} source", language = .path.language())]
     ParseFailed {
-        path: RepoPath,
-        language: Language,
+        path: SupportedPath,
         range: SourceSpan,
     },
 
     /// The parsed tree contained `ERROR` or missing nodes.
-    #[error("`{path}` contains {language:?} syntax errors")]
+    #[error("`{path}` contains {language:?} syntax errors", language = .path.language())]
     ErroneousSyntax {
-        path: RepoPath,
-        language: Language,
+        path: SupportedPath,
         range: SourceSpan,
     },
 
-    #[error("`{path}` violates a {language:?} projection invariant: {detail}")]
+    #[error("`{path}` violates a {language:?} projection invariant: {detail}", language = .path.language())]
     AstInvariant {
-        path: RepoPath,
-        language: Language,
+        path: SupportedPath,
         range: SourceSpan,
         detail: String,
     },
@@ -70,16 +66,30 @@ impl ProjectionError {
             Self::InvalidUtf8 { path, .. }
             | Self::ParseFailed { path, .. }
             | Self::ErroneousSyntax { path, .. }
+            | Self::AstInvariant { path, .. } => path.path(),
+        }
+    }
+
+    /// The path and its derived language, as stored on the error.
+    ///
+    /// [`ProjectionError::path`] and [`ProjectionError::language`] are the two
+    /// halves of this value; use this when a caller needs them together (for
+    /// example to build a [`DiagnosticContext`]).
+    pub fn supported_path(&self) -> &SupportedPath {
+        match self {
+            Self::InvalidUtf8 { path, .. }
+            | Self::ParseFailed { path, .. }
+            | Self::ErroneousSyntax { path, .. }
             | Self::AstInvariant { path, .. } => path,
         }
     }
 
     pub fn language(&self) -> Language {
         match self {
-            Self::InvalidUtf8 { language, .. }
-            | Self::ParseFailed { language, .. }
-            | Self::ErroneousSyntax { language, .. }
-            | Self::AstInvariant { language, .. } => *language,
+            Self::InvalidUtf8 { path, .. }
+            | Self::ParseFailed { path, .. }
+            | Self::ErroneousSyntax { path, .. }
+            | Self::AstInvariant { path, .. } => path.language(),
         }
     }
 
@@ -100,13 +110,11 @@ impl ProjectionError {
 /// Maps invalid UTF-8 to [`ProjectionError::InvalidUtf8`] because a supported
 /// source blob must be valid UTF-8.
 pub fn decode_source<'a>(
-    path: &RepoPath,
-    language: Language,
+    path: &SupportedPath,
     bytes: &'a [u8],
 ) -> Result<&'a str, ProjectionError> {
     std::str::from_utf8(bytes).map_err(|source| ProjectionError::InvalidUtf8 {
         path: path.clone(),
-        language,
         source,
     })
 }
@@ -121,8 +129,8 @@ pub fn decode_source<'a>(
 pub struct DiagnosticContext {
     pub repository: Option<PathBuf>,
     pub revision: Option<String>,
-    pub path: Option<RepoPath>,
-    pub language: Option<Language>,
+    /// The path and its derived language, present together or not at all.
+    pub path: Option<SupportedPath>,
     pub range: Option<SourceSpan>,
 }
 
@@ -154,19 +162,22 @@ impl Diagnostic {
 mod tests {
     use super::*;
 
+    fn supported(raw: &str) -> SupportedPath {
+        SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+    }
+
     #[test]
     fn decode_source_accepts_valid_utf8() {
-        let path = RepoPath::new("src/lib.rs").unwrap();
-        let decoded = decode_source(&path, Language::Rust, b"pub fn main() {}").unwrap();
+        let decoded = decode_source(&supported("src/lib.rs"), b"pub fn main() {}").unwrap();
         assert_eq!(decoded, "pub fn main() {}");
     }
 
     #[test]
     fn decode_source_reports_invalid_utf8_with_context() {
-        let path = RepoPath::new("src/lib.rs").unwrap();
-        let error = decode_source(&path, Language::Rust, b"pub fn main() { \xFF }").unwrap_err();
+        let path = supported("src/lib.rs");
+        let error = decode_source(&path, b"pub fn main() { \xFF }").unwrap_err();
 
-        assert_eq!(error.path(), &path);
+        assert_eq!(error.path(), path.path());
         assert_eq!(error.language(), Language::Rust);
         assert!(error.range().is_none());
         assert!(matches!(error, ProjectionError::InvalidUtf8 { .. }));
@@ -174,13 +185,12 @@ mod tests {
 
     #[test]
     fn diagnostic_preserves_the_error_chain() {
-        let path = RepoPath::new("src/lib.rs").unwrap();
-        let error = decode_source(&path, Language::Rust, b"\xFF").unwrap_err();
+        let path = supported("src/lib.rs");
+        let error = decode_source(&path, b"\xFF").unwrap_err();
         let diagnostic = Diagnostic::new(
             DiagnosticContext {
                 revision: Some("HEAD".to_owned()),
                 path: Some(path),
-                language: Some(Language::Rust),
                 ..DiagnosticContext::default()
             },
             error,

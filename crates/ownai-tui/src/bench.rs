@@ -14,7 +14,7 @@
 
 use ownai_core::{
     FileDiff, ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath,
-    Selection, SourceSpan,
+    Selection, SourceSpan, SupportedPath,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -73,8 +73,12 @@ pub fn settle(model: Model) -> Model {
 
 /// A projected file whose canonical text is `text`, built the same way the
 /// language adapters build one: a single top-level item with that fragment.
-pub fn projected(path: &str, language: Language, text: &str) -> ProjectedFile {
-    let path = RepoPath::new(path).expect("benchmark path is valid");
+///
+/// The language is derived from `path`, so a caller cannot pass a language that
+/// disagrees with the extension.
+pub fn projected(path: &str, text: &str) -> ProjectedFile {
+    let path = SupportedPath::new(RepoPath::new(path).expect("benchmark path is valid"))
+        .expect("benchmark path has a supported extension");
     let items = if text.is_empty() {
         Vec::new()
     } else {
@@ -87,25 +91,21 @@ pub fn projected(path: &str, language: Language, text: &str) -> ProjectedFile {
             canonical_text: text.to_owned(),
         }]
     };
-    ProjectedFile::try_new(path, language, items).expect("valid benchmark projection")
+    ProjectedFile::try_new(path, items).expect("valid benchmark projection")
 }
 
 /// A one-path diff with the given old and new projections.
-pub fn file_diff(
-    path: &str,
-    old: Option<(&str, Language)>,
-    new: Option<(&str, Language)>,
-) -> FileDiff {
+pub fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
     match (old, new) {
-        (None, Some((text, language))) => FileDiff::Added {
-            new: projected(path, language, text),
+        (None, Some(text)) => FileDiff::Added {
+            new: projected(path, text),
         },
-        (Some((text, language)), None) => FileDiff::Deleted {
-            old: projected(path, language, text),
+        (Some(text), None) => FileDiff::Deleted {
+            old: projected(path, text),
         },
-        (Some((old_text, old_language)), Some((new_text, new_language))) => FileDiff::Modified {
-            old: projected(path, old_language, old_text),
-            new: projected(path, new_language, new_text),
+        (Some(old_text), Some(new_text)) => FileDiff::Modified {
+            old: projected(path, old_text),
+            new: projected(path, new_text),
         },
         (None, None) => panic!("a benchmark diff needs at least one side"),
     }

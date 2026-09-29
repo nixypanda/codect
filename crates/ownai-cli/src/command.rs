@@ -732,10 +732,8 @@ fn context_help(context: &DiagnosticContext) -> Option<String> {
         lines.push(format!("revision: {revision}"));
     }
     if let Some(path) = &context.path {
-        lines.push(format!("path: {path}"));
-    }
-    if let Some(language) = context.language {
-        lines.push(format!("language: {language:?}"));
+        lines.push(format!("path: {}", path.path()));
+        lines.push(format!("language: {:?}", path.language()));
     }
     if let Some(range) = &context.range {
         lines.push(format!("range: {}", format_range(range)));
