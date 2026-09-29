@@ -1,0 +1,6 @@
+pub struct Registry {
+    pub index: HashMap<
+        String,
+        Result<(&'static str, Vec<(RepoPath, SnapshotEntry)>), EngineError>,
+    >,
+}

@@ -269,12 +269,17 @@ pub(crate) fn child_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> 
         .find(|child| child.kind() == kind)
 }
 
-/// One element of a declaration header: either flattened tokens or a bracketed
-/// list that is allowed to wrap.
+/// One element of a declaration header: either flattened tokens, a recursively
+/// rendered type, or a bracketed list that is allowed to wrap.
 enum Elem {
     Token(String),
+    Type {
+        doc: Doc,
+        first: String,
+        last: String,
+    },
     List {
-        items: Vec<String>,
+        items: Vec<Doc>,
         open: &'static str,
         close: &'static str,
     },
@@ -296,6 +301,7 @@ pub(crate) fn header(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Doc {
 
 fn header_elements(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Vec<Elem> {
     let mut elements = Vec::new();
+    let return_type = node.child_by_field_name(field::RETURN_TYPE);
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         let kind = child.kind();
@@ -304,6 +310,17 @@ fn header_elements(node: Node<'_>, source: &str, stop_kinds: &[&str]) -> Vec<Ele
         }
         if kind == node::SEMICOLON {
             continue;
+        }
+        if Some(child.id()) == return_type.map(|node| node.id()) {
+            let leaves = tokens(child, source);
+            if let (Some(first), Some(last)) = (leaves.first(), leaves.last()) {
+                elements.push(Elem::Type {
+                    doc: type_doc(child, source),
+                    first: first.clone(),
+                    last: last.clone(),
+                });
+                continue;
+            }
         }
         if kind == node::PARAMETERS {
             elements.push(list_elem(child, source, "(", ")"));
@@ -322,9 +339,109 @@ fn list_elem(node: Node<'_>, source: &str, open: &'static str, close: &'static s
     let mut items = Vec::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        items.push(render_node(child, source));
+        if child.kind() == node::PARAMETER
+            && child.child_by_field_name(field::PATTERN).is_some()
+            && child.child_by_field_name(field::TYPE).is_some()
+        {
+            items.push(parameter_doc(child, source));
+        } else {
+            items.push(Doc::Text(render_node(child, source)));
+        }
     }
     Elem::List { items, open, close }
+}
+
+/// A named parameter's document: its pattern, `: `, and its recursively
+/// rendered type. A parameter type can therefore break inside an already-broken
+/// parameter list. Anything else (notably `self`) is rendered flat.
+fn parameter_doc(node: Node<'_>, source: &str) -> Doc {
+    match child_by_field_name(node, field::TYPE) {
+        Some(ty) => prefix_then_type(node, source, ty),
+        None => Doc::Text(render_node(node, source)),
+    }
+}
+
+/// A recursive type document. Only the node kinds below are rebuilt; every
+/// other kind falls back to the flat token rendering, so an unrecognized type
+/// cannot change its flat output. Each bracket list is grouped so it re-decides
+/// its own fit after an enclosing list breaks.
+pub(crate) fn type_doc(node: Node<'_>, source: &str) -> Doc {
+    match node.kind() {
+        node::GENERIC_TYPE => {
+            let mut parts = Vec::new();
+            if let Some(ty) = child_by_field_name(node, field::TYPE) {
+                parts.push(type_doc(ty, source));
+            }
+            if let Some(arguments) = child_by_field_name(node, field::TYPE_ARGUMENTS) {
+                let items = named_type_children(arguments, source);
+                parts.push(bracket_list(&items, "<", ">"));
+            }
+            Doc::Group(Box::new(Doc::Concat(parts)))
+        }
+        node::TUPLE_TYPE => {
+            let items = named_type_children(node, source);
+            Doc::Group(Box::new(bracket_list(&items, "(", ")")))
+        }
+        node::REFERENCE_TYPE => {
+            let Some(inner) = child_by_field_name(node, field::TYPE) else {
+                return Doc::Text(render_node(node, source));
+            };
+            let mut prefix_tokens = Vec::new();
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.id() == inner.id() {
+                    break;
+                }
+                push_tokens(child, source, &mut prefix_tokens);
+            }
+            let mut parts = vec![Doc::Text(join(&prefix_tokens))];
+            let first = tokens(inner, source).into_iter().next().unwrap_or_default();
+            if needs_space(last_or_empty(&prefix_tokens), &first) {
+                parts.push(Doc::Text(" ".to_owned()));
+            }
+            parts.push(type_doc(inner, source));
+            Doc::Concat(parts)
+        }
+        node::FUNCTION_TYPE => {
+            let parameters = child_by_field_name(node, field::PARAMETERS);
+            let mut parts = Vec::new();
+            // The prefix before `parameters` is the `fn` keyword for a bare
+            // function type, or the trait name (`Fn`) when nested under
+            // `impl`/`dyn`.
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if Some(child.id()) == parameters.map(|node| node.id()) {
+                    break;
+                }
+                let mut prefix = Vec::new();
+                push_tokens(child, source, &mut prefix);
+                parts.push(Doc::Text(join(&prefix)));
+            }
+            if let Some(parameters) = parameters {
+                let items = named_type_children(parameters, source);
+                parts.push(bracket_list(&items, "(", ")"));
+            }
+            if let Some(return_type) = child_by_field_name(node, field::RETURN_TYPE) {
+                parts.push(Doc::Text(" -> ".to_owned()));
+                parts.push(type_doc(return_type, source));
+            }
+            Doc::Group(Box::new(Doc::Concat(parts)))
+        }
+        _ => Doc::Text(render_node(node, source)),
+    }
+}
+
+fn named_type_children(node: Node<'_>, source: &str) -> Vec<Doc> {
+    let mut items = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        items.push(type_doc(child, source));
+    }
+    items
+}
+
+fn last_or_empty(tokens: &[String]) -> &str {
+    tokens.last().map(String::as_str).unwrap_or("")
 }
 
 fn elements_doc(elements: &[Elem]) -> Doc {
@@ -345,6 +462,7 @@ fn elements_doc(elements: &[Elem]) -> Doc {
                         None => true,
                         Some(Elem::Token(next)) => next == ">",
                         Some(Elem::List { open, .. }) => *open == ">",
+                        Some(Elem::Type { .. }) => false,
                     };
                     if dropped {
                         continue;
@@ -372,6 +490,15 @@ fn elements_doc(elements: &[Elem]) -> Doc {
                 }
                 previous = Some(close);
             }
+            Elem::Type { doc, first, last } => {
+                if let Some(previous) = previous
+                    && needs_space(previous, first)
+                {
+                    parts.push(Doc::Text(" ".to_owned()));
+                }
+                parts.push(doc.clone());
+                previous = Some(last);
+            }
         }
     }
     Doc::Concat(parts)
@@ -381,7 +508,7 @@ fn elements_doc(elements: &[Elem]) -> Doc {
 /// item per indented line when it breaks. The trailing comma is emitted only
 /// when broken, so appending an item changes exactly one line. This is
 /// deliberately ungrouped so the caller can group the whole header.
-fn bracket_list(items: &[String], open: &str, close: &str) -> Doc {
+fn bracket_list(items: &[Doc], open: &str, close: &str) -> Doc {
     if items.is_empty() {
         return Doc::Text(format!("{open}{close}"));
     }
@@ -391,7 +518,7 @@ fn bracket_list(items: &[String], open: &str, close: &str) -> Doc {
             inner.push(Doc::Text(",".to_owned()));
             inner.push(Doc::SoftLine);
         }
-        inner.push(Doc::Text(item.clone()));
+        inner.push(item.clone());
     }
     inner.push(Doc::Broken(","));
     Doc::Concat(vec![
@@ -406,8 +533,92 @@ pub(crate) fn where_clause_text(node: Node<'_>, source: &str) -> Option<String> 
     child_of_kind(node, node::WHERE_CLAUSE).map(|clause| render_node(clause, source))
 }
 
-pub(crate) fn attribute_text(attribute: Node<'_>, source: &str) -> String {
-    render_node(attribute, source)
+/// The depth-1 comma-separated argument items of an attribute's `token_tree`,
+/// or `None` when there is no argument list or it has no top-level comma.
+///
+/// The `token_tree` includes its own outer delimiters as direct children; they
+/// are dropped so the caller can re-emit the list through [`bracket_list`].
+/// Nested token trees are single children, so a comma inside one never splits.
+fn attribute_argument_items(attribute: Node<'_>, source: &str) -> Option<Vec<String>> {
+    let arguments = attribute.child_by_field_name(field::ARGUMENTS)?;
+    if arguments.kind() != node::TOKEN_TREE {
+        return None;
+    }
+    let mut cursor = arguments.walk();
+    let children: Vec<Node<'_>> = arguments.children(&mut cursor).collect();
+    let inner: &[Node<'_>] = match (children.first(), children.last()) {
+        (Some(first), Some(last))
+            if matches!(
+                (first.kind(), last.kind()),
+                (node::OPEN_PAREN, node::CLOSE_PAREN)
+                    | (node::OPEN_BRACKET, node::CLOSE_BRACKET)
+                    | (node::OPEN_BRACE, node::CLOSE_BRACE)
+            ) =>
+        {
+            &children[1..children.len() - 1]
+        }
+        _ => &children,
+    };
+
+    let mut items = Vec::new();
+    let mut segment = Vec::new();
+    let mut depth: usize = 0;
+    let mut saw_comma = false;
+    for child in inner {
+        let kind = child.kind();
+        if depth == 0 && kind == "," {
+            saw_comma = true;
+            items.push(join(&segment));
+            segment.clear();
+            continue;
+        }
+        match kind {
+            node::OPEN_PAREN | node::OPEN_BRACKET | node::OPEN_BRACE => depth += 1,
+            node::CLOSE_PAREN | node::CLOSE_BRACKET | node::CLOSE_BRACE => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+        push_tokens(*child, source, &mut segment);
+    }
+    if !saw_comma {
+        return None;
+    }
+    items.push(join(&segment));
+    Some(items)
+}
+
+/// An attribute as a document. A multi-argument attribute whose flat form does
+/// not fit wraps one argument per indented line with a trailing comma; anything
+/// else is the flat token rendering, byte-identical to before. The `#[` attaches
+/// to the path and `]` to the closing `)` through literal text, never
+/// [`needs_space`].
+pub(crate) fn attribute_doc(attribute_item: Node<'_>, source: &str) -> Doc {
+    // Extraction passes the `attribute_item`, whose only named child is the
+    // `attribute` carrying the path and the argument token tree.
+    let attribute = if attribute_item.kind() == node::ATTRIBUTE {
+        attribute_item
+    } else {
+        match child_of_kind(attribute_item, node::ATTRIBUTE) {
+            Some(attribute) => attribute,
+            None => return Doc::Text(render_node(attribute_item, source)),
+        }
+    };
+    let arguments = attribute.child_by_field_name(field::ARGUMENTS);
+    let mut cursor = attribute.walk();
+    let path = attribute
+        .named_children(&mut cursor)
+        .find(|child| Some(*child) != arguments);
+    let (Some(path), Some(items)) = (path, attribute_argument_items(attribute, source)) else {
+        return Doc::Text(render_node(attribute_item, source));
+    };
+    let arguments: Vec<Doc> = items.into_iter().map(Doc::Text).collect();
+    Doc::Group(Box::new(Doc::Concat(vec![
+        Doc::Text("#[".to_owned()),
+        Doc::Text(render_node(path, source)),
+        bracket_list(&arguments, "(", ")"),
+        Doc::Text("]".to_owned()),
+    ])))
 }
 
 /// A unit or tuple struct terminator, or any declaration that ends in `;`.
@@ -496,15 +707,47 @@ pub(crate) fn with_attributes(attributes: Vec<Doc>, declaration: Doc) -> Doc {
     Doc::Concat(parts)
 }
 
-fn field_texts(list: Node<'_>, source: &str) -> Vec<String> {
+fn field_docs(list: Node<'_>, source: &str) -> Vec<Doc> {
     let mut out = Vec::new();
     let mut cursor = list.walk();
     for child in list.children(&mut cursor) {
         if child.kind() == node::FIELD_DECLARATION {
-            out.push(render_node(child, source));
+            out.push(field_doc(child, source));
         }
     }
     out
+}
+
+/// A named field's document: everything before the declared type (visibility,
+/// name, and `:`), then the recursively rendered type. The flat rendering is
+/// byte-identical to the previous `render_node(field)`, but a long type can now
+/// break.
+pub(crate) fn field_doc(node: Node<'_>, source: &str) -> Doc {
+    match child_by_field_name(node, field::TYPE) {
+        Some(ty) => prefix_then_type(node, source, ty),
+        None => Doc::Text(render_node(node, source)),
+    }
+}
+
+/// Everything before `ty` (its sibling tokens are rendered with [`join`]), then
+/// a space when required, then the recursively rendered type. This keeps the
+/// prefix byte-identical to [`render_node`] while letting `ty` break.
+fn prefix_then_type(node: Node<'_>, source: &str, ty: Node<'_>) -> Doc {
+    let mut prefix = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.id() == ty.id() {
+            break;
+        }
+        push_tokens(child, source, &mut prefix);
+    }
+    let mut parts = vec![Doc::Text(join(&prefix))];
+    let first = tokens(ty, source).into_iter().next().unwrap_or_default();
+    if needs_space(last_or_empty(&prefix), &first) {
+        parts.push(Doc::Text(" ".to_owned()));
+    }
+    parts.push(type_doc(ty, source));
+    Doc::Concat(parts)
 }
 
 /// A variant body as an ungrouped document. A struct-like variant's field list
@@ -520,7 +763,7 @@ pub(crate) fn variant_doc(variant: Node<'_>, source: &str) -> Doc {
             Doc::Text(format!("{name}{}", render_node(body, source)))
         }
         Some(body) => {
-            let fields = field_texts(body, source);
+            let fields = field_docs(body, source);
             if fields.is_empty() {
                 Doc::Text(format!("{name} {{}}"))
             } else {
@@ -532,14 +775,14 @@ pub(crate) fn variant_doc(variant: Node<'_>, source: &str) -> Doc {
 
 /// A brace-delimited field list, spaced inline (`{ a: A, b: B }`) and one field
 /// per indented line when broken.
-fn brace_list(fields: &[String]) -> Doc {
+fn brace_list(fields: &[Doc]) -> Doc {
     let mut inner: Vec<Doc> = vec![Doc::SoftLine];
     for (index, field) in fields.iter().enumerate() {
         if index > 0 {
             inner.push(Doc::Text(",".to_owned()));
             inner.push(Doc::SoftLine);
         }
-        inner.push(Doc::Text(field.clone()));
+        inner.push(field.clone());
     }
     inner.push(Doc::Broken(","));
     Doc::Concat(vec![
@@ -550,12 +793,8 @@ fn brace_list(fields: &[String]) -> Doc {
     ])
 }
 
-pub(crate) fn field_text(field: Node<'_>, source: &str) -> String {
-    render_node(field, source)
-}
-
 /// `type Item = RightHandSide`, without the terminator or where clause.
-pub(crate) fn type_alias_text(node: Node<'_>, source: &str) -> String {
+pub(crate) fn type_alias_text(node: Node<'_>, source: &str) -> Doc {
     let mut out = Vec::new();
     if let Some(visibility) = child_of_kind(node, node::VISIBILITY_MODIFIER) {
         push_tokens(visibility, source, &mut out);
@@ -568,10 +807,15 @@ pub(crate) fn type_alias_text(node: Node<'_>, source: &str) -> String {
         push_tokens(parameters, source, &mut out);
     }
     out.push(node::EQUAL.to_owned());
+    let mut parts = vec![Doc::Text(join(&out))];
     if let Some(right) = child_by_field_name(node, field::TYPE) {
-        push_tokens(right, source, &mut out);
+        let first = tokens(right, source).into_iter().next().unwrap_or_default();
+        if needs_space(last_or_empty(&out), &first) {
+            parts.push(Doc::Text(" ".to_owned()));
+        }
+        parts.push(type_doc(right, source));
     }
-    join(&out)
+    Doc::Concat(parts)
 }
 
 /// `type Error: Bound + Bound`, without the terminator or where clause.
@@ -649,13 +893,16 @@ mod tests {
         assert_eq!(spaced(&["where", "T", ":", "Clone", ","]), "where T: Clone");
     }
 
-    fn grouped_list(items: &[String]) -> Doc {
+    fn grouped_list(items: &[Doc]) -> Doc {
         Doc::Group(Box::new(bracket_list(items, "(", ")")))
     }
 
     #[test]
     fn bracket_list_stays_inline_when_it_fits() {
-        let items = vec!["a: i32".to_owned(), "b: i32".to_owned()];
+        let items = vec![
+            Doc::Text("a: i32".to_owned()),
+            Doc::Text("b: i32".to_owned()),
+        ];
         assert_eq!(render(&grouped_list(&items), 0), "(a: i32, b: i32)");
     }
 
@@ -663,7 +910,7 @@ mod tests {
     fn bracket_list_wraps_over_the_budget_with_a_trailing_comma() {
         let first = "x".repeat(40);
         let second = "y".repeat(40);
-        let items = vec![first.clone(), second.clone()];
+        let items = vec![Doc::Text(first.clone()), Doc::Text(second.clone())];
         assert_eq!(
             render(&grouped_list(&items), 0),
             format!("(\n    {first},\n    {second},\n)")
@@ -674,7 +921,7 @@ mod tests {
     fn a_header_group_counts_a_trailing_return_type() {
         // The list alone fits, but the whole header (with the return type) does
         // not, so the list must break.
-        let items = vec!["a: i32".to_owned()];
+        let items = vec![Doc::Text("a: i32".to_owned())];
         let head = Doc::Group(Box::new(Doc::Concat(vec![
             Doc::Text("pub fn f".to_owned()),
             bracket_list(&items, "(", ")"),
@@ -684,6 +931,117 @@ mod tests {
         assert!(
             rendered.starts_with("pub fn f(\n    a: i32,\n) -> "),
             "expected a broken list, got {rendered:?}"
+        );
+    }
+
+    /// Parses a source whose first item carries the attribute under test and
+    /// returns the attribute's document and its flat token rendering. The node
+    /// is the `attribute_item`, exactly what extraction passes in.
+    fn attribute_pair(source: &str) -> (Doc, String) {
+        let mut parser = crate::syntax::parser().unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let attribute_item = tree.root_node().named_child(0).expect("an attribute item");
+        assert_eq!(attribute_item.kind(), "attribute_item");
+        (
+            attribute_doc(attribute_item, source),
+            render_node(attribute_item, source),
+        )
+    }
+
+    /// Parses `type __T = <type>;` and returns the right-hand side's type
+    /// document together with its flat token rendering.
+    fn type_pair(source: &str) -> (Doc, String) {
+        let mut parser = crate::syntax::parser().unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let item = tree.root_node().named_child(0).expect("a type item");
+        let ty = item.child_by_field_name("type").expect("the alias type");
+        (type_doc(ty, source), render_node(ty, source))
+    }
+
+    #[test]
+    fn short_types_render_flat_and_byte_identical() {
+        for ty in [
+            "Vec<A, B>",
+            "(A, B)",
+            "&'a Vec<A>",
+            "&'static mut Vec<(A, B)>",
+            "Result<A, B>",
+            "()",
+        ] {
+            let (doc, flat) = type_pair(&format!("type X = {ty};"));
+            assert_eq!(render(&doc, 0), flat, "flat mismatch for {ty}");
+        }
+    }
+
+    #[test]
+    fn function_types_render_flat_and_byte_identical() {
+        let (doc, flat) = type_pair("type X = fn(A) -> B;");
+        assert_eq!(flat, "fn(A) -> B");
+        assert_eq!(render(&doc, 0), flat);
+
+        // The `Fn(...) -> ...` form is the `trait` of a `dyn` type; render that
+        // inner `function_type` directly.
+        let mut parser = crate::syntax::parser().unwrap();
+        let tree = parser.parse("type X = dyn Fn(A) -> B;", None).unwrap();
+        let item = tree.root_node().named_child(0).expect("a type item");
+        let dynamic = item.child_by_field_name("type").expect("the alias type");
+        let inner = dynamic
+            .child_by_field_name("trait")
+            .expect("the function type");
+        assert_eq!(render_node(inner, "type X = dyn Fn(A) -> B;"), "Fn(A) -> B");
+        assert_eq!(
+            render(&type_doc(inner, "type X = dyn Fn(A) -> B;"), 0),
+            "Fn(A) -> B"
+        );
+    }
+
+    #[test]
+    fn a_long_tuple_type_breaks_at_its_items() {
+        let first = "A".repeat(40);
+        let second = "B".repeat(40);
+        let (doc, _) = type_pair(&format!("type X = ({first}, {second});"));
+        assert_eq!(
+            render(&doc, 0),
+            format!("(\n    {first},\n    {second},\n)")
+        );
+    }
+
+    #[test]
+    fn a_long_nested_generic_breaks_at_each_level() {
+        let a = "A".repeat(40);
+        let b = "B".repeat(40);
+        let e = "E".repeat(40);
+        let (doc, _) = type_pair(&format!("type X = Result<({a}, {b}), {e}>;"));
+        assert_eq!(
+            render(&doc, 0),
+            format!("Result<\n    (\n        {a},\n        {b},\n    ),\n    {e},\n>")
+        );
+    }
+
+    #[test]
+    fn short_multi_argument_attribute_is_flat_and_byte_identical() {
+        let source = "#[arg(long = \"path\", short = 'p')]\nstruct S;";
+        let (doc, flat) = attribute_pair(source);
+        assert_eq!(flat, "#[arg(long = \"path\", short = 'p')]");
+        assert_eq!(render(&doc, 0), flat);
+    }
+
+    #[test]
+    fn nested_commas_do_not_split_an_attribute() {
+        let source = "#[cfg(all(unix, feature = \"x\"))]\nstruct S;";
+        let (doc, flat) = attribute_pair(source);
+        assert_eq!(render(&doc, 0), flat);
+    }
+
+    #[test]
+    fn long_multi_argument_attribute_wraps_with_a_trailing_comma() {
+        // Flat this attribute is 79 columns, so at depth 1 (four-space indent)
+        // it no longer fits and must break.
+        let source = "#[command(after_help = FOCUSED_DIFF_HELP, after_long_help = FOCUSED_DIFF_HELP)]\nstruct S;";
+        let (doc, _) = attribute_pair(source);
+        assert_eq!(
+            render(&doc, 1),
+            "    #[command(\n        after_help = FOCUSED_DIFF_HELP,\n        after_long_help = FOCUSED_DIFF_HELP,\n    )]"
         );
     }
 }

@@ -275,7 +275,7 @@ fn attribute_docs(declaration: &Declaration<'_>, context: &Context<'_>) -> Vec<D
     declaration
         .attributes
         .iter()
-        .map(|attribute| Doc::Text(render::attribute_text(*attribute, context.source)))
+        .map(|attribute| render::attribute_doc(*attribute, context.source))
         .collect()
 }
 
@@ -486,8 +486,13 @@ fn build_field(
     let name = field_name(node, context.source).unwrap_or_default();
     let key = context.unique(format!("{container_key}::field::{name}"));
     let attributes = attribute_docs(declaration, context);
-    let text = render::field_text(node, context.source);
-    let doc = render::with_attributes(attributes, Doc::Text(format!("{text},")));
+    let doc = render::with_attributes(
+        attributes,
+        Doc::Group(Box::new(Doc::Concat(vec![
+            render::field_doc(node, context.source),
+            Doc::Text(",".to_owned()),
+        ]))),
+    );
     make_built(
         node,
         key,
@@ -549,10 +554,7 @@ fn build_type_item(
     let attributes = attribute_docs(declaration, context);
     let header = render::type_alias_text(node, context.source);
     let where_clause = render::where_clause_text(node, context.source);
-    let doc = render::with_attributes(
-        attributes,
-        render::signature_doc(Doc::Text(header), where_clause),
-    );
+    let doc = render::with_attributes(attributes, render::signature_doc(header, where_clause));
     make_built(
         node,
         key,

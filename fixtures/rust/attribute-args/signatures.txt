@@ -1,0 +1,10 @@
+#[command(
+    after_help = FOCUSED_DIFF_HELP,
+    after_long_help = FOCUSED_DIFF_HELP,
+    name = "command",
+)]
+#[derive(Debug, Clone)]
+pub struct Command {
+    #[arg(long = "path", short = 'p')]
+    pub path: String,
+}
