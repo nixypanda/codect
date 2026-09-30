@@ -6,7 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{LoadRequest, Model, SearchSide, VisualRow, VisualRowKind};
+use crate::app::{App, VisualRow, VisualRowKind};
+use crate::content::{Loaded, SearchSide};
 use crate::highlight::{self, Run, StyledLine};
 use crate::theme::Theme;
 
@@ -24,7 +25,7 @@ pub(crate) enum Side {
 }
 
 pub(crate) fn render_diff_pane(
-    model: &Model,
+    app: &App,
     frame: &mut Frame,
     area: Rect,
     side: Side,
@@ -32,27 +33,29 @@ pub(crate) fn render_diff_pane(
     rows: &[VisualRow],
     edge: Edge,
 ) {
-    let revisions = model.diff_revisions();
-    let revision = match (side, &model.request, &revisions) {
-        (Side::Old, LoadRequest::Diff { .. }, Some((base, _))) => base.as_str(),
-        (Side::New, LoadRequest::Diff { .. }, Some((_, target))) => target.as_str(),
-        (_, LoadRequest::Show { revision, .. }, _) => revision.as_str(),
-        _ => unreachable!("diff request has revisions"),
+    let theme = &app.chrome.theme;
+    let Loaded::Diff(diff) = &app.loaded else {
+        return;
     };
-    let title = pane_title(side, revision, area.width);
-    let block = pane_block(&title, focused, &model.theme, edge);
+    let (base, target) = diff.revisions();
+    let revision = match side {
+        Side::Old => base,
+        Side::New => target,
+    };
+    let title = pane_title(side, &revision, area.width);
+    let block = pane_block(&title, focused, theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Some(diff) = model.active_diff() else {
-        let (title, detail) = if model.pending.is_some() && model.rows.is_empty() {
+    let Some(active) = diff.active_diff() else {
+        let (title, detail) = if app.is_busy() && app.tree.rows.is_empty() {
             ("Loading", "Comparing projections…")
-        } else if model.rows.is_empty() {
+        } else if app.tree.rows.is_empty() {
             ("No changes", "Body-only edits are omitted.")
         } else {
             ("No file selected", "Select a file to view its diff.")
         };
-        render_empty(frame, inner, title, detail, &model.theme);
+        render_empty(frame, inner, title, detail, theme);
         return;
     };
     if rows.is_empty() {
@@ -61,14 +64,14 @@ pub(crate) fn render_diff_pane(
             inner,
             "No text changes",
             "No projected text to compare for this file.",
-            &model.theme,
+            theme,
         );
         return;
     }
-    let gutter = gutter_width(diff);
+    let gutter = gutter_width(active);
     let content_width = (inner.width as usize).saturating_sub(gutter);
     let height = inner.height as usize;
-    let skip = model.body_scroll as usize;
+    let skip = diff.body_scroll() as usize;
 
     let mut lines = Vec::new();
     for row in rows.iter().skip(skip).take(height) {
@@ -79,9 +82,7 @@ pub(crate) fn render_diff_pane(
         let ranges = if row.continuation {
             Vec::new()
         } else {
-            number.map_or_else(Vec::new, |line| {
-                model.search_ranges(search_side(side), line)
-            })
+            number.map_or_else(Vec::new, |line| diff.search_ranges(search_side(side), line))
         };
         lines.push(diff_line(
             number,
@@ -91,7 +92,7 @@ pub(crate) fn render_diff_pane(
             side,
             gutter,
             content_width,
-            &model.theme,
+            theme,
             &ranges,
         ));
     }
@@ -417,6 +418,161 @@ fn styled_line(highlight: &[StyledLine], number: usize, text: &str) -> StyledLin
 mod tests {
     use super::*;
     use crate::theme::{Capability, Flavor};
+
+    use base::{ItemKind, ProjectedFile, ProjectedItem, RepoPath, SourceSpan, SupportedPath};
+
+    fn projected(path: &str, text: &str) -> ProjectedFile {
+        let path =
+            SupportedPath::new(RepoPath::new(path).expect("valid path")).expect("supported path");
+        ProjectedFile::try_new(
+            path,
+            vec![ProjectedItem {
+                stable_key: "item".to_owned(),
+                parent_key: None,
+                kind: ItemKind::Function,
+                name: "item".to_owned(),
+                span: SourceSpan::new(0, 0, 0, 0, 0, 0),
+                canonical_text: text.to_owned(),
+            }],
+        )
+        .expect("valid fixture")
+    }
+
+    fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
+        match (old, new) {
+            (None, Some(text)) => FileDiff::Added {
+                new: projected(path, text),
+            },
+            (Some(text), None) => FileDiff::Deleted {
+                old: projected(path, text),
+            },
+            (Some(old_text), Some(new_text)) => FileDiff::Modified {
+                old: projected(path, old_text),
+                new: projected(path, new_text),
+            },
+            (None, None) => panic!("a test diff needs at least one side"),
+        }
+    }
+
+    fn runs_text(runs: &[Run]) -> String {
+        runs.iter().map(|run| run.text.as_str()).collect()
+    }
+
+    #[test]
+    fn layout_diff_pads_the_shorter_side_and_marks_continuations() {
+        let diff = file_diff(
+            "a.rs",
+            Some(&format!("{}\nsecond\n", "x".repeat(25))),
+            Some("short\nsecond\n"),
+        );
+        let all = layout_diff(&diff, 10, 10, &[], &[], &Theme::dark());
+        let rows: Vec<&VisualRow> = all
+            .iter()
+            .filter(|row| row.kind != VisualRowKind::Hunk)
+            .collect();
+
+        assert_eq!(rows.len(), 4, "3 for the wrapped row + 1 for the rest");
+        assert!(!rows[0].continuation);
+        assert!(rows[1].continuation && rows[2].continuation);
+        assert!(rows[0].old_number.is_some());
+        assert!(
+            rows[1].old_number.is_none(),
+            "continuations carry no number"
+        );
+        assert_eq!(runs_text(&rows[1].new_runs), "");
+        assert!(rows[3].old_number.is_some() && rows[3].new_number.is_some());
+    }
+
+    #[test]
+    fn layout_diff_handles_an_added_file_with_a_missing_old_side() {
+        let diff = file_diff("a.rs", None, Some("one\ntwo\n"));
+        let all = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
+        let rows: Vec<&VisualRow> = all
+            .iter()
+            .filter(|row| row.kind != VisualRowKind::Hunk)
+            .collect();
+
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .all(|row| row.kind == VisualRowKind::Diff(base::DiffRowKind::Add))
+        );
+        assert!(rows.iter().all(|row| row.old_number.is_none()));
+        assert_eq!(rows[0].new_number, Some(1));
+        assert_eq!(rows[1].new_number, Some(2));
+    }
+
+    #[test]
+    fn layout_diff_handles_a_deleted_file() {
+        let diff = file_diff("a.rs", Some("one\n"), None);
+        let all = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
+        let rows: Vec<&VisualRow> = all
+            .iter()
+            .filter(|row| row.kind != VisualRowKind::Hunk)
+            .collect();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, VisualRowKind::Diff(base::DiffRowKind::Delete));
+        assert!(rows[0].new_number.is_none());
+    }
+
+    #[test]
+    fn layout_diff_emits_a_hunk_header_with_line_ranges() {
+        let diff = file_diff("a.rs", Some("one\ntwo\n"), Some("one\n2\n"));
+        let rows = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
+
+        assert_eq!(rows[0].kind, VisualRowKind::Hunk);
+        assert_eq!(runs_text(&rows[0].old_runs), "@@ -1,2 +1,2 @@");
+    }
+
+    #[test]
+    fn layout_diff_collapses_long_unchanged_runs_between_hunks() {
+        let old = (0..40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let mut changed: Vec<String> = (0..40).map(|index| format!("line {index}")).collect();
+        changed[0] = "changed".to_owned();
+        changed[39] = "changed too".to_owned();
+        let new = changed.join("\n") + "\n";
+
+        let diff = file_diff("a.rs", Some(&old), Some(&new));
+        let rows = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
+
+        let hunks = rows
+            .iter()
+            .filter(|row| row.kind == VisualRowKind::Hunk)
+            .count();
+        assert_eq!(hunks, 2, "two separated changes produce two hunks");
+        assert!(rows.len() < 40, "the middle context is collapsed");
+    }
+
+    #[test]
+    fn layout_diff_marks_the_collapsed_gap() {
+        let old = (0..40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let mut changed: Vec<String> = (0..40).map(|index| format!("line {index}")).collect();
+        changed[0] = "changed".to_owned();
+        changed[39] = "changed too".to_owned();
+        let new = changed.join("\n") + "\n";
+
+        let diff = file_diff("a.rs", Some(&old), Some(&new));
+        let rows = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
+
+        let hidden: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row.kind {
+                VisualRowKind::Collapse(count) => Some(count),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hidden.len(), 1, "one gap between the two hunks");
+        assert!(hidden[0] > 0);
+    }
 
     #[test]
     fn pane_titles_identify_sides_and_fit_narrow_borders() {

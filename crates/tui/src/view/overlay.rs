@@ -1,4 +1,6 @@
-// Modal overlays: help, revision entry, the scope chooser, and the mode picker.
+// Modal overlays: help, the scope chooser, the mode picker, the command
+// palette, the fuzzy file finder, and search. The revision prompts live in the
+// loaded projection and are drawn here too.
 //
 // Every overlay dims the frame behind it with a scrim so the popup reads as a
 // layer above the browser rather than a hole in it.
@@ -10,28 +12,46 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{
-    FinderState, Model, Overlay, PaletteState, RevisionField, ScopeChooser, SearchState, TextInput,
-    available_modes, mode_label, palette_entries,
-};
+use crate::app::App;
+use crate::content::{DiffSide, Loaded, available_modes, mode_label};
+use crate::overlay::{FinderState, Overlay, PaletteState, ScopeChooser, SearchState};
+use crate::text_input::TextInput;
 use crate::theme::Theme;
 
 use super::geom::{centered, window_offset};
 
-pub(crate) fn render_overlay(model: &Model, frame: &mut Frame, area: Rect) {
-    match &model.overlay {
-        Some(Overlay::Help) => render_help(frame, area, &model.theme),
-        Some(Overlay::Revision { field, input }) => {
-            render_revision(frame, area, *field, input, &model.theme);
-        }
-        Some(Overlay::Scope(chooser)) => render_scope(frame, area, chooser, &model.theme),
+pub(crate) fn render_overlay(app: &App, frame: &mut Frame, area: Rect) {
+    let theme = &app.chrome.theme;
+    match &app.overlay {
+        Some(Overlay::Help) => render_help(frame, area, theme),
+        Some(Overlay::Scope(chooser)) => render_scope(frame, area, chooser, theme),
         Some(Overlay::Mode { cursor }) => {
-            render_mode(frame, area, *cursor, model.mode, &model.theme)
+            render_mode(frame, area, *cursor, app.loaded.mode(), theme)
         }
-        Some(Overlay::Palette(state)) => render_palette(frame, area, model, state, &model.theme),
-        Some(Overlay::Finder(state)) => render_finder(frame, area, model, state, &model.theme),
-        Some(Overlay::Search(state)) => render_search(frame, area, state, model, &model.theme),
-        None => {}
+        Some(Overlay::Palette(state)) => render_palette(frame, area, app, state, theme),
+        Some(Overlay::Finder(state)) => render_finder(frame, area, app, state, theme),
+        Some(Overlay::Search(state)) => render_search(frame, area, state, app, theme),
+        None => render_prompt(app, frame, area),
+    }
+}
+
+fn render_prompt(app: &App, frame: &mut Frame, area: Rect) {
+    let theme = &app.chrome.theme;
+    match &app.loaded {
+        Loaded::Show(show) => {
+            if let Some(input) = &show.prompt {
+                render_revision(frame, area, "revision", input, theme);
+            }
+        }
+        Loaded::Diff(diff) => {
+            if let Some(prompt) = &diff.prompt {
+                let label = match prompt.side {
+                    DiffSide::Base => "base",
+                    DiffSide::Target => "target",
+                };
+                render_revision(frame, area, label, &prompt.input, theme);
+            }
+        }
     }
 }
 
@@ -147,18 +167,7 @@ fn render_scope(frame: &mut Frame, area: Rect, chooser: &ScopeChooser, theme: &T
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_revision(
-    frame: &mut Frame,
-    area: Rect,
-    field: RevisionField,
-    input: &TextInput,
-    theme: &Theme,
-) {
-    let label = match field {
-        RevisionField::Show => "revision",
-        RevisionField::Base => "base",
-        RevisionField::Target => "target",
-    };
+fn render_revision(frame: &mut Frame, area: Rect, label: &str, input: &TextInput, theme: &Theme) {
     let width = area.width.saturating_sub(4).min(70);
     let height = 3.min(area.height);
     if width == 0 || height == 0 {
@@ -233,14 +242,8 @@ fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_palette(
-    frame: &mut Frame,
-    area: Rect,
-    model: &Model,
-    state: &PaletteState,
-    theme: &Theme,
-) {
-    let entries = palette_entries(model);
+fn render_palette(frame: &mut Frame, area: Rect, app: &App, state: &PaletteState, theme: &Theme) {
+    let entries = app.loaded.palette_entries();
     let width = area.width.saturating_sub(4).min(72);
     let list_height = state.matches.len().min(12);
     let height = (list_height + 3).min(area.height as usize) as u16;
@@ -289,7 +292,7 @@ fn render_palette(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_finder(frame: &mut Frame, area: Rect, model: &Model, state: &FinderState, theme: &Theme) {
+fn render_finder(frame: &mut Frame, area: Rect, app: &App, state: &FinderState, theme: &Theme) {
     let width = area.width.saturating_sub(4).min(80);
     let list_height = state.matches.len().min(14);
     let height = (list_height + 3).min(area.height as usize) as u16;
@@ -308,6 +311,7 @@ fn render_finder(frame: &mut Frame, area: Rect, model: &Model, state: &FinderSta
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
+    let visible = app.loaded.visible();
     let mut lines = vec![input_line("⌕ ", &state.input, theme), Line::from("")];
     let offset = window_offset(state.cursor, state.matches.len(), list_height);
     for (row, ranked) in state
@@ -317,8 +321,7 @@ fn render_finder(frame: &mut Frame, area: Rect, model: &Model, state: &FinderSta
         .skip(offset)
         .take(list_height)
     {
-        let label = model
-            .visible
+        let label = visible
             .get(ranked.index)
             .map_or(String::new(), ToString::to_string);
         lines.push(ranked_line(
@@ -339,7 +342,7 @@ fn render_finder(frame: &mut Frame, area: Rect, model: &Model, state: &FinderSta
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_search(frame: &mut Frame, area: Rect, state: &SearchState, model: &Model, theme: &Theme) {
+fn render_search(frame: &mut Frame, area: Rect, state: &SearchState, app: &App, theme: &Theme) {
     let width = area.width.saturating_sub(4).min(80);
     if width == 0 || area.height < 2 {
         return;
@@ -354,10 +357,7 @@ fn render_search(frame: &mut Frame, area: Rect, state: &SearchState, model: &Mod
     frame.render_widget(Clear, popup);
 
     let mut spans = input_line("/ ", &state.input, theme).spans;
-    let count = model
-        .search
-        .as_ref()
-        .map_or(0, |search| search.matches.len());
+    let count = app.loaded.search().map_or(0, |search| search.matches.len());
     let summary = if state.input.value().is_empty() {
         "  type to search".to_owned()
     } else if count == 0 {

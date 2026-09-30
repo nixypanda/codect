@@ -3,7 +3,8 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::app::{Model, SearchSide};
+use crate::app::App;
+use crate::content::Loaded;
 use crate::highlight;
 use crate::theme::Theme;
 
@@ -12,43 +13,46 @@ use super::geom::{Edge, pane_block};
 use super::text::clip_line;
 
 pub(crate) fn render_show_body(
-    model: &Model,
+    app: &App,
     frame: &mut Frame,
     area: Rect,
     focused: bool,
     edge: Edge,
 ) {
-    let block = pane_block(" Projection ", focused, &model.theme, edge);
+    let theme = &app.chrome.theme;
+    let block = pane_block(" Projection ", focused, theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Some(text) = model.active_text() else {
-        let (title, detail) = if model.pending.is_some() && model.rows.is_empty() {
+    let Loaded::Show(show) = &app.loaded else {
+        return;
+    };
+    let Some(text) = show.active_text() else {
+        let (title, detail) = if app.is_busy() && app.tree.rows.is_empty() {
             ("Loading", "Projecting files…")
-        } else if model.rows.is_empty() {
+        } else if app.tree.rows.is_empty() {
             ("No files", "No projected file content in this scope.")
         } else {
             ("No file selected", "Select a file to view its projection.")
         };
-        render_empty(frame, inner, title, detail, &model.theme);
+        render_empty(frame, inner, title, detail, theme);
         return;
     };
 
-    let total = model.line_count();
+    let total = show.line_count();
     let height = inner.height as usize;
     let needs_scrollbar = total > height;
     let gutter = gutter_width(total);
     let width = (inner.width as usize).saturating_sub(gutter + usize::from(needs_scrollbar));
-    let skip = model.body_scroll as usize;
-    let hscroll = model.body_hscroll as usize;
-    let theme = &model.theme;
+    let skip = show.body.scroll as usize;
+    let hscroll = show.body.hscroll as usize;
 
     let mut lines = Vec::new();
-    match model.active_show_lines() {
+    match show.active_lines() {
         Some(styled) => {
             for (offset, runs) in styled.iter().skip(skip).take(height).enumerate() {
                 let number = skip + offset + 1;
-                let ranges = model.search_ranges(SearchSide::Show, number);
+                let ranges = show.search_ranges(number);
                 let runs = highlight_search(runs, &ranges, theme);
                 let clipped = highlight::clip_runs(&runs, hscroll, width);
                 let mut spans = vec![gutter_span(number, gutter, theme)];
@@ -77,7 +81,7 @@ pub(crate) fn render_show_body(
 
     if needs_scrollbar {
         let mut state = ScrollbarState::new(total)
-            .position(model.body_scroll as usize)
+            .position(show.body.scroll as usize)
             .viewport_content_length(height);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)

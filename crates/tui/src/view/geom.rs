@@ -7,7 +7,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
-use crate::app::{Pane, SIDE_BY_SIDE_MIN_WIDTH};
+use crate::app::{Focus, SIDE_BY_SIDE_MIN_WIDTH};
 use crate::theme::Theme;
 
 // Splits a terminal of `width` × `height` into header, content, and status.
@@ -150,16 +150,16 @@ pub(crate) fn body_layout(
     tree_percent: u16,
     is_diff: bool,
     has_commits: bool,
-    focus: Pane,
+    focus: Focus,
 ) -> BodyLayout {
     if content.width < SIDE_BY_SIDE_MIN_WIDTH {
         let slots = match (is_diff, focus) {
-            (true, Pane::Commits) if has_commits => vec![Slot {
+            (true, Focus::Commits) if has_commits => vec![Slot {
                 pane: PaneSlot::Commits,
                 outer: content,
                 edge: Edge::Solo,
             }],
-            (_, Pane::Tree) => vec![Slot {
+            (_, Focus::Tree) => vec![Slot {
                 pane: PaneSlot::Tree,
                 outer: content,
                 edge: Edge::Solo,
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn a_show_splits_into_a_tree_and_a_content_pane() {
-        let layout = body_layout(content(), 30, false, false, Pane::Tree);
+        let layout = body_layout(content(), 30, false, false, Focus::Tree);
         assert_eq!(layout.slots.len(), 2);
         assert_eq!(layout.slots[0].pane, PaneSlot::Tree);
         assert_eq!(layout.slots[0].edge, Edge::Left);
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn a_diff_splits_into_tree_old_and_new() {
-        let layout = body_layout(content(), 30, true, false, Pane::Diff);
+        let layout = body_layout(content(), 30, true, false, Focus::Content);
         let panes: Vec<PaneSlot> = layout.slots.iter().map(|slot| slot.pane).collect();
         assert_eq!(panes, vec![PaneSlot::Tree, PaneSlot::Old, PaneSlot::New]);
         assert_eq!(layout.slots[1].edge, Edge::Middle);
@@ -364,16 +364,16 @@ mod tests {
     fn a_narrow_body_shows_only_the_focused_pane() {
         let narrow = Rect::new(0, 1, 60, 20);
 
-        let tree = body_layout(narrow, 30, false, false, Pane::Tree);
+        let tree = body_layout(narrow, 30, false, false, Focus::Tree);
         assert_eq!(tree.slots.len(), 1);
         assert_eq!(tree.slots[0].pane, PaneSlot::Tree);
         assert!(tree.dividers.is_empty());
 
-        let body = body_layout(narrow, 30, false, false, Pane::Body);
+        let body = body_layout(narrow, 30, false, false, Focus::Content);
         assert_eq!(body.slots[0].pane, PaneSlot::Show);
 
         // A focused diff stacks old over new, tiling the content vertically.
-        let diff = body_layout(narrow, 30, true, false, Pane::Diff);
+        let diff = body_layout(narrow, 30, true, false, Focus::Content);
         let panes: Vec<PaneSlot> = diff.slots.iter().map(|slot| slot.pane).collect();
         assert_eq!(panes, vec![PaneSlot::Old, PaneSlot::New]);
         assert_eq!(diff.slots[0].outer.height + diff.slots[1].outer.height, 20);
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn commits_split_only_the_left_column_and_adapt_to_height() {
-        let normal = body_layout(content(), 30, true, true, Pane::Commits);
+        let normal = body_layout(content(), 30, true, true, Focus::Commits);
         let panes: Vec<_> = normal.slots.iter().map(|slot| slot.pane).collect();
         assert_eq!(
             panes,
@@ -397,14 +397,14 @@ mod tests {
         assert_eq!(normal.slots[0].outer.width, normal.slots[1].outer.width);
         assert_eq!(normal.slots[2].outer.height, content().height);
 
-        let short = body_layout(Rect::new(0, 1, 100, 6), 30, true, true, Pane::Commits);
+        let short = body_layout(Rect::new(0, 1, 100, 6), 30, true, true, Focus::Commits);
         assert_eq!(short.slots[0].outer.height, 3);
         assert_eq!(short.slots[1].outer.height, 3);
 
         let narrow = Rect::new(0, 1, 60, 20);
         for (focus, expected) in [
-            (Pane::Commits, PaneSlot::Commits),
-            (Pane::Tree, PaneSlot::Tree),
+            (Focus::Commits, PaneSlot::Commits),
+            (Focus::Tree, PaneSlot::Tree),
         ] {
             let layout = body_layout(narrow, 30, true, true, focus);
             assert_eq!(layout.slots.len(), 1);

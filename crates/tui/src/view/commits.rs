@@ -4,56 +4,59 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::Model;
+use crate::app::App;
+use crate::content::{CommitsFocus, DiffViewState, Loaded};
 
 use super::empty::render_empty;
 use super::geom::{Edge, commit_offset, pane_block};
 use super::text::truncate_ellipsis;
 
-pub(crate) fn render_commits(model: &Model, frame: &mut Frame, area: Rect, edge: Edge) {
-    let block = pane_block(
-        " Commits ",
-        model.focus == crate::app::Pane::Commits,
-        &model.theme,
-        edge,
-    );
+pub(crate) fn render_commits(app: &App, frame: &mut Frame, area: Rect, edge: Edge) {
+    let Loaded::Diff(diff) = &app.loaded else {
+        return;
+    };
+    let DiffViewState::Commits(commits) = &diff.view else {
+        return;
+    };
+    let theme = &app.chrome.theme;
+    let focused = commits.focus == CommitsFocus::Commits;
+    let block = pane_block(" Commits ", focused, theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    if model.commits.is_empty() {
-        let (title, detail) = if model.pending.is_some() {
+
+    let steps = commits.picker.steps_slice();
+    if steps.is_empty() {
+        let (title, detail) = if app.is_busy() {
             ("Loading", "Loading commits…")
         } else {
             ("No commits", "No commits in the selected range.")
         };
-        render_empty(frame, inner, title, detail, &model.theme);
+        render_empty(frame, inner, title, detail, theme);
         return;
     }
 
+    let cursor = commits.picker.cursor();
     let offset = commit_offset(
-        model.commit_cursor,
-        model.commit_scroll,
-        model.commits.len(),
+        cursor,
+        commits.picker.scroll(),
+        steps.len(),
         inner.height as usize,
     );
     let mut lines = Vec::new();
-    for (index, step) in model
-        .commits
+    for (index, step) in steps
         .iter()
         .enumerate()
         .skip(offset)
         .take(inner.height as usize)
     {
-        let selected = index == model.commit_cursor;
+        let selected = index == cursor;
         let style = if selected {
-            model.theme.fg_bg(
-                model.theme.palette.selection_fg,
-                model.theme.palette.selection_bg,
-            )
+            theme.fg_bg(theme.palette.selection_fg, theme.palette.selection_bg)
         } else {
-            model.theme.fg(model.theme.palette.text)
+            theme.fg(theme.palette.text)
         };
         let id = step.commit_id.to_string();
-        let position = format!(" {}/{}", index + 1, model.commits.len());
+        let position = format!(" {}/{}", index + 1, steps.len());
         let prefix = format!(
             "{} {} ",
             if selected { "▌" } else { " " },

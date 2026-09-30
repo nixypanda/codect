@@ -227,7 +227,7 @@ fn frame_benchmarks(c: &mut Criterion) {
     );
 
     let mut scrolled = diff_one_large(WIDE.0, WIDE.1);
-    scrolled.body_scroll = 300;
+    bench::set_body_scroll(&mut scrolled, 300);
     bench_warm(&mut group, "diff_scrolled", &scrolled, WIDE);
 
     bench_warm(

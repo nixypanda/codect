@@ -5,54 +5,59 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{ChangeKind, Content, Model, RowKind, TreeRow};
+use crate::app::App;
+use crate::content::{ChangeKind, Loaded};
 use crate::theme::Theme;
+use crate::tree::{RowKind, TreeRow};
 
 use super::empty::render_empty;
 use super::geom::{Edge, pane_block, window_offset};
 use super::text::truncate_ellipsis;
 
-pub(crate) fn render_tree(model: &Model, frame: &mut Frame, area: Rect, focused: bool, edge: Edge) {
-    let block = pane_block(" Files ", focused, &model.theme, edge);
+pub(crate) fn render_tree(app: &App, frame: &mut Frame, area: Rect, focused: bool, edge: Edge) {
+    let tree = &app.tree;
+    let theme = &app.chrome.theme;
+    let block = pane_block(" Files ", focused, theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if model.rows.is_empty() {
-        let (title, detail) = if model.pending.is_some() {
+    if tree.rows.is_empty() {
+        let (title, detail) = if app.is_busy() {
             ("Loading", "Projecting files…")
         } else {
-            match model.content {
-                Content::Show(_) => ("No files", "No projected file content in this scope."),
-                Content::Diff(_) => ("No changes", "Body-only edits are omitted."),
+            match app.loaded {
+                Loaded::Show(_) => ("No files", "No projected file content in this scope."),
+                Loaded::Diff(_) => ("No changes", "Body-only edits are omitted."),
             }
         };
-        render_empty(frame, inner, title, detail, &model.theme);
+        render_empty(frame, inner, title, detail, theme);
         return;
     }
 
     let height = inner.height as usize;
-    let needs_scrollbar = model.rows.len() > height;
+    let needs_scrollbar = tree.rows.len() > height;
     let width = (inner.width as usize).saturating_sub(usize::from(needs_scrollbar));
-    let offset = window_offset(model.cursor, model.rows.len(), height);
-    let theme = &model.theme;
+    let offset = window_offset(tree.cursor, tree.rows.len(), height);
+    let selected = app.loaded.selected();
 
     let mut lines = Vec::new();
-    for (index, row) in model.rows.iter().enumerate().skip(offset).take(height) {
+    for (index, row) in tree.rows.iter().enumerate().skip(offset).take(height) {
         lines.push(tree_line(
-            model,
+            app,
             row,
             index,
-            index == model.cursor,
+            index == tree.cursor,
             focused,
             width,
             theme,
+            selected,
         ));
     }
     frame.render_widget(Paragraph::new(lines), inner);
 
     if needs_scrollbar {
-        let mut state = ScrollbarState::new(model.rows.len())
-            .position(model.cursor)
+        let mut state = ScrollbarState::new(tree.rows.len())
+            .position(tree.cursor)
             .viewport_content_length(height);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -65,17 +70,21 @@ pub(crate) fn render_tree(model: &Model, frame: &mut Frame, area: Rect, focused:
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tree_line(
-    model: &Model,
+    app: &App,
     row: &TreeRow,
     index: usize,
-    selected: bool,
+    cursor: bool,
     focused: bool,
     width: usize,
     theme: &Theme,
+    selected: Option<&base::RepoPath>,
 ) -> Line<'static> {
-    let base = if selected {
-        let background = if focused {
+    let is_selected = matches!(&row.kind, RowKind::File { path } if Some(path) == selected);
+    let highlighted = cursor && focused;
+    let base = if is_selected || highlighted {
+        let background = if highlighted {
             theme.palette.selection_bg
         } else {
             theme.palette.surface_alt
@@ -88,18 +97,21 @@ fn tree_line(
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     // The selection bar reserves its column on every row so labels stay aligned.
-    if selected {
-        let (bar, color) = if focused {
-            ("▌", theme.palette.selection_bar)
-        } else {
-            ("▏", theme.palette.text_muted)
-        };
-        spans.push(Span::styled(bar.to_owned(), base.fg(theme.color(color))));
+    if highlighted {
+        spans.push(Span::styled(
+            "▌".to_owned(),
+            base.fg(theme.color(theme.palette.selection_bar)),
+        ));
+    } else if is_selected {
+        spans.push(Span::styled(
+            "▏".to_owned(),
+            base.fg(theme.color(theme.palette.text_muted)),
+        ));
     } else {
         spans.push(Span::styled(" ".to_owned(), base));
     }
 
-    let rows = &model.rows;
+    let rows = &app.tree.rows;
     for level in 0..row.depth {
         let text = if level + 1 == row.depth {
             if is_last_child(rows, index, level) {
@@ -130,8 +142,8 @@ fn tree_line(
     }
 
     let icon = match &row.kind {
-        RowKind::Directory { .. } => model.icons.folder(),
-        RowKind::File { path } => model.icons.file(path),
+        RowKind::Directory { .. } => app.chrome.icons.folder(),
+        RowKind::File { path } => app.chrome.icons.file(path),
     };
     if !icon.is_empty() {
         let color = match &row.kind {
@@ -145,7 +157,7 @@ fn tree_line(
         .iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum();
-    let badge = badge(model, row);
+    let badge = badge(app, row, theme);
     let badge_width = badge.as_ref().map_or(0, |(label, _)| label.len() + 1);
     let label_width = width.saturating_sub(used + badge_width);
     let label = truncate_ellipsis(&row.label, label_width);
@@ -172,12 +184,11 @@ fn tree_line(
     Line::from(spans)
 }
 
-fn badge(model: &Model, row: &TreeRow) -> Option<(&'static str, crate::theme::Rgb)> {
+fn badge(app: &App, row: &TreeRow, theme: &Theme) -> Option<(&'static str, crate::theme::Rgb)> {
     let RowKind::File { path } = &row.kind else {
         return None;
     };
-    let theme = &model.theme;
-    match model.change_kind(path)? {
+    match app.change_kind(path)? {
         ChangeKind::Added => Some(("A", theme.palette.badge_add)),
         ChangeKind::Modified => Some(("M", theme.palette.badge_mod)),
         ChangeKind::Deleted => Some(("D", theme.palette.badge_del)),
