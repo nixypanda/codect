@@ -157,7 +157,7 @@
       }
     },
     "kind": {
-      "description": "The exhaustive declaration kind. Every ItemKind in ownai-core maps to exactly one value.",
+      "description": "The exhaustive declaration kind. Every ItemKind in base maps to exactly one value.",
       "enum": [
         "module",
         "type",

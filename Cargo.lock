@@ -173,6 +173,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "base"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "similar",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -370,6 +379,31 @@ name = "clap_lex"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
+
+[[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "assert_cmd",
+ "base",
+ "clap",
+ "engine",
+ "git",
+ "lang-elm",
+ "lang-haskell",
+ "lang-python",
+ "lang-rust",
+ "miette",
+ "portable-pty",
+ "predicates",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tui",
+]
 
 [[package]]
 name = "clru"
@@ -736,6 +770,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "git",
+ "lang-elm",
+ "lang-haskell",
+ "lang-python",
+ "lang-rust",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -887,6 +937,17 @@ name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
+
+[[package]]
+name = "git"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "bstr",
+ "gix",
+ "tempfile",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "gix"
@@ -1865,6 +1926,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "lang-elm"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "thiserror 2.0.20",
+ "tree-sitter",
+ "tree-sitter-elm",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "lang-haskell"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "thiserror 2.0.20",
+ "tree-sitter",
+ "tree-sitter-haskell",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "lang-python"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "thiserror 2.0.20",
+ "tree-sitter",
+ "tree-sitter-python",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "lang-rust"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "thiserror 2.0.20",
+ "tree-sitter",
+ "tree-sitter-rust",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2116,129 +2221,6 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
-
-[[package]]
-name = "ownai-cli"
-version = "0.1.0"
-dependencies = [
- "anstream",
- "anstyle",
- "assert_cmd",
- "clap",
- "miette",
- "ownai-core",
- "ownai-engine",
- "ownai-git",
- "ownai-language-elm",
- "ownai-language-haskell",
- "ownai-language-python",
- "ownai-language-rust",
- "ownai-tui",
- "portable-pty",
- "predicates",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "ownai-core"
-version = "0.1.0"
-dependencies = [
- "bstr",
- "similar",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "ownai-engine"
-version = "0.1.0"
-dependencies = [
- "ownai-core",
- "ownai-git",
- "ownai-language-elm",
- "ownai-language-haskell",
- "ownai-language-python",
- "ownai-language-rust",
- "serde",
- "tempfile",
- "thiserror 2.0.20",
- "toml",
-]
-
-[[package]]
-name = "ownai-git"
-version = "0.1.0"
-dependencies = [
- "bstr",
- "gix",
- "ownai-core",
- "tempfile",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "ownai-language-elm"
-version = "0.1.0"
-dependencies = [
- "ownai-core",
- "thiserror 2.0.20",
- "tree-sitter",
- "tree-sitter-elm",
- "unicode-width 0.2.2",
-]
-
-[[package]]
-name = "ownai-language-haskell"
-version = "0.1.0"
-dependencies = [
- "ownai-core",
- "thiserror 2.0.20",
- "tree-sitter",
- "tree-sitter-haskell",
- "unicode-width 0.2.2",
-]
-
-[[package]]
-name = "ownai-language-python"
-version = "0.1.0"
-dependencies = [
- "ownai-core",
- "thiserror 2.0.20",
- "tree-sitter",
- "tree-sitter-python",
- "unicode-width 0.2.2",
-]
-
-[[package]]
-name = "ownai-language-rust"
-version = "0.1.0"
-dependencies = [
- "ownai-core",
- "thiserror 2.0.20",
- "tree-sitter",
- "tree-sitter-rust",
- "unicode-width 0.2.2",
-]
-
-[[package]]
-name = "ownai-tui"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "crossterm",
- "ownai-core",
- "ownai-engine",
- "ownai-git",
- "ratatui",
- "syntect",
- "tempfile",
- "terminal-colorsaurus",
- "thiserror 2.0.20",
- "two-face",
- "unicode-width 0.2.2",
-]
 
 [[package]]
 name = "owo-colors"
@@ -3237,6 +3219,24 @@ checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tui"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "criterion",
+ "crossterm",
+ "engine",
+ "git",
+ "ratatui",
+ "syntect",
+ "tempfile",
+ "terminal-colorsaurus",
+ "thiserror 2.0.20",
+ "two-face",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

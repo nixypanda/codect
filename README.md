@@ -53,11 +53,11 @@ This is equivalent to:
 ```text
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p ownai-tui --features bench --all-targets -- -D warnings
+cargo clippy -p tui --features bench --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
-cargo tree -e features -p ownai-git
-cargo build -p ownai-cli --no-default-features
+cargo tree -e features -p git
+cargo build -p cli --no-default-features
 ```
 
 The `cargo tree` command audits the enabled `gix` features. It must show
@@ -66,7 +66,7 @@ their unavoidable transitive implications.
 
 The final `cargo build` proves the terminal frontend is optional: with
 `--no-default-features`, `ratatui`, `crossterm`, `terminal-colorsaurus`,
-`syntect`, and `two-face` must not appear in `ownai-cli`'s dependency tree.
+`syntect`, and `two-face` must not appear in `cli`'s dependency tree.
 `just check-workspace-nodefault` also checks this dependency tree.
 
 The Neovim plugin has a separate headless suite (`just test-nvim`) and a Nix
@@ -213,7 +213,7 @@ Requirements:
 Building without the frontend:
 
 ```sh
-cargo build -p ownai-cli --no-default-features
+cargo build -p cli --no-default-features
 ```
 
 `tui` then becomes an unknown command, and no terminal dependency is linked.

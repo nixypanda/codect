@@ -1,26 +1,26 @@
 # Named areas for studying OwnAI itself. Paths are repo-root-relative and
 # literal (no globs). Select with --area/-a, e.g.
 #   ownai show --mode signatures --area seams
-#   ownai show --mode types --area core --area cli
+#   ownai show --mode types --area base --area cli
 
 [areas]
-core      = ["crates/ownai-core/src"]
-git       = ["crates/ownai-git/src"]
-cli       = ["crates/ownai-cli/src"]
+base      = ["crates/base/src"]
+git       = ["crates/git/src"]
+cli       = ["crates/cli/src"]
 languages = [
-    "crates/ownai-language-elm/src",
-    "crates/ownai-language-haskell/src",
-    "crates/ownai-language-python/src",
-    "crates/ownai-language-rust/src",
+    "crates/lang-elm/src",
+    "crates/lang-haskell/src",
+    "crates/lang-python/src",
+    "crates/lang-rust/src",
 ]
 
 seams = [
-    "crates/ownai-core/src/lib.rs",
-    "crates/ownai-git/src/lib.rs",
-    "crates/ownai-language-elm/src/lib.rs",
-    "crates/ownai-language-haskell/src/lib.rs",
-    "crates/ownai-language-python/src/lib.rs",
-    "crates/ownai-language-rust/src/lib.rs",
-    "crates/ownai-cli/src/main.rs",
-    "crates/ownai-cli/src/command.rs",
+    "crates/base/src/lib.rs",
+    "crates/git/src/lib.rs",
+    "crates/lang-elm/src/lib.rs",
+    "crates/lang-haskell/src/lib.rs",
+    "crates/lang-python/src/lib.rs",
+    "crates/lang-rust/src/lib.rs",
+    "crates/cli/src/main.rs",
+    "crates/cli/src/command.rs",
 ]

@@ -1,15 +1,15 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/ownai-core",
-    "crates/ownai-git",
-    "crates/ownai-language-elm",
-    "crates/ownai-language-haskell",
-    "crates/ownai-language-python",
-    "crates/ownai-language-rust",
-    "crates/ownai-engine",
-    "crates/ownai-tui",
-    "crates/ownai-cli",
+    "crates/base",
+    "crates/git",
+    "crates/lang-elm",
+    "crates/lang-haskell",
+    "crates/lang-python",
+    "crates/lang-rust",
+    "crates/engine",
+    "crates/tui",
+    "crates/cli",
 ]
 
 [workspace.package]
@@ -20,14 +20,14 @@ publish = false
 
 [workspace.dependencies]
 # First-party crates.
-ownai-core = { path = "crates/ownai-core" }
-ownai-git = { path = "crates/ownai-git" }
-ownai-language-elm = { path = "crates/ownai-language-elm" }
-ownai-language-haskell = { path = "crates/ownai-language-haskell" }
-ownai-language-python = { path = "crates/ownai-language-python" }
-ownai-language-rust = { path = "crates/ownai-language-rust" }
-ownai-engine = { path = "crates/ownai-engine" }
-ownai-tui = { path = "crates/ownai-tui" }
+base = { path = "crates/base" }
+git = { path = "crates/git" }
+lang-elm = { path = "crates/lang-elm" }
+lang-haskell = { path = "crates/lang-haskell" }
+lang-python = { path = "crates/lang-python" }
+lang-rust = { path = "crates/lang-rust" }
+engine = { path = "crates/engine" }
+tui = { path = "crates/tui" }
 
 # Runtime dependencies.
 tree-sitter = "0.27"
@@ -76,6 +76,6 @@ predicates = "3"
 tempfile = "3"
 portable-pty = "0.9"
 
-# Benchmark-only dependency. Confined to `ownai-tui`'s `bench` feature via a
+# Benchmark-only dependency. Confined to `tui`'s `bench` feature via a
 # `required-features` bench target, so it never enters a normal build.
 criterion = { version = "0.8", features = ["html_reports"] }

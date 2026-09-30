@@ -57,8 +57,8 @@
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
 
-          cargoBuildFlags = [ "--package=ownai-cli" ];
-          cargoTestFlags = [ "--package=ownai-cli" ];
+          cargoBuildFlags = [ "--package=cli" ];
+          cargoTestFlags = [ "--package=cli" ];
 
           # The workspace root is a virtual manifest, so install the binary
           # produced by cargoBuildHook directly instead of using `cargo install`.
