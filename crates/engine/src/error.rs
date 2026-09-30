@@ -28,7 +28,7 @@ pub enum EngineError {
         source: std::io::Error,
     },
 
-    /// `.ownai.toml` could not supply areas.
+    /// `.codect.toml` could not supply areas.
     #[error(transparent)]
     Config(#[from] ConfigError),
 

@@ -1,8 +1,8 @@
-# OwnAI Technical Design
+# Codect Technical Design
 
 ## 1. Purpose and authority
 
-This document records the implemented OwnAI architecture and the contracts
+This document records the implemented Codect architecture and the contracts
 that future changes must preserve. Section 19 retains the original delivery
 sequence as historical context.
 
@@ -17,7 +17,7 @@ The current implementation supports:
   the index, tracked worktree, and empty tree.
 - Narrowing a projection to selected repository paths on both commands.
 
-OwnAI does not perform type inference, expand macros, inspect function bodies,
+Codect does not perform type inference, expand macros, inspect function bodies,
 or implement Public and Full projection modes. The editor projection surface
 (section 14.2) may read the worktree or standard input. JSON snapshot diffs
 (section 14.3) may read the index and tracked worktree. All paths are read-only.
@@ -28,7 +28,7 @@ or implement Public and Full projection modes. The editor projection surface
 |---|---|
 | Implementation language | Rust, stable toolchain, Rust 2024 edition |
 | Project structure | Cargo workspace with separate core, language, Git, and CLI crates |
-| Git access | `gix`, read-only, behind an OwnAI-owned interface |
+| Git access | `gix`, read-only, behind an Codect-owned interface |
 | Parsing | Tree-sitter with the Elm, Haskell, Python, and Rust grammars |
 | Projection | Language-specific extraction into a small shared projection model |
 | Rendering | Deterministic, language-specific canonical rendering |
@@ -177,7 +177,7 @@ must not depend on `clap`, `miette`, `ratatui`, or `crossterm`, and it never
 renders a document or reads command-line arguments.
 
 `tui` is the terminal frontend (section 21). It must not depend on `clap`
-or `miette`, discover repositories, parse arguments, or read `.ownai.toml`; it
+or `miette`, discover repositories, parse arguments, or read `.codect.toml`; it
 receives an `Engine` and a fully-built `Selection` and talks to the terminal
 through `ratatui`/`crossterm` only.
 
@@ -241,7 +241,7 @@ syntect = { version = "5.3", default-features = false, features = ["default-fanc
 two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 ```
 
-`serde` and `toml` parse `.ownai.toml` for the shared engine (section 14.1);
+`serde` and `toml` parse `.codect.toml` for the shared engine (section 14.1);
 they are not a serialization dependency of `gix`, whose `serde` feature stays
 disabled (section 4.1).
 
@@ -284,7 +284,7 @@ Keep `default-features = false`. Enable only:
 Do not enable these feature groups in the MVP:
 
 - `basic` or any default bundle.
-- `blob-diff`; OwnAI diffs projections, not Git blobs.
+- `blob-diff`; Codect diffs projections, not Git blobs.
 - `attributes`, `excludes`, or `dirwalk`.
 - `status`, `worktree-stream`, `worktree-archive`, or `worktree-mutation`.
 - `merge`, `blame`, `mailmap`, or `notes`.
@@ -438,7 +438,7 @@ Nested items remain in `items` so that stable keys and later per-declaration com
 
 The variants make named areas and literal paths mutually exclusive by construction.
 
-`Area` is a named list of repository paths. `Area::new` rejects an empty name or an empty path list and sorts and deduplicates the paths, so every constructed `Area` is non-empty; `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. `SelectionGroup` is either a literal `Path(RepoPath)` or an `Area(Area)`, so a group can never be empty and its label cannot disagree with its paths. `Selection::resolve` is the single entry point from a `PathSelection` plus the repository's `AreaSet`: it validates named areas and records one group per literal path or named area in one step, so callers never resolve a scope and then rebuild its groups by hand. It reports an undefined name as `SelectionError::UnknownArea`; an empty area is impossible by construction rather than a runtime error, and `Selection::new` is infallible for the same reason. The resulting `Selection` pairs the resolved `PathScope` with those groups, so an unsatisfied selection can name what the user asked for and no group can disagree with the scope. Areas are data only and core stays file-format-free: the engine loads them from `.ownai.toml` (section 14.1) and passes the resulting `AreaSet` to `Selection::resolve`, so `All`, literal paths, and named areas are all reachable at the frontend boundary.
+`Area` is a named list of repository paths. `Area::new` rejects an empty name or an empty path list and sorts and deduplicates the paths, so every constructed `Area` is non-empty; `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. `SelectionGroup` is either a literal `Path(RepoPath)` or an `Area(Area)`, so a group can never be empty and its label cannot disagree with its paths. `Selection::resolve` is the single entry point from a `PathSelection` plus the repository's `AreaSet`: it validates named areas and records one group per literal path or named area in one step, so callers never resolve a scope and then rebuild its groups by hand. It reports an undefined name as `SelectionError::UnknownArea`; an empty area is impossible by construction rather than a runtime error, and `Selection::new` is infallible for the same reason. The resulting `Selection` pairs the resolved `PathScope` with those groups, so an unsatisfied selection can name what the user asked for and no group can disagree with the scope. Areas are data only and core stays file-format-free: the engine loads them from `.codect.toml` (section 14.1) and passes the resulting `AreaSet` to `Selection::resolve`, so `All`, literal paths, and named areas are all reachable at the frontend boundary.
 
 ## 6. Language adapter interface
 
@@ -517,7 +517,7 @@ symlinks. Mutable snapshot names are labels rather than content hashes.
 `git` is read-only. It owns repository discovery, revision resolution,
 commit peeling, tree traversal, stage-zero index enumeration, and blob reads.
 
-Expose OwnAI-owned values:
+Expose Codect-owned values:
 
 ```rust
 pub struct Revision {
@@ -593,7 +593,7 @@ Use object IDs to avoid reading or projecting unchanged blobs during diff.
 
 Configure a bounded `gix` object cache suitable for repeated tree and blob access. Keep cache sizing in `git` and use a conservative constant initially. Do not expose tuning flags in the MVP. Add benchmarks before changing cache strategy or enabling broader `gix` performance features.
 
-OwnAI needs no persistent projection cache in the MVP.
+Codect needs no persistent projection cache in the MVP.
 
 ## 9. Tree-sitter integration
 
@@ -664,7 +664,7 @@ For `show`, use an unambiguous neutral header:
 For `diff`, use familiar per-file headers:
 
 ```text
-diff --ownai a/src/User.elm b/src/User.elm
+diff --codect a/src/User.elm b/src/User.elm
 --- a/src/User.elm
 +++ b/src/User.elm
 ```
@@ -676,7 +676,7 @@ Multi-file document policy (pinned so it cannot drift):
 - `show` sections are separated by exactly one blank line.
 - `diff` blocks are concatenated with no blank line between them, and only files whose projections differ are emitted.
 - A non-empty document ends with exactly one trailing newline; a document with no emitted files is empty.
-- The `diff --ownai` line keeps `a/` and `b/` labels even for an added or deleted file, while the absent `---`/`+++` side uses `/dev/null`.
+- The `diff --codect` line keeps `a/` and `b/` labels even for an added or deleted file, while the absent `---`/`+++` side uses `/dev/null`.
 
 ## 11. Elm projection
 
@@ -851,13 +851,13 @@ side-by-side view by parsing unified-diff text.
 
 ## 14. CLI contract
 
-The binary name is `ownai`.
+The binary name is `codect`.
 
 Commands:
 
 ```text
-ownai show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-ownai diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 Rules:
@@ -892,11 +892,11 @@ engine, and renders the result or a diagnostic; `main.rs` stays a thin entry
 point. `base` stays Git-free (section 3). Business rules do not belong in
 `main.rs`.
 
-### 14.1 `.ownai.toml` and named areas
+### 14.1 `.codect.toml` and named areas
 
 A named area is a repository-defined group of paths, selected with `--area`. It lets a project share a recurring selection without repeating `--path` arguments.
 
-The config file is `.ownai.toml` at the repository root: the worktree root for a normal repository or linked worktree, and the bare repository root for a bare repository. It maps area names to lists of repository-root-relative paths:
+The config file is `.codect.toml` at the repository root: the worktree root for a normal repository or linked worktree, and the bare repository root for a bare repository. It maps area names to lists of repository-root-relative paths:
 
 ```toml
 [areas]
@@ -916,20 +916,20 @@ Rules:
 - An area is satisfied when any one of its paths names something in the projected revision, or in either side of a diff. A group that matches nothing is fatal; a group that exists but contains no supported files succeeds with empty output.
 - A missing, unreadable, oversized, or malformed config is fatal (exit `1`, empty stdout). An unknown area name is likewise fatal and its diagnostic lists the known names.
 
-### 14.2 Editor projection surface (`ownai.show.v1`)
+### 14.2 Editor projection surface (`codect.show.v1`)
 
-`ownai show --format json` emits a stable, versioned JSON document so an editor
-can fold a real source buffer by OwnAI's declaration structure. `--format`
+`codect show --format json` emits a stable, versioned JSON document so an editor
+can fold a real source buffer by Codect's declaration structure. `--format`
 defaults to `text`, whose output is byte-for-byte unchanged. The schema is
-committed at `docs/schema/ownai.show.v1.json`; golden documents live under
+committed at `docs/schema/codect.show.v1.json`; golden documents live under
 `fixtures/schema/`.
 
 Input forms:
 
 ```text
-ownai show --format json --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-ownai show --format json --mode <types|signatures> --stdin --path <PATH>
-ownai show --format json --mode <types|signatures> --worktree --path <PATH>
+codect show --format json --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+codect show --format json --mode <types|signatures> --stdin --path <PATH>
+codect show --format json --mode <types|signatures> --worktree --path <PATH>
 ```
 
 - `--stdin` reads source bytes from standard input; `--worktree` reads the file
@@ -954,7 +954,7 @@ Document shape:
 
 ```jsonc
 {
-  "schema": "ownai.show.v1",   // a consumer treats any other value as fatal
+  "schema": "codect.show.v1",   // a consumer treats any other value as fatal
   "input": "revision",          // "revision" | "stdin" | "worktree"
   "revision": "HEAD",           // string, or null for stdin/worktree
   "mode": "types",              // "types" | "signatures"
@@ -1008,7 +1008,7 @@ Contract rules:
 - `span` starts at the declaration node, so preceding attributes, decorators,
   `{-# ... #-}` pragmas, and doc comments are excluded even though `signature`
   may include them. An editor extends a fold start upward over those lines. A
-  `decorator_start_line` field can be added additively within `ownai.show.v1`
+  `decorator_start_line` field can be added additively within `codect.show.v1`
   later.
 - `stable_key` is unique within its file but not necessarily across the
   repository: Rust `impl` keys are not path-namespaced, so a consumer keys
@@ -1016,9 +1016,9 @@ Contract rules:
 - `kind` is an exhaustive mapping of `ItemKind` with no wildcard arm, so a new
   kind is a compile error rather than a silent fallback.
 - Unknown fields must be tolerated by consumers, and fields may be added
-  additively within `ownai.show.v1`; the schema permits additional properties
+  additively within `codect.show.v1`; the schema permits additional properties
   while keeping the required fields and value constraints strict. A `schema`
-  value other than `ownai.show.v1` is a fatal, explicit version mismatch.
+  value other than `codect.show.v1` is a fatal, explicit version mismatch.
 
 Crate placement:
 
@@ -1033,10 +1033,10 @@ Crate placement:
   and golden fixtures are referenced by the CLI test suite, never by
   `base`.
 
-### 14.3 Focused snapshot diff document (`ownai.diff.v1`)
+### 14.3 Focused snapshot diff document (`codect.diff.v1`)
 
-`ownai diff --format json` emits the schema in
-[`docs/schema/ownai.diff.v1.json`](./schema/ownai.diff.v1.json). The root
+`codect diff --format json` emits the schema in
+[`docs/schema/codect.diff.v1.json`](./schema/codect.diff.v1.json). The root
 contains `schema`, `mode`, `base`, `target`, and `files`. Each snapshot has
 a `kind` (`commit`, `index`, `worktree`, or `empty`), the requested
 `revision`, and an `id`. A commit ID is resolved; `:index` and
@@ -1074,7 +1074,7 @@ Fatal cases include:
 - No repository found.
 - Revision not found, ambiguous, a range, or not peelable to a commit.
 - A selected path that names nothing in the projected revision, or in either side of a diff.
-- `--area` selection with a missing, unreadable, oversized, or malformed `.ownai.toml`.
+- `--area` selection with a missing, unreadable, oversized, or malformed `.codect.toml`.
 - `--area` naming an area the config does not define; the diagnostic lists the known names.
 - An empty area (no paths) or an area path that is absolute or contains `..`.
 - Git object missing or corrupt.
@@ -1241,7 +1241,7 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
   `TestBackend` tests. The fuzzy matcher has its own unit tests, including a
   scoring order between consecutive and scattered matches.
 - `theme.rs` unit tests cover capability resolution (truecolor, 256, 16, and
-  `NO_COLOR`), Tokyo Night night/day palette roles, and the `OWNAI_THEME` override:
+  `NO_COLOR`), Tokyo Night night/day palette roles, and the `CODECT_THEME` override:
   `dark`/`light` are explicit and unknown values defer to the terminal query.
 - An injected terminal driver covers partial setup and matching cleanup; a PTY
   smoke test runs where the platform supports one. The PTY test waits for the
@@ -1255,7 +1255,7 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
 
 ### 16.7 JSON and Neovim integration tests
 
-The CLI tests compare `ownai.show.v1` and `ownai.diff.v1` documents against
+The CLI tests compare `codect.show.v1` and `codect.diff.v1` documents against
 golden fixtures and their committed JSON schemas. Snapshot diff tests cover
 commit, index, worktree, and empty inputs, including staged and unstaged
 changes. `just test-nvim` runs the plugin's headless Lua suite against the
@@ -1269,7 +1269,7 @@ Correctness and stable output take priority over concurrency in the MVP.
 
 Initial performance rules:
 
-- Read `.ownai.toml` at most once per command and only when `--area` is present, so unscoped and `--path` runs never touch it.
+- Read `.codect.toml` at most once per command and only when `--area` is present, so unscoped and `--path` runs never touch it.
 - Filter entries by path scope before reading blobs, so scoping bounds the number of blobs read and projected.
 - Skip files with identical blob IDs before reading them during diff.
 - Read each needed blob at most once per command.
@@ -1295,7 +1295,7 @@ cancellable worker and a loading state before considering persistent caches.
 ### Performance baseline
 
 Measured 2026-09-21 with rustc 1.98.1 (`48a229cea 2026-09-01`) and cargo 1.98.1,
-running `target/release/ownai` on an Apple Silicon macOS host. Times are wall
+running `target/release/codect` on an Apple Silicon macOS host. Times are wall
 clock for `--mode signatures`, best and median of ten warm runs. These are a
 baseline for later comparison, not a target.
 
@@ -1303,8 +1303,8 @@ baseline for later comparison, not a target.
 |---|---|---|---|
 | `show --mode signatures HEAD` | synthetic, 150 Elm + 150 Rust | 300 | 33 ms / 34 ms |
 | `diff --mode signatures <base> <target>` | synthetic, every file changed | 300 | 53 ms / 55 ms |
-| `show --mode signatures HEAD` | OwnAI itself | 67 | 70 ms / 76 ms |
-| `diff --mode signatures acf05df a0d42f5` | OwnAI itself | 67 changed | 74 ms / 85 ms |
+| `show --mode signatures HEAD` | Codect itself | 67 | 70 ms / 76 ms |
+| `diff --mode signatures acf05df a0d42f5` | Codect itself | 67 changed | 74 ms / 85 ms |
 
 The synthetic repository is packed (`git repack -a -d` plus
 `git prune-packed`) and carries a 100-commit front-loaded history. No threads,
@@ -1520,9 +1520,9 @@ Acceptance gate: a release build passes all tests and the dependency feature tre
 
 - Extract the Git-aware pipeline into `engine` without changing CLI output.
 - Add `tui` with the TEA core and terminal runtime, behind the default-on `tui` feature.
-- Implement `ownai tui show`: file tree, projection pane, mode switch, scrolling, help, and the terminal-safety contract.
+- Implement `codect tui show`: file tree, projection pane, mode switch, scrolling, help, and the terminal-safety contract.
 
-Acceptance gate: `ownai tui show` works in normal, bare, single-language, and mixed repositories; CLI output is byte-for-byte unchanged; the no-default-features build links no terminal dependency.
+Acceptance gate: `codect tui show` works in normal, bare, single-language, and mixed repositories; CLI output is byte-for-byte unchanged; the no-default-features build links no terminal dependency.
 
 ### Phase 9: Diff frontend
 
@@ -1564,7 +1564,7 @@ The original MVP gate required:
 - Mixed-language, added-file, and deleted-file comparisons work.
 - Invalid revisions and unprojectable supported files fail clearly without partial output.
 - Path scoping on both commands behaves as documented, including the fatal absent-path case.
-- Named areas load from `.ownai.toml` only for `--area`, scope both commands by repository-root-relative paths, and fail clearly on a missing or malformed config or an unknown area.
+- Named areas load from `.codect.toml` only for `--area`, scope both commands by repository-root-relative paths, and fail clearly on a missing or malformed config or an unknown area.
 - Output is deterministic across repeated runs and independent of terminal width.
 - All required tests and snapshots pass.
 - Only the approved `gix` features are enabled.
@@ -1578,15 +1578,15 @@ The original MVP gate required:
 
 ## 21. Terminal frontend
 
-`ownai tui` is an optional, default-on terminal frontend over the same
+`codect tui` is an optional, default-on terminal frontend over the same
 projections. `tui` is the only crate that touches the terminal.
 
 ### 21.1 Command surface
 
 ```text
-ownai tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-ownai tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
-ownai tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+codect tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 - `show` defaults `REVISION` to `HEAD`; both diff revisions are required.
@@ -1623,7 +1623,7 @@ lifecycle, and effect interpretation.
   and returns requests (an effect, or a diagnostic) for the shell to fold.
 - **Cmd** — I/O is described as data. `Load` runs `Engine::show` or
   `Engine::diff`; commit history loads the metadata once and projects the
-  selected step lazily. `LoadAreas` reads `.ownai.toml` through
+  selected step lazily. `LoadAreas` reads `.codect.toml` through
   `Engine::load_areas`.
 - **view** — a pure function of the model. The frame is composed in `view/`,
   and each pane draws itself: `page::show::view`, `page::diff::view`,
@@ -1725,8 +1725,8 @@ keeps no persistent cache.
   them through a `Capability`: truecolor, the 256-color xterm palette, the 16 ANSI colors, or
   no color. The theme is part of the `Model`, so `view` never reads the
   environment.
-- The dark or light flavor is chosen at startup: `OWNAI_THEME=dark` and
-  `OWNAI_THEME=light` are explicit, and anything else (including unset) asks the
+- The dark or light flavor is chosen at startup: `CODECT_THEME=dark` and
+  `CODECT_THEME=light` are explicit, and anything else (including unset) asks the
   terminal for its background color with `terminal-colorsaurus` over `OSC 11`,
   falling back to dark when the terminal does not answer. `COLORTERM` and `TERM`
   select the capability, and `NO_COLOR` wins over both. The query runs once in
@@ -1744,7 +1744,7 @@ keeps no persistent cache.
   (`fuzzy.rs`); no new crate is added for navigation.
 - `icons.rs` holds an opt-in Nerd Font glyph set. Nerd Fonts cannot be detected
   from inside a program, so icons default off and are enabled with
-  `--icons=nerd` or `OWNAI_ICONS=nerd`. Every glyph is a single display column,
+  `--icons=nerd` or `CODECT_ICONS=nerd`. Every glyph is a single display column,
   which keeps the tree's display-width alignment intact; the glyphs come from
   the Font Awesome and Devicons/Seti ranges that exist in Nerd Fonts v2 and are
   aliased in v3.

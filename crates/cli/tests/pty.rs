@@ -37,11 +37,11 @@ fn run_in_pty(repo: &TestRepo, args: &[&str]) -> u32 {
         })
         .expect("open a pty");
 
-    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_ownai"));
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_codect"));
     command.cwd(repo.path());
     command.args(args);
 
-    let mut child = pair.slave.spawn_command(command).expect("spawn ownai");
+    let mut child = pair.slave.spawn_command(command).expect("spawn codect");
     let mut reader = pair.master.try_clone_reader().expect("pty reader");
     let mut writer = pair.master.take_writer().expect("pty writer");
     drop(pair);
@@ -62,7 +62,7 @@ fn run_in_pty(repo: &TestRepo, args: &[&str]) -> u32 {
     writer.write_all(b"q").expect("write quit key");
     let _ = writer.flush();
 
-    let status = child.wait().expect("wait for ownai");
+    let status = child.wait().expect("wait for codect");
     let output = drain.join().unwrap_or_default();
     assert!(
         !output.is_empty(),

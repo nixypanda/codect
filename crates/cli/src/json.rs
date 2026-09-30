@@ -1,13 +1,13 @@
-// The `ownai.show.v1` JSON document.
+// The `codect.show.v1` JSON document.
 //
 // The JSON types live in the CLI so `base` stays free of serialization
 // and `engine` stays free of file formats. The document is produced for
 // both committed revisions and editor-supplied bytes (stdin or worktree), and
-// is validated against `docs/schema/ownai.show.v1.json` by the test suite.
+// is validated against `docs/schema/codect.show.v1.json` by the test suite.
 //
 // # Contract highlights
 //
-// - `schema` is the literal `ownai.show.v1`; a consumer treats any other value
+// - `schema` is the literal `codect.show.v1`; a consumer treats any other value
 //   as a fatal, explicit version mismatch.
 // - Line numbers are **one-based** for editor friendliness. Byte offsets are
 //   zero-based into the decoded UTF-8 source. The plugin converts as needed.
@@ -34,8 +34,8 @@ use base::{
 use engine::SnapshotDiff;
 use serde::Serialize;
 
-pub const SCHEMA: &str = "ownai.show.v1";
-pub const DIFF_SCHEMA: &str = "ownai.diff.v1";
+pub const SCHEMA: &str = "codect.show.v1";
+pub const DIFF_SCHEMA: &str = "codect.diff.v1";
 
 pub fn diff_document(
     base: &str,
@@ -161,7 +161,7 @@ impl Input {
     }
 }
 
-// Serializes one `ownai.show.v1` document.
+// Serializes one `codect.show.v1` document.
 //
 // The document is pretty-printed so the contract is inspectable by hand, and
 // it always ends with a single newline.

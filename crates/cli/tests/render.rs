@@ -99,19 +99,19 @@ fn mixed_diff_document_covers_added_deleted_modified_and_unchanged_files() {
 
         assert!(
             document.contains(
-                "diff --ownai a/src/App.elm b/src/App.elm\n--- /dev/null\n+++ b/src/App.elm\n"
+                "diff --codect a/src/App.elm b/src/App.elm\n--- /dev/null\n+++ b/src/App.elm\n"
             ),
             "added Elm file must use /dev/null: {document:?}"
         );
         assert!(
             document.contains(
-                "diff --ownai a/src/Main.elm b/src/Main.elm\n--- a/src/Main.elm\n+++ b/src/Main.elm\n"
+                "diff --codect a/src/Main.elm b/src/Main.elm\n--- a/src/Main.elm\n+++ b/src/Main.elm\n"
             ),
             "modified Elm file must emit both sides: {document:?}"
         );
         assert!(
             document.contains(
-                "diff --ownai a/src/Old.rs b/src/Old.rs\n--- a/src/Old.rs\n+++ /dev/null\n"
+                "diff --codect a/src/Old.rs b/src/Old.rs\n--- a/src/Old.rs\n+++ /dev/null\n"
             ),
             "deleted Rust file must use /dev/null: {document:?}"
         );
@@ -185,11 +185,11 @@ fn diff_document_reports_haskell_and_python_changes() {
         let document = diff_document(&old, &new);
         assert!(!document.contains('\u{1b}'));
         assert!(
-            document.contains("diff --ownai a/src/Model.hs b/src/Model.hs\n"),
+            document.contains("diff --codect a/src/Model.hs b/src/Model.hs\n"),
             "Haskell block missing in {mode:?}: {document:?}"
         );
         assert!(
-            document.contains("diff --ownai a/src/model.py b/src/model.py\n"),
+            document.contains("diff --codect a/src/model.py b/src/model.py\n"),
             "Python block missing in {mode:?}: {document:?}"
         );
     }

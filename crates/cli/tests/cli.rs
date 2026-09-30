@@ -9,7 +9,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{TestRepo, fixture, ownai, ownai_in, stderr, stdout};
+use support::{TestRepo, fixture, codect, codect_in, stderr, stdout};
 
 const RUST_BASE: &str = "\
 pub struct User {
@@ -68,7 +68,7 @@ greet name =
 ";
 
 fn run(repo: &TestRepo, args: &[&str]) -> Output {
-    ownai_in(repo, args).output().expect("run ownai")
+    codect_in(repo, args).output().expect("run codect")
 }
 
 fn repo_with_type_change() -> TestRepo {
@@ -99,16 +99,16 @@ fn show_elm_only_defaults_to_head_in_both_modes() {
         fixture("elm/type-aliases/signatures.txt")
     );
 
-    ownai_in(&repo, &["show", "--mode", "types"])
+    codect_in(&repo, &["show", "--mode", "types"])
         .assert()
         .success()
         .stdout(predicates::str::diff(types.clone()))
         .stderr(predicates::str::is_empty());
-    ownai_in(&repo, &["show", "--mode", "signatures"])
+    codect_in(&repo, &["show", "--mode", "signatures"])
         .assert()
         .success()
         .stdout(predicates::str::diff(signatures));
-    ownai_in(&repo, &["show", "--mode", "types", "HEAD"])
+    codect_in(&repo, &["show", "--mode", "types", "HEAD"])
         .assert()
         .success()
         .stdout(predicates::str::diff(types));
@@ -124,7 +124,7 @@ fn show_wraps_a_long_python_signature_within_the_line_budget() {
         "== src/service.py ==\n{}",
         fixture("python/line-wrapping/signatures.txt")
     );
-    ownai_in(&repo, &["show", "--mode", "signatures"])
+    codect_in(&repo, &["show", "--mode", "signatures"])
         .assert()
         .success()
         .stdout(predicates::str::diff(expected))
@@ -141,7 +141,7 @@ fn show_wraps_a_nested_rust_return_type_within_the_line_budget() {
         "== src/registry.rs ==\n{}",
         fixture("rust/nested-return/signatures.txt")
     );
-    ownai_in(&repo, &["show", "--mode", "signatures"])
+    codect_in(&repo, &["show", "--mode", "signatures"])
         .assert()
         .success()
         .stdout(predicates::str::diff(expected))
@@ -165,7 +165,7 @@ fn show_all_four_languages_in_byte_order() {
         fixture("rust/structs/types.txt"),
     );
 
-    ownai_in(&repo, &["show", "--mode", "types"])
+    codect_in(&repo, &["show", "--mode", "types"])
         .assert()
         .success()
         .stdout(predicates::str::diff(expected))
@@ -194,7 +194,7 @@ fn focused_diff_hides_body_changes_across_haskell_and_python() {
     );
     repo.commit("body only");
 
-    ownai_in(&repo, &["diff", "--mode", "signatures", "HEAD^", "HEAD"])
+    codect_in(&repo, &["diff", "--mode", "signatures", "HEAD^", "HEAD"])
         .assert()
         .success()
         .stdout(predicates::str::is_empty())
@@ -213,11 +213,11 @@ fn show_rust_only_in_both_modes() {
         fixture("rust/structs/signatures.txt")
     );
 
-    ownai_in(&repo, &["show", "--mode", "types"])
+    codect_in(&repo, &["show", "--mode", "types"])
         .assert()
         .success()
         .stdout(predicates::str::diff(types));
-    ownai_in(&repo, &["show", "--mode", "signatures"])
+    codect_in(&repo, &["show", "--mode", "signatures"])
         .assert()
         .success()
         .stdout(predicates::str::diff(signatures));
@@ -237,7 +237,7 @@ fn show_mixed_repository_orders_by_raw_path_bytes() {
         fixture("rust/structs/types.txt")
     );
 
-    ownai_in(&repo, &["show", "--mode", "types"])
+    codect_in(&repo, &["show", "--mode", "types"])
         .assert()
         .success()
         .stdout(predicates::str::diff(expected));
@@ -254,7 +254,7 @@ fn show_accepts_an_explicit_full_object_id() {
         fixture("rust/canonical-signatures/signatures.txt")
     );
 
-    ownai_in(&repo, &["show", "--mode", "signatures", &id])
+    codect_in(&repo, &["show", "--mode", "signatures", &id])
         .assert()
         .success()
         .stdout(predicates::str::diff(expected));
@@ -266,7 +266,7 @@ fn show_empty_supported_file_set_is_empty_and_successful() {
     repo.write("README.md", "not a supported source file\n");
     repo.commit("docs");
 
-    ownai_in(&repo, &["show", "--mode", "types"])
+    codect_in(&repo, &["show", "--mode", "types"])
         .assert()
         .success()
         .stdout(predicates::str::is_empty())
@@ -281,7 +281,7 @@ fn show_path_with_no_supported_files_is_empty_and_successful() {
 
     // The directory exists in the revision, so the empty result is real rather
     // than a mistyped `--path`.
-    ownai_in(&repo, &["show", "--mode", "types", "--path", "docs"])
+    codect_in(&repo, &["show", "--mode", "types", "--path", "docs"])
         .assert()
         .success()
         .stdout(predicates::str::is_empty())
@@ -317,18 +317,18 @@ fn diff_reports_added_deleted_and_modified_files_and_skips_unchanged() {
     let document = stdout(&output);
     assert!(
         document
-            .contains("diff --ownai a/src/new.rs b/src/new.rs\n--- /dev/null\n+++ b/src/new.rs\n"),
+            .contains("diff --codect a/src/new.rs b/src/new.rs\n--- /dev/null\n+++ b/src/new.rs\n"),
         "added file block missing: {document:?}"
     );
     assert!(
         document.contains(
-            "diff --ownai a/src/gone.rs b/src/gone.rs\n--- a/src/gone.rs\n+++ /dev/null\n"
+            "diff --codect a/src/gone.rs b/src/gone.rs\n--- a/src/gone.rs\n+++ /dev/null\n"
         ),
         "deleted file block missing: {document:?}"
     );
     assert!(
         document.contains(
-            "diff --ownai a/src/mod.elm b/src/mod.elm\n--- a/src/mod.elm\n+++ b/src/mod.elm\n"
+            "diff --codect a/src/mod.elm b/src/mod.elm\n--- a/src/mod.elm\n+++ b/src/mod.elm\n"
         ),
         "modified file block missing: {document:?}"
     );
@@ -360,7 +360,7 @@ fn body_only_change_is_empty_and_successful_in_both_modes() {
 
     for mode in ["types", "signatures"] {
         for repo in [&rust, &elm] {
-            ownai_in(repo, &["diff", "--mode", mode, "HEAD~1", "HEAD"])
+            codect_in(repo, &["diff", "--mode", mode, "HEAD~1", "HEAD"])
                 .assert()
                 .success()
                 .stdout(predicates::str::is_empty())
@@ -377,12 +377,12 @@ fn signature_change_appears_only_in_signatures() {
     repo.write("src/lib.rs", RUST_SIGNATURE_VARIANT);
     repo.commit("signature change");
 
-    ownai_in(&repo, &["diff", "--mode", "types", "HEAD~1", "HEAD"])
+    codect_in(&repo, &["diff", "--mode", "types", "HEAD~1", "HEAD"])
         .assert()
         .success()
         .stdout(predicates::str::is_empty());
 
-    ownai_in(&repo, &["diff", "--mode", "signatures", "HEAD~1", "HEAD"])
+    codect_in(&repo, &["diff", "--mode", "signatures", "HEAD~1", "HEAD"])
         .assert()
         .success()
         .stdout(predicates::str::contains(
@@ -440,7 +440,7 @@ fn diff_path_deleted_in_target_still_succeeds() {
         "successful diff must not write diagnostics"
     );
     assert!(
-        stdout(&output).contains("diff --ownai a/src/gone.rs b/src/gone.rs"),
+        stdout(&output).contains("diff --codect a/src/gone.rs b/src/gone.rs"),
         "deleted file block missing: {:?}",
         stdout(&output)
     );
@@ -462,7 +462,7 @@ fn repo_with_areas() -> TestRepo {
     );
     repo.write("services/api/src/lib.rs", RUST_BASE);
     repo.write(
-        ".ownai.toml",
+        ".codect.toml",
         "[areas]\nfrontend = [\"apps/web\", \"libs/ui\"]\nbackend = [\"services/api\"]\n",
     );
     repo.commit("base");
@@ -479,7 +479,7 @@ fn show_with_an_area_scopes_to_its_paths() {
         fixture("elm/normal-module/types.txt")
     );
 
-    ownai_in(&repo, &["show", "--mode", "types", "--area", "frontend"])
+    codect_in(&repo, &["show", "--mode", "types", "--area", "frontend"])
         .assert()
         .success()
         .stdout(predicates::str::diff(expected))
@@ -514,11 +514,11 @@ fn area_paths_are_relative_to_the_repository_root_from_a_subdirectory() {
     // Run from inside the area itself: a working-directory-relative `--path`
     // would resolve to `apps/web/apps/web` and fail, so this proves `--area`
     // ignores the working directory.
-    let output = ownai()
+    let output = codect()
         .current_dir(repo.path().join("apps/web"))
         .args(["show", "--mode", "types", "-a", "frontend"])
         .output()
-        .expect("run ownai");
+        .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(
         stdout(&output).contains("== apps/web/src/App.elm =="),
@@ -535,12 +535,12 @@ fn an_area_is_satisfied_when_any_of_its_paths_exists() {
         &fixture("elm/type-aliases/input.elm"),
     );
     repo.write(
-        ".ownai.toml",
+        ".codect.toml",
         "[areas]\nfrontend = [\"apps/web\", \"gone\"]\n",
     );
     repo.commit("base");
 
-    ownai_in(&repo, &["show", "--mode", "types", "-a", "frontend"])
+    codect_in(&repo, &["show", "--mode", "types", "-a", "frontend"])
         .assert()
         .success()
         .stdout(predicates::str::contains("== apps/web/src/App.elm =="));
@@ -564,7 +564,7 @@ fn an_unknown_area_exits_one_and_lists_the_known_names() {
 fn an_area_absent_from_the_revision_exits_one() {
     let repo = TestRepo::init();
     repo.write("src/User.elm", &fixture("elm/type-aliases/input.elm"));
-    repo.write(".ownai.toml", "[areas]\nfrontend = [\"apps/web\"]\n");
+    repo.write(".codect.toml", "[areas]\nfrontend = [\"apps/web\"]\n");
     repo.commit("base");
 
     // `frontend` is defined, but none of its paths exist in the revision, so
@@ -588,7 +588,7 @@ fn a_missing_config_exits_one() {
     let output = run(&repo, &["show", "--mode", "types", "-a", "frontend"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        stderr(&output).contains(".ownai.toml"),
+        stderr(&output).contains(".codect.toml"),
         "diagnostic: {}",
         stderr(&output)
     );
@@ -598,18 +598,18 @@ fn a_missing_config_exits_one() {
 fn a_malformed_config_exits_one_only_for_area_selection() {
     let repo = TestRepo::init();
     repo.write("src/lib.rs", RUST_BASE);
-    repo.write(".ownai.toml", "this is not toml\n");
+    repo.write(".codect.toml", "this is not toml\n");
     repo.commit("base");
 
     let output = run(&repo, &["show", "--mode", "types", "-a", "frontend"]);
     assert_eq!(output.status.code(), Some(1));
 
     // A malformed config must not affect `--path` or an unscoped run.
-    ownai_in(&repo, &["show", "--mode", "types", "--path", "src/lib.rs"])
+    codect_in(&repo, &["show", "--mode", "types", "--path", "src/lib.rs"])
         .assert()
         .success()
         .stdout(predicates::str::contains("== src/lib.rs =="));
-    ownai_in(&repo, &["show", "--mode", "types"])
+    codect_in(&repo, &["show", "--mode", "types"])
         .assert()
         .success();
 }
@@ -618,7 +618,7 @@ fn a_malformed_config_exits_one_only_for_area_selection() {
 fn area_and_path_together_are_a_usage_error() {
     let repo = repo_with_areas();
 
-    ownai_in(
+    codect_in(
         &repo,
         &["show", "--mode", "types", "-a", "frontend", "-p", "src"],
     )
@@ -640,15 +640,15 @@ fn show_and_diff_work_in_a_bare_repository() {
 
     let bare = normal.clone_bare();
 
-    ownai_in(&bare, &["show", "--mode", "types", "HEAD"])
+    codect_in(&bare, &["show", "--mode", "types", "HEAD"])
         .assert()
         .success()
         .stdout(predicates::str::contains("== src/User.elm =="));
 
-    ownai_in(&bare, &["diff", "--mode", "types", "HEAD~1", "HEAD"])
+    codect_in(&bare, &["diff", "--mode", "types", "HEAD~1", "HEAD"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("diff --ownai a/src/User.elm"));
+        .stdout(predicates::str::contains("diff --codect a/src/User.elm"));
 }
 
 // ---------------------------------------------------------------------------
@@ -735,8 +735,8 @@ fn missing_mode_is_a_usage_error() {
     repo.write("src/lib.rs", RUST_BASE);
     repo.commit("base");
 
-    ownai_in(&repo, &["show", "HEAD"]).assert().code(2);
-    ownai_in(&repo, &["diff", "HEAD~1", "HEAD"])
+    codect_in(&repo, &["show", "HEAD"]).assert().code(2);
+    codect_in(&repo, &["diff", "HEAD~1", "HEAD"])
         .assert()
         .code(2);
 }
@@ -745,10 +745,10 @@ fn missing_mode_is_a_usage_error() {
 fn missing_diff_revisions_are_usage_errors() {
     let repo = repo_with_type_change();
 
-    ownai_in(&repo, &["diff", "--mode", "types", "HEAD"])
+    codect_in(&repo, &["diff", "--mode", "types", "HEAD"])
         .assert()
         .code(2);
-    ownai_in(&repo, &["diff", "--mode", "types"])
+    codect_in(&repo, &["diff", "--mode", "types"])
         .assert()
         .code(2);
 }

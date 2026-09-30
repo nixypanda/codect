@@ -8,7 +8,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{TestRepo, ownai_in, stderr, stdout};
+use support::{TestRepo, codect_in, stderr, stdout};
 
 const RUST_BASE: &str = "\
 pub struct User {
@@ -53,16 +53,16 @@ pub fn broken(
 ";
 
 fn run(repo: &TestRepo, args: &[&str]) -> Output {
-    ownai_in(repo, args).output().expect("run ownai")
+    codect_in(repo, args).output().expect("run codect")
 }
 
 fn run_with_columns(repo: &TestRepo, args: &[&str], columns: Option<&str>) -> Output {
-    let mut command = ownai_in(repo, args);
+    let mut command = codect_in(repo, args);
     match columns {
         Some(columns) => command.env("COLUMNS", columns),
         None => command.env_remove("COLUMNS"),
     };
-    command.output().expect("run ownai")
+    command.output().expect("run codect")
 }
 
 fn changed_repo() -> TestRepo {
@@ -295,7 +295,7 @@ fn stdout_is_independent_of_terminal_width() {
     let baseline_diff = run_with_columns(&repo, &diff_args, None);
     assert!(baseline_diff.status.success());
 
-    // `ownai_in` captures stdout through a pipe, so every run below is already
+    // `codect_in` captures stdout through a pipe, so every run below is already
     // non-terminal; varying `COLUMNS` proves width is not consulted either.
     for columns in ["20", "40", "80", "200", "1000"] {
         let show = run_with_columns(&repo, &show_args, Some(columns));

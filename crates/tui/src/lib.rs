@@ -10,7 +10,7 @@
 //!
 //! - No `clap` or `miette`. Argument parsing and diagnostic reporting belong to
 //!   the command line.
-//! - The crate never discovers a repository or reads `.ownai.toml`; it receives
+//! - The crate never discovers a repository or reads `.codect.toml`; it receives
 //!   an [`Engine`] and a fully-built [`Selection`].
 //! - Engine calls are effects: they are described by a [`app::Cmd`] and only
 //!   ever run here, never inside `update` or `view`.
@@ -846,9 +846,9 @@ mod tests {
         let status = std::process::Command::new("git")
             .args([
                 "-c",
-                "user.name=OwnAI Test",
+                "user.name=Codect Test",
                 "-c",
-                "user.email=ownai@example.invalid",
+                "user.email=codect@example.invalid",
                 "-c",
                 "init.defaultBranch=main",
                 "-c",

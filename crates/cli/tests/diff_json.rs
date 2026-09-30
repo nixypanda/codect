@@ -1,15 +1,15 @@
 mod support;
 
 use serde_json::{Value, json};
-use support::{TestRepo, doc, fixture, ownai_in, stderr, stdout};
+use support::{TestRepo, doc, fixture, codect_in, stderr, stdout};
 
 fn run(repo: &TestRepo, mode: &str, base: &str, target: &str) -> Value {
-    let output = ownai_in(
+    let output = codect_in(
         repo,
         &["diff", "--format", "json", "--mode", mode, base, target],
     )
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!stdout(&output).contains('\u{1b}'));
     assert!(stdout(&output).ends_with('\n'));
@@ -50,7 +50,7 @@ fn commit_snapshots_and_changed_panes_validate_against_schema() {
     let target = repo.commit("target");
 
     let value = run(&repo, "types", &base, &target);
-    assert_eq!(value["schema"], "ownai.diff.v1");
+    assert_eq!(value["schema"], "codect.diff.v1");
     assert_eq!(
         value["base"],
         json!({"kind":"commit", "revision":base, "id":base})
@@ -72,7 +72,7 @@ fn commit_snapshots_and_changed_panes_validate_against_schema() {
             .unwrap()
             .contains("u64")
     );
-    let schema: Value = serde_json::from_str(&doc("schema/ownai.diff.v1.json")).unwrap();
+    let schema: Value = serde_json::from_str(&doc("schema/codect.diff.v1.json")).unwrap();
     support::schema::validate(&schema, &value).expect("valid diff schema");
 
     let mut invalid = value.clone();
@@ -161,13 +161,13 @@ fn four_languages_have_projected_sides_and_text_mode_is_unchanged() {
         paths,
         ["src/App.elm", "src/Main.hs", "src/app.py", "src/lib.rs"]
     );
-    let schema: Value = serde_json::from_str(&doc("schema/ownai.diff.v1.json")).unwrap();
+    let schema: Value = serde_json::from_str(&doc("schema/codect.diff.v1.json")).unwrap();
     support::schema::validate(&schema, &json).unwrap();
 
-    let default = ownai_in(&repo, &["diff", "--mode", "types", &base, &target])
+    let default = codect_in(&repo, &["diff", "--mode", "types", &base, &target])
         .output()
         .unwrap();
-    let explicit = ownai_in(
+    let explicit = codect_in(
         &repo,
         &[
             "diff", "--format", "text", "--mode", "types", &base, &target,
@@ -211,7 +211,7 @@ fn staged_and_unstaged_snapshots_are_distinct() {
             .unwrap()
             .contains("u8")
     );
-    let schema: Value = serde_json::from_str(&doc("schema/ownai.diff.v1.json")).unwrap();
+    let schema: Value = serde_json::from_str(&doc("schema/codect.diff.v1.json")).unwrap();
     support::schema::validate(&schema, &staged).unwrap();
     support::schema::validate(&schema, &unstaged).unwrap();
 }

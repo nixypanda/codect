@@ -1,4 +1,4 @@
--- OwnAI Neovim plugin: minimal headless test harness (no plugin deps).
+-- Codect Neovim plugin: minimal headless test harness (no plugin deps).
 --
 -- Each spec file is `return function(H) ... end` and registers tests through
 -- `H.test`. run.lua loads the specs and calls H.run().
@@ -43,13 +43,13 @@ function H.contains(haystack, needle, message)
 end
 
 function H.state()
-  return require("ownai.state").get(vim.api.nvim_get_current_buf())
+  return require("codect.state").get(vim.api.nvim_get_current_buf())
 end
 
 --- Open the fixture in a clean buffer and clear its sticky overrides.
 function H.open_fixture()
   vim.cmd("silent! %bwipeout!")
-  require("ownai.state").clear_overrides(H.fixture_rel)
+  require("codect.state").clear_overrides(H.fixture_rel)
   vim.cmd("edit " .. H.fixture_rel)
   return vim.api.nvim_get_current_buf()
 end
@@ -57,7 +57,7 @@ end
 --- Open an arbitrary repository-relative file in a clean buffer.
 function H.open_path(rel)
   vim.cmd("silent! %bwipeout!")
-  require("ownai.state").clear_overrides(rel)
+  require("codect.state").clear_overrides(rel)
   vim.cmd("edit " .. vim.fn.fnameescape(rel))
   return vim.api.nvim_get_current_buf()
 end
@@ -138,10 +138,10 @@ function H.with_stub_binary(body)
   file:write("\n")
   file:close()
   vim.fn.setfperm(path, "rwxr-xr-x")
-  local previous = vim.g.ownai_binary
-  vim.g.ownai_binary = path
+  local previous = vim.g.codect_binary
+  vim.g.codect_binary = path
   return function()
-    vim.g.ownai_binary = previous
+    vim.g.codect_binary = previous
     vim.fn.delete(path)
   end
 end

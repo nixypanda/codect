@@ -1,7 +1,7 @@
-//! Rust language adapter for OwnAI.
+//! Rust language adapter for Codect.
 //!
 //! Owns the Rust parser constructor and all Rust grammar node-kind knowledge,
-//! and implements the OwnAI language projector interface for Rust source files.
+//! and implements the Codect language projector interface for Rust source files.
 
 pub mod extract;
 pub mod render;

@@ -7,7 +7,7 @@ local NEW = "impl Widget::method::new"
 return function(H)
   H.test("a function dropped in types is still outlined and folded with a marker", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     local make = H.item_by_key(MAKE)
     H.truthy(make, "dropped function is present in the outline")
@@ -23,14 +23,14 @@ return function(H)
   H.test("the outline is mode-independent", function()
     H.open_fixture()
 
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
     local types_items = vim.deepcopy(H.state().items)
     local types_keys = {}
     for _, item in ipairs(types_items) do
       types_keys[item.key] = true
     end
 
-    vim.cmd("OwnaiShow signatures")
+    vim.cmd("CodectShow signatures")
     local signatures_items = H.state().items
 
     H.eq(#types_items, #signatures_items, "same number of declarations in both modes")
@@ -41,7 +41,7 @@ return function(H)
 
   H.test("a method dropped in types is hidden under its container", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     local new = H.item_by_key(NEW)
     H.truthy(new)

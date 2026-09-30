@@ -1,4 +1,4 @@
-//! Golden fixture for the `ownai.show.v1` document.
+//! Golden fixture for the `codect.show.v1` document.
 //!
 //! It exercises the contract directly: Types mode drops the inherent `impl`
 //! block and the free function, so their outline entries carry

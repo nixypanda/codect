@@ -1,4 +1,4 @@
-//! Language-agnostic core for OwnAI.
+//! Language-agnostic core for Codect.
 //!
 //! Must not depend on Git, a parser, a grammar, or the CLI; language-specific
 //! Tree-sitter node names and `gix` types must never appear here.

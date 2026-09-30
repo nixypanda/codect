@@ -1,18 +1,18 @@
--- ownai.folds: fold ranges, foldexpr/foldtext, and open/close.
+-- codect.folds: fold ranges, foldexpr/foldtext, and open/close.
 --
 -- Folds are `foldmethod=expr`: `foldexpr` reads a cached line -> level map and
--- `foldtext` renders the OwnAI closed-fold fragment. Open/closed state is
+-- `foldtext` renders the Codect closed-fold fragment. Open/closed state is
 -- applied explicitly with `:foldclose` so a declaration's state is independent
 -- of its nesting depth, which lets the plugin keep containers open while
 -- folding signatures, and honour sticky per-declaration overrides.
 
-local state = require("ownai.state")
-local outline = require("ownai.outline")
+local state = require("codect.state")
+local outline = require("codect.outline")
 
 local M = {}
 
-local FOLDEXPR = "v:lua.require'ownai.folds'.foldexpr(v:lnum)"
-local FOLDTEXT = "v:lua.require'ownai.folds'.foldtext()"
+local FOLDEXPR = "v:lua.require'codect.folds'.foldexpr(v:lnum)"
+local FOLDTEXT = "v:lua.require'codect.folds'.foldtext()"
 
 --- The innermost declaration whose fold region contains `line`.
 function M.item_at(st, line)
@@ -111,7 +111,7 @@ end
 
 --- Restore the window-local fold options replaced by `apply_window`.
 ---
---- Called when an OwnAI buffer leaves its window so `foldmethod`, `foldexpr`,
+--- Called when an Codect buffer leaves its window so `foldmethod`, `foldexpr`,
 --- `foldtext`, `foldminlines`, and `foldlevel` do not leak into the next
 --- buffer shown in that window.
 function M.restore_window(win)
@@ -134,7 +134,7 @@ function M.apply_window(st, win)
     -- Remember the options we replace so they can be restored on leave.
     save_window_options(win)
 
-    if require("ownai").config.manage_fold_options ~= false then
+    if require("codect").config.manage_fold_options ~= false then
       vim.wo.foldmethod = "expr"
       vim.wo.foldexpr = FOLDEXPR
       vim.wo.foldenable = true

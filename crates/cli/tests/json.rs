@@ -1,17 +1,17 @@
-// End-to-end tests for the `ownai.show.v1` JSON document
-// (`ownai show --format json`).
+// End-to-end tests for the `codect.show.v1` JSON document
+// (`codect show --format json`).
 //
 // These cover both input paths: a committed revision and editor-supplied
 // bytes (stdin and worktree). They assert the document contract — identical
 // `stable_key` values and outline structure between the two input paths, the
 // mode-independent outline, byte-order file ordering, usage errors, and the
 // absence of ANSI — and validate the document against
-// `docs/schema/ownai.show.v1.json`.
+// `docs/schema/codect.show.v1.json`.
 
 mod support;
 
 use serde_json::Value;
-use support::{TestRepo, doc, fixture, ownai_in, stderr, stdout};
+use support::{TestRepo, doc, fixture, codect_in, stderr, stdout};
 
 const RUST: &str = "\
 pub struct User {
@@ -24,7 +24,7 @@ pub fn greet(name: &str) -> String {
 ";
 
 fn schema() -> Value {
-    serde_json::from_str(&doc("schema/ownai.show.v1.json")).expect("the schema is valid JSON")
+    serde_json::from_str(&doc("schema/codect.show.v1.json")).expect("the schema is valid JSON")
 }
 
 fn outline_keys(outline: &Value) -> Vec<&str> {
@@ -66,7 +66,7 @@ fn parse(output: &std::process::Output) -> Value {
 }
 
 fn show_json_stdin(repo: &TestRepo, path: &str, mode: &str, source: &str) -> Value {
-    let output = ownai_in(
+    let output = codect_in(
         repo,
         &[
             "show", "--format", "json", "--stdin", "--path", path, "--mode", mode,
@@ -74,13 +74,13 @@ fn show_json_stdin(repo: &TestRepo, path: &str, mode: &str, source: &str) -> Val
     )
     .write_stdin(source)
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     parse(&output)
 }
 
 fn show_json_worktree(repo: &TestRepo, path: &str, mode: &str) -> Value {
-    let output = ownai_in(
+    let output = codect_in(
         repo,
         &[
             "show",
@@ -94,18 +94,18 @@ fn show_json_worktree(repo: &TestRepo, path: &str, mode: &str) -> Value {
         ],
     )
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     parse(&output)
 }
 
 fn show_json_revision(repo: &TestRepo, path: &str, mode: &str) -> Value {
-    let output = ownai_in(
+    let output = codect_in(
         repo,
         &["show", "--format", "json", "--path", path, "--mode", mode],
     )
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     parse(&output)
 }
@@ -120,7 +120,7 @@ fn stdin_and_worktree_documents_match_modulo_input() {
     let stdin_doc = show_json_stdin(&repo, "src/lib.rs", "types", &source);
     let worktree_doc = show_json_worktree(&repo, "src/lib.rs", "types");
 
-    assert_eq!(stdin_doc["schema"], "ownai.show.v1");
+    assert_eq!(stdin_doc["schema"], "codect.show.v1");
     assert_eq!(stdin_doc["input"], "stdin");
     assert_eq!(worktree_doc["input"], "worktree");
     assert_eq!(stdin_doc["revision"], Value::Null);
@@ -299,12 +299,12 @@ fn json_path_and_area_scoping_emit_files_in_raw_byte_order() {
     );
     repo.write("services/api/src/lib.rs", &fixture("rust/structs/input.rs"));
     repo.write(
-        ".ownai.toml",
+        ".codect.toml",
         "[areas]\nfrontend = [\"apps/web\", \"libs/ui\"]\nbackend = [\"services/api\"]\n",
     );
     repo.commit("base");
 
-    let by_area = ownai_in(
+    let by_area = codect_in(
         &repo,
         &[
             "show", "--format", "json", "--area", "frontend", "--area", "backend", "--mode",
@@ -312,7 +312,7 @@ fn json_path_and_area_scoping_emit_files_in_raw_byte_order() {
         ],
     )
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert!(by_area.status.success(), "stderr: {}", stderr(&by_area));
     let area_doc = parse(&by_area);
     let area_paths: Vec<&str> = area_doc["files"]
@@ -330,14 +330,14 @@ fn json_path_and_area_scoping_emit_files_in_raw_byte_order() {
         ]
     );
 
-    let by_path = ownai_in(
+    let by_path = codect_in(
         &repo,
         &[
             "show", "--format", "json", "--path", "services", "--path", "libs", "--mode", "types",
         ],
     )
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert!(by_path.status.success(), "stderr: {}", stderr(&by_path));
     let path_doc = parse(&by_path);
     let path_paths: Vec<&str> = path_doc["files"]
@@ -358,7 +358,7 @@ fn stdin_usage_errors_exit_two() {
     repo.write("src/lib.rs", RUST);
     repo.commit("base");
 
-    ownai_in(
+    codect_in(
         &repo,
         &["show", "--format", "json", "--mode", "types", "--stdin"],
     )
@@ -366,7 +366,7 @@ fn stdin_usage_errors_exit_two() {
     .assert()
     .code(2);
 
-    ownai_in(
+    codect_in(
         &repo,
         &[
             "show",
@@ -384,7 +384,7 @@ fn stdin_usage_errors_exit_two() {
     .assert()
     .code(2);
 
-    ownai_in(
+    codect_in(
         &repo,
         &[
             "show",
@@ -404,7 +404,7 @@ fn stdin_usage_errors_exit_two() {
     .code(2);
 
     // More than one `--path` is not one language/path context.
-    ownai_in(
+    codect_in(
         &repo,
         &[
             "show",
@@ -448,10 +448,10 @@ fn source_path_that_names_a_directory_is_a_usage_error() {
             "crates",
         ],
     ] {
-        let output = ownai_in(&repo, &args)
+        let output = codect_in(&repo, &args)
             .write_stdin(RUST)
             .output()
-            .expect("run ownai");
+            .expect("run codect");
         assert_eq!(
             output.status.code(),
             Some(2),
@@ -463,7 +463,7 @@ fn source_path_that_names_a_directory_is_a_usage_error() {
         );
     }
 
-    let root = ownai_in(
+    let root = codect_in(
         &repo,
         &[
             "show", "--format", "json", "--mode", "types", "--stdin", "--path", ".",
@@ -471,7 +471,7 @@ fn source_path_that_names_a_directory_is_a_usage_error() {
     )
     .write_stdin(RUST)
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert_eq!(root.status.code(), Some(2));
     assert!(root.stdout.is_empty(), "usage error must not write stdout");
 }
@@ -495,7 +495,7 @@ fn worktree_symlink_that_leaves_the_repository_is_rejected() {
     )
     .expect("create in-repo symlink");
 
-    let output = ownai_in(
+    let output = codect_in(
         &repo,
         &[
             "show",
@@ -509,7 +509,7 @@ fn worktree_symlink_that_leaves_the_repository_is_rejected() {
         ],
     )
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty(), "stdout must stay empty");
     assert!(
@@ -521,7 +521,7 @@ fn worktree_symlink_that_leaves_the_repository_is_rejected() {
     // A symlinked directory that escapes the repository is caught by the
     // resolved-path check even though the final component is a regular file.
     symlink(outside.path(), repo.path().join("linked")).expect("create directory symlink");
-    let escaped = ownai_in(
+    let escaped = codect_in(
         &repo,
         &[
             "show",
@@ -535,7 +535,7 @@ fn worktree_symlink_that_leaves_the_repository_is_rejected() {
         ],
     )
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert_eq!(escaped.status.code(), Some(1));
     assert!(escaped.stdout.is_empty(), "stdout must stay empty");
     assert!(
@@ -552,7 +552,7 @@ fn source_failures_exit_one_with_empty_stdout() {
     repo.write("src/lib.rs", RUST);
     repo.commit("base");
 
-    let unsupported = ownai_in(
+    let unsupported = codect_in(
         &repo,
         &[
             "show",
@@ -567,11 +567,11 @@ fn source_failures_exit_one_with_empty_stdout() {
     )
     .write_stdin("not a supported source file\n")
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert_eq!(unsupported.status.code(), Some(1));
     assert!(unsupported.stdout.is_empty(), "stdout must stay empty");
 
-    let outside = ownai_in(
+    let outside = codect_in(
         &repo,
         &[
             "show",
@@ -586,11 +586,11 @@ fn source_failures_exit_one_with_empty_stdout() {
     )
     .write_stdin("x\n")
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert_eq!(outside.status.code(), Some(1));
     assert!(outside.stdout.is_empty(), "stdout must stay empty");
 
-    let invalid = ownai_in(
+    let invalid = codect_in(
         &repo,
         &[
             "show",
@@ -605,7 +605,7 @@ fn source_failures_exit_one_with_empty_stdout() {
     )
     .write_stdin(b"pub fn main() { \xFF }\n".to_vec())
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert_eq!(invalid.status.code(), Some(1));
     assert!(invalid.stdout.is_empty(), "stdout must stay empty");
     assert!(
@@ -622,7 +622,7 @@ fn json_output_contains_no_ansi_even_with_color_always() {
     repo.write("src/lib.rs", &source);
     repo.commit("base");
 
-    let output = ownai_in(
+    let output = codect_in(
         &repo,
         &[
             "--color=always",
@@ -638,7 +638,7 @@ fn json_output_contains_no_ansi_even_with_color_always() {
     )
     .write_stdin(source.as_str())
     .output()
-    .expect("run ownai");
+    .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(
         !stdout(&output).contains('\u{1b}'),
@@ -658,7 +658,7 @@ fn golden_documents_match_and_validate_against_the_schema() {
         ("types", "schema/show-types.json"),
         ("signatures", "schema/show-signatures.json"),
     ] {
-        let output = ownai_in(
+        let output = codect_in(
             &repo,
             &[
                 "show",
@@ -673,7 +673,7 @@ fn golden_documents_match_and_validate_against_the_schema() {
         )
         .write_stdin(source.as_str())
         .output()
-        .expect("run ownai");
+        .expect("run codect");
         assert!(output.status.success(), "stderr: {}", stderr(&output));
 
         let text = stdout(&output);
@@ -835,9 +835,9 @@ fn revision_documents_validate_against_the_schema() {
     }
 
     // The whole multi-file document validates too, in raw path byte order.
-    let output = ownai_in(&repo, &["show", "--format", "json", "--mode", "types"])
+    let output = codect_in(&repo, &["show", "--format", "json", "--mode", "types"])
         .output()
-        .expect("run ownai");
+        .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let document = parse(&output);
     let paths: Vec<&str> = document["files"]

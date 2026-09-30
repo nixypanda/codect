@@ -1,11 +1,11 @@
--- :OwnaiOutline picker and ]f/[f navigation.
+-- :CodectOutline picker and ]f/[f navigation.
 
-local view = require("ownai.view")
+local view = require("codect.view")
 
 return function(H)
-  H.test(":OwnaiOutline lists declarations and jumps to the chosen one", function()
+  H.test(":CodectOutline lists declarations and jumps to the chosen one", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     local offered
     local original = vim.ui.select
@@ -19,7 +19,7 @@ return function(H)
       end
       on_choice(nil)
     end
-    vim.cmd("OwnaiOutline")
+    vim.cmd("CodectOutline")
     vim.ui.select = original
 
     H.truthy(offered and #offered > 0, "picker offered declarations")
@@ -29,7 +29,7 @@ return function(H)
 
   H.test("]f and [f move between declarations", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     local struct = H.item_by_key("editors/nvim/tests/fixtures/sample.rs::type::Widget")
     local enum = H.item_by_key("editors/nvim/tests/fixtures/sample.rs::type::Kind")
@@ -42,11 +42,11 @@ return function(H)
     H.eq(vim.api.nvim_win_get_cursor(0)[1], struct.fold_start, "previous declaration")
   end)
 
-  H.test("the first :OwnaiFold attaches buffer keymaps (F4)", function()
+  H.test("the first :CodectFold attaches buffer keymaps (F4)", function()
     H.open_fixture()
     H.falsy(vim.fn.maparg("]f", "n", false, true).buffer, "no buffer-local map before folding")
 
-    vim.cmd("OwnaiFold types")
+    vim.cmd("CodectFold types")
     H.eq(vim.fn.maparg("]f", "n", false, true).buffer, 1, "buffer-local map attached after folding")
     H.eq(vim.fn.maparg("[f", "n", false, true).buffer, 1, "the previous-declaration map is attached too")
   end)

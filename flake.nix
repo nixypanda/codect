@@ -1,5 +1,5 @@
 {
-  description = "OwnAI: selectable focused views and diffs of a codebase";
+  description = "Codect: selectable focused views and diffs of a codebase";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -41,7 +41,7 @@
           extensions = [ "rust-src" ];
         };
 
-      ownaiPackage =
+      codectPackage =
         pkgs:
         let
           toolchain = rustToolchain pkgs;
@@ -51,7 +51,7 @@
           };
         in
         rustPlatform.buildRustPackage {
-          pname = "ownai";
+          pname = "codect";
           version = "0.1.0";
 
           src = self;
@@ -64,8 +64,8 @@
           # produced by cargoBuildHook directly instead of using `cargo install`.
           installPhase = ''
             runHook preInstall
-            install -Dm755 target/${pkgs.stdenv.hostPlatform.rust.cargoShortTarget}/release/ownai \
-              "$out/bin/ownai"
+            install -Dm755 target/${pkgs.stdenv.hostPlatform.rust.cargoShortTarget}/release/codect \
+              "$out/bin/codect"
             runHook postInstall
           '';
 
@@ -73,46 +73,46 @@
 
           meta = {
             description = "Selectable focused views and diffs of a codebase";
-            homepage = "https://github.com/nixypanda/ownai";
+            homepage = "https://github.com/nixypanda/codect";
             license = pkgs.lib.licenses.mit;
-            mainProgram = "ownai";
+            mainProgram = "codect";
             platforms = pkgs.lib.platforms.unix;
           };
         };
 
       # The Neovim plugin. `buildVimPlugin` copies the source tree verbatim, so
       # `lua/` and `plugin/` land at the store root. It cannot wrap the binary;
-      # consumers pair it with `pkgs.ownai` on PATH (or set `vim.g.ownai_binary`
-      # / `OWNAI_BIN`).
-      ownaiNvimPackage =
+      # consumers pair it with `pkgs.codect` on PATH (or set `vim.g.codect_binary`
+      # / `CODECT_BIN`).
+      codectNvimPackage =
         pkgs:
         pkgs.vimUtils.buildVimPlugin {
-          pname = "ownai.nvim";
+          pname = "codect.nvim";
           version = "0.1.0";
           src = ./editors/nvim;
           meta = {
-            description = "OwnAI semantic fold viewer for Neovim";
-            homepage = "https://github.com/nixypanda/ownai";
+            description = "Codect semantic fold viewer for Neovim";
+            homepage = "https://github.com/nixypanda/codect";
             license = pkgs.lib.licenses.mit;
           };
         };
     in
     {
       packages = forAllSystems (pkgs: {
-        default = ownaiPackage pkgs;
-        ownai = ownaiPackage pkgs;
-        ownai-nvim = ownaiNvimPackage pkgs;
+        default = codectPackage pkgs;
+        codect = codectPackage pkgs;
+        codect-nvim = codectNvimPackage pkgs;
       });
 
       overlays.default = final: _prev: {
-        ownai = ownaiPackage final;
-        ownai-nvim = ownaiNvimPackage final;
+        codect = codectPackage final;
+        codect-nvim = codectNvimPackage final;
       };
 
       apps = forAllSystems (pkgs: {
         default = {
           type = "app";
-          program = "${ownaiPackage pkgs}/bin/ownai";
+          program = "${codectPackage pkgs}/bin/codect";
         };
       });
 
@@ -136,13 +136,13 @@
       # Run the plugin's headless suite in a throwaway Git repository so
       # `nix flake check` covers the plugin alongside the workspace.
       checks = forAllSystems (pkgs: {
-        ownai-nvim =
-          pkgs.runCommand "ownai-nvim-check"
+        codect-nvim =
+          pkgs.runCommand "codect-nvim-check"
             {
               nativeBuildInputs = [
                 pkgs.neovim
                 pkgs.git
-                (ownaiPackage pkgs)
+                (codectPackage pkgs)
               ];
             }
             ''
@@ -161,7 +161,7 @@
               git config user.name check
               git add -A
               git commit -qm fixture
-              export OWNAI_BIN=${ownaiPackage pkgs}/bin/ownai
+              export CODECT_BIN=${codectPackage pkgs}/bin/codect
               nvim --headless -u NONE -l editors/nvim/tests/run.lua > log.txt 2>&1 || {
                 cat log.txt
                 exit 1

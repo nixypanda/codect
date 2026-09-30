@@ -1,8 +1,8 @@
--- ownai.view: :OwnaiShow / :OwnaiFold / :OwnaiOutline and refresh wiring.
+-- codect.view: :CodectShow / :CodectFold / :CodectOutline and refresh wiring.
 
-local cli = require("ownai.cli")
-local folds = require("ownai.folds")
-local state = require("ownai.state")
+local cli = require("codect.cli")
+local folds = require("codect.folds")
+local state = require("codect.state")
 
 local M = {}
 
@@ -40,11 +40,11 @@ local auto = {
 }
 
 local function config()
-  return require("ownai").config
+  return require("codect").config
 end
 
 local function fail(message)
-  vim.notify("OwnAI: " .. message, vim.log.levels.ERROR)
+  vim.notify("Codect: " .. message, vim.log.levels.ERROR)
   return nil
 end
 
@@ -71,7 +71,7 @@ function M.resolve_target(buf)
   end
   local dir = vim.fn.fnamemodify(abs, ":h")
   -- A missing/unusable `git` is an ordinary ineligible result, not a thrown
-  -- error: auto-fold must skip the buffer silently, while `:OwnaiShow` reports
+  -- error: auto-fold must skip the buffer silently, while `:CodectShow` reports
   -- this message. `vim.fn.system` raises E475 for a non-executable cmd, so guard
   -- with `executable()` and `pcall` rather than letting it escape an autocmd.
   if vim.fn.executable("git") ~= 1 then
@@ -126,7 +126,7 @@ end
 ---
 --- Reuses the cached document when it was projected from the same bytes and
 --- mode; otherwise fetches one from the CLI. This is what makes
---- `:OwnaiFold <mode>` mode-correct: it never folds from a stale or absent
+--- `:CodectFold <mode>` mode-correct: it never folds from a stale or absent
 --- document. Returns the buffer state, or nil plus an error string.
 ---
 --- `target`, `hash`, and `source` may be supplied by a caller that already
@@ -146,7 +146,7 @@ function M.ensure(buf, mode, target, hash, source)
   local st = state.get(buf)
   if state.cached_doc(st, mode, hash, target.path) then
     state.set_mode(buf, mode)
-    require("ownai").attach_keymaps(buf)
+    require("codect").attach_keymaps(buf)
     folds.apply(buf)
     return state.get(buf)
   end
@@ -163,11 +163,11 @@ function M.ensure(buf, mode, target, hash, source)
 
   local file_entry = find_file(doc, target.path)
   if not file_entry then
-    return nil, "ownai returned no projection for " .. target.path
+    return nil, "codect returned no projection for " .. target.path
   end
 
   st = state.install(buf, doc, file_entry, mode, target.root, target.path, hash)
-  require("ownai").attach_keymaps(buf)
+  require("codect").attach_keymaps(buf)
   folds.apply(buf)
   return st
 end
@@ -177,7 +177,7 @@ function M.show(mode)
   local buf = vim.api.nvim_get_current_buf()
   mode = mode or config().default_mode or "signatures"
   if not VALID_MODES[mode] or mode == "full" then
-    return fail(string.format(":OwnaiShow expects `types` or `signatures`, got %q", mode))
+    return fail(string.format(":CodectShow expects `types` or `signatures`, got %q", mode))
   end
 
   local st, err = M.ensure(buf, mode)
@@ -196,13 +196,13 @@ function M.fold(mode)
   local buf = vim.api.nvim_get_current_buf()
   mode = mode or config().default_mode or "signatures"
   if not VALID_MODES[mode] then
-    return fail(string.format(":OwnaiFold expects `types`, `signatures`, or `full`, got %q", mode))
+    return fail(string.format(":CodectFold expects `types`, `signatures`, or `full`, got %q", mode))
   end
 
   if mode == "full" then
     local st = state.get(buf)
     if not st then
-      return fail("nothing to unfold; run :OwnaiShow first")
+      return fail("nothing to unfold; run :CodectShow first")
     end
     state.set_mode(buf, mode)
     folds.apply(buf)
@@ -225,7 +225,7 @@ end
 local function resolve_auto_mode(mode)
   mode = mode or auto.last_mode or config().default_mode or "signatures"
   if not AUTO_MODES[mode] then
-    return nil, string.format(":OwnaiEnable expects `types` or `signatures`, got %q", mode)
+    return nil, string.format(":CodectEnable expects `types` or `signatures`, got %q", mode)
   end
   return mode
 end
@@ -259,7 +259,7 @@ local function warn_auto(err)
     return
   end
   auto.warned = true
-  vim.notify("OwnAI: auto-fold is unavailable: " .. err, vim.log.levels.WARN)
+  vim.notify("Codect: auto-fold is unavailable: " .. err, vim.log.levels.WARN)
 end
 
 --- Fold `buf` to the active auto-fold mode, if it is not already folded there.
@@ -334,14 +334,14 @@ function M.enable(mode)
 
   M.auto_fold(vim.api.nvim_get_current_buf())
 
-  vim.notify(string.format("OwnAI: auto-fold enabled (%s)", resolved), vim.log.levels.INFO)
+  vim.notify(string.format("Codect: auto-fold enabled (%s)", resolved), vim.log.levels.INFO)
   return true
 end
 
 --- Turn global auto-fold off and unfold every buffer it folded.
 ---
 --- Only buffers auto-fold actually folded (recorded in `auto.folded`) are
---- unfolded. An explicitly folded buffer (`:OwnaiShow`/`:OwnaiFold`) keeps its
+--- unfolded. An explicitly folded buffer (`:CodectShow`/`:CodectFold`) keeps its
 --- folds only while auto-fold has not also folded it: auto-fold re-folds a
 --- buffer to the active mode on entry, and once that happens the buffer counts
 --- as auto-folded and is unfolded here too. Unfolding is local (`full`): no CLI
@@ -359,7 +359,7 @@ function M.disable()
   end
   auto.folded = {}
 
-  vim.notify("OwnAI: auto-fold disabled", vim.log.levels.INFO)
+  vim.notify("Codect: auto-fold disabled", vim.log.levels.INFO)
   return true
 end
 
@@ -393,7 +393,7 @@ end
 
 --- Refresh an active buffer: re-project only when its bytes changed.
 ---
---- `full` is a local unfold target, not a CLI mode (`ownai show` only accepts
+--- `full` is a local unfold target, not a CLI mode (`codect show` only accepts
 --- `types`/`signatures`), so it never calls the binary: it just recomputes the
 --- local fold state. This covers buffers edited after `disable()`.
 function M.refresh(buf)
@@ -410,7 +410,7 @@ function M.refresh(buf)
 
   local target, target_err = M.resolve_target(buf)
   if not target then
-    vim.notify("OwnAI refresh skipped: " .. target_err, vim.log.levels.WARN)
+    vim.notify("Codect refresh skipped: " .. target_err, vim.log.levels.WARN)
     return
   end
 
@@ -428,13 +428,13 @@ function M.refresh(buf)
     source = source,
   })
   if not doc then
-    vim.notify("OwnAI refresh failed: " .. cli_err, vim.log.levels.WARN)
+    vim.notify("Codect refresh failed: " .. cli_err, vim.log.levels.WARN)
     return
   end
 
   local file_entry = find_file(doc, target.path)
   if not file_entry then
-    vim.notify("OwnAI refresh returned no projection for " .. target.path, vim.log.levels.WARN)
+    vim.notify("Codect refresh returned no projection for " .. target.path, vim.log.levels.WARN)
     return
   end
 
@@ -511,7 +511,7 @@ function M.outline()
   local buf = vim.api.nvim_get_current_buf()
   local st = state.get(buf)
   if not st or not st.items or #st.items == 0 then
-    return fail("no declarations; run :OwnaiShow first")
+    return fail("no declarations; run :CodectShow first")
   end
 
   local sorted = {}
@@ -539,7 +539,7 @@ function M.outline()
     by_label[label] = item
   end
 
-  vim.ui.select(labels, { prompt = "OwnAI declarations" }, function(choice)
+  vim.ui.select(labels, { prompt = "Codect declarations" }, function(choice)
     if not choice then
       return
     end
@@ -554,7 +554,7 @@ end
 
 --- Register refresh and window autocmds.
 function M.setup_autocmds()
-  local group = vim.api.nvim_create_augroup("Ownai", { clear = true })
+  local group = vim.api.nvim_create_augroup("Codect", { clear = true })
 
   vim.api.nvim_create_autocmd({ "BufWritePost", "InsertLeave" }, {
     group = group,
@@ -563,7 +563,7 @@ function M.setup_autocmds()
         M.refresh(event.buf)
       end
     end,
-    desc = "OwnAI: refresh folds after a write or leaving insert",
+    desc = "Codect: refresh folds after a write or leaving insert",
   })
 
   vim.api.nvim_create_autocmd("TextChanged", {
@@ -573,7 +573,7 @@ function M.setup_autocmds()
         M.schedule_refresh(event.buf)
       end
     end,
-    desc = "OwnAI: debounced refresh after edits",
+    desc = "Codect: debounced refresh after edits",
   })
 
   vim.api.nvim_create_autocmd({ "BufWinEnter", "WinEnter" }, {
@@ -583,7 +583,7 @@ function M.setup_autocmds()
         folds.attach_window(event.buf)
       end
     end,
-    desc = "OwnAI: restore the window-local foldtext",
+    desc = "Codect: restore the window-local foldtext",
   })
 
   vim.api.nvim_create_autocmd("BufLeave", {
@@ -593,7 +593,7 @@ function M.setup_autocmds()
         folds.restore_window(vim.api.nvim_get_current_win())
       end
     end,
-    desc = "OwnAI: restore window-local fold options when the buffer leaves the window",
+    desc = "Codect: restore window-local fold options when the buffer leaves the window",
   })
 
   vim.api.nvim_create_autocmd("BufWipeout", {
@@ -607,7 +607,7 @@ function M.setup_autocmds()
       auto.folded[event.buf] = nil
       auto.failed[event.buf] = nil
     end,
-    desc = "OwnAI: drop per-buffer state and sticky overrides",
+    desc = "Codect: drop per-buffer state and sticky overrides",
   })
 
   -- Auto-fold: fold a freshly read file buffer to the active mode. Deferred so
@@ -625,7 +625,7 @@ function M.setup_autocmds()
         end
       end)
     end,
-    desc = "OwnAI: auto-fold a newly opened file when auto-fold is enabled",
+    desc = "Codect: auto-fold a newly opened file when auto-fold is enabled",
   })
 
   -- Auto-fold: cover buffers that were already open when auto-fold was enabled
@@ -644,7 +644,7 @@ function M.setup_autocmds()
         end
       end)
     end,
-    desc = "OwnAI: auto-fold a buffer that enters a window when auto-fold is enabled",
+    desc = "Codect: auto-fold a buffer that enters a window when auto-fold is enabled",
   })
 end
 

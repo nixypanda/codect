@@ -18,7 +18,7 @@ return function(H)
     for _, case in ipairs(cases) do
       local path = FIX .. case.file
       H.open_path(path)
-      vim.cmd("OwnaiShow signatures")
+      vim.cmd("CodectShow signatures")
 
       local item = H.item_named(case.name)
       H.truthy(item, string.format("%s: %s is outlined", case.file, case.name))
@@ -33,7 +33,7 @@ return function(H)
 
   H.test("single-line declarations dropped in types show a marker", function()
     H.open_path(FIX .. "one_liners.rs")
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     local limit = H.item_named("LIMIT")
     H.truthy(limit, "one-line const is outlined")

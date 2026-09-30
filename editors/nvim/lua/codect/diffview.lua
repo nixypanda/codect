@@ -33,7 +33,7 @@ local function compatible()
 end
 
 local function notify(message)
-  vim.notify("OwnAI Diffview: " .. message, vim.log.levels.WARN)
+  vim.notify("Codect Diffview: " .. message, vim.log.levels.WARN)
 end
 
 local function current_view()
@@ -51,15 +51,15 @@ local function diff_doc(root, base, target, mode)
   local immutable = base ~= ":index" and base ~= ":worktree"
     and target ~= ":index" and target ~= ":worktree"
   if immutable and cache[key] then return cache[key] end
-  local binary = require("ownai.cli").resolve_binary()
-  if not binary then return nil, "ownai binary not found" end
+  local binary = require("codect.cli").resolve_binary()
+  if not binary then return nil, "codect binary not found" end
   local result = vim.system({ binary, "diff", "--format", "json", "--mode", mode, base, target }, {
     cwd = root, text = true, timeout = 30000,
   }):wait()
-  if result.code ~= 0 then return nil, vim.trim(result.stderr or "ownai diff failed") end
+  if result.code ~= 0 then return nil, vim.trim(result.stderr or "codect diff failed") end
   local ok, doc = pcall(vim.json.decode, result.stdout)
-  if not ok or type(doc) ~= "table" or doc.schema ~= "ownai.diff.v1" or type(doc.files) ~= "table" then
-    return nil, "invalid or unsupported ownai.diff.v1 document"
+  if not ok or type(doc) ~= "table" or doc.schema ~= "codect.diff.v1" or type(doc.files) ~= "table" then
+    return nil, "invalid or unsupported codect.diff.v1 document"
   end
   if immutable then cache[key] = doc end
   return doc
@@ -74,13 +74,13 @@ local function projections(doc)
 end
 
 local function release(file)
-  if file._ownai_foldlevel ~= nil then
-    file.winopts.foldlevel = file._ownai_foldlevel
-    file._ownai_foldlevel = nil
+  if file._codect_foldlevel ~= nil then
+    file.winopts.foldlevel = file._codect_foldlevel
+    file._codect_foldlevel = nil
   end
-  if file._ownai_projection then
+  if file._codect_projection then
     file:dispose_buffer()
-    file._ownai_projection = nil
+    file._codect_projection = nil
   elseif file.rev and (file.rev.type == require("diffview.vcs.rev").RevType.LOCAL
       or file.rev.type == require("diffview.vcs.rev").RevType.STAGE) then
     -- The real worktree or index buffer may contain user edits. Detach it
@@ -103,18 +103,18 @@ local function attach(entry, projected)
     local window = entry.layout[symbol]
     local file = window and window.file
     if file then
-      if file._ownai_projection then file:dispose_buffer() end
+      if file._codect_projection then file:dispose_buffer() end
       if file.rev then
-        if not file._ownai_projection then release(file) end
+        if not file._codect_projection then release(file) end
         -- Diffview normally starts diff panes at foldlevel=0. A focused
         -- projection is already short; hiding its unchanged lines can make the
         -- two sides look like a single collapsed declaration instead of a diff.
         -- Keep foldmethod=diff for highlights and open every projected line.
-        if file._ownai_foldlevel == nil then
-          file._ownai_foldlevel = file.winopts.foldlevel
+        if file._codect_foldlevel == nil then
+          file._codect_foldlevel = file.winopts.foldlevel
         end
         file.winopts.foldlevel = 99
-        file._ownai_projection = symbol == "a" and left or right
+        file._codect_projection = symbol == "a" and left or right
         file.get_data = function(_, _, pos) return pos == "left" and left or right end
       end
     end
@@ -128,7 +128,7 @@ local function refresh_existing(view, by_section)
     if projected then attach(entry, projected) end
     if not projected then
       for _, file in ipairs(entry.layout:files()) do
-        if file._ownai_projection then release(file) end
+        if file._codect_projection then release(file) end
       end
     end
   end
@@ -162,7 +162,7 @@ function M.install()
   local destroy = File.destroy
 
   File.destroy = function(file, force)
-    local projected = file._ownai_projection ~= nil
+    local projected = file._codect_projection ~= nil
     if not projected and not force and file.rev
         and (file.rev.type == RevType.STAGE or file.rev.type == RevType.LOCAL)
         and file.bufnr and vim.api.nvim_buf_is_valid(file.bufnr)
@@ -174,24 +174,24 @@ function M.install()
       return
     end
     destroy(file, force or projected)
-    file._ownai_projection = nil
+    file._codect_projection = nil
     if projected then file.get_data = nil end
   end
 
   -- LOCAL and STAGE normally resolve to editable user buffers. Focused panes
   -- always get independent scratch buffers, including for those revisions.
   File.create_buffer = require("diffview.async").wrap(function(file, callback)
-    if not file._ownai_projection or file.nulled or file.binary then
+    if not file._codect_projection or file.nulled or file.binary then
       return create_buffer(file, callback)
     end
     if file:is_valid() then return callback(file.bufnr) end
     projection_buffer = projection_buffer + 1
     local bufnr = vim.api.nvim_create_buf(false, false)
     file.bufnr = bufnr
-    vim.api.nvim_buf_set_name(bufnr, "diffview://ownai/" .. projection_buffer .. "/" .. file.path)
+    vim.api.nvim_buf_set_name(bufnr, "diffview://codect/" .. projection_buffer .. "/" .. file.path)
     for option, value in pairs(File.bufopts) do vim.bo[bufnr][option] = value end
     vim.bo[bufnr].modifiable = true
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, file._ownai_projection)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, file._codect_projection)
     vim.bo[bufnr].modifiable = false
     vim.api.nvim_buf_call(bufnr, function() vim.cmd("filetype detect") end)
     file:post_buf_created()
@@ -301,7 +301,7 @@ end
 
 function M.on_view_opened(view)
   if not M.install() then return end
-  modes[view] = require("ownai").config.default_mode
+  modes[view] = require("codect").config.default_mode
   views[view.adapter] = view
 end
 

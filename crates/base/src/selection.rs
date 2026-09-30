@@ -229,7 +229,7 @@ mod tests {
 
         assert_eq!(selection.scope().paths().len(), 3);
         assert!(selection.scope().matches(&path("crates/core/src/lib.rs")));
-        assert!(selection.scope().matches(&path("bin/ownai")));
+        assert!(selection.scope().matches(&path("bin/codect")));
         assert!(!selection.scope().matches(&path("docs/readme.md")));
         assert_eq!(selection.groups()[0].kind_label(), "area");
         assert_eq!(selection.groups()[0].label().to_string(), "core");

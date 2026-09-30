@@ -104,10 +104,10 @@ impl TestRepo {
     }
 }
 
-// Builds the `ownai` binary invocation with Git repository-override variables
+// Builds the `codect` binary invocation with Git repository-override variables
 // removed, so a developer's environment cannot redirect discovery.
-pub fn ownai() -> assert_cmd::Command {
-    let mut command = assert_cmd::Command::cargo_bin("ownai").expect("ownai binary is built");
+pub fn codect() -> assert_cmd::Command {
+    let mut command = assert_cmd::Command::cargo_bin("codect").expect("codect binary is built");
     command
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
@@ -115,8 +115,8 @@ pub fn ownai() -> assert_cmd::Command {
     command
 }
 
-pub fn ownai_in(repo: &TestRepo, args: &[&str]) -> assert_cmd::Command {
-    let mut command = ownai();
+pub fn codect_in(repo: &TestRepo, args: &[&str]) -> assert_cmd::Command {
+    let mut command = codect();
     command.current_dir(repo.path()).args(args);
     command
 }
@@ -150,8 +150,8 @@ pub mod schema;
 fn git(dir: &Path, args: &[&str]) -> Output {
     let mut command = Command::new("git");
     for prefix in [
-        "user.name=OwnAI Test",
-        "user.email=ownai@example.invalid",
+        "user.name=Codect Test",
+        "user.email=codect@example.invalid",
         "init.defaultBranch=main",
         "commit.gpgsign=false",
         "tag.gpgsign=false",
@@ -167,10 +167,10 @@ fn git(dir: &Path, args: &[&str]) -> Output {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_PAGER", "cat")
-        .env("GIT_AUTHOR_NAME", "OwnAI Test")
-        .env("GIT_AUTHOR_EMAIL", "ownai@example.invalid")
-        .env("GIT_COMMITTER_NAME", "OwnAI Test")
-        .env("GIT_COMMITTER_EMAIL", "ownai@example.invalid")
+        .env("GIT_AUTHOR_NAME", "Codect Test")
+        .env("GIT_AUTHOR_EMAIL", "codect@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Codect Test")
+        .env("GIT_COMMITTER_EMAIL", "codect@example.invalid")
         .env("GIT_AUTHOR_DATE", FIXED_DATE)
         .env("GIT_COMMITTER_DATE", FIXED_DATE)
         .env_remove("GIT_DIR")

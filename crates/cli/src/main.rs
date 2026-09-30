@@ -1,4 +1,4 @@
-// The `ownai` command-line interface.
+// The `codect` command-line interface.
 //
 // Thin entry point: argument parsing and exit-code mapping only. The
 // Git-aware pipeline lives in `command.rs`, and core stays Git-free

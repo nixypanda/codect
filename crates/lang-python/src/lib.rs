@@ -1,7 +1,7 @@
-//! Python language adapter for OwnAI.
+//! Python language adapter for Codect.
 //!
 //! Owns the Python parser constructor and all Python grammar node-kind
-//! knowledge, and implements the OwnAI language projector interface for Python
+//! knowledge, and implements the Codect language projector interface for Python
 //! source files.
 
 pub mod extract;

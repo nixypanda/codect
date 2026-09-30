@@ -287,7 +287,7 @@ fn read_stdin() -> io::Result<Vec<u8>> {
 // `--worktree` is the one path that reads a file the user points at on disk,
 // so it is the one place where a symlink could redirect a repository-relative
 // read outside the repository. The target is rejected when it is itself a
-// symlink (mirroring `.ownai.toml`) and the fully-resolved path is checked to
+// symlink (mirroring `.codect.toml`) and the fully-resolved path is checked to
 // stay inside the repository, so a symlinked ancestor directory cannot escape
 // either.
 #[derive(Debug, thiserror::Error)]
@@ -450,14 +450,14 @@ fn run_tui(
     tui::run(engine, options).map_err(tui_failure)
 }
 
-// Resolves the icon style: an explicit `--icons` wins, then `OWNAI_ICONS`,
+// Resolves the icon style: an explicit `--icons` wins, then `CODECT_ICONS`,
 // then no icons. Unknown environment values fall back to no icons.
 #[cfg(feature = "tui")]
 fn resolve_icons(choice: Option<IconChoice>) -> tui::IconStyle {
     match choice {
         Some(IconChoice::Nerd) => tui::IconStyle::Nerd,
         Some(IconChoice::None) => tui::IconStyle::None,
-        None => match std::env::var("OWNAI_ICONS").ok().as_deref() {
+        None => match std::env::var("CODECT_ICONS").ok().as_deref() {
             Some("nerd") => tui::IconStyle::Nerd,
             _ => tui::IconStyle::None,
         },
@@ -480,7 +480,7 @@ fn scope_label(selection: &Selection) -> String {
 // Resolves a command's `--path`/`--area` arguments into the selection its
 // projection will use.
 //
-// Only an `--area` invocation may touch `.ownai.toml`, so a malformed config
+// Only an `--area` invocation may touch `.codect.toml`, so a malformed config
 // can never break `--path` or unscoped runs. Resolution records one group per
 // literal path or named area in a single step, so an unknown or empty area is
 // reported while the same call builds the scope.
@@ -636,7 +636,7 @@ fn config_failure(error: ConfigError) -> CliError {
 fn selection_failure(error: SelectionError, areas: &AreaSet) -> CliError {
     let names: Vec<&str> = areas.names().collect();
     let help = if names.is_empty() {
-        Some("no areas are defined in `.ownai.toml`".to_owned())
+        Some("no areas are defined in `.codect.toml`".to_owned())
     } else {
         Some(format!("known areas: {}", names.join(", ")))
     };

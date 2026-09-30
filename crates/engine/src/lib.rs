@@ -10,7 +10,7 @@
 //!
 //! - No `clap`, `miette`, `ratatui`, or `crossterm` dependency. Presenting a
 //!   diagnostic belongs to the caller.
-//! - Every public result is an OwnAI-owned value or a typed [`EngineError`];
+//! - Every public result is an Codect-owned value or a typed [`EngineError`];
 //!   `gix` types stay inside `git`.
 //! - Caches are per-operation. An [`Engine`] holds no unbounded session state.
 

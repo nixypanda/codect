@@ -27,7 +27,7 @@ pub enum RepoPathError {
 ///
 /// Unsupported extensions, symlinks, submodules, and macro-generated
 /// declarations are exclusions, not projection errors. An error here means
-/// OwnAI must not emit a partial result.
+/// Codect must not emit a partial result.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectionError {
     /// Elm, Haskell, Python, and Rust source contents must be valid UTF-8; see

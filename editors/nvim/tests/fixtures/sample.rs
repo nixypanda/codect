@@ -1,4 +1,4 @@
-//! Fixture for the OwnAI Neovim plugin headless tests.
+//! Fixture for the Codect Neovim plugin headless tests.
 //!
 //! It deliberately exercises every fold rule:
 //!   * a struct with fields (types keep it open),

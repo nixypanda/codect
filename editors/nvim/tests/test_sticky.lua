@@ -4,9 +4,9 @@ local P = "editors/nvim/tests/fixtures/sample.rs::"
 local WIDGET = P .. "type::Widget"
 local NEW = "impl Widget::method::new"
 
-local folds = require("ownai.folds")
-local state = require("ownai.state")
-local view = require("ownai.view")
+local folds = require("codect.folds")
+local state = require("codect.state")
+local view = require("codect.view")
 
 return function(H)
   local function put_cursor(line)
@@ -15,7 +15,7 @@ return function(H)
 
   H.test("an opened declaration stays open across a refresh", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
     local buf = vim.api.nvim_get_current_buf()
 
     local new = H.item_by_key(NEW)
@@ -42,7 +42,7 @@ return function(H)
 
   H.test("a closed declaration stays closed across a refresh", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
     local buf = vim.api.nvim_get_current_buf()
 
     local widget = H.item_by_key(WIDGET)
@@ -60,7 +60,7 @@ return function(H)
 
   H.test("sticky state survives a local mode switch", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     local impl = H.item_by_key("impl Widget")
     put_cursor(impl.fold_start)
@@ -70,7 +70,7 @@ return function(H)
     put_cursor(widget.fold_start)
     folds.user_action("close")
 
-    vim.cmd("OwnaiFold signatures")
+    vim.cmd("CodectFold signatures")
 
     local impl_after = H.item_by_key("impl Widget")
     local widget_after = H.item_by_key(WIDGET)
@@ -80,7 +80,7 @@ return function(H)
 
   H.test("overrides are keyed by (path, stable_key)", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow signatures")
+    vim.cmd("CodectShow signatures")
 
     local widget = H.item_by_key(WIDGET)
     put_cursor(widget.fold_start)

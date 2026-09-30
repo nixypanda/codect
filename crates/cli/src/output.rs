@@ -97,7 +97,7 @@ fn is_show_header(line: &str) -> bool {
 //
 // The `---`/`+++` file headers share their prefixes with deletions and
 // insertions, so a small state machine marks the two lines that structurally
-// follow each `diff --ownai` line as headers instead of content (section 13).
+// follow each `diff --codect` line as headers instead of content (section 13).
 fn style_diff(document: &str) -> String {
     let bold = Style::new().bold();
     let deletion = AnsiColor::Red.on_default();
@@ -109,7 +109,7 @@ fn style_diff(document: &str) -> String {
     let mut header_lines_remaining = 0u8;
 
     for line in document.split_inclusive('\n') {
-        if line.starts_with("diff --ownai") {
+        if line.starts_with("diff --codect") {
             push_styled(&mut styled, bold, line);
             header_lines_remaining = 2;
         } else if header_lines_remaining > 0 {

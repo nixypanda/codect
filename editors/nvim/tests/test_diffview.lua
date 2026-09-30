@@ -1,17 +1,17 @@
--- Integration test; run with OWNAI_DIFFVIEW_RTP pointing at Diffview 4516612.
-local diffview_path = vim.env.OWNAI_DIFFVIEW_RTP
+-- Integration test; run with CODECT_DIFFVIEW_RTP pointing at Diffview 4516612.
+local diffview_path = vim.env.CODECT_DIFFVIEW_RTP
 if not diffview_path or diffview_path == "" then
-  print("Diffview integration skipped (set OWNAI_DIFFVIEW_RTP)")
+  print("Diffview integration skipped (set CODECT_DIFFVIEW_RTP)")
   return
 end
 
 local source = debug.getinfo(1, "S").source:sub(2)
 local plugin = vim.fn.fnamemodify(source, ":p:h:h")
-local ownai_root = vim.fn.fnamemodify(plugin, ":h:h")
+local codect_root = vim.fn.fnamemodify(plugin, ":h:h")
 vim.opt.runtimepath:prepend(plugin)
 vim.opt.runtimepath:prepend(diffview_path)
-vim.env.OWNAI_BIN = vim.env.OWNAI_BIN or ownai_root .. "/target/debug/ownai"
-vim.cmd("runtime! plugin/ownai.lua")
+vim.env.CODECT_BIN = vim.env.CODECT_BIN or codect_root .. "/target/debug/codect"
+vim.cmd("runtime! plugin/codect.lua")
 vim.cmd("runtime! plugin/diffview.lua")
 require("diffview").setup({ use_icons = false })
 
@@ -45,7 +45,7 @@ write(other, "pub fn other(x: i32) -> i32 { x }\n")
 run({ "git", "commit", "-qam", "signature" }, tmp)
 
 vim.cmd("cd " .. vim.fn.fnameescape(tmp))
-local test_case = vim.env.OWNAI_TEST_DIFFVIEW_CASE or "history"
+local test_case = vim.env.CODECT_TEST_DIFFVIEW_CASE or "history"
 local lib = require("diffview.lib")
 if test_case == "history" then
 vim.cmd("DiffviewFileHistory")
@@ -100,11 +100,11 @@ local other_after = table.concat(vim.api.nvim_buf_get_lines(other_file.layout.b.
 assert(other_before:find("other%(%)") and other_after:find("other%(x: i32%)"),
   "second file does not show its per-commit difference")
 
-vim.cmd("OwnaiDiffview types")
+vim.cmd("CodectDiffview types")
 assert(vim.wait(15000, function()
   return not view.panel.updating and #view.panel.entries >= 3 and view.panel.entries[1].nulled
 end, 20), "Types mode did not hide signature-only commit")
-vim.cmd("OwnaiDiffview signatures")
+vim.cmd("CodectDiffview signatures")
 assert(vim.wait(15000, function()
   return not view.panel.updating and #view.panel.entries[1].files == 2
     and not view.panel.entries[1].nulled
@@ -115,7 +115,7 @@ assert(vim.wait(10000, function()
   return view.panel.cur_item[1] and view.panel.cur_item[1].commit.hash == view.panel.entries[2].commit.hash
 end, 20), "body-only commit was not selected")
 local selected_hash = view.panel.cur_item[1].commit.hash
-vim.cmd("OwnaiDiffview source")
+vim.cmd("CodectDiffview source")
 assert(vim.wait(15000, function() return not view.panel.updating and #view.panel.entries >= 3 end, 20))
 assert(not view.panel.entries[2].nulled, "source mode failed to restore body-only commit")
 assert(vim.wait(10000, function()
@@ -144,7 +144,7 @@ end, 20), "range projection buffer did not load")
 lines = vim.api.nvim_buf_get_lines(file.layout.b.file.bufnr, 0, -1, false)
 assert(table.concat(lines, "\n"):find("example%(x: i32%)"), "range projection missing")
 assert(not table.concat(lines, "\n"):find("{ x }", 1, true), "range body leaked")
-vim.cmd("OwnaiDiffview source")
+vim.cmd("CodectDiffview source")
 assert(vim.wait(10000, function()
   local current = view.panel:ordered_file_list()[1]
   if not current or not current.layout.b.file.bufnr then return false end
@@ -198,15 +198,15 @@ if test_case == "local" then
   assert(table.concat(vim.api.nvim_buf_get_lines(workbuf, 0, -1, false), "\n"):find("x: u64", 1, true))
   assert(vim.trim(assert(io.open(path, "rb")):read("*a")) == disk_source, "worktree changed by projection")
 
-  vim.cmd("OwnaiDiffview types")
+  vim.cmd("CodectDiffview types")
   assert(vim.wait(10000, function()
     return #current.files.staged == 0 and #current.files.working == 0
   end, 20), "Types mode did not filter signature-only files")
-  vim.cmd("OwnaiDiffview source")
+  vim.cmd("CodectDiffview source")
   assert(vim.wait(10000, function()
     return #current.files.staged == 2 and #current.files.working == 2
   end, 20), "source mode did not restore ordinary local file lists")
-  vim.cmd("OwnaiDiffview signatures")
+  vim.cmd("CodectDiffview signatures")
   assert(vim.wait(10000, function() return #current.files.working == 1 end, 20))
   write(path, "pub fn example(x: u128) -> i32 { x as i32 }\n")
   current:update_files()

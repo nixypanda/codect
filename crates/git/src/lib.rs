@@ -1,7 +1,7 @@
-//! Read-only Git access for OwnAI.
+//! Read-only Git access for Codect.
 //!
 //! `gix` types must never leave this crate; every public signature, error
-//! variant, and value type is OwnAI-owned.
+//! variant, and value type is Codect-owned.
 
 pub mod repository;
 pub mod revision;

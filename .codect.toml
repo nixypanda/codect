@@ -1,7 +1,7 @@
-# Named areas for studying OwnAI itself. Paths are repo-root-relative and
+# Named areas for studying Codect itself. Paths are repo-root-relative and
 # literal (no globs). Select with --area/-a, e.g.
-#   ownai show --mode signatures --area seams
-#   ownai show --mode types --area base --area cli
+#   codect show --mode signatures --area seams
+#   codect show --mode types --area base --area cli
 
 [areas]
 base      = ["crates/base/src"]

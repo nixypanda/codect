@@ -8,7 +8,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{TestRepo, ownai_in, stderr};
+use support::{TestRepo, codect_in, stderr};
 
 const RUST_BASE: &str = "\
 pub struct User {
@@ -17,7 +17,7 @@ pub struct User {
 ";
 
 fn run(repo: &TestRepo, args: &[&str]) -> Output {
-    ownai_in(repo, args).output().expect("run ownai")
+    codect_in(repo, args).output().expect("run codect")
 }
 
 fn repo() -> TestRepo {
@@ -55,13 +55,13 @@ fn tui_show_without_a_terminal_exits_one_with_a_clean_stdout() {
 #[test]
 fn tui_show_without_a_mode_is_a_usage_error() {
     let repo = repo();
-    ownai_in(&repo, &["tui", "show"]).assert().code(2);
+    codect_in(&repo, &["tui", "show"]).assert().code(2);
 }
 
 #[test]
 fn an_unknown_icons_value_is_a_usage_error() {
     let repo = repo();
-    ownai_in(
+    codect_in(
         &repo,
         &["tui", "show", "--mode", "types", "--icons", "bogus"],
     )
@@ -72,13 +72,13 @@ fn an_unknown_icons_value_is_a_usage_error() {
 #[test]
 fn tui_without_a_subcommand_is_a_usage_error() {
     let repo = repo();
-    ownai_in(&repo, &["tui"]).assert().code(2);
+    codect_in(&repo, &["tui"]).assert().code(2);
 }
 
 #[test]
 fn tui_show_area_and_path_together_are_a_usage_error() {
     let repo = repo();
-    ownai_in(
+    codect_in(
         &repo,
         &[
             "tui", "show", "--mode", "types", "-a", "frontend", "-p", "src",
@@ -91,7 +91,7 @@ fn tui_show_area_and_path_together_are_a_usage_error() {
 #[test]
 fn tui_diff_without_revisions_is_a_usage_error() {
     let repo = repo_with_change();
-    ownai_in(&repo, &["tui", "diff", "range", "--mode", "types"])
+    codect_in(&repo, &["tui", "diff", "range", "--mode", "types"])
         .assert()
         .code(2);
 }
@@ -122,7 +122,7 @@ fn commits_view_parses_then_requires_a_terminal() {
 #[test]
 fn tui_diff_without_a_mode_is_a_usage_error() {
     let repo = repo_with_change();
-    ownai_in(&repo, &["tui", "diff", "range", "HEAD~1", "HEAD"])
+    codect_in(&repo, &["tui", "diff", "range", "HEAD~1", "HEAD"])
         .assert()
         .code(2);
 }

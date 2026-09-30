@@ -21,7 +21,7 @@ pub fn colors_enabled() -> bool {
 
 // The environment variable that pins the flavor. Unset, empty, or `auto` asks
 // the terminal for its background color.
-const FLAVOR_ENV: &str = "OWNAI_THEME";
+const FLAVOR_ENV: &str = "CODECT_THEME";
 
 // The longest the startup background query waits before falling back to dark.
 //
@@ -195,7 +195,7 @@ impl Theme {
         }
     }
 
-    // Detects the theme from the environment and the terminal: `OWNAI_THEME`
+    // Detects the theme from the environment and the terminal: `CODECT_THEME`
     // pins the flavor, and `NO_COLOR`/`COLORTERM`/`TERM` choose the capability.
     // Called once by the runtime before the event reader starts; `view` stays
     // pure by reading the theme off the model.
@@ -244,7 +244,7 @@ impl Theme {
 
 // The flavor the frontend draws with.
 //
-// `OWNAI_THEME=dark` and `OWNAI_THEME=light` are explicit and skip the query.
+// `CODECT_THEME=dark` and `CODECT_THEME=light` are explicit and skip the query.
 // Any other value (or an unset variable) asks the terminal for its background
 // color and falls back to dark when the terminal does not answer.
 pub fn detect_flavor() -> Flavor {
@@ -253,7 +253,7 @@ pub fn detect_flavor() -> Flavor {
         .unwrap_or(Flavor::Dark)
 }
 
-// The explicit flavor named by `OWNAI_THEME`, if it names one.
+// The explicit flavor named by `CODECT_THEME`, if it names one.
 //
 // `auto`, an empty value, and an unset variable all defer to
 // [`query_flavor`]; so does any unrecognized value, which keeps a typo from

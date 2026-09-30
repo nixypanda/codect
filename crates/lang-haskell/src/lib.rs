@@ -1,7 +1,7 @@
-//! Haskell language adapter for OwnAI.
+//! Haskell language adapter for Codect.
 //!
 //! Owns the Haskell parser constructor and all Haskell grammar node-kind
-//! knowledge, and implements the OwnAI language projector interface for Haskell
+//! knowledge, and implements the Codect language projector interface for Haskell
 //! source files.
 
 pub mod extract;

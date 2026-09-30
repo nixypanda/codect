@@ -8,7 +8,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{TestRepo, ownai, ownai_in, stderr, stdout};
+use support::{TestRepo, codect, codect_in, stderr, stdout};
 
 const RUST_BASE: &str = "\
 pub struct User {
@@ -41,7 +41,7 @@ pub fn greet(name: &str) -> String {
 ";
 
 fn run(repo: &TestRepo, args: &[&str]) -> Output {
-    ownai_in(repo, args).output().expect("run ownai")
+    codect_in(repo, args).output().expect("run codect")
 }
 
 fn sections(document: &str) -> Vec<&str> {
@@ -125,11 +125,11 @@ fn dot_inside_a_subdirectory_scopes_to_that_directory() {
     repo.write("src/beta/lib.rs", RUST_BASE);
     repo.commit("base");
 
-    let output = ownai()
+    let output = codect()
         .current_dir(repo.path().join("src/alpha"))
         .args(["show", "--mode", "types", "-p", "."])
         .output()
-        .expect("run ownai");
+        .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(sections(&stdout(&output)), ["== src/alpha/lib.rs =="]);
 }
@@ -144,10 +144,10 @@ fn absolute_path_inside_the_repository_scopes_to_it() {
     // The temporary directory is a symlink on macOS, so canonicalize the
     // test-side path to match the working directory the OS hands the child.
     let absolute = std::fs::canonicalize(repo.path().join("src/alpha")).expect("canonical path");
-    let output = ownai_in(&repo, &["show", "--mode", "types", "--path"])
+    let output = codect_in(&repo, &["show", "--mode", "types", "--path"])
         .arg(&absolute)
         .output()
-        .expect("run ownai");
+        .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(sections(&stdout(&output)), ["== src/alpha/lib.rs =="]);
 }
@@ -216,7 +216,7 @@ fn diff_scoped_to_a_file_omits_other_changed_files() {
 
     let document = stdout(&output);
     assert!(
-        document.contains("diff --ownai a/src/lib.rs b/src/lib.rs"),
+        document.contains("diff --codect a/src/lib.rs b/src/lib.rs"),
         "scoped file block missing: {document:?}"
     );
     assert!(
@@ -251,7 +251,7 @@ fn diff_scoped_to_a_directory_omits_other_changed_directories() {
 
     let document = stdout(&output);
     assert!(
-        document.contains("diff --ownai a/src/alpha/lib.rs b/src/alpha/lib.rs"),
+        document.contains("diff --codect a/src/alpha/lib.rs b/src/alpha/lib.rs"),
         "scoped directory block missing: {document:?}"
     );
     assert!(
@@ -286,13 +286,13 @@ fn scoped_diff_marks_added_and_deleted_files_with_dev_null() {
     let document = stdout(&output);
     assert!(
         document.contains(
-            "diff --ownai a/src/alpha/new.rs b/src/alpha/new.rs\n--- /dev/null\n+++ b/src/alpha/new.rs\n"
+            "diff --codect a/src/alpha/new.rs b/src/alpha/new.rs\n--- /dev/null\n+++ b/src/alpha/new.rs\n"
         ),
         "added file block missing: {document:?}"
     );
     assert!(
         document.contains(
-            "diff --ownai a/src/alpha/gone.rs b/src/alpha/gone.rs\n--- a/src/alpha/gone.rs\n+++ /dev/null\n"
+            "diff --codect a/src/alpha/gone.rs b/src/alpha/gone.rs\n--- a/src/alpha/gone.rs\n+++ /dev/null\n"
         ),
         "deleted file block missing: {document:?}"
     );
@@ -307,7 +307,7 @@ fn scoping_preserves_body_only_invisibility() {
     repo.commit("body only");
 
     for mode in ["types", "signatures"] {
-        ownai_in(
+        codect_in(
             &repo,
             &["diff", "--mode", mode, "-p", "src/lib.rs", "HEAD~1", "HEAD"],
         )
@@ -340,12 +340,12 @@ fn show_targets_a_non_utf8_committed_path_on_unix() {
     }
     repo.commit("non-utf8 path");
 
-    let output = ownai()
+    let output = codect()
         .current_dir(repo.path())
         .args(["show", "--mode", "types", "--path"])
         .arg(relative)
         .output()
-        .expect("run ownai");
+        .expect("run codect");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(
         stdout(&output).contains("== src/\\xFF/lib.rs =="),

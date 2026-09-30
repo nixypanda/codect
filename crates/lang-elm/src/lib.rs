@@ -1,7 +1,7 @@
-//! Elm language adapter for OwnAI.
+//! Elm language adapter for Codect.
 //!
 //! Owns the Elm parser constructor and all Elm grammar node-kind knowledge, and
-//! implements the OwnAI language projector interface for Elm source files.
+//! implements the Codect language projector interface for Elm source files.
 
 pub mod extract;
 pub mod render;

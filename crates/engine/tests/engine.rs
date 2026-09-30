@@ -123,7 +123,7 @@ fn show_rejects_a_selection_that_names_nothing() {
 fn an_area_is_satisfied_by_any_one_of_its_paths() {
     let repo = TestRepo::init();
     repo.write("a.rs", RUST_BASE);
-    repo.write(".ownai.toml", "[areas]\nfrontend = [\"a.rs\", \"gone\"]\n");
+    repo.write(".codect.toml", "[areas]\nfrontend = [\"a.rs\", \"gone\"]\n");
     repo.commit("base");
 
     let engine = engine(&repo);
@@ -167,7 +167,7 @@ fn an_area_absent_from_the_revision_is_unsatisfied() {
 fn a_malformed_config_is_reported_as_a_config_error() {
     let repo = TestRepo::init();
     repo.write("a.rs", RUST_BASE);
-    repo.write(".ownai.toml", "this is not toml\n");
+    repo.write(".codect.toml", "this is not toml\n");
     repo.commit("base");
 
     let error = engine(&repo).load_areas().expect_err("config error");

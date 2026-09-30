@@ -1,34 +1,34 @@
-# ownai.nvim
+# codect.nvim
 
-Semantic fold viewer for [OwnAI](../../README.md). The buffer holds real
-source; OwnAI supplies the declaration map and the mode-correct closed-fold
+Semantic fold viewer for [Codect](../../README.md). The buffer holds real
+source; Codect supplies the declaration map and the mode-correct closed-fold
 text. Expanding a fold reveals real code.
 
-This plugin lives in the OwnAI repository while `ownai.show.v1` is unstable and
-is intended to split into its own `ownai.nvim` repository later.
+This plugin lives in the Codect repository while `codect.show.v1` is unstable and
+is intended to split into its own `codect.nvim` repository later.
 
 ## Requirements
 
 - Neovim 0.10 or newer (the plugin uses `vim.system`, `vim.json`, `vim.ui.select`).
-- The `ownai` binary. It is packaged separately; the plugin cannot bundle it.
+- The `codect` binary. It is packaged separately; the plugin cannot bundle it.
 
 The plugin resolves the binary in this order:
 
-1. `vim.g.ownai_binary`
-2. `OWNAI_BIN`
-3. `ownai` on `PATH`
+1. `vim.g.codect_binary`
+2. `CODECT_BIN`
+3. `codect` on `PATH`
 
 With Nix, pair the plugin with the binary:
 
 ```nix
-programs.neovim.plugins = [ pkgs.ownai-nvim ];
-programs.neovim.extraPackages = [ pkgs.ownai ];
+programs.neovim.plugins = [ pkgs.codect-nvim ];
+programs.neovim.extraPackages = [ pkgs.codect ];
 ```
 
 ## Setup
 
 ```lua
-require("ownai").setup({
+require("codect").setup({
   default_mode = "signatures", -- used when a command omits its argument
   debounce_ms = 200,           -- TextChanged refresh debounce
   manage_fold_options = true,  -- set window-local fold options (see below)
@@ -50,10 +50,10 @@ require("ownai").setup({
 binding to `false` or `""` to leave it unregistered.
 
 With `manage_fold_options = true` (the default) the plugin owns the
-window-local fold options for OwnAI buffers: `foldmethod=expr`, `foldexpr`,
+window-local fold options for Codect buffers: `foldmethod=expr`, `foldexpr`,
 `foldtext`, `foldenable`, `foldminlines=0`, and a `foldlevel` reset on every
 apply. Because it resets `foldlevel`, native `zr`/`zm` depth keys do not
-persist; use `:OwnaiFold`, `za`/`zo`/`zc`, or the cycle key instead. The
+persist; use `:CodectFold`, `za`/`zo`/`zc`, or the cycle key instead. The
 previous window-local fold options are saved and restored when the buffer
 leaves the window, so they do not leak into the next buffer.
 
@@ -72,12 +72,12 @@ there is nothing for the plugin to open or close.
 
 | Command | Behavior |
 |---|---|
-| `:OwnaiShow [types\|signatures]` | Project the current buffer via stdin and fold it to the mode (default `signatures`). Attaches the buffer keymaps. |
-| `:OwnaiFold [types\|signatures\|full]` | Fold to the mode. Reuses the cached projection for the current bytes and path; fetches one only when the mode is not cached or the buffer's file changed. Attaches the buffer keymaps. `full` unfolds everything. |
-| `:OwnaiOutline` | Declaration picker via `vim.ui.select` (no plugin dependencies). |
-| `:OwnaiEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default: the last enabled mode, else `default_mode`). |
-| `:OwnaiDisable` | Turn global auto-fold off and unfold the buffers auto-fold folded. An explicitly folded buffer keeps its folds only until auto-fold also folds it; from then on `disable()` unfolds it too. |
-| `:OwnaiToggle [types\|signatures]` | Toggle global auto-fold (default: the last enabled mode, else `default_mode`). |
+| `:CodectShow [types\|signatures]` | Project the current buffer via stdin and fold it to the mode (default `signatures`). Attaches the buffer keymaps. |
+| `:CodectFold [types\|signatures\|full]` | Fold to the mode. Reuses the cached projection for the current bytes and path; fetches one only when the mode is not cached or the buffer's file changed. Attaches the buffer keymaps. `full` unfolds everything. |
+| `:CodectOutline` | Declaration picker via `vim.ui.select` (no plugin dependencies). |
+| `:CodectEnable [types\|signatures]` | Turn global auto-fold on and fold the current buffer (default: the last enabled mode, else `default_mode`). |
+| `:CodectDisable` | Turn global auto-fold off and unfold the buffers auto-fold folded. An explicitly folded buffer keeps its folds only until auto-fold also folds it; from then on `disable()` unfolds it too. |
+| `:CodectToggle [types\|signatures]` | Toggle global auto-fold (default: the last enabled mode, else `default_mode`). |
 
 ## Auto-fold mode
 
@@ -86,10 +86,10 @@ is folded to the chosen mode; while it is off, new files open normally and the
 buffers the plugin folded are returned to normal.
 
 ```lua
-require("ownai").enable("types") -- omit the mode to use default_mode
-require("ownai").is_enabled()    -- boolean
-require("ownai").disable()
-require("ownai").toggle("signatures")
+require("codect").enable("types") -- omit the mode to use default_mode
+require("codect").is_enabled()    -- boolean
+require("codect").disable()
+require("codect").toggle("signatures")
 ```
 
 - `enable(mode?)` turns it on, validates that `mode` is `types` or `signatures`
@@ -103,7 +103,7 @@ require("ownai").toggle("signatures")
   binary or a schema mismatch warns at most once per enable.
 - `disable()` turns it off and unfolds every buffer auto-fold folded by
   switching it to `full` locally — no binary call. A buffer you folded yourself
-  with `:OwnaiShow`/`:OwnaiFold` keeps its folds only while auto-fold has not
+  with `:CodectShow`/`:CodectFold` keeps its folds only while auto-fold has not
   also folded it: auto-fold re-folds a buffer to the active mode when it is
   entered, and once that happens the buffer counts as auto-folded and
   `disable()` unfolds it too. A buffer auto-fold never touched is left as you
@@ -120,8 +120,8 @@ unchanged buffer does not re-run `git rev-parse` and the CLI. The memory is
 dropped when the content changes, the buffer is wiped, or a new `enable()`
 starts.
 
-Auto-fold uses the same read-only projection pipeline as `:OwnaiShow`. The
-per-buffer `:OwnaiShow` and `:OwnaiFold` keep working while the toggle is on;
+Auto-fold uses the same read-only projection pipeline as `:CodectShow`. The
+per-buffer `:CodectShow` and `:CodectFold` keep working while the toggle is on;
 they set that buffer's depth until it is next entered.
 
 ## Folding
@@ -149,7 +149,7 @@ they set that buffer's depth until it is next entered.
 - Expansion is sticky, keyed by `(path, stable_key)`: a declaration you open
   stays open across re-folds, refreshes, and mode switches, and one you close
   stays closed. Overrides are dropped when the buffer is wiped; call
-  `require("ownai").clear_overrides()` to drop them all.
+  `require("codect").clear_overrides()` to drop them all.
 - Folds refresh on `BufWritePost`, `InsertLeave`, and a debounced `TextChanged`.
   The CLI is never invoked per keystroke.
 
@@ -159,7 +159,7 @@ or the index.
 ## Diffview integration
 
 When Diffview is installed, `:DiffviewFileHistory` and `:DiffviewOpen`
-views start in OwnAI's `default_mode`. Their file lists omit
+views start in Codect's `default_mode`. Their file lists omit
 files whose canonical projections are equal, and their diff panes show only
 projected Types or Signatures. A body-only history commit stays in the commit
 list with Diffview's `No diff` row. The existing Diffview open, close, file
@@ -173,27 +173,27 @@ Diffview file-list updates. Git's file list tracks changes on disk and in the
 index; unsaved changes that exist only in an editor buffer do not appear until
 written.
 
-Use `:OwnaiDiffview types`, `:OwnaiDiffview signatures`, or
-`:OwnaiDiffview source` in the current Diffview tab. History refreshes preserve
+Use `:CodectDiffview types`, `:CodectDiffview signatures`, or
+`:CodectDiffview source` in the current Diffview tab. History refreshes preserve
 the selected commit and file when they still exist. The focused panes are
 read-only scratch buffers; source mode restores Diffview's normal content.
 
 Diffview has no public provider for its file list and pane contents. This
 adapter is guarded by source hashes for Diffview commit
 `4516612fe98ff56ae0415a259ff6361a89419b0a`. Pin that revision when using
-the integration. If Diffview's internal files differ, OwnAI warns once and
+the integration. If Diffview's internal files differ, Codect warns once and
 leaves Diffview unmodified. The integration is loaded automatically when a
-Diffview tab opens, including when Diffview is lazy loaded after OwnAI.
+Diffview tab opens, including when Diffview is lazy loaded after Codect.
 
 The linked dotfiles config obtains Diffview from nixpkgs. Its `flake.lock`
 revision `18dd725c29603f582cf1900e0d25f9f1063dbf11` resolves
 `vimPlugins.diffview-nvim.src.rev` to this exact Diffview commit. Add
-`editors/nvim` to Neovim's plugin runtimepath and source its `plugin/ownai.lua`
+`editors/nvim` to Neovim's plugin runtimepath and source its `plugin/codect.lua`
 to activate the integration there; the five existing Diffview mappings and
 their `after = function() require("diffview").setup({}) end` callback need no
-changes. The dotfiles configuration does not currently install OwnAI itself.
+changes. The dotfiles configuration does not currently install Codect itself.
 
-The `ownai.diff.v1` CLI accepts commits, `:index`, `:worktree`, and Git's empty
+The `codect.diff.v1` CLI accepts commits, `:index`, `:worktree`, and Git's empty
 tree. Root commits therefore show focused added-file projections. Rename rows
 currently use Diffview's destination path; rename-aware matching and a separate
 old-path row are not provided. Unmerged index entries have no stage-zero
@@ -202,7 +202,7 @@ focused file lists.
 
 ## Health
 
-`:checkhealth ownai` reports the resolved binary, its version, the expected
+`:checkhealth codect` reports the resolved binary, its version, the expected
 schema, and a live projection probe.
 
 ## Tests
@@ -214,18 +214,18 @@ just test-nvim
 The suite runs headlessly without extra plugins:
 
 ```sh
-OWNAI_BIN=target/debug/ownai nvim --headless -u NONE -l editors/nvim/tests/run.lua
+CODECT_BIN=target/debug/codect nvim --headless -u NONE -l editors/nvim/tests/run.lua
 ```
 
 With the pinned Diffview checkout, run the integration cases separately:
 
 ```sh
-OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=history \
-  OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
-OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=range \
-  OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
-OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=local \
-  OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
-OWNAI_DIFFVIEW_RTP=/path/to/diffview.nvim OWNAI_TEST_DIFFVIEW_CASE=root \
-  OWNAI_BIN="$(pwd)/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=history \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=range \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=local \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=root \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
 ```

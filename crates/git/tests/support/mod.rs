@@ -134,8 +134,8 @@ pub fn git(dir: &Path, args: &[&str]) -> Output {
 pub fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
     let mut command = Command::new("git");
     for prefix in [
-        "user.name=OwnAI Test",
-        "user.email=ownai@example.invalid",
+        "user.name=Codect Test",
+        "user.email=codect@example.invalid",
         "init.defaultBranch=main",
         "commit.gpgsign=false",
         "tag.gpgsign=false",
@@ -151,10 +151,10 @@ pub fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_PAGER", "cat")
-        .env("GIT_AUTHOR_NAME", "OwnAI Test")
-        .env("GIT_AUTHOR_EMAIL", "ownai@example.invalid")
-        .env("GIT_COMMITTER_NAME", "OwnAI Test")
-        .env("GIT_COMMITTER_EMAIL", "ownai@example.invalid")
+        .env("GIT_AUTHOR_NAME", "Codect Test")
+        .env("GIT_AUTHOR_EMAIL", "codect@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Codect Test")
+        .env("GIT_COMMITTER_EMAIL", "codect@example.invalid")
         .env("GIT_AUTHOR_DATE", FIXED_DATE)
         .env("GIT_COMMITTER_DATE", FIXED_DATE)
         .env_remove("GIT_DIR")

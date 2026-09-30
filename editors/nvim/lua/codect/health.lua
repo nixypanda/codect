@@ -1,28 +1,28 @@
--- ownai.health: :checkhealth ownai
+-- codect.health: :checkhealth codect
 
-local cli = require("ownai.cli")
+local cli = require("codect.cli")
 
 local M = {}
 
 function M.check()
   local health = vim.health or require("vim.health")
-  health.start("ownai")
+  health.start("codect")
 
   local binary = cli.resolve_binary()
   if not binary then
-    health.error("ownai binary not found", {
-      "Set `vim.g.ownai_binary`, export `OWNAI_BIN`, or put `ownai` on `PATH`.",
-      "The Neovim plugin and the `ownai` binary are packaged separately.",
+    health.error("codect binary not found", {
+      "Set `vim.g.codect_binary`, export `CODECT_BIN`, or put `codect` on `PATH`.",
+      "The Neovim plugin and the `codect` binary are packaged separately.",
     })
     return
   end
-  health.ok("ownai binary: " .. binary)
+  health.ok("codect binary: " .. binary)
 
   local version = cli.version(binary)
   if version then
-    health.ok("ownai version: " .. version)
+    health.ok("codect version: " .. version)
   else
-    health.warn("`ownai --version` did not run successfully")
+    health.warn("`codect --version` did not run successfully")
   end
 
   health.ok("expected schema: " .. cli.SCHEMA)
@@ -32,7 +32,7 @@ function M.check()
   local doc, err = cli.show({
     binary = binary,
     root = vim.fn.getcwd(),
-    path = "ownai-health-probe.rs",
+    path = "codect-health-probe.rs",
     mode = "types",
     source = source,
   })

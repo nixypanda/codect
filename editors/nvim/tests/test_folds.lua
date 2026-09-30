@@ -1,4 +1,4 @@
--- :OwnaiFold depth semantics and nesting.
+-- :CodectFold depth semantics and nesting.
 
 local P = "editors/nvim/tests/fixtures/sample.rs::"
 local WIDGET = P .. "type::Widget"
@@ -14,61 +14,61 @@ local MODE_FIXTURES = {
 }
 
 return function(H)
-  H.test(":OwnaiFold full unfolds everything and switching back re-folds", function()
+  H.test(":CodectFold full unfolds everything and switching back re-folds", function()
     H.open_fixture()
 
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
     H.truthy(#H.closed_starts() > 0, "types folds signatures")
 
-    vim.cmd("OwnaiFold full")
+    vim.cmd("CodectFold full")
     H.eq(H.state().mode, "full")
     H.eq(#H.closed_starts(), 0, "full leaves nothing folded")
 
-    vim.cmd("OwnaiFold types")
+    vim.cmd("CodectFold types")
     H.eq(H.state().mode, "types")
     H.truthy(#H.closed_starts() > 0, "switching back to types re-folds")
   end)
 
-  H.test(":OwnaiFold reuses a cached document without calling the CLI", function()
+  H.test(":CodectFold reuses a cached document without calling the CLI", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow signatures")
+    vim.cmd("CodectShow signatures")
 
     local marker = vim.fn.tempname()
     vim.fn.delete(marker)
 
     -- Cached: same content and mode, so the CLI must not run.
     local restore = H.with_marker_binary(marker)
-    vim.cmd("OwnaiFold signatures")
+    vim.cmd("CodectFold signatures")
     restore()
-    H.falsy(vim.fn.filereadable(marker) == 1, "cached :OwnaiFold must not call the CLI")
+    H.falsy(vim.fn.filereadable(marker) == 1, "cached :CodectFold must not call the CLI")
 
     -- Uncached: a different mode must be fetched, proving the marker works.
     vim.fn.delete(marker)
     local restore_uncached = H.with_marker_binary(marker)
     H.capture_notify(function()
-      vim.cmd("OwnaiFold types")
+      vim.cmd("CodectFold types")
     end)
     restore_uncached()
-    H.truthy(vim.fn.filereadable(marker) == 1, "uncached :OwnaiFold must call the CLI")
+    H.truthy(vim.fn.filereadable(marker) == 1, "uncached :CodectFold must call the CLI")
 
     vim.fn.delete(marker)
   end)
 
-  H.test(":OwnaiFold matches a fresh :OwnaiShow for every mode and language", function()
+  H.test(":CodectFold matches a fresh :CodectShow for every mode and language", function()
     for _, fixture in ipairs(MODE_FIXTURES) do
       for _, mode in ipairs({ "types", "signatures" }) do
         local other = (mode == "types") and "signatures" or "types"
 
         H.open_path(fixture)
-        vim.cmd("OwnaiShow " .. mode)
+        vim.cmd("CodectShow " .. mode)
         local fresh = H.snapshot()
 
         H.open_path(fixture)
-        vim.cmd("OwnaiShow " .. other)
-        vim.cmd("OwnaiFold " .. mode)
+        vim.cmd("CodectShow " .. other)
+        vim.cmd("CodectFold " .. mode)
         local folded = H.snapshot()
 
-        H.eq(folded, fresh, string.format("%s [%s]: :OwnaiFold matches :OwnaiShow", fixture, mode))
+        H.eq(folded, fresh, string.format("%s [%s]: :CodectFold matches :CodectShow", fixture, mode))
       end
     end
   end)
@@ -76,7 +76,7 @@ return function(H)
   H.test("a dropped container nested in a retained container does not collapse it", function()
     local rel = "fixtures/rust/nested-modules/input.rs"
     H.open_path(rel)
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     local inner = H.item_by_key(rel .. "::mod::outer::mod::inner")
     H.truthy(inner, "inner module is outlined")
@@ -91,7 +91,7 @@ return function(H)
 
   H.test("an impl nests its methods", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow signatures")
+    vim.cmd("CodectShow signatures")
 
     local impl = H.item_by_key("impl Widget")
     local method = H.item_by_key(NEW)
@@ -111,7 +111,7 @@ return function(H)
 
   H.test("fold starts extend upward over attributes and doc comments", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     local widget = H.item_by_key(WIDGET)
     H.truthy(widget.fold_start < widget.span.start_line, "struct fold start precedes the node span")
@@ -130,13 +130,13 @@ return function(H)
     local b = "editors/nvim/tests/fixtures/cache_b.rs"
 
     H.open_path(a)
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
     H.eq(H.state().path, a, "state records the projected path")
 
     -- Identical bytes at a different path: the cache must miss and refetch so
     -- `st.path`, `st.root`, and `st.file_entry` track the new target.
     vim.cmd("file " .. vim.fn.fnameescape(b))
-    vim.cmd("OwnaiFold types")
+    vim.cmd("CodectFold types")
     H.eq(H.state().path, b, "path is refreshed when the buffer's file changes")
     H.truthy(H.item_named("same"), "the refetched document's outline is installed")
   end)

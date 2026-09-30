@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/nixypanda/ownai/docs/schema/ownai.show.v1.json",
-  "title": "OwnAI show document v1",
-  "description": "The versioned JSON document emitted by `ownai show --format json` for a committed revision, standard input, or the worktree. Consumers must tolerate unknown fields: fields may be added additively within `ownai.show.v1`, so every object permits additional properties while its required fields and value constraints stay strict. A consumer must treat any `schema` value other than `ownai.show.v1` as a fatal, explicit version mismatch. Line numbers are ONE-BASED for editor friendliness; byte offsets are ZERO-BASED into the decoded UTF-8 source. `projection` is the requested mode; `outline` is mode-independent and complete, derived from the Signatures superset projection.",
+  "$id": "https://github.com/nixypanda/codect/docs/schema/codect.show.v1.json",
+  "title": "Codect show document v1",
+  "description": "The versioned JSON document emitted by `codect show --format json` for a committed revision, standard input, or the worktree. Consumers must tolerate unknown fields: fields may be added additively within `codect.show.v1`, so every object permits additional properties while its required fields and value constraints stay strict. A consumer must treat any `schema` value other than `codect.show.v1` as a fatal, explicit version mismatch. Line numbers are ONE-BASED for editor friendliness; byte offsets are ZERO-BASED into the decoded UTF-8 source. `projection` is the requested mode; `outline` is mode-independent and complete, derived from the Signatures superset projection.",
   "type": "object",
   "required": ["schema", "input", "revision", "mode", "files"],
   "additionalProperties": true,
   "properties": {
     "schema": {
-      "const": "ownai.show.v1",
+      "const": "codect.show.v1",
       "description": "The schema identifier. A mismatch is fatal."
     },
     "input": {
@@ -135,7 +135,7 @@
       "additionalProperties": true,
       "properties": {
         "start_line": {
-          "description": "One-based first line of the declaration node. Preceding attributes, decorators, `{-# ... #-}` pragmas, and doc comments are excluded even though `signature` may include them; an editor should extend a fold start upward over those lines. A `decorator_start_line` field may be added additively within `ownai.show.v1` later.",
+          "description": "One-based first line of the declaration node. Preceding attributes, decorators, `{-# ... #-}` pragmas, and doc comments are excluded even though `signature` may include them; an editor should extend a fold start upward over those lines. A `decorator_start_line` field may be added additively within `codect.show.v1` later.",
           "type": "integer",
           "minimum": 1
         },

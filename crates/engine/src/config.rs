@@ -1,6 +1,6 @@
 //! Loading of the repository's named-area definitions.
 //!
-//! `.ownai.toml` is repository-controlled, so it is the one config file OwnAI
+//! `.codect.toml` is repository-controlled, so it is the one config file Codect
 //! reads and the only one it must treat as hostile: bounded in size, never
 //! followed through a symlink, and only ever consulted when an area is
 //! selected. Core stays file-format-free, so the conversion from TOML to
@@ -18,7 +18,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 // The fixed config filename at the repository root; there is deliberately no
 // flag to point at another file.
-const FILE_NAME: &str = ".ownai.toml";
+const FILE_NAME: &str = ".codect.toml";
 
 /// The repository's areas, already validated and name-sorted.
 #[derive(Debug)]
@@ -27,7 +27,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Reads `.ownai.toml` from the repository root. The file is untrusted
+    /// Reads `.codect.toml` from the repository root. The file is untrusted
     /// input, so it is size-bounded and never followed through a symlink.
     pub fn load(repo_root: &Path) -> Result<Self, ConfigError> {
         let file = repo_root.join(FILE_NAME);

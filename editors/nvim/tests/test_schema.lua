@@ -1,18 +1,18 @@
 -- Schema guard and error surfaces.
 
-local cli = require("ownai.cli")
-local view = require("ownai.view")
+local cli = require("codect.cli")
+local view = require("codect.view")
 
 return function(H)
   H.test("cli.check_schema accepts the exact schema", function()
-    H.eq(cli.check_schema({ schema = "ownai.show.v1" }), nil)
+    H.eq(cli.check_schema({ schema = "codect.show.v1" }), nil)
   end)
 
   H.test("cli.check_schema rejects a different major version loudly", function()
-    local err = cli.check_schema({ schema = "ownai.show.v2" })
+    local err = cli.check_schema({ schema = "codect.show.v2" })
     H.truthy(err, "major mismatch is an error")
     H.contains(err, "major version mismatch")
-    H.contains(err, "ownai.show.v2")
+    H.contains(err, "codect.show.v2")
   end)
 
   H.test("cli.check_schema rejects an unknown schema", function()
@@ -20,13 +20,13 @@ return function(H)
     H.truthy(cli.check_schema({}), "missing schema is an error")
   end)
 
-  H.test(":OwnaiShow fails cleanly on a schema mismatch", function()
+  H.test(":CodectShow fails cleanly on a schema mismatch", function()
     H.open_fixture()
     local restore = H.with_stub_binary(
-      [[printf '%s' '{"schema":"ownai.show.v9","input":"stdin","revision":null,"mode":"types","files":[]}']]
+      [[printf '%s' '{"schema":"codect.show.v9","input":"stdin","revision":null,"mode":"types","files":[]}']]
     )
     local messages = H.capture_notify(function()
-      vim.cmd("OwnaiShow types")
+      vim.cmd("CodectShow types")
     end)
     restore()
 
@@ -34,11 +34,11 @@ return function(H)
     H.contains(messages[1], "schema", "error mentions the schema")
   end)
 
-  H.test(":OwnaiShow surfaces a failing binary", function()
+  H.test(":CodectShow surfaces a failing binary", function()
     H.open_fixture()
     local restore = H.with_stub_binary([[echo "unsupported source path" >&2; exit 1]])
     local messages = H.capture_notify(function()
-      vim.cmd("OwnaiShow types")
+      vim.cmd("CodectShow types")
     end)
     restore()
 
@@ -46,12 +46,12 @@ return function(H)
     H.contains(messages[1], "unsupported source path")
   end)
 
-  H.test(":OwnaiShow refuses a non-file buffer", function()
+  H.test(":CodectShow refuses a non-file buffer", function()
     vim.cmd("silent! %bwipeout!")
     vim.cmd("enew")
     vim.bo.buftype = "nofile"
     local messages = H.capture_notify(function()
-      vim.cmd("OwnaiShow types")
+      vim.cmd("CodectShow types")
     end)
     H.truthy(#messages > 0, "an error was reported")
     H.contains(messages[1], "not a file")

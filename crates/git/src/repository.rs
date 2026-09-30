@@ -1,6 +1,6 @@
 //! Repository discovery and read-only opening.
 //!
-//! OwnAI-owned value types and the [`SnapshotRepository`] trait mirror
+//! Codect-owned value types and the [`SnapshotRepository`] trait mirror
 //! TECHNICAL_DESIGN.md section 8; no `gix` type appears in a public signature.
 
 use std::fmt;
@@ -124,7 +124,7 @@ pub trait SnapshotRepository {
     fn read_blob(&self, id: &ObjectId) -> Result<Vec<u8>, GitError>;
 }
 
-/// The wrapped `gix::Repository` is private; callers only observe OwnAI-owned
+/// The wrapped `gix::Repository` is private; callers only observe Codect-owned
 /// values through [`SnapshotRepository`].
 pub struct GitRepository {
     repo: gix::Repository,

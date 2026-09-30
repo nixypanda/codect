@@ -1,15 +1,15 @@
--- ownai: setup(), configuration, and buffer-local keymaps.
+-- codect: setup(), configuration, and buffer-local keymaps.
 
 local M = {}
 
 M.defaults = {
-  -- Mode used when :OwnaiShow/:OwnaiFold is called without an argument.
+  -- Mode used when :CodectShow/:CodectFold is called without an argument.
   default_mode = "signatures",
   -- Debounce for TextChanged refreshes, in milliseconds.
   debounce_ms = 200,
   -- Set the window-local fold options (foldmethod, foldexpr, foldtext,
-  -- foldenable, foldminlines, foldlevel) for OwnAI buffers. Set false to keep
-  -- your own fold configuration; OwnAI will still open/close its folds.
+  -- foldenable, foldminlines, foldlevel) for Codect buffers. Set false to keep
+  -- your own fold configuration; Codect will still open/close its folds.
   manage_fold_options = true,
   keymaps = {
     -- Set to false to register no keymaps at all.
@@ -36,19 +36,19 @@ local function map(buf, lhs, rhs, desc)
     buffer = buf,
     silent = true,
     nowait = true,
-    desc = "OwnAI: " .. desc,
+    desc = "Codect: " .. desc,
   })
 end
 
---- Register the buffer-local keymaps for an active OwnAI buffer.
+--- Register the buffer-local keymaps for an active Codect buffer.
 function M.attach_keymaps(buf)
   local keymaps = M.config.keymaps
   if not keymaps or keymaps.enabled == false then
     return
   end
 
-  local folds = require("ownai.folds")
-  local view = require("ownai.view")
+  local folds = require("codect.folds")
+  local view = require("codect.view")
 
   map(buf, keymaps.next_declaration, function()
     view.goto_declaration(1)
@@ -81,13 +81,13 @@ end
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
 
-  -- `:OwnaiShow` and `:OwnaiFold` only accept types|signatures, so a default
+  -- `:CodectShow` and `:CodectFold` only accept types|signatures, so a default
   -- of `full` would break both commands.
   local default_mode = M.config.default_mode
   if default_mode ~= "types" and default_mode ~= "signatures" then
     vim.notify(
       string.format(
-        "OwnAI: default_mode must be `types` or `signatures`, got %s; using %q",
+        "Codect: default_mode must be `types` or `signatures`, got %s; using %q",
         vim.inspect(default_mode),
         M.defaults.default_mode
       ),
@@ -96,9 +96,9 @@ function M.setup(opts)
     M.config.default_mode = M.defaults.default_mode
   end
 
-  require("ownai.view").setup_autocmds()
+  require("codect.view").setup_autocmds()
 
-  for buf in pairs(require("ownai.state").buffers) do
+  for buf in pairs(require("codect.state").buffers) do
     if vim.api.nvim_buf_is_valid(buf) then
       M.attach_keymaps(buf)
     end
@@ -109,7 +109,7 @@ end
 
 --- Drop every sticky fold override for every file in this session.
 function M.clear_overrides()
-  require("ownai.state").clear_all_overrides()
+  require("codect.state").clear_all_overrides()
 end
 
 --- Turn global auto-fold on. `mode` defaults to the last enabled mode (then
@@ -117,25 +117,25 @@ end
 --- buffer folds immediately and every file buffer opened afterwards folds on
 --- read. Toggle survives `setup()` but not a Neovim restart.
 function M.enable(mode)
-  return require("ownai.view").enable(mode)
+  return require("codect.view").enable(mode)
 end
 
 --- Turn global auto-fold off and unfold every buffer auto-fold folded.
 --- An explicitly folded buffer keeps its folds only until auto-fold also folds
 --- it (for example on a later entry in another mode).
 function M.disable()
-  return require("ownai.view").disable()
+  return require("codect.view").disable()
 end
 
 --- Toggle global auto-fold. Enables with `mode` (or the remembered/default
 --- mode) when off. Returns whether auto-fold is on afterwards.
 function M.toggle(mode)
-  return require("ownai.view").toggle(mode)
+  return require("codect.view").toggle(mode)
 end
 
 --- Is global auto-fold on?
 function M.is_enabled()
-  return require("ownai.view").is_enabled()
+  return require("codect.view").is_enabled()
 end
 
 return M

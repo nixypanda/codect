@@ -1,5 +1,5 @@
 {
-  "schema": "ownai.diff.v1",
+  "schema": "codect.diff.v1",
   "mode": "types",
   "base": {
     "kind": "commit",

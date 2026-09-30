@@ -1,4 +1,4 @@
--- ownai.outline: turn the mode-independent declaration outline into a fold
+-- codect.outline: turn the mode-independent declaration outline into a fold
 -- tree and fold regions.
 --
 -- The document's `outline` is complete regardless of mode, so this module only
@@ -341,7 +341,7 @@ function M.fold_start(lines, start_line, is_boundary)
   return line
 end
 
---- Build the fold tree from an `ownai.show.v1` file entry.
+--- Build the fold tree from an `codect.show.v1` file entry.
 ---
 --- Returns `{ list = items, by_key = map }`. Each item gains:
 ---   * `key`, `parent`, `kind`, `name`, `signature`

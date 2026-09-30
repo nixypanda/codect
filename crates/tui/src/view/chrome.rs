@@ -17,7 +17,7 @@ pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.chrome.theme;
     let base = theme.bg(theme.palette.surface);
     let brand = Span::styled(
-        " ◆ ownai ",
+        " ◆ codect ",
         theme
             .fg_bg(theme.ink(theme.palette.accent), theme.palette.accent)
             .add_modifier(Modifier::BOLD),

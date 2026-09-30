@@ -1,6 +1,6 @@
-# OwnAI
+# Codect
 
-OwnAI provides selectable views of a codebase at different levels of detail.
+Codect provides selectable views of a codebase at different levels of detail.
 Focused views remove implementation bodies so that a person or tool can study the
 shape of the code without reading how it works.
 
@@ -35,10 +35,10 @@ Or run it without installing:
 nix run . -- --help
 ```
 
-When installing from GitHub, replace `.` with `github:nixypanda/ownai`. Nix
+When installing from GitHub, replace `.` with `github:nixypanda/codect`. Nix
 automatically selects the package matching the current system.
 To update an installation made from this checkout, run
-`nix profile upgrade ownai`.
+`nix profile upgrade codect`.
 
 ## Required checks
 
@@ -79,32 +79,32 @@ Individual recipes are available as `just build`, `just test`, `just format`,
 ## Usage
 
 ```text
-ownai show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-ownai show --format json --mode <types|signatures> --stdin    --path <FILE>
-ownai show --format json --mode <types|signatures> --worktree --path <FILE>
-ownai diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+codect show --format json --mode <types|signatures> --stdin    --path <FILE>
+codect show --format json --mode <types|signatures> --worktree --path <FILE>
+codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 `--format` defaults to `text`, the canonical projection. `--format json` emits
-the versioned `ownai.show.v1` document: the requested mode's projection plus a
+the versioned `codect.show.v1` document: the requested mode's projection plus a
 mode-independent declaration outline that an editor can turn into semantic
 folds. `--stdin` projects a buffer's bytes and `--worktree` projects the file at
 `--path` on disk; both require exactly one `--path` naming a file, and the
 result carries the same stable keys as a committed revision. See
 [docs/TECHNICAL_DESIGN.md](./docs/TECHNICAL_DESIGN.md) section 14.2 and
-[docs/schema/ownai.show.v1.json](./docs/schema/ownai.show.v1.json) for the
+[docs/schema/codect.show.v1.json](./docs/schema/codect.show.v1.json) for the
 contract.
 
-`ownai diff --format json` emits `ownai.diff.v1` for commits and the reserved
+`codect diff --format json` emits `codect.diff.v1` for commits and the reserved
 snapshot names `:index`, `:worktree`, and `:empty`. The canonical Git empty-tree
 object ID is also accepted, so the initial commit can be compared directly.
-For example, compare staged changes with `ownai diff --format json --mode types HEAD :index`
-and unstaged changes with `ownai diff --format json --mode types :index :worktree`.
+For example, compare staged changes with `codect diff --format json --mode types HEAD :index`
+and unstaged changes with `codect diff --format json --mode types :index :worktree`.
 It includes the resolved commit IDs (or mutable snapshot names) and each changed file's projected base and
 target panes with declaration items and outlines. An absent side is `null`.
 Files with equal projected text are omitted, so an empty `files` array means
 there are no focused changes. The JSON contract is specified in
-[docs/schema/ownai.diff.v1.json](./docs/schema/ownai.diff.v1.json). Index reads
+[docs/schema/codect.diff.v1.json](./docs/schema/codect.diff.v1.json). Index reads
 the stage-zero blob bytes; worktree reads tracked regular files on disk and
 does not follow symlinks. Mutable snapshot IDs are labels, so integrations
 must refresh after staging or file writes. Unsaved editor buffer bytes are not
@@ -121,7 +121,7 @@ projected revision — or in either side of a diff — is an error. Paths are
 relative to the current directory and must stay inside the repository.
 
 `--area`/`-a` is repeatable and selects named path groups defined in
-`.ownai.toml` at the repository root. Area paths are relative to the repository
+`.codect.toml` at the repository root. Area paths are relative to the repository
 root and are read only when `--area` is used; `--area` and `--path` cannot be
 combined.
 
@@ -137,13 +137,13 @@ change for that function.
 
 ## Terminal frontend
 
-`ownai` also ships an interactive terminal browser for the same projections. It
+`codect` also ships an interactive terminal browser for the same projections. It
 is a default-on feature of the CLI.
 
 ```text
-ownai tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-ownai tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
-ownai tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
+codect tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 `tui show` opens a file tree beside the canonical projection of the selected
@@ -158,11 +158,11 @@ disables all styling.
 
 A command palette (`Ctrl-P`), a fuzzy file finder (`Ctrl-F`), and in-pane search
 (`/`) make the frontend navigable without memorizing keys. The UI is themed:
-`OWNAI_THEME=light` switches to a light palette, and colors degrade gracefully on
+`CODECT_THEME=light` switches to a light palette, and colors degrade gracefully on
 terminals that only support 256 or 16 colors.
 
 The file tree can draw Nerd Font folder and file-type glyphs with `--icons=nerd`
-(or `OWNAI_ICONS=nerd`). This requires a Nerd Font installed in your terminal;
+(or `CODECT_ICONS=nerd`). This requires a Nerd Font installed in your terminal;
 without one the glyphs render as boxes, so the default is `--icons=none`.
 
 Keybindings:

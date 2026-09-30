@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/nixypanda/ownai/docs/schema/ownai.diff.v1.json",
-  "title": "OwnAI diff document v1",
-  "description": "Changed canonical projections between commit, index, worktree, and empty snapshots. Consumers must reject an unknown schema version and may accept additive fields. Files with equal projections are omitted. Paths use OwnAI escaped representation for invalid UTF-8. Lines are one-based and byte offsets zero-based. Mutable snapshot IDs name the input kind, not a durable content hash; consumers must refresh them after writes or staging.",
+  "$id": "https://github.com/nixypanda/codect/docs/schema/codect.diff.v1.json",
+  "title": "Codect diff document v1",
+  "description": "Changed canonical projections between commit, index, worktree, and empty snapshots. Consumers must reject an unknown schema version and may accept additive fields. Files with equal projections are omitted. Paths use Codect escaped representation for invalid UTF-8. Lines are one-based and byte offsets zero-based. Mutable snapshot IDs name the input kind, not a durable content hash; consumers must refresh them after writes or staging.",
   "type": "object",
   "required": [
     "schema",
@@ -14,7 +14,7 @@
   "additionalProperties": true,
   "properties": {
     "schema": {
-      "const": "ownai.diff.v1"
+      "const": "codect.diff.v1"
     },
     "mode": {
       "enum": [
@@ -247,7 +247,7 @@
       "additionalProperties": true,
       "properties": {
         "start_line": {
-          "description": "One-based first line of the declaration node. Preceding attributes, decorators, `{-# ... #-}` pragmas, and doc comments are excluded even though `signature` may include them; an editor should extend a fold start upward over those lines. A `decorator_start_line` field may be added additively within `ownai.show.v1` later.",
+          "description": "One-based first line of the declaration node. Preceding attributes, decorators, `{-# ... #-}` pragmas, and doc comments are excluded even though `signature` may include them; an editor should extend a fold start upward over those lines. A `decorator_start_line` field may be added additively within `codect.show.v1` later.",
           "type": "integer",
           "minimum": 1
         },

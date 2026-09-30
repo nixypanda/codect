@@ -499,7 +499,7 @@ mod tests {
         ] {
             let theme = Theme::new(flavor, Capability::TrueColor);
             let lines = highlight(
-                "pub fn main() { let name = \"ownai\"; }",
+                "pub fn main() { let name = \"codect\"; }",
                 Language::Rust,
                 &theme,
             );
@@ -509,7 +509,7 @@ mod tests {
                 .unwrap();
             let string_run = lines[0]
                 .iter()
-                .find(|run| run.text.contains("ownai"))
+                .find(|run| run.text.contains("codect"))
                 .unwrap();
             assert_eq!(keyword_run.style.fg, Some(keyword));
             assert_eq!(string_run.style.fg, Some(string));

@@ -102,7 +102,7 @@ pub fn show_document(files: &[ProjectedFile]) -> String {
 /// Renders the `diff` document (section 10.1):
 ///
 /// ```text
-/// diff --ownai a/src/User.elm b/src/User.elm
+/// diff --codect a/src/User.elm b/src/User.elm
 /// --- a/src/User.elm
 /// +++ b/src/User.elm
 /// <unified hunks>
@@ -110,7 +110,7 @@ pub fn show_document(files: &[ProjectedFile]) -> String {
 ///
 /// `old` and `new` are the two projections. A path present on only one side is
 /// an added or deleted file and uses `/dev/null` for the absent `---`/`+++`
-/// side; the `diff --ownai` line keeps `a/` and `b/` labels, matching Git. Only
+/// side; the `diff --codect` line keeps `a/` and `b/` labels, matching Git. Only
 /// paths whose canonical text differs emit a block, so an all-equal comparison
 /// (including a body-only change) produces empty output (section 7.2). Blocks
 /// are concatenated in raw path byte order with no blank line between them, and
@@ -135,7 +135,7 @@ pub fn diff_document(old: &[ProjectedFile], new: &[ProjectedFile]) -> String {
         }
 
         let display = path.to_string();
-        document.push_str(&format!("diff --ownai a/{display} b/{display}\n"));
+        document.push_str(&format!("diff --codect a/{display} b/{display}\n"));
         document.push_str(&format!(
             "--- {}\n",
             side_label(old_file.is_some(), 'a', &display)
@@ -239,12 +239,12 @@ mod tests {
         assert_eq!(
             document,
             concat!(
-                "diff --ownai a/fresh.rs b/fresh.rs\n",
+                "diff --codect a/fresh.rs b/fresh.rs\n",
                 "--- /dev/null\n",
                 "+++ b/fresh.rs\n",
                 "@@ -0,0 +1 @@\n",
                 "+pub fn fresh();\n",
-                "diff --ownai a/gone.rs b/gone.rs\n",
+                "diff --codect a/gone.rs b/gone.rs\n",
                 "--- a/gone.rs\n",
                 "+++ /dev/null\n",
                 "@@ -1 +0,0 @@\n",
@@ -262,7 +262,7 @@ mod tests {
         assert_eq!(
             document,
             concat!(
-                "diff --ownai a/a.rs b/a.rs\n",
+                "diff --codect a/a.rs b/a.rs\n",
                 "--- a/a.rs\n",
                 "+++ b/a.rs\n",
                 "@@ -1 +1 @@\n",

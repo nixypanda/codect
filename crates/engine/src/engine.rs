@@ -159,7 +159,7 @@ impl Engine {
         Ok(self.repository.first_parent_steps(&base, &target)?)
     }
 
-    /// Reads the current `.ownai.toml` area definitions.
+    /// Reads the current `.codect.toml` area definitions.
     ///
     /// The engine reloads them on every call; callers decide how long to retain
     /// the owned snapshot.

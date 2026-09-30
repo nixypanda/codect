@@ -1,5 +1,5 @@
 // A small JSON Schema validator for the subset used by
-// `docs/schema/ownai.show.v1.json`.
+// `docs/schema/codect.show.v1.json`.
 //
 // The schema is validated with this in-crate checker rather than a third-party
 // validator so the test suite adds no dependency to the build graph. The

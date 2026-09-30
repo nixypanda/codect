@@ -1,4 +1,4 @@
--- ownai.state: per-buffer projection state and sticky fold overrides.
+-- codect.state: per-buffer projection state and sticky fold overrides.
 --
 -- Two kinds of state live here:
 --
@@ -9,7 +9,7 @@
 --     stable_key is only unique within a file. Overrides survive re-folding,
 --     refreshes, mode switches, and buffer reloads.
 
-local outline = require("ownai.outline")
+local outline = require("codect.outline")
 
 local M = {}
 
@@ -60,7 +60,7 @@ function M.clear_overrides(path)
   end
 end
 
---- Drop every sticky override. Exposed as `require("ownai").clear_overrides()`.
+--- Drop every sticky override. Exposed as `require("codect").clear_overrides()`.
 function M.clear_all_overrides()
   M.overrides = {}
 end
@@ -151,9 +151,9 @@ end
 
 --- Install a freshly decoded document for `buf`.
 ---
---- `doc` is the whole `ownai.show.v1` document; `file_entry` is the matching
+--- `doc` is the whole `codect.show.v1` document; `file_entry` is the matching
 --- entry from `doc.files`. `mode` is the mode to fold with (which may differ
---- from `doc.mode` for a local `:OwnaiFold`). `hash` is the source hash the
+--- from `doc.mode` for a local `:CodectFold`). `hash` is the source hash the
 --- document was projected from, so a later re-fold can reuse it.
 function M.install(buf, doc, file_entry, mode, root, path, hash)
   index_doc(doc, file_entry)

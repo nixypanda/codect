@@ -1,4 +1,4 @@
--- :OwnaiShow produces mode-correct folds on the Rust fixture.
+-- :CodectShow produces mode-correct folds on the Rust fixture.
 
 local P = "editors/nvim/tests/fixtures/sample.rs::"
 local WIDGET = P .. "type::Widget"
@@ -6,9 +6,9 @@ local MAKE = P .. "fn::make"
 local NEW = "impl Widget::method::new"
 
 return function(H)
-  H.test(":OwnaiShow types keeps types open and folds dropped signatures", function()
+  H.test(":CodectShow types keeps types open and folds dropped signatures", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
 
     H.eq(H.state().mode, "types")
 
@@ -22,9 +22,9 @@ return function(H)
     H.contains(H.fold_text(make), "hidden in types", "dropped fold text")
   end)
 
-  H.test(":OwnaiShow signatures folds methods and shows their signatures", function()
+  H.test(":CodectShow signatures folds methods and shows their signatures", function()
     H.open_fixture()
-    vim.cmd("OwnaiShow signatures")
+    vim.cmd("CodectShow signatures")
 
     H.eq(H.state().mode, "signatures")
 
@@ -38,11 +38,11 @@ return function(H)
   H.test("the fold count and text differ between types and signatures", function()
     H.open_fixture()
 
-    vim.cmd("OwnaiShow types")
+    vim.cmd("CodectShow types")
     local types_count = #H.closed_starts()
     local types_make = H.fold_text(H.item_by_key(MAKE))
 
-    vim.cmd("OwnaiShow signatures")
+    vim.cmd("CodectShow signatures")
     local signatures_count = #H.closed_starts()
     local signatures_make = H.fold_text(H.item_by_key(MAKE))
 

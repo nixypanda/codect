@@ -15,10 +15,10 @@ const FOCUSED_DIFF_HELP: &str = "Focused diffs are semantic: implementation-only
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "ownai",
+    name = "codect",
     version,
     about = "Show and diff canonical Type and Signature projections of Git revisions",
-    long_about = "OwnAI projects committed Elm, Haskell, Python, and Rust source files \
+    long_about = "Codect projects committed Elm, Haskell, Python, and Rust source files \
                   into canonical Type and Signature forms and diffs those projections \
                   between two revisions.\n\nFocused diffs are semantic: implementation-only \
                   changes such as function bodies, comments, and whitespace are \
@@ -32,7 +32,7 @@ pub struct Cli {
     pub color: ColorChoice,
 
     /// Draw Nerd Font icons in the terminal frontend's file tree. Requires a
-    /// Nerd Font installed in the terminal; `OWNAI_ICONS=nerd` sets the same
+    /// Nerd Font installed in the terminal; `CODECT_ICONS=nerd` sets the same
     /// default.
     #[arg(long, value_enum, global = true)]
     pub icons: Option<IconChoice>,
@@ -51,7 +51,7 @@ pub enum Command {
         mode: Mode,
 
         /// Output format. `text` is the canonical projection; `json` is the
-        /// versioned `ownai.show.v1` document with a mode-independent outline.
+        /// versioned `codect.show.v1` document with a mode-independent outline.
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
 
@@ -65,7 +65,7 @@ pub enum Command {
         #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
         paths: Vec<std::ffi::OsString>,
 
-        /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+        /// Select a named area from `.codect.toml`. Repeatable, and mutually
         /// exclusive with `--path`.
         #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
         areas: Vec<String>,
@@ -98,7 +98,7 @@ pub enum Command {
         #[arg(long, value_enum)]
         mode: Mode,
 
-        /// Output format: text hunks or a versioned `ownai.diff.v1` document.
+        /// Output format: text hunks or a versioned `codect.diff.v1` document.
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
 
@@ -115,7 +115,7 @@ pub enum Command {
         #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
         paths: Vec<std::ffi::OsString>,
 
-        /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+        /// Select a named area from `.codect.toml`. Repeatable, and mutually
         /// exclusive with `--path`.
         #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
         areas: Vec<String>,
@@ -148,7 +148,7 @@ pub enum TuiCommand {
         #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
         paths: Vec<std::ffi::OsString>,
 
-        /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+        /// Select a named area from `.codect.toml`. Repeatable, and mutually
         /// exclusive with `--path`.
         #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
         areas: Vec<String>,
@@ -198,7 +198,7 @@ pub struct TuiDiffArgs {
     #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
     pub paths: Vec<std::ffi::OsString>,
 
-    /// Select a named area from `.ownai.toml`. Repeatable, and mutually
+    /// Select a named area from `.codect.toml`. Repeatable, and mutually
     /// exclusive with `--path`.
     #[arg(long = "area", short = 'a', value_name = "AREA", action = clap::ArgAction::Append, conflicts_with = "paths")]
     pub areas: Vec<String>,
@@ -227,7 +227,7 @@ impl From<Mode> for ProjectionMode {
 pub enum Format {
     /// The canonical text projection; byte-for-byte the historical output.
     Text,
-    /// The versioned `ownai.show.v1` JSON document.
+    /// The versioned `codect.show.v1` JSON document.
     Json,
 }
 

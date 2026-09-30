@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "ownai"
+name = "codect"
 path = "src/main.rs"
 
 [features]

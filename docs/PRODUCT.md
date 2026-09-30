@@ -1,8 +1,8 @@
-# OwnAI Product Decisions
+# Codect Product Decisions
 
 ## Product definition
 
-OwnAI provides selectable views of a codebase at different levels of detail. Its focused views remove implementation bodies so that a person or tool can study the shape of the code without reading how it works.
+Codect provides selectable views of a codebase at different levels of detail. Its focused views remove implementation bodies so that a person or tool can study the shape of the code without reading how it works.
 
 Each focused view also has a corresponding diff view. A focused diff compares
 the selected projections of two Git snapshots rather than their complete
@@ -11,7 +11,7 @@ empty tree.
 
 ## Product modes
 
-OwnAI has two implemented modes and two planned modes:
+Codect has two implemented modes and two planned modes:
 
 1. **Types** — show type declarations only.
 2. **Public** — show type declarations and public interfaces.
@@ -26,7 +26,7 @@ it is not the planned Full projection mode.
 
 ### Language scope
 
-- OwnAI supports Elm, Haskell, Python, and Rust.
+- Codect supports Elm, Haskell, Python, and Rust.
 - A project may contain unsupported files, but they are not included in focused views.
 
 ### Types mode
@@ -130,11 +130,11 @@ For Python, Signatures mode adds:
 
 ### Missing type annotations
 
-OwnAI does not infer types for unannotated Elm functions or values.
+Codect does not infer types for unannotated Elm functions or values.
 
-An unannotated top-level Elm declaration remains visible in Signatures mode and is marked as having no type annotation. OwnAI does not guess its type and does not omit the declaration silently.
+An unannotated top-level Elm declaration remains visible in Signatures mode and is marked as having no type annotation. Codect does not guess its type and does not omit the declaration silently.
 
-Haskell and Python do not use the Elm placeholder. They render declarations exactly as written, because unannotated declarations are ordinary in both languages: an unannotated Haskell binding shows its written head, and an unannotated Python function shows its written `def` line. OwnAI still never infers a type.
+Haskell and Python do not use the Elm placeholder. They render declarations exactly as written, because unannotated declarations are ordinary in both languages: an unannotated Haskell binding shows its written head, and an unannotated Python function shows its written `def` line. Codect still never infers a type.
 
 ### Focused diffs
 
@@ -150,7 +150,7 @@ canonical Git empty-tree object ID.
 Implementation-only changes are intentionally invisible in both focused diff
 modes. If a function body changes while its explicit signature remains
 unchanged, the focused diff contains no change for that function. The JSON
-document `ownai.diff.v1` contains only files with changed canonical
+document `codect.diff.v1` contains only files with changed canonical
 projections and carries each side's projection and declaration outline.
 `:index` reads stage-zero blobs; `:worktree` reads tracked regular files on
 disk, not unsaved editor buffers. Mutable snapshot names must be refreshed
@@ -172,7 +172,7 @@ A path that names nothing in the projected revision is an error. A path that exi
 
 A repository may define named path groups in a configuration file, so a project can share a recurring selection such as a package or subsystem instead of repeating paths. Both focused modes accept a repeatable `--area`/`-a` selection that narrows a view or diff to one or more named areas.
 
-- Areas are defined in `.ownai.toml` at the repository root, under an `[areas]` table that maps each name to a list of paths:
+- Areas are defined in `.codect.toml` at the repository root, under an `[areas]` table that maps each name to a list of paths:
 
   ```toml
   [areas]
@@ -194,11 +194,11 @@ Area configuration is declarative data. It defines names and paths only and is n
 The default CLI build includes an interactive terminal frontend for the same
 focused views.
 
-- `ownai tui show` presents a file tree beside the canonical projection of the
+- `codect tui show` presents a file tree beside the canonical projection of the
   selected file.
-- `ownai tui diff range` presents a changed-file tree beside a side-by-side
+- `codect tui diff range` presents a changed-file tree beside a side-by-side
   comparison of two revisions, with `@@` hunk headers.
-- `ownai tui diff commits` adds a scrollable commit list above the file tree.
+- `codect tui diff commits` adds a scrollable commit list above the file tree.
   It follows the target's first-parent chain after the base, newest first.
   Selecting a commit compares that commit with its first parent; commits with
   no focused projection changes remain in the list.
@@ -225,11 +225,11 @@ never opens an editor.
 
 ### Editor projection surface
 
-OwnAI exposes a machine-readable projection document and an in-repository
+Codect exposes a machine-readable projection document and an in-repository
 Neovim plugin that consumes it to build semantic folds.
 
-- `ownai show --format json` emits the versioned `ownai.show.v1` document. Its
-  schema is committed at `docs/schema/ownai.show.v1.json`, and golden documents
+- `codect show --format json` emits the versioned `codect.show.v1` document. Its
+  schema is committed at `docs/schema/codect.show.v1.json`, and golden documents
   live under `fixtures/schema/`.
 - The document pairs the requested mode's canonical projection with a
   **mode-independent outline**: every declaration in the file, including ones
@@ -260,7 +260,7 @@ repository-relative path used to build stable keys, and both resolve inside the
 repository. A `--path` that names a directory is a usage error, and `--worktree`
 refuses a symlinked target so a read can never escape the repository.
 
-OwnAI now **reads** the worktree for this path. It remains strictly read-only:
+Codect now **reads** the worktree for this path. It remains strictly read-only:
 it never writes the repository, worktree, or index, and the stdin and worktree
 inputs are incapable of writing.
 
@@ -319,9 +319,9 @@ could include unsaved editor buffer bytes or untracked files.
 
 ### Additional languages
 
-OwnAI may add languages beyond the four supported languages. Each language must preserve the meaning of the four product modes according to that language's own type, declaration, and visibility rules.
+Codect may add languages beyond the four supported languages. Each language must preserve the meaning of the four product modes according to that language's own type, declaration, and visibility rules.
 
-Language support may differ in whether inferred types, public visibility, or implementation-impact information is available. OwnAI must make reduced capabilities visible rather than presenting incomplete information as complete.
+Language support may differ in whether inferred types, public visibility, or implementation-impact information is available. Codect must make reduced capabilities visible rather than presenting incomplete information as complete.
 
 ### Interactive navigation
 
@@ -346,7 +346,7 @@ on-demand implementation reveal remain possible future work.
 
 ### Agent experiences
 
-Agent integrations may let an agent begin with Types, Public, or Signatures views and request selected implementation details only when needed. Users may restrict an agent to a particular OwnAI mode or permit progressive access to more detailed modes.
+Agent integrations may let an agent begin with Types, Public, or Signatures views and request selected implementation details only when needed. Users may restrict an agent to a particular Codect mode or permit progressive access to more detailed modes.
 
 ### Code-review and automation experiences
 

@@ -1,4 +1,4 @@
-# OwnAI — Command runner
+# Codect — Command runner
 #
 # Enter `nix develop` once, then run `just <command>`.
 
@@ -40,7 +40,7 @@ test-workspace:
 # Run the Neovim plugin's headless suite against the built binary.
 test-nvim:
     cargo build -p cli
-    OWNAI_BIN="$PWD/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/run.lua
+    CODECT_BIN="$PWD/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/run.lua
 
 # Benchmark one rendered frame and its per-part seams (criterion).
 bench-tui:
