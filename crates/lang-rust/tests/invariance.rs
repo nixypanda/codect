@@ -2,7 +2,7 @@
 //! and 12.1).
 
 use base::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
-use language_rust::RustProjector;
+use lang_rust::RustProjector;
 
 fn supported(raw: &str) -> SupportedPath {
     SupportedPath::new(RepoPath::new(raw).expect("path")).expect("supported path")

@@ -66,25 +66,25 @@ crates/
       repository.rs
       revision.rs
       tree.rs
-  language-elm/
+  lang-elm/
     src/
       lib.rs
       extract.rs
       render.rs
       syntax.rs
-  language-haskell/
+  lang-haskell/
     src/
       lib.rs
       extract.rs
       render.rs
       syntax.rs
-  language-python/
+  lang-python/
     src/
       lib.rs
       extract.rs
       render.rs
       syntax.rs
-  language-rust/
+  lang-rust/
     src/
       lib.rs
       extract.rs
@@ -141,12 +141,12 @@ cli
 tui              ──→ base
                  └──→ engine
 engine           ──→ base, git
-                 └──→ language-elm, language-haskell,
-                      language-python, language-rust
-language-elm     ──→ base
-language-haskell ──→ base
-language-python  ──→ base
-language-rust    ──→ base
+                 └──→ lang-elm, lang-haskell,
+                      lang-python, lang-rust
+lang-elm     ──→ base
+lang-haskell ──→ base
+lang-python  ──→ base
+lang-rust    ──→ base
 git              ──→ base
 ```
 
@@ -1502,7 +1502,7 @@ Acceptance gate: the documented keybindings work end to end, and every earlier f
 ### Phase 11: Haskell and Python support
 
 - Add the `tree-sitter-haskell` and `tree-sitter-python` grammars and the
-  `language-haskell` and `language-python` crates.
+  `lang-haskell` and `lang-python` crates.
 - Extend `Language`, `RepoPath` extension detection, and `ItemKind` in core.
 - Implement Haskell and Python extraction and canonical rendering (sections 23
   and 24) with syntax, fixture, projector, and invariance tests.
@@ -1742,7 +1742,7 @@ Pin resolved versions in `Cargo.lock`. When upgrading `gix` or a grammar, read i
 
 ## 23. Haskell projection
 
-The Haskell adapter lives in `language-haskell`. It owns the Haskell
+The Haskell adapter lives in `lang-haskell`. It owns the Haskell
 grammar and every Haskell node name through `syntax.rs`.
 
 ### 23.1 General rules
@@ -1817,7 +1817,7 @@ leaves both projections unchanged.
 
 ## 24. Python projection
 
-The Python adapter lives in `language-python`. It owns the Python grammar
+The Python adapter lives in `lang-python`. It owns the Python grammar
 and every Python node name through `syntax.rs`.
 
 ### 24.1 General rules

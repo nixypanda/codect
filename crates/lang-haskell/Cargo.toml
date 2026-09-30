@@ -1,5 +1,5 @@
 [package]
-name = "language-python"
+name = "lang-haskell"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,6 @@ publish.workspace = true
 [dependencies]
 base.workspace = true
 tree-sitter.workspace = true
-tree-sitter-python.workspace = true
+tree-sitter-haskell.workspace = true
 thiserror.workspace = true
 unicode-width.workspace = true

@@ -27,10 +27,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-language-elm.workspace = true
-language-haskell.workspace = true
-language-python.workspace = true
-language-rust.workspace = true
+lang-elm.workspace = true
+lang-haskell.workspace = true
+lang-python.workspace = true
+lang-rust.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true

@@ -1,16 +1,15 @@
-//! Fixture-driven projection tests.
+//! Fixture-driven projection tests (TECHNICAL_DESIGN.md section 16.2).
 //!
 //! Expected projections are plain text so a failure shows a readable diff.
-//! A case's input is `input.py` or, for type stubs, `input.pyi`.
 
 use std::fs;
 use std::path::PathBuf;
 
 use base::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
-use language_python::PythonProjector;
+use lang_rust::RustProjector;
 
 fn fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/python")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/rust")
 }
 
 fn fixture_cases() -> Vec<PathBuf> {
@@ -24,30 +23,18 @@ fn fixture_cases() -> Vec<PathBuf> {
     cases
 }
 
-fn input_file(case: &std::path::Path) -> &'static str {
-    if case.join("input.py").exists() {
-        "input.py"
-    } else {
-        "input.pyi"
-    }
-}
-
 #[test]
-fn python_fixtures_match_expected_projections() {
-    let projector = PythonProjector;
+fn rust_fixtures_match_expected_projections() {
+    let projector = RustProjector;
     let cases = fixture_cases();
-    assert!(
-        !cases.is_empty(),
-        "expected at least one Python fixture case"
-    );
+    assert!(!cases.is_empty(), "expected at least one Rust fixture case");
 
     for case in cases {
         let name = case.file_name().expect("case name").to_string_lossy();
-        let input_name = input_file(&case);
-        let input = case.join(input_name);
+        let input = case.join("input.rs");
         let source = fs::read_to_string(&input)
             .unwrap_or_else(|error| panic!("read {}: {error}", input.display()));
-        let relative = format!("fixtures/python/{name}/{input_name}");
+        let relative = format!("fixtures/rust/{name}/input.rs");
         let path = SupportedPath::new(RepoPath::new(relative.as_bytes()).expect("fixture path"))
             .expect("fixture path has a supported extension");
 

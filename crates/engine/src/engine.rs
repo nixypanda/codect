@@ -15,10 +15,10 @@ use base::{
     select_projector,
 };
 use git::{CommitStep, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
-use language_elm::ElmProjector;
-use language_haskell::HaskellProjector;
-use language_python::PythonProjector;
-use language_rust::RustProjector;
+use lang_elm::ElmProjector;
+use lang_haskell::HaskellProjector;
+use lang_python::PythonProjector;
+use lang_rust::RustProjector;
 
 use crate::config;
 use crate::error::EngineError;

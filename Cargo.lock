@@ -391,10 +391,10 @@ dependencies = [
  "clap",
  "engine",
  "git",
- "language-elm",
- "language-haskell",
- "language-python",
- "language-rust",
+ "lang-elm",
+ "lang-haskell",
+ "lang-python",
+ "lang-rust",
  "miette",
  "portable-pty",
  "predicates",
@@ -775,10 +775,10 @@ version = "0.1.0"
 dependencies = [
  "base",
  "git",
- "language-elm",
- "language-haskell",
- "language-python",
- "language-rust",
+ "lang-elm",
+ "lang-haskell",
+ "lang-python",
+ "lang-rust",
  "serde",
  "tempfile",
  "thiserror 2.0.20",
@@ -1926,7 +1926,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "language-elm"
+name = "lang-elm"
 version = "0.1.0"
 dependencies = [
  "base",
@@ -1937,7 +1937,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "language-haskell"
+name = "lang-haskell"
 version = "0.1.0"
 dependencies = [
  "base",
@@ -1948,7 +1948,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "language-python"
+name = "lang-python"
 version = "0.1.0"
 dependencies = [
  "base",
@@ -1959,7 +1959,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "language-rust"
+name = "lang-rust"
 version = "0.1.0"
 dependencies = [
  "base",

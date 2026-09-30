@@ -1,7 +1,7 @@
 use base::{
     LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode, RepoPath, SupportedPath,
 };
-use language_elm::ElmProjector;
+use lang_elm::ElmProjector;
 
 fn supported(raw: &str) -> SupportedPath {
     SupportedPath::new(RepoPath::new(raw).expect("test path is valid")).expect("supported path")

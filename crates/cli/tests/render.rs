@@ -11,10 +11,10 @@ use base::{
     LanguageProjector, ProjectedFile, ProjectionInput, ProjectionMode, RepoPath, SupportedPath,
     diff_document, show_document,
 };
-use language_elm::ElmProjector;
-use language_haskell::HaskellProjector;
-use language_python::PythonProjector;
-use language_rust::RustProjector;
+use lang_elm::ElmProjector;
+use lang_haskell::HaskellProjector;
+use lang_python::PythonProjector;
+use lang_rust::RustProjector;
 
 const MODES: [ProjectionMode; 2] = [ProjectionMode::Types, ProjectionMode::Signatures];
 

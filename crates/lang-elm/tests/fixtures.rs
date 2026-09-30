@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use base::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
-use language_elm::ElmProjector;
+use lang_elm::ElmProjector;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/elm");
 

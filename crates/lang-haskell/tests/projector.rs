@@ -4,7 +4,7 @@ use base::{
     ItemKind, LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
     SupportedPath,
 };
-use language_haskell::HaskellProjector;
+use lang_haskell::HaskellProjector;
 
 fn supported(raw: &str) -> SupportedPath {
     SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()

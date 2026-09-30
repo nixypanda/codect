@@ -4,7 +4,7 @@ use base::{
     ItemKind, LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
     SupportedPath,
 };
-use language_python::PythonProjector;
+use lang_python::PythonProjector;
 
 fn supported(raw: &str) -> SupportedPath {
     SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()

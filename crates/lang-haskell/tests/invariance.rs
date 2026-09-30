@@ -1,7 +1,7 @@
 //! Projection invariance and exclusion tests.
 
 use base::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
-use language_haskell::HaskellProjector;
+use lang_haskell::HaskellProjector;
 
 fn supported(raw: &str) -> SupportedPath {
     SupportedPath::new(RepoPath::new(raw).expect("path")).expect("supported path")

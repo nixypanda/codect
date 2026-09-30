@@ -3,10 +3,10 @@ resolver = "3"
 members = [
     "crates/base",
     "crates/git",
-    "crates/language-elm",
-    "crates/language-haskell",
-    "crates/language-python",
-    "crates/language-rust",
+    "crates/lang-elm",
+    "crates/lang-haskell",
+    "crates/lang-python",
+    "crates/lang-rust",
     "crates/engine",
     "crates/tui",
     "crates/cli",
@@ -22,10 +22,10 @@ publish = false
 # First-party crates.
 base = { path = "crates/base" }
 git = { path = "crates/git" }
-language-elm = { path = "crates/language-elm" }
-language-haskell = { path = "crates/language-haskell" }
-language-python = { path = "crates/language-python" }
-language-rust = { path = "crates/language-rust" }
+lang-elm = { path = "crates/lang-elm" }
+lang-haskell = { path = "crates/lang-haskell" }
+lang-python = { path = "crates/lang-python" }
+lang-rust = { path = "crates/lang-rust" }
 engine = { path = "crates/engine" }
 tui = { path = "crates/tui" }
 

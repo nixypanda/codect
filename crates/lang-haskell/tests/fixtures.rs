@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use base::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
-use language_haskell::HaskellProjector;
+use lang_haskell::HaskellProjector;
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/haskell")

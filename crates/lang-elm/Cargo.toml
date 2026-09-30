@@ -1,5 +1,5 @@
 [package]
-name = "language-elm"
+name = "lang-elm"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

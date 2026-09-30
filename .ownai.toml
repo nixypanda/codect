@@ -8,19 +8,19 @@ base      = ["crates/base/src"]
 git       = ["crates/git/src"]
 cli       = ["crates/cli/src"]
 languages = [
-    "crates/language-elm/src",
-    "crates/language-haskell/src",
-    "crates/language-python/src",
-    "crates/language-rust/src",
+    "crates/lang-elm/src",
+    "crates/lang-haskell/src",
+    "crates/lang-python/src",
+    "crates/lang-rust/src",
 ]
 
 seams = [
     "crates/base/src/lib.rs",
     "crates/git/src/lib.rs",
-    "crates/language-elm/src/lib.rs",
-    "crates/language-haskell/src/lib.rs",
-    "crates/language-python/src/lib.rs",
-    "crates/language-rust/src/lib.rs",
+    "crates/lang-elm/src/lib.rs",
+    "crates/lang-haskell/src/lib.rs",
+    "crates/lang-python/src/lib.rs",
+    "crates/lang-rust/src/lib.rs",
     "crates/cli/src/main.rs",
     "crates/cli/src/command.rs",
 ]
