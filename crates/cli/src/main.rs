@@ -1,8 +1,8 @@
-//! The `ownai` command-line interface.
-//!
-//! Thin entry point: argument parsing and exit-code mapping only. The
-//! Git-aware pipeline lives in `command.rs`, and core stays Git-free
-//! (TECHNICAL_DESIGN.md sections 3, 14).
+// The `ownai` command-line interface.
+//
+// Thin entry point: argument parsing and exit-code mapping only. The
+// Git-aware pipeline lives in `command.rs`, and core stays Git-free
+// (TECHNICAL_DESIGN.md sections 3, 14).
 
 mod args;
 mod command;

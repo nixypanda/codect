@@ -1,14 +1,14 @@
-//! Command-line argument definitions (TECHNICAL_DESIGN.md section 14).
-//!
-//! `--mode` has no default: the product has not validated a preferred mode, so
-//! the caller must choose explicitly.
+// Command-line argument definitions (TECHNICAL_DESIGN.md section 14).
+//
+// `--mode` has no default: the product has not validated a preferred mode, so
+// the caller must choose explicitly.
 
 use clap::{Parser, Subcommand, ValueEnum};
 
 use base::ProjectionMode;
 
-/// Repeated on every help surface so nobody trusts a focused diff without
-/// knowing what it deliberately hides (section 14).
+// Repeated on every help surface so nobody trusts a focused diff without
+// knowing what it deliberately hides (section 14).
 const FOCUSED_DIFF_HELP: &str = "Focused diffs are semantic: implementation-only changes (function bodies, \
      comments, whitespace) are invisible. Only changes that alter a projected \
      declaration appear.";

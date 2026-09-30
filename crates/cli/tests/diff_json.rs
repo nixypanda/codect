@@ -1,4 +1,3 @@
-//! End-to-end contract checks for committed `ownai.diff.v1` documents.
 mod support;
 
 use serde_json::{Value, json};

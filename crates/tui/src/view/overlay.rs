@@ -1,7 +1,7 @@
-//! Modal overlays: help, revision entry, the scope chooser, and the mode picker.
-//!
-//! Every overlay dims the frame behind it with a scrim so the popup reads as a
-//! layer above the browser rather than a hole in it.
+// Modal overlays: help, revision entry, the scope chooser, and the mode picker.
+//
+// Every overlay dims the frame behind it with a scrim so the popup reads as a
+// layer above the browser rather than a hole in it.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -35,7 +35,6 @@ pub(crate) fn render_overlay(model: &Model, frame: &mut Frame, area: Rect) {
     }
 }
 
-/// Dims everything behind an overlay.
 fn scrim(frame: &mut Frame, area: Rect) {
     frame
         .buffer_mut()

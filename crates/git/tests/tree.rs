@@ -1,6 +1,3 @@
-//! Commit tree traversal integration tests
-//! (TECHNICAL_DESIGN.md section 8.3).
-
 mod support;
 
 use std::collections::BTreeMap;

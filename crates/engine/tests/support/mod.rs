@@ -1,9 +1,9 @@
-//! Trimmed fixture helpers for the `engine` integration tests.
-//!
-//! The engine and `git` are read-only and never invoke Git. The approved
-//! `gix` feature set cannot create commits or references, so tests build real
-//! repositories with the `git` executable. Every invocation is test setup only
-//! and is isolated from host configuration and the network.
+// Trimmed fixture helpers for the `engine` integration tests.
+//
+// The engine and `git` are read-only and never invoke Git. The approved
+// `gix` feature set cannot create commits or references, so tests build real
+// repositories with the `git` executable. Every invocation is test setup only
+// and is isolated from host configuration and the network.
 
 #![allow(dead_code)]
 
@@ -12,7 +12,7 @@ use std::process::{Command, Output};
 
 use tempfile::TempDir;
 
-/// A fixed commit date so generated commit ids are reproducible.
+// A fixed commit date so generated commit ids are reproducible.
 const FIXED_DATE: &str = "2020-01-01T00:00:00+0000";
 
 pub struct TestRepo {
@@ -125,7 +125,7 @@ fn git_ok(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("git stdout is UTF-8 in tests")
 }
 
-/// The repository-relative path of a test file, for building selections.
+// The repository-relative path of a test file, for building selections.
 pub fn repo_path(raw: &str) -> base::RepoPath {
     base::RepoPath::new(raw).expect("valid repository path")
 }

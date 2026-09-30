@@ -1,7 +1,4 @@
-//! Fixture-driven projection tests.
-//!
-//! Expected projections are plain text so a failure shows a readable diff.
-//! A case's input is `input.py` or, for type stubs, `input.pyi`.
+// Expected projections are plain text so a failure shows a readable diff.
 
 use std::fs;
 use std::path::PathBuf;

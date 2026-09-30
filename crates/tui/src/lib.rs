@@ -46,15 +46,14 @@ use icons::Icons;
 use theme::Theme;
 use view::view;
 
-/// How long the driver waits for input before emitting a tick, which drives the
-/// spinner and lets a diagnostic expire without another keypress.
+// How long the driver waits for input before emitting a tick, which drives the
+// spinner and lets a diagnostic expire without another keypress.
 const TICK_INTERVAL: Duration = Duration::from_millis(150);
 
-/// The most input events folded into a single frame.
 const MAX_INPUT_BATCH: usize = 256;
 
-/// The longest a batch may spend draining. Bounds how long a continuous stream
-/// of events can delay drawing.
+// The longest a batch may spend draining. Bounds how long a continuous stream
+// of events can delay drawing.
 const INPUT_BATCH_BUDGET: Duration = Duration::from_millis(8);
 
 /// Everything `run` needs beyond the engine, built by the caller.
@@ -105,10 +104,10 @@ pub fn run(engine: Engine, options: TuiOptions) -> Result<(), TuiError> {
     run_with(engine, options, theme, CrosstermDriver::default())
 }
 
-/// The imperative seam: terminal lifecycle, event reading, and effect
-/// interpretation. Generic over the driver so tests can inject one.
-///
-/// The theme is resolved by the caller so tests never touch the terminal.
+// The imperative seam: terminal lifecycle, event reading, and effect
+// interpretation. Generic over the driver so tests can inject one.
+//
+// The theme is resolved by the caller so tests never touch the terminal.
 fn run_with<D: Driver>(
     engine: Engine,
     options: TuiOptions,
@@ -229,7 +228,6 @@ fn run_with<D: Driver>(
     Ok(())
 }
 
-/// Runs one effect and reports its completion as a message.
 fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
     match cmd {
         Cmd::Load { request } => {
@@ -302,24 +300,22 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
     }
 }
 
-/// The terminal operations the runtime needs. Implemented by the real
-/// crossterm driver and by test doubles.
 trait Driver {
-    /// Stages terminal setup. On failure, the steps that succeeded are undone
-    /// by [`Driver::teardown`].
+    // Stages terminal setup. On failure, the steps that succeeded are undone
+    // by [`Driver::teardown`].
     fn setup(&mut self) -> Result<(), TuiError>;
-    /// Undoes exactly the steps that succeeded, in reverse order. Best-effort.
+    // Undoes exactly the steps that succeeded, in reverse order. Best-effort.
     fn teardown(&mut self);
     fn size(&mut self) -> Result<(u16, u16), TuiError>;
     fn draw(&mut self, model: &Model) -> Result<(), TuiError>;
     fn read_msg(&mut self) -> Result<Msg, TuiError>;
-    /// A message for an event that is already available, or `None` when the
-    /// input queue is empty. Never blocks.
+    // A message for an event that is already available, or `None` when the
+    // input queue is empty. Never blocks.
     fn try_read_msg(&mut self) -> Result<Option<Msg>, TuiError>;
 }
 
-/// Owns a driver and guarantees its teardown on drop, whether the runtime
-/// returns normally, returns an error, or unwinds.
+// Owns a driver and guarantees its teardown on drop, whether the runtime
+// returns normally, returns an error, or unwinds.
 struct Session<D: Driver> {
     driver: D,
     attempted: bool,
@@ -352,12 +348,12 @@ impl<D: Driver> Drop for Session<D> {
     }
 }
 
-/// Toggles mouse capture, reporting only button and wheel events with SGR
-/// coordinates.
-///
-/// crossterm's stock `EnableMouseCapture` also switches on all-motion tracking
-/// (`?1003h`), which floods the event loop with `Moved` events. Enabling only
-/// normal tracking (`?1000h`) plus SGR coordinates keeps the queue quiet.
+// Toggles mouse capture, reporting only button and wheel events with SGR
+// coordinates.
+//
+// crossterm's stock `EnableMouseCapture` also switches on all-motion tracking
+// (`?1003h`), which floods the event loop with `Moved` events. Enabling only
+// normal tracking (`?1000h`) plus SGR coordinates keeps the queue quiet.
 struct MouseCaptured(bool);
 
 impl crossterm::Command for MouseCaptured {
@@ -380,7 +376,6 @@ impl crossterm::Command for MouseCaptured {
     }
 }
 
-/// The real driver: raw mode, the alternate screen, and a crossterm backend.
 #[derive(Default)]
 struct CrosstermDriver {
     terminal: Option<Terminal<CrosstermBackend<Stdout>>>,
@@ -523,8 +518,8 @@ fn translate(key: KeyEvent) -> Option<Msg> {
     Some(Msg::Key(key))
 }
 
-/// Translates a terminal mouse event, dropping motion, drag, release, and
-/// non-left buttons so they never reach the core.
+// Translates a terminal mouse event, dropping motion, drag, release, and
+// non-left buttons so they never reach the core.
 fn translate_mouse(mouse: MouseEvent) -> Option<Msg> {
     use crossterm::event::{MouseButton, MouseEventKind};
 
@@ -541,8 +536,8 @@ fn translate_mouse(mouse: MouseEvent) -> Option<Msg> {
     }))
 }
 
-/// Installs a panic hook that restores the terminal before the panic message
-/// is printed, so a crash does not leave the alternate screen active.
+// Installs a panic hook that restores the terminal before the panic message
+// is printed, so a crash does not leave the alternate screen active.
 fn install_panic_hook() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
@@ -554,7 +549,7 @@ fn install_panic_hook() {
     });
 }
 
-/// Best-effort terminal restoration that never panics.
+// Best-effort terminal restoration that never panics.
 fn restore_terminal() {
     let mut stdout = std::io::stdout();
     let _ = execute!(stdout, MouseCaptured(false));
@@ -703,7 +698,6 @@ mod tests {
             translate(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
             Some(Msg::Key(Key::PageDown))
         ));
-        // A plain character is not a control key.
         assert!(matches!(
             translate(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
             Some(Msg::Key(Key::Char('p')))
@@ -743,7 +737,6 @@ mod tests {
                 ..
             }))
         ));
-        // Motion, drag, release, and non-left buttons are dropped.
         assert!(translate_mouse(at(MouseEventKind::Moved)).is_none());
         assert!(translate_mouse(at(MouseEventKind::Up(MouseButton::Left))).is_none());
         assert!(translate_mouse(at(MouseEventKind::Down(MouseButton::Right))).is_none());
@@ -831,7 +824,6 @@ mod tests {
         );
     }
 
-    /// A minimal temporary repository with one empty commit.
     struct TestRepo {
         dir: tempfile::TempDir,
     }

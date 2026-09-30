@@ -15,14 +15,12 @@ use tree_sitter::Node;
 use crate::render::{self, Doc, Renderer};
 use crate::syntax::{self, field, node};
 
-/// Whether a declaration sits at module level or inside a class body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Scope {
     Module,
     Class { enum_like: bool },
 }
 
-/// A rendered declaration fragment plus the items it produces.
 struct Built {
     doc: Doc,
     items: Vec<ProjectedItem>,
@@ -503,7 +501,6 @@ fn make_built(
     Built { doc, items }
 }
 
-/// A class or def block: decorators, a header, and an indented body.
 fn container_doc(decorators: Vec<Doc>, header: Doc, members: Vec<Doc>) -> Doc {
     let mut parts = Vec::new();
     for decorator in decorators {
@@ -527,7 +524,6 @@ fn container_doc(decorators: Vec<Doc>, header: Doc, members: Vec<Doc>) -> Doc {
     Doc::Concat(parts)
 }
 
-/// A function signature, optionally preceded by its preserved decorators.
 fn signature_doc(decorators: Vec<Doc>, header: Doc) -> Doc {
     if decorators.is_empty() {
         return header;

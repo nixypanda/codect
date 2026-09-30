@@ -56,8 +56,8 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// The declared lower-case or module name. Qualified names are rebuilt from
-    /// identifiers and dots so spacing and comments cannot survive.
+    // The declared lower-case or module name. Qualified names are rebuilt from
+    // identifiers and dots so spacing and comments cannot survive.
     pub(crate) fn qualified_name(&self, node: Node<'_>) -> Result<String, ProjectionError> {
         let mut out = String::new();
         let mut cursor = node.walk();
@@ -83,8 +83,8 @@ impl<'a> Renderer<'a> {
         self.source_text(name)
     }
 
-    /// Returns the module's declared name and whether the module is a port
-    /// module, which is the only module kind the MVP distinguishes.
+    // Returns the module's declared name and whether the module is a port
+    // module, which is the only module kind the MVP distinguishes.
     pub(crate) fn module_name_and_port(
         &self,
         node: Node<'_>,
@@ -97,7 +97,6 @@ impl<'a> Renderer<'a> {
         Ok((name, is_port))
     }
 
-    /// The declared lower-case name at the head of a function declaration.
     pub(crate) fn declaration_name(&self, node: Node<'_>) -> Result<&'a str, ProjectionError> {
         let mut cursor = node.walk();
         match node
@@ -119,8 +118,8 @@ impl<'a> Renderer<'a> {
         Ok(text(format!("{prefix}{name}")))
     }
 
-    /// A custom type: `type Name params` followed by one indented line per
-    /// constructor, matching the canonical form in TECHNICAL_DESIGN.md 11.2.
+    // A custom type: `type Name params` followed by one indented line per
+    // constructor, matching the canonical form in TECHNICAL_DESIGN.md 11.2.
     pub(crate) fn type_declaration(&self, node: Node<'_>) -> Result<Doc, ProjectionError> {
         let name = self.field_name(node)?;
         let parameters = self.parameters(node, field::TYPE_NAME)?;
@@ -152,8 +151,8 @@ impl<'a> Renderer<'a> {
         Ok(Doc::Concat(parts))
     }
 
-    /// A type alias. A record right-hand side uses the block form from
-    /// TECHNICAL_DESIGN.md 11.2; every other alias stays a single line.
+    // A type alias. A record right-hand side uses the block form from
+    // TECHNICAL_DESIGN.md 11.2; every other alias stays a single line.
     pub(crate) fn type_alias(&self, node: Node<'_>) -> Result<Doc, ProjectionError> {
         let name = self.field_name(node)?;
         let parameters = self.parameters(node, field::TYPE_VARIABLE)?;
@@ -190,8 +189,8 @@ impl<'a> Renderer<'a> {
         ]))
     }
 
-    /// The declared surface for an unannotated top-level declaration. The MVP
-    /// never infers a type (PRODUCT.md, "Missing Elm type annotations").
+    // The declared surface for an unannotated top-level declaration. The MVP
+    // never infers a type (PRODUCT.md, "Missing Elm type annotations").
     pub(crate) fn missing_annotation(&self, name: &str) -> Doc {
         text(format!("{name} : <missing type annotation>"))
     }
@@ -235,9 +234,9 @@ impl<'a> Renderer<'a> {
             .is_some()
     }
 
-    /// The grammar wraps a type alias right-hand side in a `type_expression`
-    /// even when it is a single record, so a record body is only reachable as
-    /// the lone non-arrow atom.
+    // The grammar wraps a type alias right-hand side in a `type_expression`
+    // even when it is a single record, so a record body is only reachable as
+    // the lone non-arrow atom.
     fn sole_record_type<'n>(&self, node: Node<'n>) -> Option<Node<'n>> {
         if node.kind() != node::TYPE_EXPRESSION {
             return None;
@@ -422,7 +421,6 @@ mod tests {
         SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
     }
 
-    /// The document shape `type_expression` builds for an arrow chain.
     fn arrow_chain(parts: &[String]) -> Doc {
         let mut iter = parts.iter();
         let first = text(iter.next().expect("at least one atom").clone());
@@ -451,7 +449,6 @@ mod tests {
         assert_eq!(doc.render(), format!("{long}\n    -> Short\n    -> Other"));
     }
 
-    /// The first node of `kind` in a depth-first walk of `root`.
     fn find<'a>(root: Node<'a>, kind: &str) -> Node<'a> {
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {

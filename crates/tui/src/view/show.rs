@@ -1,5 +1,3 @@
-//! The projection pane: syntax-highlighted lines with a line-number gutter.
-
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -96,7 +94,6 @@ fn gutter_width(total: usize) -> usize {
     total.max(1).to_string().len() + 1
 }
 
-/// Recolors search matches on a line, the current match more brightly.
 fn highlight_search(
     runs: &[highlight::Run],
     ranges: &[(usize, usize, bool)],

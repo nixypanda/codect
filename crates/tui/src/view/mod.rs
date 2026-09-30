@@ -1,8 +1,8 @@
-//! The pure view layer.
-//!
-//! `view` composes a header, a body, and a footer, then draws overlays and
-//! diagnostics on top. Every module here is presentation-only: it reads the
-//! model and writes to the frame, and performs no I/O.
+// The pure view layer.
+//
+// `view` composes a header, a body, and a footer, then draws overlays and
+// diagnostics on top. Every module here is presentation-only: it reads the
+// model and writes to the frame, and performs no I/O.
 
 pub(crate) mod chrome;
 pub(crate) mod commits;
@@ -23,7 +23,6 @@ use crate::app::{Content, DiffView, MIN_HEIGHT, Model, Pane, SINGLE_PANE_MIN_WID
 use diff::Side;
 use geom::{PaneSlot, body_layout, frame_areas, render_divider};
 
-/// Renders the whole model. Pure: it reads the model and writes to the frame.
 pub(crate) fn view(model: &Model, frame: &mut Frame) {
     let area = frame.area();
 
@@ -50,7 +49,7 @@ pub(crate) fn view(model: &Model, frame: &mut Frame) {
     overlay::render_overlay(model, frame, area);
 }
 
-/// Renders the body panes from the same layout mouse hit-testing uses.
+// Renders the body panes from the same layout mouse hit-testing uses.
 fn render_body(model: &Model, frame: &mut Frame, content: Rect) {
     let is_diff = matches!(model.content, Content::Diff(_));
     let layout = body_layout(

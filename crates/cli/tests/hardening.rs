@@ -1,8 +1,8 @@
-//! Phase 7 hardening: packed objects, SHA-256 repositories, fatal projection
-//! failures, and output stability (TECHNICAL_DESIGN.md sections 16.4, 16.5, 20).
-//!
-//! Repositories are created with the `git` executable by the support module;
-//! the binary under test never invokes Git.
+// Phase 7 hardening: packed objects, SHA-256 repositories, fatal projection
+// failures, and output stability (TECHNICAL_DESIGN.md sections 16.4, 16.5, 20).
+//
+// Repositories are created with the `git` executable by the support module;
+// the binary under test never invokes Git.
 
 mod support;
 
@@ -46,8 +46,8 @@ greet name =
     \"hi \" ++ name
 ";
 
-/// An unclosed parameter list guarantees a Tree-sitter `ERROR` (or missing)
-/// node, so projecting this file is fatal rather than a silent partial result.
+// An unclosed parameter list guarantees a Tree-sitter `ERROR` (or missing)
+// node, so projecting this file is fatal rather than a silent partial result.
 const RUST_SYNTAX_ERROR: &str = "\
 pub fn broken(
 ";
@@ -56,7 +56,6 @@ fn run(repo: &TestRepo, args: &[&str]) -> Output {
     ownai_in(repo, args).output().expect("run ownai")
 }
 
-/// Runs `ownai` with an explicit `COLUMNS` value, or with the variable removed.
 fn run_with_columns(repo: &TestRepo, args: &[&str], columns: Option<&str>) -> Output {
     let mut command = ownai_in(repo, args);
     match columns {
@@ -66,7 +65,6 @@ fn run_with_columns(repo: &TestRepo, args: &[&str], columns: Option<&str>) -> Ou
     command.output().expect("run ownai")
 }
 
-/// A repository whose `HEAD` changes an Elm signature and a Rust type.
 fn changed_repo() -> TestRepo {
     let repo = TestRepo::init();
     repo.write("src/User.elm", ELM_BASE);
@@ -85,7 +83,6 @@ fn has_pack_file(repo: &TestRepo) -> bool {
         .any(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"))
 }
 
-/// Counts loose objects, ignoring the `pack` and `info` subdirectories.
 fn loose_object_count(repo: &TestRepo) -> usize {
     std::fs::read_dir(repo.path().join(".git/objects"))
         .expect("objects directory")
@@ -223,7 +220,6 @@ fn show_of_a_syntax_error_exits_one_without_partial_document() {
     );
 }
 
-/// Asserts the `diff` fails cleanly with the broken file on the given side.
 fn assert_diff_with_broken_side(broken_base: bool) {
     let repo = TestRepo::init();
     repo.write("src/aaa.rs", RUST_BASE);

@@ -126,8 +126,6 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// Returns projected items plus any pragma prefix carried to the next
-    /// declaration.
     fn declaration(
         &mut self,
         node: Node<'_>,
@@ -259,8 +257,8 @@ impl Builder<'_> {
         )
     }
 
-    /// A `type` synonym, whose right-hand side wraps through the renderer's
-    /// recursive type document.
+    // A `type` synonym, whose right-hand side wraps through the renderer's
+    // recursive type document.
     fn type_synonym_decl(&mut self, node: Node<'_>, prefixes: Vec<String>) -> Built {
         let name = self.name_of(node);
         let key = self.unique(format!("{}::alias::{name}", self.renderer.path()));
@@ -495,8 +493,8 @@ fn with_prefix(prefixes: Vec<String>, doc: Doc) -> Doc {
     Doc::Concat(parts)
 }
 
-/// A class or instance block: a header and an indented member list. The `where`
-/// keyword is only emitted when a member is actually shown.
+// A class or instance block: a header and an indented member list. The `where`
+// keyword is only emitted when a member is actually shown.
 fn container_doc(header: String, members: Vec<Doc>) -> Doc {
     if members.is_empty() {
         return Doc::Text(header);

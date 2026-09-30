@@ -1,6 +1,3 @@
-//! Projection invariance and exclusion tests (TECHNICAL_DESIGN.md sections 16.3
-//! and 12.1).
-
 use base::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
 use lang_rust::RustProjector;
 

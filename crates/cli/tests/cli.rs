@@ -1,9 +1,9 @@
-//! End-to-end CLI tests over real temporary Git repositories
-//! (TECHNICAL_DESIGN.md sections 8.2, 14, 16.5).
-//!
-//! Each test asserts stdout, stderr, and the exit status for a documented
-//! command form. Repositories are created with the `git` executable by the
-//! support module; the binary under test never invokes Git.
+// End-to-end CLI tests over real temporary Git repositories
+// (TECHNICAL_DESIGN.md sections 8.2, 14, 16.5).
+//
+// Each test asserts stdout, stderr, and the exit status for a documented
+// command form. Repositories are created with the `git` executable by the
+// support module; the binary under test never invokes Git.
 
 mod support;
 
@@ -71,7 +71,6 @@ fn run(repo: &TestRepo, args: &[&str]) -> Output {
     ownai_in(repo, args).output().expect("run ownai")
 }
 
-/// A repository whose `HEAD` differs from its parent by a Rust type change.
 fn repo_with_type_change() -> TestRepo {
     let repo = TestRepo::init();
     repo.write("src/lib.rs", RUST_BASE);
@@ -451,7 +450,6 @@ fn diff_path_deleted_in_target_still_succeeds() {
 // named areas
 // ---------------------------------------------------------------------------
 
-/// A repository with a committed `.ownai.toml` and one Elm file per area.
 fn repo_with_areas() -> TestRepo {
     let repo = TestRepo::init();
     repo.write(

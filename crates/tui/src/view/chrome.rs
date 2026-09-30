@@ -1,6 +1,3 @@
-//! The application chrome: a header with identity and context, and a footer
-//! with contextual information and key hints.
-
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
@@ -13,7 +10,6 @@ use crate::theme::{Rgb, Theme};
 
 use super::text::clip_line;
 
-/// Renders the header: repository identity and projection context.
 pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
     let theme = &model.theme;
     let base = theme.bg(theme.palette.surface);
@@ -77,7 +73,6 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(base), area);
 }
 
-/// Renders the footer: selected file, file status, and contextual hints.
 pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
     let theme = &model.theme;
     let base = theme.bg(theme.palette.surface);
@@ -172,7 +167,6 @@ fn compact_hints(model: &Model) -> &'static str {
     }
 }
 
-/// The key hints for the current focus, content, and overlay.
 fn hints(model: &Model) -> String {
     match &model.overlay {
         Some(Overlay::Revision { .. }) => "Enter apply   Esc cancel ".to_owned(),
@@ -200,7 +194,6 @@ fn hints(model: &Model) -> String {
     }
 }
 
-/// Added and removed logical-line counts for the selected diff.
 pub(crate) fn diff_stats(model: &Model) -> Option<(usize, usize)> {
     if !matches!(model.content, Content::Diff(_)) {
         return None;
@@ -226,14 +219,12 @@ pub(crate) fn diff_stats(model: &Model) -> Option<(usize, usize)> {
     Some((added, removed))
 }
 
-/// The spinner glyphs, advanced by the model's tick counter.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 fn spinner_frame(frame: u8) -> &'static str {
     SPINNER[frame as usize % SPINNER.len()]
 }
 
-/// Renders a transient diagnostic as a dismissible toast above the footer.
 pub(crate) fn render_diagnostic(model: &Model, frame: &mut Frame, area: Rect) {
     let Some(text) = &model.diagnostic else {
         return;
@@ -274,7 +265,7 @@ fn chip(label: &str, background: Rgb, theme: &Theme) -> Span<'static> {
     )
 }
 
-/// Keeps the tail of a path so the deepest directory stays visible.
+// Keeps the tail of a path so the deepest directory stays visible.
 fn clip_tail(text: &str, width: usize) -> String {
     let text_width = UnicodeWidthStr::width(text);
     if text_width <= width {

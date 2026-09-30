@@ -1,40 +1,38 @@
-//! Design tokens for the terminal frontend.
-//!
-//! Every color the frontend draws comes from a [`Palette`] resolved through a
-//! [`Capability`], so the UI can be themed (dark/light) and degrade gracefully
-//! on terminals without truecolor. The palettes and color math are pure data;
-//! only [`Theme::detect`] touches the environment and the terminal, and the
-//! runtime calls it once at startup before the event reader exists.
+// Design tokens for the terminal frontend.
+//
+// Every color the frontend draws comes from a [`Palette`] resolved through a
+// [`Capability`], so the UI can be themed (dark/light) and degrade gracefully
+// on terminals without truecolor. The palettes and color math are pure data;
+// only [`Theme::detect`] touches the environment and the terminal, and the
+// runtime calls it once at startup before the event reader exists.
 
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use ratatui::style::{Color, Style};
 
-/// Whether color is emitted at all.
-///
-/// The `NO_COLOR` convention disables all styling; text, markers, line numbers,
-/// and borders still render so structure survives.
+// Whether color is emitted at all.
+//
+// The `NO_COLOR` convention disables all styling; text, markers, line numbers,
+// and borders still render so structure survives.
 pub fn colors_enabled() -> bool {
     std::env::var_os("NO_COLOR").is_none()
 }
 
-/// The environment variable that pins the flavor. Unset, empty, or `auto` asks
-/// the terminal for its background color.
+// The environment variable that pins the flavor. Unset, empty, or `auto` asks
+// the terminal for its background color.
 const FLAVOR_ENV: &str = "OWNAI_THEME";
 
-/// The longest the startup background query waits before falling back to dark.
-///
-/// Terminals that cannot answer are detected almost immediately; the budget only
-/// matters for a terminal that answers slowly.
+// The longest the startup background query waits before falling back to dark.
+//
+// Terminals that cannot answer are detected almost immediately; the budget only
+// matters for a terminal that answers slowly.
 const QUERY_TIMEOUT: Duration = Duration::from_millis(250);
 
-/// An sRGB color used by a palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {
-    /// Resolves this color for a terminal of the given capability.
     pub fn to_color(self, capability: Capability) -> Color {
         match capability {
             Capability::TrueColor => Color::Rgb(self.0, self.1, self.2),
@@ -45,99 +43,61 @@ impl Rgb {
     }
 }
 
-/// What color a terminal can display.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Capability {
-    /// 24-bit color.
     TrueColor,
-    /// The 256-color xterm palette.
     Ansi256,
-    /// The 16 basic ANSI colors.
     Ansi16,
-    /// No color; `NO_COLOR` is set.
     NoColor,
 }
 
-/// A light or dark theme flavor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Flavor {
     Dark,
     Light,
 }
 
-/// The semantic colors of one flavor. Views never name a raw color; they name a
-/// role from this palette.
+// The semantic colors of one flavor. Views never name a raw color; they name a
+// role from this palette.
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
-    /// The application background.
     pub bg: Rgb,
-    /// A raised panel surface.
     pub surface: Rgb,
-    /// A second surface, used for alternating rows and gutters.
     pub surface_alt: Rgb,
-    /// An unfocused border.
     pub border: Rgb,
-    /// A focused border.
     pub border_focus: Rgb,
-    /// A separator between two regions.
     pub divider: Rgb,
-    /// Primary text.
     pub text: Rgb,
-    /// Secondary text.
     pub text_dim: Rgb,
-    /// Tertiary text and disabled affordances.
     pub text_muted: Rgb,
-    /// The primary accent.
     pub accent: Rgb,
-    /// A negative status.
     pub danger: Rgb,
-    /// The selected-row background.
     pub selection_bg: Rgb,
-    /// Text on the selected-row background.
     pub selection_fg: Rgb,
-    /// The accent bar marking the selected row.
     pub selection_bar: Rgb,
-    /// A search match.
     pub match_bg: Rgb,
-    /// The current search match.
     pub match_current_bg: Rgb,
-    /// The search-match indicator in the status bar and palette, drawn on a
-    /// surface rather than on a match highlight.
     pub match_fg: Rgb,
-    /// A tree guide line.
     pub guide: Rgb,
-    /// A directory label.
     pub dir: Rgb,
-    /// A file label.
     pub file: Rgb,
-    /// An added-file badge.
     pub badge_add: Rgb,
-    /// A modified-file badge.
     pub badge_mod: Rgb,
-    /// A deleted-file badge.
     pub badge_del: Rgb,
-    /// A hunk header.
     pub hunk: Rgb,
-    /// A line-number gutter.
     pub gutter: Rgb,
-    /// A removed-line background.
     pub del_bg: Rgb,
-    /// A removed intra-line emphasis background.
     pub del_emph: Rgb,
-    /// An added-line background.
     pub add_bg: Rgb,
-    /// An added intra-line emphasis background.
     pub add_emph: Rgb,
-    /// Added-line foreground.
     pub add_fg: Rgb,
-    /// Removed-line foreground.
     pub del_fg: Rgb,
 }
 
-/// Tokyo Night night and day colors from folke/tokyonight.nvim:
-/// https://github.com/folke/tokyonight.nvim/tree/main/extras/lua
-/// Diff fills use its `diff` and `git` colors. Focus uses the clearest accent;
-/// directory labels and hunk headers use quieter blue/cyan tones.
+// Tokyo Night night and day colors from folke/tokyonight.nvim:
+// https://github.com/folke/tokyonight.nvim/tree/main/extras/lua
+// Diff fills use its `diff` and `git` colors. Focus uses the clearest accent;
+// directory labels and hunk headers use quieter blue/cyan tones.
 const DARK: Palette = Palette {
     bg: Rgb(0x1a, 0x1b, 0x26),
     surface: Rgb(0x16, 0x16, 0x1e),
@@ -206,7 +166,6 @@ const LIGHT: Palette = Palette {
     del_fg: Rgb(0xc6, 0x43, 0x43),
 };
 
-/// A resolved palette plus the terminal capability it is drawn for.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
     pub flavor: Flavor,
@@ -215,7 +174,6 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// The dark theme at full truecolor, used by tests and previews.
     #[cfg(test)]
     pub fn dark() -> Self {
         Self {
@@ -225,7 +183,6 @@ impl Theme {
         }
     }
 
-    /// Builds a theme for a flavor and capability.
     pub fn new(flavor: Flavor, capability: Capability) -> Self {
         let palette = match flavor {
             Flavor::Dark => DARK,
@@ -238,41 +195,37 @@ impl Theme {
         }
     }
 
-    /// Detects the theme from the environment and the terminal: `OWNAI_THEME`
-    /// pins the flavor, and `NO_COLOR`/`COLORTERM`/`TERM` choose the capability.
-    /// Called once by the runtime before the event reader starts; `view` stays
-    /// pure by reading the theme off the model.
+    // Detects the theme from the environment and the terminal: `OWNAI_THEME`
+    // pins the flavor, and `NO_COLOR`/`COLORTERM`/`TERM` choose the capability.
+    // Called once by the runtime before the event reader starts; `view` stays
+    // pure by reading the theme off the model.
     pub fn detect() -> Self {
         Self::new(detect_flavor(), detect_capability())
     }
 
-    /// Resolves a palette color for this terminal.
     pub fn color(&self, rgb: Rgb) -> Color {
         rgb.to_color(self.capability)
     }
 
-    /// A foreground style for a palette color.
     pub fn fg(&self, rgb: Rgb) -> Style {
         Style::default().fg(self.color(rgb))
     }
 
-    /// A background style for a palette color.
     pub fn bg(&self, rgb: Rgb) -> Style {
         Style::default().bg(self.color(rgb))
     }
 
-    /// A foreground-and-background style.
     pub fn fg_bg(&self, fg: Rgb, bg: Rgb) -> Style {
         Style::default().fg(self.color(fg)).bg(self.color(bg))
     }
 
-    /// The palette ink that stays legible on a filled background.
-    ///
-    /// Chips, badges, and cursors fill a cell with a palette color and then draw
-    /// text on it. `palette.bg` is a good ink in the dark flavor because it is
-    /// near-black, but in the light flavor it is near-white and vanishes on light
-    /// fills such as `surface_alt`. Choosing whichever of `text` or `bg` contrasts
-    /// more with the fill keeps both flavors legible.
+    // The palette ink that stays legible on a filled background.
+    //
+    // Chips, badges, and cursors fill a cell with a palette color and then draw
+    // text on it. `palette.bg` is a good ink in the dark flavor because it is
+    // near-black, but in the light flavor it is near-white and vanishes on light
+    // fills such as `surface_alt`. Choosing whichever of `text` or `bg` contrasts
+    // more with the fill keeps both flavors legible.
     pub fn ink(&self, fill: Rgb) -> Rgb {
         let fill = relative_luminance(fill);
         let text = contrast_ratio(fill, relative_luminance(self.palette.text));
@@ -284,28 +237,27 @@ impl Theme {
         }
     }
 
-    /// Whether any color is emitted.
     pub fn colors_enabled(&self) -> bool {
         self.capability != Capability::NoColor
     }
 }
 
-/// The flavor the frontend draws with.
-///
-/// `OWNAI_THEME=dark` and `OWNAI_THEME=light` are explicit and skip the query.
-/// Any other value (or an unset variable) asks the terminal for its background
-/// color and falls back to dark when the terminal does not answer.
+// The flavor the frontend draws with.
+//
+// `OWNAI_THEME=dark` and `OWNAI_THEME=light` are explicit and skip the query.
+// Any other value (or an unset variable) asks the terminal for its background
+// color and falls back to dark when the terminal does not answer.
 pub fn detect_flavor() -> Flavor {
     explicit_flavor(std::env::var(FLAVOR_ENV).ok().as_deref())
         .or_else(query_flavor)
         .unwrap_or(Flavor::Dark)
 }
 
-/// The explicit flavor named by `OWNAI_THEME`, if it names one.
-///
-/// `auto`, an empty value, and an unset variable all defer to
-/// [`query_flavor`]; so does any unrecognized value, which keeps a typo from
-/// forcing a wrong palette.
+// The explicit flavor named by `OWNAI_THEME`, if it names one.
+//
+// `auto`, an empty value, and an unset variable all defer to
+// [`query_flavor`]; so does any unrecognized value, which keeps a typo from
+// forcing a wrong palette.
 fn explicit_flavor(value: Option<&str>) -> Option<Flavor> {
     match value {
         Some("light") => Some(Flavor::Light),
@@ -314,13 +266,13 @@ fn explicit_flavor(value: Option<&str>) -> Option<Flavor> {
     }
 }
 
-/// Asks the terminal for its background color over `OSC 11`.
-///
-/// `terminal-colorsaurus` owns the query, saves and restores raw mode itself,
-/// and short-circuits terminals that cannot answer, so this returns `None`
-/// rather than blocking when detection is unsupported. It is called once, by
-/// [`Theme::detect`], before the event reader is first polled, so the reply is
-/// not competing with the event loop for standard input.
+// Asks the terminal for its background color over `OSC 11`.
+//
+// `terminal-colorsaurus` owns the query, saves and restores raw mode itself,
+// and short-circuits terminals that cannot answer, so this returns `None`
+// rather than blocking when detection is unsupported. It is called once, by
+// [`Theme::detect`], before the event reader is first polled, so the reply is
+// not competing with the event loop for standard input.
 fn query_flavor() -> Option<Flavor> {
     if !colors_enabled() {
         return None;
@@ -334,7 +286,6 @@ fn query_flavor() -> Option<Flavor> {
     }
 }
 
-/// Detects the terminal's color capability from the environment.
 pub fn detect_capability() -> Capability {
     if !colors_enabled() {
         return Capability::NoColor;
@@ -352,7 +303,6 @@ pub fn detect_capability() -> Capability {
     }
 }
 
-/// The 16 basic ANSI colors and their representative sRGB values.
 const ANSI16: [(Rgb, Color); 16] = [
     (Rgb(0x00, 0x00, 0x00), Color::Black),
     (Rgb(0x80, 0x00, 0x00), Color::Red),
@@ -372,7 +322,6 @@ const ANSI16: [(Rgb, Color); 16] = [
     (Rgb(0xff, 0xff, 0xff), Color::White),
 ];
 
-/// The 256-entry xterm palette, built once.
 fn xterm256() -> &'static [Rgb; 256] {
     static PALETTE: OnceLock<[Rgb; 256]> = OnceLock::new();
     PALETTE.get_or_init(|| {
@@ -396,7 +345,6 @@ fn xterm256() -> &'static [Rgb; 256] {
     })
 }
 
-/// The WCAG relative luminance of a color, in `0.0..=1.0`.
 fn relative_luminance(rgb: Rgb) -> f32 {
     fn linear(channel: u8) -> f32 {
         let channel = f32::from(channel) / 255.0;
@@ -409,7 +357,6 @@ fn relative_luminance(rgb: Rgb) -> f32 {
     0.212_6 * linear(rgb.0) + 0.715_2 * linear(rgb.1) + 0.072_2 * linear(rgb.2)
 }
 
-/// The WCAG contrast ratio between two relative luminances, from 1.0 to 21.0.
 fn contrast_ratio(a: f32, b: f32) -> f32 {
     let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
     (hi + 0.05) / (lo + 0.05)

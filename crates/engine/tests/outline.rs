@@ -1,9 +1,9 @@
-//! Outline contract tests over the whole fixture corpus.
-//!
-//! The outline is derived from the Signatures projection, which must be a
-//! superset of the Types projection by `stable_key`. If any fixture violates
-//! that, the outline would silently omit a declaration the requested mode
-//! drops; this test fails rather than hiding it.
+// Outline contract tests over the whole fixture corpus.
+//
+// The outline is derived from the Signatures projection, which must be a
+// superset of the Types projection by `stable_key`. If any fixture violates
+// that, the outline would silently omit a declaration the requested mode
+// drops; this test fails rather than hiding it.
 
 mod support;
 
@@ -17,7 +17,6 @@ fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
 
-/// Collects every `input.*` file under `dir`, recursively.
 fn input_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries =
         std::fs::read_dir(dir).unwrap_or_else(|error| panic!("read {}: {error}", dir.display()));

@@ -1,5 +1,5 @@
-//! Pure geometry and panel chrome shared by the view and the derived-layout
-//! cache. Nothing here reads the terminal or the model's behaviour.
+// Pure geometry and panel chrome shared by the view and the derived-layout
+// cache. Nothing here reads the terminal or the model's behaviour.
 
 use base::FileDiff;
 use ratatui::Frame;
@@ -10,8 +10,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 use crate::app::{Pane, SIDE_BY_SIDE_MIN_WIDTH};
 use crate::theme::Theme;
 
-/// Splits a terminal of `width` × `height` into header, content, and status.
-/// Pure, so `update` and `view` agree on where the content body sits.
+// Splits a terminal of `width` × `height` into header, content, and status.
+// Pure, so `update` and `view` agree on where the content body sits.
 pub(crate) fn frame_areas(width: u16, height: u16) -> (Rect, Rect, Rect) {
     let area = Rect::new(0, 0, width, height);
     let chunks = Layout::vertical([
@@ -23,17 +23,13 @@ pub(crate) fn frame_areas(width: u16, height: u16) -> (Rect, Rect, Rect) {
     (chunks[0], chunks[1], chunks[2])
 }
 
-/// Where a column sits among its neighbours, which decides which borders it
-/// draws so adjacent panes share a single divider instead of doubling it.
+// Where a column sits among its neighbours, which decides which borders it
+// draws so adjacent panes share a single divider instead of doubling it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Edge {
-    /// The only column: all four borders.
     Solo,
-    /// The leftmost of several: no right border.
     Left,
-    /// Between two dividers: only top and bottom borders.
     Middle,
-    /// The rightmost of several: no left border.
     Right,
 }
 
@@ -46,7 +42,6 @@ fn borders_for(edge: Edge) -> Borders {
     }
 }
 
-/// A rounded panel with a themed border. Focused panels use the accent border.
 pub(crate) fn pane_block(title: &str, focused: bool, theme: &Theme, edge: Edge) -> Block<'static> {
     let border = if focused {
         theme.fg(theme.palette.border_focus)
@@ -62,11 +57,11 @@ pub(crate) fn pane_block(title: &str, focused: bool, theme: &Theme, edge: Edge) 
         .title(title.to_owned())
 }
 
-/// Splits `area` into content columns separated by single-column dividers.
-///
-/// `weights` are relative widths. Returns `(columns, dividers)`, where
-/// `dividers` has one fewer entry than `columns`. When there is not enough room
-/// for every divider, they are dropped and the columns share the space.
+// Splits `area` into content columns separated by single-column dividers.
+//
+// `weights` are relative widths. Returns `(columns, dividers)`, where
+// `dividers` has one fewer entry than `columns`. When there is not enough room
+// for every divider, they are dropped and the columns share the space.
 pub(crate) fn split_with_dividers(area: Rect, weights: &[u16]) -> (Vec<Rect>, Vec<Rect>) {
     let count = weights.len();
     if count == 0 {
@@ -122,7 +117,6 @@ pub(crate) fn split_with_dividers(area: Rect, weights: &[u16]) -> (Vec<Rect>, Ve
     (columns, divider_rects)
 }
 
-/// Which pane a body slot renders.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PaneSlot {
     Commits,
@@ -132,7 +126,6 @@ pub(crate) enum PaneSlot {
     New,
 }
 
-/// One rendered pane: which pane, its outer rect, and the border edge it draws.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Slot {
     pub pane: PaneSlot,
@@ -140,19 +133,18 @@ pub(crate) struct Slot {
     pub edge: Edge,
 }
 
-/// The panes and dividers a body draws, in draw order.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BodyLayout {
     pub slots: Vec<Slot>,
     pub dividers: Vec<Rect>,
 }
 
-/// The body panes for the current size, content, and focus.
-///
-/// Shared by `view::render_body` and mouse hit-testing, so a click or wheel maps
-/// to exactly the pane that was drawn. Below [`SIDE_BY_SIDE_MIN_WIDTH`] only the
-/// focused pane occupies the body; a focused diff stacks old over new. When the
-/// tree is focused in a narrow terminal every pane is hidden except the tree.
+// The body panes for the current size, content, and focus.
+//
+// Shared by `view::render_body` and mouse hit-testing, so a click or wheel maps
+// to exactly the pane that was drawn. Below [`SIDE_BY_SIDE_MIN_WIDTH`] only the
+// focused pane occupies the body; a focused diff stacks old over new. When the
+// tree is focused in a narrow terminal every pane is hidden except the tree.
 pub(crate) fn body_layout(
     content: Rect,
     tree_percent: u16,
@@ -257,7 +249,6 @@ pub(crate) fn body_layout(
     BodyLayout { slots, dividers }
 }
 
-/// First visible commit row, keeping the selected row in view.
 pub(crate) fn commit_offset(cursor: usize, scroll: usize, len: usize, height: usize) -> usize {
     if height == 0 {
         return 0;
@@ -273,7 +264,7 @@ pub(crate) fn commit_offset(cursor: usize, scroll: usize, len: usize, height: us
     }
 }
 
-/// The border edge a column draws, so adjacent panes share one divider.
+// The border edge a column draws, so adjacent panes share one divider.
 fn edge_for(index: usize, last: usize) -> Edge {
     match (index, last) {
         (0, 0) => Edge::Solo,
@@ -283,7 +274,6 @@ fn edge_for(index: usize, last: usize) -> Edge {
     }
 }
 
-/// Draws a vertical divider, joining the neighbouring top and bottom borders.
 pub(crate) fn render_divider(frame: &mut Frame, column: Rect, theme: &Theme) {
     if column.width == 0 || column.height == 0 {
         return;
@@ -307,7 +297,6 @@ pub(crate) fn render_divider(frame: &mut Frame, column: Rect, theme: &Theme) {
     );
 }
 
-/// The width of the line-number gutter: a sign column, the digits, and a space.
 pub(crate) fn gutter_width(diff: &FileDiff) -> usize {
     let lines = |file: &base::ProjectedFile| file.canonical_text().lines().count();
     let max_lines = match diff {

@@ -1,9 +1,9 @@
-//! Output and color handling.
-//!
-//! Projections and diffs are written to stdout, diagnostics to stderr. ANSI
-//! styling is applied only here, never in core. Color is the only
-//! environment-sensitive behavior: everything else in the document is
-//! deterministic (section 10).
+// Output and color handling.
+//
+// Projections and diffs are written to stdout, diagnostics to stderr. ANSI
+// styling is applied only here, never in core. Color is the only
+// environment-sensitive behavior: everything else in the document is
+// deterministic (section 10).
 
 use std::fmt::Write as _;
 use std::io::{self, Write as _};
@@ -14,14 +14,13 @@ use anstyle::{AnsiColor, Style};
 use crate::args::ColorChoice;
 use crate::command::CliError;
 
-/// Which framing the plain document uses, so the styler can classify lines.
+// Which framing the plain document uses, so the styler can classify lines.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentKind {
     Show,
     Diff,
 }
 
-/// Writes a rendered document to stdout, styling it only when color is active.
 pub fn write_document(kind: DocumentKind, document: &str, color: ColorChoice) -> io::Result<()> {
     if color == ColorChoice::Never {
         // Bypass styling entirely rather than relying on stripping, so
@@ -42,17 +41,16 @@ pub fn write_document(kind: DocumentKind, document: &str, color: ColorChoice) ->
     stream.flush()
 }
 
-/// Writes a JSON document to stdout with no styling.
-///
-/// JSON is a machine-readable document, so `--color` must never introduce ANSI
-/// sequences into it; this bypasses the styler entirely.
+// Writes a JSON document to stdout with no styling.
+//
+// JSON is a machine-readable document, so `--color` must never introduce ANSI
+// sequences into it; this bypasses the styler entirely.
 pub fn write_json(document: &str) -> io::Result<()> {
     let mut out = std::io::stdout().lock();
     out.write_all(document.as_bytes())?;
     out.flush()
 }
 
-/// Renders a fatal error as a miette report for stderr.
 pub fn render_diagnostic(error: &CliError) -> String {
     let mut text = String::new();
     // A fixed width keeps stderr independent of terminal size (section 10);
@@ -77,7 +75,6 @@ fn stream_choice(color: ColorChoice) -> AnstreamChoice {
     }
 }
 
-/// Bolds the `== path ==` section headers; everything else is left plain.
 fn style_show(document: &str) -> String {
     let bold = Style::new().bold();
     let mut styled = String::with_capacity(document.len());
@@ -96,11 +93,11 @@ fn is_show_header(line: &str) -> bool {
     trimmed.starts_with("== ") && trimmed.ends_with(" ==")
 }
 
-/// Colors diff lines by kind.
-///
-/// The `---`/`+++` file headers share their prefixes with deletions and
-/// insertions, so a small state machine marks the two lines that structurally
-/// follow each `diff --ownai` line as headers instead of content (section 13).
+// Colors diff lines by kind.
+//
+// The `---`/`+++` file headers share their prefixes with deletions and
+// insertions, so a small state machine marks the two lines that structurally
+// follow each `diff --ownai` line as headers instead of content (section 13).
 fn style_diff(document: &str) -> String {
     let bold = Style::new().bold();
     let deletion = AnsiColor::Red.on_default();

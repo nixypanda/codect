@@ -1,8 +1,8 @@
-//! End-to-end coverage of `--path`/`-p` scoping for `show` and `diff`
-//! (TECHNICAL_DESIGN.md sections 8.2, 14, 16.5).
-//!
-//! Repositories are created with the `git` executable by the support module;
-//! the binary under test never invokes Git.
+// End-to-end coverage of `--path`/`-p` scoping for `show` and `diff`
+// (TECHNICAL_DESIGN.md sections 8.2, 14, 16.5).
+//
+// Repositories are created with the `git` executable by the support module;
+// the binary under test never invokes Git.
 
 mod support;
 
@@ -44,7 +44,6 @@ fn run(repo: &TestRepo, args: &[&str]) -> Output {
     ownai_in(repo, args).output().expect("run ownai")
 }
 
-/// The `== path ==` headers a `show` document emitted, in document order.
 fn sections(document: &str) -> Vec<&str> {
     document
         .lines()
@@ -52,7 +51,6 @@ fn sections(document: &str) -> Vec<&str> {
         .collect()
 }
 
-/// A repository whose `HEAD` differs from its parent by a Rust type change.
 fn repo_with_type_change() -> TestRepo {
     let repo = TestRepo::init();
     repo.write("src/lib.rs", RUST_BASE);

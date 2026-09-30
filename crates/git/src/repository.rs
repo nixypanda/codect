@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 
 use crate::GitError;
 
-/// The object cache budget for one opened repository (TECHNICAL_DESIGN.md
-/// section 8.4).
-///
-/// The value is deliberately conservative for the MVP and is kept inside this
-/// crate; there are no tuning flags. It bounds the fully decoded object cache
-/// used while reading trees and blobs repeatedly.
+// The object cache budget for one opened repository (TECHNICAL_DESIGN.md
+// section 8.4).
+//
+// The value is deliberately conservative for the MVP and is kept inside this
+// crate; there are no tuning flags. It bounds the fully decoded object cache
+// used while reading trees and blobs repeatedly.
 const OBJECT_CACHE_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -23,8 +23,8 @@ pub enum HashKind {
 }
 
 impl HashKind {
-    /// `gix` types must stay inside this crate. With the approved feature set
-    /// (`sha1` and `sha256`) only those two kinds can occur.
+    // `gix` types must stay inside this crate. With the approved feature set
+    // (`sha1` and `sha256`) only those two kinds can occur.
     pub(crate) fn from_gix(kind: gix::hash::Kind) -> Self {
         match kind {
             gix::hash::Kind::Sha1 => Self::Sha1,
@@ -48,8 +48,8 @@ impl ObjectId {
         }
     }
 
-    /// The length and declared [`HashKind`] must agree; a mismatch is
-    /// [`GitError::InvalidObjectId`] rather than a panic.
+    // The length and declared [`HashKind`] must agree; a mismatch is
+    // [`GitError::InvalidObjectId`] rather than a panic.
     pub(crate) fn to_gix(&self, repository: &Path) -> Result<gix::hash::ObjectId, GitError> {
         let id = gix::hash::ObjectId::try_from(self.bytes.as_slice()).map_err(|_| {
             GitError::InvalidObjectId {

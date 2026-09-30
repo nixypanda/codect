@@ -1,9 +1,9 @@
-//! Snapshot invariants and the Phase 2 acceptance gate
-//! (TECHNICAL_DESIGN.md sections 8 and 19).
-//!
-//! Every test here builds fixtures with the `git` executable (see
-//! `tests/support/mod.rs`) and then uses only `GitRepository` and
-//! `SnapshotRepository` to enumerate and read committed files.
+// Snapshot invariants and the Phase 2 acceptance gate
+// (TECHNICAL_DESIGN.md sections 8 and 19).
+//
+// Every test here builds fixtures with the `git` executable (see
+// `tests/support/mod.rs`) and then uses only `GitRepository` and
+// `SnapshotRepository` to enumerate and read committed files.
 
 mod support;
 

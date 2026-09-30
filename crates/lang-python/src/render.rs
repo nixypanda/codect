@@ -12,9 +12,9 @@ use tree_sitter::Node;
 
 use crate::syntax::{self, field, node};
 
-/// One leaf token with explicit glue flags. `glue_before` and `glue_after`
-/// suppress the default space on that side, which is how `keyword=value` is
-/// written without spaces while `name: T = default` keeps them.
+// One leaf token with explicit glue flags. `glue_before` and `glue_after`
+// suppress the default space on that side, which is how `keyword=value` is
+// written without spaces while `name: T = default` keeps them.
 #[derive(Clone, Debug)]
 struct Tok {
     text: String,
@@ -50,7 +50,7 @@ impl<'a> Renderer<'a> {
         Self { path, source }
     }
 
-    /// The path and its derived language, for building a [`ProjectionError`].
+    // The path and its derived language, for building a [`ProjectionError`].
     pub(crate) fn supported_path(&self) -> &SupportedPath {
         self.path
     }
@@ -79,8 +79,8 @@ impl<'a> Renderer<'a> {
         self.field(node, field).map(|child| self.node_text(child))
     }
 
-    /// The first child of `kind`, named or not. Python needs this for anonymous
-    /// keyword tokens such as `async`.
+    // The first child of `kind`, named or not. Python needs this for anonymous
+    // keyword tokens such as `async`.
     pub(crate) fn child_of_kind_any<'t>(&self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
         let mut cursor = node.walk();
         node.children(&mut cursor)
@@ -128,21 +128,20 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// Canonical text for a type, parameter list, or expression fragment.
     pub(crate) fn node_text(&self, node: Node<'_>) -> String {
         let mut tokens = Vec::new();
         self.push_tokens(node, &mut tokens);
         join(&tokens)
     }
 
-    /// A decorator, with a breakable argument list when its expression is a
-    /// call. A bare decorator (`@property`) or any other expression stays flat.
-    ///
-    /// The `decorator` node has no fields; its first named child is the
-    /// expression. When that expression is a `call`, the call's `arguments`
-    /// (`argument_list`) named children are the items, rendered through
-    /// [`Renderer::bracket_list`] so a long decorator breaks one argument per
-    /// indented line with a trailing comma while a short one stays inline.
+    // A decorator, with a breakable argument list when its expression is a
+    // call. A bare decorator (`@property`) or any other expression stays flat.
+    //
+    // The `decorator` node has no fields; its first named child is the
+    // expression. When that expression is a `call`, the call's `arguments`
+    // (`argument_list`) named children are the items, rendered through
+    // [`Renderer::bracket_list`] so a long decorator breaks one argument per
+    // indented line with a trailing comma while a short one stays inline.
     pub(crate) fn decorator_doc(&self, node: Node<'_>) -> Doc {
         let mut cursor = node.walk();
         let expression = node.named_children(&mut cursor).next();
@@ -161,17 +160,17 @@ impl<'a> Renderer<'a> {
         Doc::Text(self.node_text(node))
     }
 
-    /// A bracketed list body: inline while the enclosing [`Doc::Group`] fits,
-    /// one item per indented line when it breaks.
-    ///
-    /// `open`/`close` are the delimiters (`()` for parameters, `[]` for type
-    /// parameters). The trailing comma is emitted only when the group breaks, so
-    /// appending an item changes exactly one line. This is deliberately ungrouped
-    /// so the caller can group the whole declaration header, letting the fit
-    /// check see the return type and other trailing text.
-    ///
-    /// Items are [`Doc`]s so a nested list (a subscript inside a type, or a long
-    /// parameter type) re-decides at its own column after the outer list breaks.
+    // A bracketed list body: inline while the enclosing [`Doc::Group`] fits,
+    // one item per indented line when it breaks.
+    //
+    // `open`/`close` are the delimiters (`()` for parameters, `[]` for type
+    // parameters). The trailing comma is emitted only when the group breaks, so
+    // appending an item changes exactly one line. This is deliberately ungrouped
+    // so the caller can group the whole declaration header, letting the fit
+    // check see the return type and other trailing text.
+    //
+    // Items are [`Doc`]s so a nested list (a subscript inside a type, or a long
+    // parameter type) re-decides at its own column after the outer list breaks.
     pub(crate) fn bracket_list(&self, items: Vec<Doc>, open: &str, close: &str) -> Doc {
         if items.is_empty() {
             return Doc::Text(format!("{open}{close}"));
@@ -195,9 +194,9 @@ impl<'a> Renderer<'a> {
         ])
     }
 
-    /// [`Renderer::bracket_list`] over a node's named children rendered as flat
-    /// text. Used for lists whose items have no internal break points (call
-    /// arguments, superclasses, type parameters).
+    // [`Renderer::bracket_list`] over a node's named children rendered as flat
+    // text. Used for lists whose items have no internal break points (call
+    // arguments, superclasses, type parameters).
     pub(crate) fn node_bracket_list(&self, node: Node<'_>, open: &str, close: &str) -> Doc {
         let mut items = Vec::new();
         let mut cursor = node.walk();
@@ -207,9 +206,9 @@ impl<'a> Renderer<'a> {
         self.bracket_list(items, open, close)
     }
 
-    /// A function's parameter list, with each parameter rendered by
-    /// [`Renderer::parameter_doc`] so a long parameter type can break once the
-    /// parameter list itself breaks.
+    // A function's parameter list, with each parameter rendered by
+    // [`Renderer::parameter_doc`] so a long parameter type can break once the
+    // parameter list itself breaks.
     pub(crate) fn parameters_doc(&self, node: Node<'_>) -> Doc {
         let mut items = Vec::new();
         let mut cursor = node.walk();
@@ -219,13 +218,13 @@ impl<'a> Renderer<'a> {
         self.bracket_list(items, "(", ")")
     }
 
-    /// A parameter, keeping its declared type as a nested [`Doc`].
-    ///
-    /// Only a `typed_parameter` or `typed_default_parameter` (one with a `type`
-    /// field) is split; every other parameter stays flat. The split renders the
-    /// tokens before and after the type node separately, re-inserting the exact
-    /// boundary space, so the flat form is byte-identical to
-    /// [`Renderer::node_text`].
+    // A parameter, keeping its declared type as a nested [`Doc`].
+    //
+    // Only a `typed_parameter` or `typed_default_parameter` (one with a `type`
+    // field) is split; every other parameter stays flat. The split renders the
+    // tokens before and after the type node separately, re-inserting the exact
+    // boundary space, so the flat form is byte-identical to
+    // [`Renderer::node_text`].
     fn parameter_doc(&self, node: Node<'_>) -> Doc {
         let Some(type_node) = node.child_by_field_name(field::TYPE) else {
             return Doc::Text(self.node_text(node));
@@ -277,17 +276,17 @@ impl<'a> Renderer<'a> {
         ])
     }
 
-    /// A recursive type [`Doc`].
-    ///
-    /// Only the node kinds that appear in Python type positions are handled:
-    /// the `type` wrapper, `generic_type` subscripts, and `binary_operator`
-    /// unions. Every other kind falls back to flat text, so an unmodeled type
-    /// cannot regress and always renders byte-identically to
-    /// [`Renderer::node_text`].
-    ///
-    /// This grammar (tree-sitter-python 0.25) represents annotations with a
-    /// `type` wrapper around a `generic_type` (`list[int]`) rather than a
-    /// `subscript`; a bare `subscript` in an expression position is left flat.
+    // A recursive type [`Doc`].
+    //
+    // Only the node kinds that appear in Python type positions are handled:
+    // the `type` wrapper, `generic_type` subscripts, and `binary_operator`
+    // unions. Every other kind falls back to flat text, so an unmodeled type
+    // cannot regress and always renders byte-identically to
+    // [`Renderer::node_text`].
+    //
+    // This grammar (tree-sitter-python 0.25) represents annotations with a
+    // `type` wrapper around a `generic_type` (`list[int]`) rather than a
+    // `subscript`; a bare `subscript` in an expression position is left flat.
     pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
         match node.kind() {
             node::TYPE => {
@@ -304,12 +303,12 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// A subscript type such as `dict[str, int]` or `tuple[A, B]`.
-    ///
-    /// The value (`dict`, `tuple`, or a dotted attribute) stays flat and each
-    /// bracketed argument group becomes a breakable list whose items are
-    /// recursively typed. The whole node is grouped so it re-decides at its own
-    /// column after an enclosing parameter list breaks.
+    // A subscript type such as `dict[str, int]` or `tuple[A, B]`.
+    //
+    // The value (`dict`, `tuple`, or a dotted attribute) stays flat and each
+    // bracketed argument group becomes a breakable list whose items are
+    // recursively typed. The whole node is grouped so it re-decides at its own
+    // column after an enclosing parameter list breaks.
     fn generic_type_doc(&self, node: Node<'_>) -> Doc {
         let mut cursor = node.walk();
         let mut named = node.named_children(&mut cursor);
@@ -331,8 +330,6 @@ impl<'a> Renderer<'a> {
         Doc::Group(Box::new(Doc::Concat(parts)))
     }
 
-    /// A union such as `A | B | C`, breaking before each `|`. Any other operator
-    /// (or a non-union shape) stays flat.
     fn binary_operator_type_doc(&self, node: Node<'_>) -> Doc {
         let is_union = node
             .child_by_field_name("operator")
@@ -364,7 +361,6 @@ impl<'a> Renderer<'a> {
         ])))
     }
 
-    /// Flattens a `|` chain (left- or right-leaning) into its operands.
     fn collect_union_operands<'t>(&self, node: Node<'t>, out: &mut Vec<Node<'t>>) {
         let is_union = node.kind() == node::BINARY_OPERATOR
             && node
@@ -383,8 +379,8 @@ impl<'a> Renderer<'a> {
     }
 }
 
-/// Spacing is a function of the two adjacent leaf tokens, never of source
-/// whitespace.
+// Spacing is a function of the two adjacent leaf tokens, never of source
+// whitespace.
 fn join(tokens: &[Tok]) -> String {
     let mut text = String::new();
     let mut previous: Option<&Tok> = None;
@@ -498,7 +494,6 @@ mod tests {
         assert_eq!(join(&tokens), "frozen=True");
     }
 
-    /// The document shape `bracket_list_doc` builds, for width tests.
     fn list(items: &[String]) -> Doc {
         let mut inner: Vec<Doc> = vec![Doc::SoftNil];
         for (index, item) in items.iter().enumerate() {
@@ -590,8 +585,6 @@ mod tests {
         );
     }
 
-    /// The `type_doc` for the return annotation of the first function in
-    /// `source`, alongside its flat `node_text`.
     fn return_type_doc_for(source: &str) -> (Doc, String) {
         let path = supported("src/sample.py");
         let tree = syntax::parse(source, &path).expect("annotated source parses");

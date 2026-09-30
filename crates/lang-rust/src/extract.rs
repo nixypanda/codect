@@ -14,8 +14,8 @@ use tree_sitter::Node;
 use crate::render::{self, Doc, Renderer};
 use crate::syntax::{self, field, node};
 
-/// The kind of container a declaration is nested in, which determines its
-/// `ItemKind` and which product rules include it.
+// The kind of container a declaration is nested in, which determines its
+// `ItemKind` and which product rules include it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Scope {
     File,
@@ -27,13 +27,11 @@ enum Scope {
     VariantFields,
 }
 
-/// A declaration node together with the outer attributes that precede it.
 struct Declaration<'t> {
     node: Node<'t>,
     attributes: Vec<Node<'t>>,
 }
 
-/// A rendered declaration fragment plus the items it produces.
 struct Built {
     doc: Doc,
     items: Vec<ProjectedItem>,
