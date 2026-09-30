@@ -9,3 +9,4 @@ publish.workspace = true
 bstr.workspace = true
 similar.workspace = true
 thiserror.workspace = true
+unicode-width.workspace = true
