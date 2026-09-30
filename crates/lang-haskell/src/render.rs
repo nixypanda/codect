@@ -26,7 +26,7 @@ impl<'a> Renderer<'a> {
         self.path.path()
     }
 
-    pub(crate) fn slice(&self, node: Node<'_>) -> &str {
+    pub(crate) fn slice(&self, node: Node<'_>) -> &'a str {
         self.source.get(node.byte_range()).unwrap_or("")
     }
 
@@ -121,9 +121,7 @@ impl<'a> Renderer<'a> {
     /// A data or newtype declaration, with record fields and constructors one
     /// per indented line.
     pub(crate) fn data_doc(&self, node: Node<'_>, keyword: &str) -> Doc {
-        let name = self
-            .field_text(node, field::NAME)
-            .unwrap_or_default();
+        let name = self.field_text(node, field::NAME).unwrap_or_default();
         let context = self.context_text(self.field(node, "context"));
         let params = self.params_text(self.field(node, "patterns"));
         let kind = self
@@ -275,9 +273,7 @@ impl<'a> Renderer<'a> {
     /// A type or data family, with a closed family's equations one per indented
     /// line.
     pub(crate) fn family_doc(&self, node: Node<'_>, keyword: &str) -> Doc {
-        let name = self
-            .field_text(node, field::NAME)
-            .unwrap_or_default();
+        let name = self.field_text(node, field::NAME).unwrap_or_default();
         let params = self.params_text(self.field(node, "patterns"));
         let header = format!("{keyword} {name}{params}");
 
@@ -312,9 +308,7 @@ impl<'a> Renderer<'a> {
             .field(node, "forall")
             .map(|forall| format!("{} ", self.node_text(forall)))
             .unwrap_or_default();
-        let name = self
-            .field_text(node, field::NAME)
-            .unwrap_or_default();
+        let name = self.field_text(node, field::NAME).unwrap_or_default();
         let params = self.params_text(self.field(node, "patterns"));
         let fundeps = self
             .field(node, "fundeps")
@@ -328,9 +322,7 @@ impl<'a> Renderer<'a> {
     pub(crate) fn signature_doc(&self, node: Node<'_>) -> Doc {
         let names = match self.field(node, "names") {
             Some(names) => self.node_text(names),
-            None => self
-                .field_text(node, field::NAME)
-                .unwrap_or_default(),
+            None => self.field_text(node, field::NAME).unwrap_or_default(),
         };
         let Some(type_node) = self.field(node, field::TYPE) else {
             return Doc::Text(format!("{names} ::"));
@@ -373,9 +365,7 @@ impl<'a> Renderer<'a> {
     /// A type synonym: `type Name params =` followed by an indented, wrapped
     /// right-hand side.
     pub(crate) fn type_synonym_doc(&self, node: Node<'_>) -> Doc {
-        let name = self
-            .field_text(node, field::NAME)
-            .unwrap_or_default();
+        let name = self.field_text(node, field::NAME).unwrap_or_default();
         let params = self.params_text(self.field(node, "patterns"));
         let header = format!("type {name}{params} =");
         let Some(rhs) = self.field(node, field::TYPE) else {
@@ -569,9 +559,7 @@ impl<'a> Renderer<'a> {
 
     /// The written head of a function definition, without the body.
     pub(crate) fn function_head(&self, node: Node<'_>) -> String {
-        let name = self
-            .field_text(node, field::NAME)
-            .unwrap_or_default();
+        let name = self.field_text(node, field::NAME).unwrap_or_default();
         let params = self
             .field(node, "patterns")
             .map(|patterns| format!(" {}", self.node_text(patterns)))
