@@ -1,77 +1,82 @@
 //! Haskell grammar node-kind constants.
 //!
 //! Tree-sitter node names are centralized here so that grammar upgrades fail
-//! focused tests when node names or shapes change.
+//! focused tests when node names or shapes change. Every other module in this
+//! crate refers to nodes through these constants.
 
 use base::{ProjectionError, SourceSpan, SupportedPath};
 use tree_sitter::{Node, Parser};
 
-// Visible node kinds.
-pub const HASKELL: &str = "haskell";
-pub const HEADER: &str = "header";
-pub const MODULE: &str = "module";
-pub const MODULE_ID: &str = "module_id";
-pub const EXPORTS: &str = "exports";
-pub const IMPORT: &str = "import";
-pub const IMPORTS: &str = "imports";
-pub const DECLARATIONS: &str = "declarations";
-pub const DECLARATION: &str = "declaration";
-pub const SIGNATURE: &str = "signature";
-pub const FUNCTION: &str = "function";
-pub const BIND: &str = "bind";
-pub const DATA_TYPE: &str = "data_type";
-pub const NEWTYPE: &str = "newtype";
-pub const TYPE_SYNONYM: &str = "type_synomym";
-pub const CLASS: &str = "class";
-pub const INSTANCE: &str = "instance";
-pub const DATA_FAMILY: &str = "data_family";
-pub const TYPE_FAMILY: &str = "type_family";
-pub const TYPE_INSTANCE: &str = "type_instance";
-pub const DATA_INSTANCE: &str = "data_instance";
-pub const PATTERN_SYNONYM: &str = "pattern_synonym";
-pub const DERIVING: &str = "deriving";
-pub const DERIVING_INSTANCE: &str = "deriving_instance";
-pub const KIND_SIGNATURE: &str = "kind_signature";
-pub const TYPE_ROLE: &str = "role_annotation";
-pub const FOREIGN_IMPORT: &str = "foreign_import";
-pub const FOREIGN_EXPORT: &str = "foreign_export";
-pub const PRAGMA: &str = "pragma";
-pub const COMMENT: &str = "comment";
-pub const HADDOCK: &str = "haddock";
-pub const CPP: &str = "cpp";
-pub const SPLICE: &str = "splice";
-pub const TOP_SPLICE: &str = "top_splice";
-pub const QUASIQUOTE: &str = "quasiquote";
+/// Tree-sitter node kinds referenced by extraction and rendering.
+pub mod node {
+    pub const HASKELL: &str = "haskell";
+    pub const HEADER: &str = "header";
+    pub const MODULE: &str = "module";
+    pub const MODULE_ID: &str = "module_id";
+    pub const EXPORTS: &str = "exports";
+    pub const IMPORT: &str = "import";
+    pub const IMPORTS: &str = "imports";
+    pub const DECLARATIONS: &str = "declarations";
+    pub const DECLARATION: &str = "declaration";
+    pub const SIGNATURE: &str = "signature";
+    pub const FUNCTION: &str = "function";
+    pub const BIND: &str = "bind";
+    pub const DATA_TYPE: &str = "data_type";
+    pub const NEWTYPE: &str = "newtype";
+    pub const TYPE_SYNONYM: &str = "type_synomym";
+    pub const CLASS: &str = "class";
+    pub const INSTANCE: &str = "instance";
+    pub const DATA_FAMILY: &str = "data_family";
+    pub const TYPE_FAMILY: &str = "type_family";
+    pub const TYPE_INSTANCE: &str = "type_instance";
+    pub const DATA_INSTANCE: &str = "data_instance";
+    pub const PATTERN_SYNONYM: &str = "pattern_synonym";
+    pub const DERIVING: &str = "deriving";
+    pub const DERIVING_INSTANCE: &str = "deriving_instance";
+    pub const KIND_SIGNATURE: &str = "kind_signature";
+    pub const TYPE_ROLE: &str = "role_annotation";
+    pub const FOREIGN_IMPORT: &str = "foreign_import";
+    pub const FOREIGN_EXPORT: &str = "foreign_export";
+    pub const PRAGMA: &str = "pragma";
+    pub const COMMENT: &str = "comment";
+    pub const HADDOCK: &str = "haddock";
+    pub const CPP: &str = "cpp";
+    pub const SPLICE: &str = "splice";
+    pub const TOP_SPLICE: &str = "top_splice";
+    pub const QUASIQUOTE: &str = "quasiquote";
 
-pub const DATA_CONSTRUCTORS: &str = "data_constructors";
-pub const DATA_CONSTRUCTOR: &str = "data_constructor";
-pub const NEWTYPE_CONSTRUCTOR: &str = "newtype_constructor";
-pub const FIELDS: &str = "fields";
-pub const FIELD: &str = "field";
-pub const CLASS_DECLARATIONS: &str = "class_declarations";
-pub const INSTANCE_DECLARATIONS: &str = "instance_declarations";
-pub const DEFAULT_SIGNATURE: &str = "default_signature";
-pub const TYPE_PARAMS: &str = "type_params";
-pub const TYPE_PARAM: &str = "type_param";
-pub const CONTEXT: &str = "context";
-pub const FORALL: &str = "forall";
-pub const FIELD_NAME: &str = "field_name";
-pub const VARIABLE: &str = "variable";
-pub const CONSTRUCTOR: &str = "constructor";
-pub const PREFIX_ID: &str = "prefix_id";
-pub const INFIX_ID: &str = "infix_id";
-pub const INVISIBLE: &str = "invisible";
-pub const PATTERN: &str = "pattern";
-pub const BINDING_LIST: &str = "binding_list";
+    pub const DATA_CONSTRUCTORS: &str = "data_constructors";
+    pub const DATA_CONSTRUCTOR: &str = "data_constructor";
+    pub const NEWTYPE_CONSTRUCTOR: &str = "newtype_constructor";
+    pub const FIELDS: &str = "fields";
+    pub const FIELD: &str = "field";
+    pub const CLASS_DECLARATIONS: &str = "class_declarations";
+    pub const INSTANCE_DECLARATIONS: &str = "instance_declarations";
+    pub const DEFAULT_SIGNATURE: &str = "default_signature";
+    pub const TYPE_PARAMS: &str = "type_params";
+    pub const TYPE_PARAM: &str = "type_param";
+    pub const CONTEXT: &str = "context";
+    pub const FORALL: &str = "forall";
+    pub const FIELD_NAME: &str = "field_name";
+    pub const VARIABLE: &str = "variable";
+    pub const CONSTRUCTOR: &str = "constructor";
+    pub const PREFIX_ID: &str = "prefix_id";
+    pub const INFIX_ID: &str = "infix_id";
+    pub const INVISIBLE: &str = "invisible";
+    pub const PATTERN: &str = "pattern";
+    pub const BINDING_LIST: &str = "binding_list";
+}
 
-// Named-field names used during traversal.
-pub const FIELD_NAME_FIELD: &str = "name";
-pub const FIELD_MODULE: &str = "module";
-pub const FIELD_DECLARATIONS: &str = "declarations";
-pub const FIELD_TYPE: &str = "type";
-pub const FIELD_BODY: &str = "body";
-pub const FIELD_PATTERNS: &str = "patterns";
-pub const FIELD_EXPRESSION: &str = "expression";
+/// Named fields accessed through `Node::child_by_field_name`.
+pub mod field {
+    pub const NAME: &str = "name";
+    pub const MODULE: &str = "module";
+    pub const DECLARATIONS: &str = "declarations";
+    pub const TYPE: &str = "type";
+    pub const BODY: &str = "body";
+    pub const PATTERNS: &str = "patterns";
+    pub const EXPRESSION: &str = "expression";
+}
 
 /// Parses one Haskell source file and rejects any tree containing `ERROR` or
 /// missing nodes. `None` parse results and error nodes are fatal so that no

@@ -10,18 +10,10 @@ pub(crate) use base::doc::{Doc, render};
 use base::{RepoPath, SupportedPath};
 use tree_sitter::Node;
 
-use crate::syntax::{
-    ATTRIBUTE, BLOCK_COMMENT, BOOLEAN_LITERAL, CHAR_LITERAL, CLOSE_BRACE, CLOSE_BRACKET,
-    CLOSE_PAREN, EQUAL, FIELD_ARGUMENTS, FIELD_BODY, FIELD_DECLARATION, FIELD_NAME,
-    FIELD_PARAMETERS, FIELD_PATTERN, FIELD_RETURN_TYPE, FIELD_TYPE, FIELD_TYPE_ARGUMENTS,
-    FLOAT_LITERAL, FUNCTION_TYPE, GENERIC_TYPE, INTEGER_LITERAL, LINE_COMMENT, NEGATIVE_LITERAL,
-    OPEN_BRACE, OPEN_BRACKET, OPEN_PAREN, ORDERED_FIELD_DECLARATION_LIST, PARAMETER, PARAMETERS,
-    RAW_STRING_LITERAL, REFERENCE_TYPE, SEMICOLON, STRING_LITERAL, TOKEN_TREE, TRAIT_BOUNDS,
-    TUPLE_TYPE, TYPE_PARAMETERS, VISIBILITY_MODIFIER, WHERE_CLAUSE,
-};
+use crate::syntax::{field, node};
 
 fn is_comment(kind: &str) -> bool {
-    matches!(kind, LINE_COMMENT | BLOCK_COMMENT)
+    matches!(kind, node::LINE_COMMENT | node::BLOCK_COMMENT)
 }
 
 /// Literals whose internal bytes must be preserved exactly, including spaces
@@ -29,13 +21,13 @@ fn is_comment(kind: &str) -> bool {
 fn is_atomic_literal(kind: &str) -> bool {
     matches!(
         kind,
-        STRING_LITERAL
-            | RAW_STRING_LITERAL
-            | CHAR_LITERAL
-            | INTEGER_LITERAL
-            | FLOAT_LITERAL
-            | BOOLEAN_LITERAL
-            | NEGATIVE_LITERAL
+        node::STRING_LITERAL
+            | node::RAW_STRING_LITERAL
+            | node::CHAR_LITERAL
+            | node::INTEGER_LITERAL
+            | node::FLOAT_LITERAL
+            | node::BOOLEAN_LITERAL
+            | node::NEGATIVE_LITERAL
     )
 }
 
@@ -191,14 +183,14 @@ impl<'a> Renderer<'a> {
 
     fn header_elements(&self, node: Node<'_>, stop_kinds: &[&str]) -> Vec<Elem> {
         let mut elements = Vec::new();
-        let return_type = self.child_by_field_name(node, FIELD_RETURN_TYPE);
+        let return_type = self.child_by_field_name(node, field::RETURN_TYPE);
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             let kind = child.kind();
             if stop_kinds.contains(&kind) {
                 break;
             }
-            if kind == SEMICOLON {
+            if kind == node::SEMICOLON {
                 continue;
             }
             if Some(child.id()) == return_type.map(|node| node.id()) {
@@ -212,9 +204,9 @@ impl<'a> Renderer<'a> {
                     continue;
                 }
             }
-            if kind == PARAMETERS {
+            if kind == node::PARAMETERS {
                 elements.push(self.list_elem(child, "(", ")"));
-            } else if kind == TYPE_PARAMETERS {
+            } else if kind == node::TYPE_PARAMETERS {
                 elements.push(self.list_elem(child, "<", ">"));
             } else {
                 for token in self.tokens(child) {
@@ -229,9 +221,9 @@ impl<'a> Renderer<'a> {
         let mut items = Vec::new();
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            if child.kind() == PARAMETER
-                && self.child_by_field_name(child, FIELD_PATTERN).is_some()
-                && self.child_by_field_name(child, FIELD_TYPE).is_some()
+            if child.kind() == node::PARAMETER
+                && self.child_by_field_name(child, field::PATTERN).is_some()
+                && self.child_by_field_name(child, field::TYPE).is_some()
             {
                 items.push(self.parameter_doc(child));
             } else {
@@ -245,7 +237,7 @@ impl<'a> Renderer<'a> {
     /// rendered type. A parameter type can therefore break inside an already-broken
     /// parameter list. Anything else (notably `self`) is rendered flat.
     fn parameter_doc(&self, node: Node<'_>) -> Doc {
-        match self.child_by_field_name(node, FIELD_TYPE) {
+        match self.child_by_field_name(node, field::TYPE) {
             Some(ty) => self.prefix_then_type(node, ty),
             None => Doc::Text(self.render_node(node)),
         }
@@ -257,23 +249,23 @@ impl<'a> Renderer<'a> {
     /// its own fit after an enclosing list breaks.
     pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
         match node.kind() {
-            GENERIC_TYPE => {
+            node::GENERIC_TYPE => {
                 let mut parts = Vec::new();
-                if let Some(ty) = self.child_by_field_name(node, FIELD_TYPE) {
+                if let Some(ty) = self.child_by_field_name(node, field::TYPE) {
                     parts.push(self.type_doc(ty));
                 }
-                if let Some(arguments) = self.child_by_field_name(node, FIELD_TYPE_ARGUMENTS) {
+                if let Some(arguments) = self.child_by_field_name(node, field::TYPE_ARGUMENTS) {
                     let items = self.named_type_children(arguments);
                     parts.push(bracket_list(&items, "<", ">"));
                 }
                 Doc::Group(Box::new(Doc::Concat(parts)))
             }
-            TUPLE_TYPE => {
+            node::TUPLE_TYPE => {
                 let items = self.named_type_children(node);
                 Doc::Group(Box::new(bracket_list(&items, "(", ")")))
             }
-            REFERENCE_TYPE => {
-                let Some(inner) = self.child_by_field_name(node, FIELD_TYPE) else {
+            node::REFERENCE_TYPE => {
+                let Some(inner) = self.child_by_field_name(node, field::TYPE) else {
                     return Doc::Text(self.render_node(node));
                 };
                 let mut prefix_tokens = Vec::new();
@@ -292,8 +284,8 @@ impl<'a> Renderer<'a> {
                 parts.push(self.type_doc(inner));
                 Doc::Concat(parts)
             }
-            FUNCTION_TYPE => {
-                let parameters = self.child_by_field_name(node, FIELD_PARAMETERS);
+            node::FUNCTION_TYPE => {
+                let parameters = self.child_by_field_name(node, field::PARAMETERS);
                 let mut parts = Vec::new();
                 // The prefix before `parameters` is the `fn` keyword for a bare
                 // function type, or the trait name (`Fn`) when nested under
@@ -311,7 +303,7 @@ impl<'a> Renderer<'a> {
                     let items = self.named_type_children(parameters);
                     parts.push(bracket_list(&items, "(", ")"));
                 }
-                if let Some(return_type) = self.child_by_field_name(node, FIELD_RETURN_TYPE) {
+                if let Some(return_type) = self.child_by_field_name(node, field::RETURN_TYPE) {
                     parts.push(Doc::Text(" -> ".to_owned()));
                     parts.push(self.type_doc(return_type));
                 }
@@ -331,7 +323,7 @@ impl<'a> Renderer<'a> {
     }
 
     pub(crate) fn where_clause_text(&self, node: Node<'_>) -> Option<String> {
-        self.child_of_kind(node, WHERE_CLAUSE)
+        self.child_of_kind(node, node::WHERE_CLAUSE)
             .map(|clause| self.render_node(clause))
     }
 
@@ -342,8 +334,8 @@ impl<'a> Renderer<'a> {
     /// are dropped so the caller can re-emit the list through [`bracket_list`].
     /// Nested token trees are single children, so a comma inside one never splits.
     fn attribute_argument_items(&self, attribute: Node<'_>) -> Option<Vec<String>> {
-        let arguments = attribute.child_by_field_name(FIELD_ARGUMENTS)?;
-        if arguments.kind() != TOKEN_TREE {
+        let arguments = attribute.child_by_field_name(field::ARGUMENTS)?;
+        if arguments.kind() != node::TOKEN_TREE {
             return None;
         }
         let mut cursor = arguments.walk();
@@ -352,9 +344,9 @@ impl<'a> Renderer<'a> {
             (Some(first), Some(last))
                 if matches!(
                     (first.kind(), last.kind()),
-                    (OPEN_PAREN, CLOSE_PAREN)
-                        | (OPEN_BRACKET, CLOSE_BRACKET)
-                        | (OPEN_BRACE, CLOSE_BRACE)
+                    (node::OPEN_PAREN, node::CLOSE_PAREN)
+                        | (node::OPEN_BRACKET, node::CLOSE_BRACKET)
+                        | (node::OPEN_BRACE, node::CLOSE_BRACE)
                 ) =>
             {
                 &children[1..children.len() - 1]
@@ -375,8 +367,8 @@ impl<'a> Renderer<'a> {
                 continue;
             }
             match kind {
-                OPEN_PAREN | OPEN_BRACKET | OPEN_BRACE => depth += 1,
-                CLOSE_PAREN | CLOSE_BRACKET | CLOSE_BRACE => {
+                node::OPEN_PAREN | node::OPEN_BRACKET | node::OPEN_BRACE => depth += 1,
+                node::CLOSE_PAREN | node::CLOSE_BRACKET | node::CLOSE_BRACE => {
                     depth = depth.saturating_sub(1);
                 }
                 _ => {}
@@ -398,15 +390,15 @@ impl<'a> Renderer<'a> {
     pub(crate) fn attribute_doc(&self, attribute_item: Node<'_>) -> Doc {
         // Extraction passes the `attribute_item`, whose only named child is the
         // `attribute` carrying the path and the argument token tree.
-        let attribute = if attribute_item.kind() == ATTRIBUTE {
+        let attribute = if attribute_item.kind() == node::ATTRIBUTE {
             attribute_item
         } else {
-            match self.child_of_kind(attribute_item, ATTRIBUTE) {
+            match self.child_of_kind(attribute_item, node::ATTRIBUTE) {
                 Some(attribute) => attribute,
                 None => return Doc::Text(self.render_node(attribute_item)),
             }
         };
-        let arguments = attribute.child_by_field_name(FIELD_ARGUMENTS);
+        let arguments = attribute.child_by_field_name(field::ARGUMENTS);
         let mut cursor = attribute.walk();
         let path = attribute
             .named_children(&mut cursor)
@@ -427,7 +419,7 @@ impl<'a> Renderer<'a> {
         let mut out = Vec::new();
         let mut cursor = list.walk();
         for child in list.children(&mut cursor) {
-            if child.kind() == FIELD_DECLARATION {
+            if child.kind() == node::FIELD_DECLARATION {
                 out.push(self.field_doc(child));
             }
         }
@@ -439,7 +431,7 @@ impl<'a> Renderer<'a> {
     /// byte-identical to the previous `render_node(field)`, but a long type can now
     /// break.
     pub(crate) fn field_doc(&self, node: Node<'_>) -> Doc {
-        match self.child_by_field_name(node, FIELD_TYPE) {
+        match self.child_by_field_name(node, field::TYPE) {
             Some(ty) => self.prefix_then_type(node, ty),
             None => Doc::Text(self.render_node(node)),
         }
@@ -470,13 +462,13 @@ impl<'a> Renderer<'a> {
     /// is a brace list the caller can group with the trailing comma.
     pub(crate) fn variant_doc(&self, variant: Node<'_>) -> Doc {
         let name = self
-            .child_by_field_name(variant, FIELD_NAME)
+            .child_by_field_name(variant, field::NAME)
             .map(|node| self.render_node(node))
             .unwrap_or_default();
 
-        match self.child_by_field_name(variant, FIELD_BODY) {
+        match self.child_by_field_name(variant, field::BODY) {
             None => Doc::Text(self.render_node(variant)),
-            Some(body) if body.kind() == ORDERED_FIELD_DECLARATION_LIST => {
+            Some(body) if body.kind() == node::ORDERED_FIELD_DECLARATION_LIST => {
                 Doc::Text(format!("{name}{}", self.render_node(body)))
             }
             Some(body) => {
@@ -493,19 +485,19 @@ impl<'a> Renderer<'a> {
     /// `type Item = RightHandSide`, without the terminator or where clause.
     pub(crate) fn type_alias_text(&self, node: Node<'_>) -> Doc {
         let mut out = Vec::new();
-        if let Some(visibility) = self.child_of_kind(node, VISIBILITY_MODIFIER) {
+        if let Some(visibility) = self.child_of_kind(node, node::VISIBILITY_MODIFIER) {
             self.push_tokens(visibility, &mut out);
         }
         out.push("type".to_owned());
-        if let Some(name) = self.child_by_field_name(node, FIELD_NAME) {
+        if let Some(name) = self.child_by_field_name(node, field::NAME) {
             self.push_tokens(name, &mut out);
         }
-        if let Some(parameters) = self.child_of_kind(node, TYPE_PARAMETERS) {
+        if let Some(parameters) = self.child_of_kind(node, node::TYPE_PARAMETERS) {
             self.push_tokens(parameters, &mut out);
         }
-        out.push(EQUAL.to_owned());
+        out.push(node::EQUAL.to_owned());
         let mut parts = vec![Doc::Text(join(&out))];
-        if let Some(right) = self.child_by_field_name(node, FIELD_TYPE) {
+        if let Some(right) = self.child_by_field_name(node, field::TYPE) {
             let first = self.tokens(right).into_iter().next().unwrap_or_default();
             if needs_space(last_or_empty(&out), &first) {
                 parts.push(Doc::Text(" ".to_owned()));
@@ -518,13 +510,13 @@ impl<'a> Renderer<'a> {
     /// `type Error: Bound + Bound`, without the terminator or where clause.
     pub(crate) fn associated_type_text(&self, node: Node<'_>) -> String {
         let mut out = vec!["type".to_owned()];
-        if let Some(name) = self.child_by_field_name(node, FIELD_NAME) {
+        if let Some(name) = self.child_by_field_name(node, field::NAME) {
             self.push_tokens(name, &mut out);
         }
-        if let Some(parameters) = self.child_of_kind(node, TYPE_PARAMETERS) {
+        if let Some(parameters) = self.child_of_kind(node, node::TYPE_PARAMETERS) {
             self.push_tokens(parameters, &mut out);
         }
-        if let Some(bounds) = self.child_of_kind(node, TRAIT_BOUNDS) {
+        if let Some(bounds) = self.child_of_kind(node, node::TRAIT_BOUNDS) {
             self.push_tokens(bounds, &mut out);
         }
         join(&out)
@@ -536,10 +528,10 @@ impl<'a> Renderer<'a> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             let kind = child.kind();
-            if kind == EQUAL {
+            if kind == node::EQUAL {
                 break;
             }
-            if kind == SEMICOLON {
+            if kind == node::SEMICOLON {
                 continue;
             }
             self.push_tokens(child, &mut out);

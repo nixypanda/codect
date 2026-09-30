@@ -12,14 +12,7 @@ use base::{
 use tree_sitter::Node;
 
 use crate::render::{self, Doc, Renderer};
-use crate::syntax::{
-    self, ASSOCIATED_TYPE, ATTRIBUTE, ATTRIBUTE_ITEM, BLOCK, BLOCK_COMMENT, CONST_ITEM,
-    DECLARATION_LIST, ENUM_ITEM, ENUM_VARIANT, ENUM_VARIANT_LIST, EXTERN_MODIFIER, FIELD_BODY,
-    FIELD_DECLARATION, FIELD_DECLARATION_LIST, FIELD_NAME, FIELD_TRAIT, FIELD_TYPE,
-    FOREIGN_MOD_ITEM, FUNCTION_ITEM, FUNCTION_SIGNATURE_ITEM, IMPL_ITEM, INNER_ATTRIBUTE_ITEM,
-    LINE_COMMENT, MOD_ITEM, ORDERED_FIELD_DECLARATION_LIST, STATIC_ITEM, STRUCT_ITEM, TRAIT_ITEM,
-    TYPE_ITEM, UNION_ITEM, WHERE_CLAUSE,
-};
+use crate::syntax::{self, field, node};
 
 /// The kind of container a declaration is nested in, which determines its
 /// `ItemKind` and which product rules include it.
@@ -81,7 +74,7 @@ pub(crate) fn project_file(
 }
 
 fn is_comment(kind: &str) -> bool {
-    matches!(kind, LINE_COMMENT | BLOCK_COMMENT)
+    matches!(kind, node::LINE_COMMENT | node::BLOCK_COMMENT)
 }
 
 fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
@@ -90,7 +83,7 @@ fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 fn is_doc_attribute(item: Node<'_>, renderer: &Renderer<'_>) -> bool {
-    let attribute = match renderer.child_of_kind(item, ATTRIBUTE) {
+    let attribute = match renderer.child_of_kind(item, node::ATTRIBUTE) {
         Some(attribute) => attribute,
         None => return false,
     };
@@ -109,13 +102,13 @@ fn collect_declarations<'t>(container: Node<'t>, renderer: &Renderer<'_>) -> Vec
         if is_comment(kind) {
             continue;
         }
-        if kind == ATTRIBUTE_ITEM {
+        if kind == node::ATTRIBUTE_ITEM {
             if !is_doc_attribute(child, renderer) {
                 pending.push(child);
             }
             continue;
         }
-        if kind == INNER_ATTRIBUTE_ITEM {
+        if kind == node::INNER_ATTRIBUTE_ITEM {
             continue;
         }
         declarations.push(Declaration {
@@ -153,28 +146,28 @@ fn build_decl(
     context: &mut Context<'_>,
 ) -> Option<Built> {
     match declaration.node.kind() {
-        STRUCT_ITEM => Some(build_struct(
+        node::STRUCT_ITEM => Some(build_struct(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        ENUM_ITEM => Some(build_enum(
+        node::ENUM_ITEM => Some(build_enum(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        UNION_ITEM => Some(build_union(
+        node::UNION_ITEM => Some(build_union(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        TYPE_ITEM => Some(build_type_item(
+        node::TYPE_ITEM => Some(build_type_item(
             declaration,
             scope,
             container_key,
@@ -182,25 +175,25 @@ fn build_decl(
             depth,
             context,
         )),
-        ASSOCIATED_TYPE => Some(build_associated_type(
+        node::ASSOCIATED_TYPE => Some(build_associated_type(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        TRAIT_ITEM => Some(build_trait(
+        node::TRAIT_ITEM => Some(build_trait(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        IMPL_ITEM => build_impl(declaration, container_key, nested, depth, context),
-        FUNCTION_ITEM | FUNCTION_SIGNATURE_ITEM => {
+        node::IMPL_ITEM => build_impl(declaration, container_key, nested, depth, context),
+        node::FUNCTION_ITEM | node::FUNCTION_SIGNATURE_ITEM => {
             build_signature(declaration, scope, container_key, nested, depth, context)
         }
-        CONST_ITEM => build_constant(
+        node::CONST_ITEM => build_constant(
             declaration,
             container_key,
             nested,
@@ -208,7 +201,7 @@ fn build_decl(
             context,
             ItemKind::Constant,
         ),
-        STATIC_ITEM => build_constant(
+        node::STATIC_ITEM => build_constant(
             declaration,
             container_key,
             nested,
@@ -216,16 +209,16 @@ fn build_decl(
             context,
             ItemKind::Static,
         ),
-        FOREIGN_MOD_ITEM => build_foreign(declaration, container_key, nested, depth, context),
-        MOD_ITEM => build_module(declaration, container_key, nested, depth, context),
-        FIELD_DECLARATION => Some(build_field(
+        node::FOREIGN_MOD_ITEM => build_foreign(declaration, container_key, nested, depth, context),
+        node::MOD_ITEM => build_module(declaration, container_key, nested, depth, context),
+        node::FIELD_DECLARATION => Some(build_field(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        ENUM_VARIANT => Some(build_variant(
+        node::ENUM_VARIANT => Some(build_variant(
             declaration,
             container_key,
             nested,
@@ -286,7 +279,7 @@ fn make_built(
 }
 
 fn field_name(node: Node<'_>, renderer: &Renderer<'_>) -> Option<String> {
-    node.child_by_field_name(FIELD_NAME)
+    node.child_by_field_name(field::NAME)
         .map(|name| renderer.slice(name).to_owned())
 }
 
@@ -304,14 +297,14 @@ fn build_struct(
     let header = context.renderer.header(
         node,
         &[
-            WHERE_CLAUSE,
-            FIELD_DECLARATION_LIST,
-            ORDERED_FIELD_DECLARATION_LIST,
+            node::WHERE_CLAUSE,
+            node::FIELD_DECLARATION_LIST,
+            node::ORDERED_FIELD_DECLARATION_LIST,
         ],
     );
     let where_clause = context.renderer.where_clause_text(node);
 
-    match node.child_by_field_name(FIELD_BODY) {
+    match node.child_by_field_name(field::BODY) {
         None => {
             let doc = render::with_attributes(attributes, render::signature_doc(header, None));
             make_built(
@@ -325,7 +318,7 @@ fn build_struct(
                 Vec::new(),
             )
         }
-        Some(body) if body.kind() == ORDERED_FIELD_DECLARATION_LIST => {
+        Some(body) if body.kind() == node::ORDERED_FIELD_DECLARATION_LIST => {
             let fields = context.renderer.render_node(body);
             let header = Doc::Concat(vec![header, Doc::Text(fields)]);
             let doc =
@@ -375,10 +368,10 @@ fn build_union(
     let attributes = attribute_docs(declaration, context.renderer);
     let header = context
         .renderer
-        .header(node, &[WHERE_CLAUSE, FIELD_DECLARATION_LIST]);
+        .header(node, &[node::WHERE_CLAUSE, node::FIELD_DECLARATION_LIST]);
     let where_clause = context.renderer.where_clause_text(node);
     let members = node
-        .child_by_field_name(FIELD_BODY)
+        .child_by_field_name(field::BODY)
         .map(|body| build_members(body, Scope::Fields, &key, true, depth + 1, context))
         .unwrap_or_default();
     let doc = render::with_attributes(
@@ -411,10 +404,10 @@ fn build_enum(
     let attributes = attribute_docs(declaration, context.renderer);
     let header = context
         .renderer
-        .header(node, &[WHERE_CLAUSE, ENUM_VARIANT_LIST]);
+        .header(node, &[node::WHERE_CLAUSE, node::ENUM_VARIANT_LIST]);
     let where_clause = context.renderer.where_clause_text(node);
     let members = node
-        .child_by_field_name(FIELD_BODY)
+        .child_by_field_name(field::BODY)
         .map(|body| build_members(body, Scope::VariantFields, &key, true, depth + 1, context))
         .unwrap_or_default();
     let doc = render::with_attributes(
@@ -568,11 +561,11 @@ fn build_trait(
     let attributes = attribute_docs(declaration, context.renderer);
     let header = context
         .renderer
-        .header(node, &[WHERE_CLAUSE, DECLARATION_LIST]);
+        .header(node, &[node::WHERE_CLAUSE, node::DECLARATION_LIST]);
     let where_clause = context.renderer.where_clause_text(node);
     let members = context
         .renderer
-        .child_of_kind(node, DECLARATION_LIST)
+        .child_of_kind(node, node::DECLARATION_LIST)
         .map(|body| build_members(body, Scope::Trait, &key, true, depth + 1, context))
         .unwrap_or_default();
     let doc = render::with_attributes(
@@ -600,8 +593,8 @@ fn build_impl(
     context: &mut Context<'_>,
 ) -> Option<Built> {
     let node = declaration.node;
-    let trait_node = node.child_by_field_name(FIELD_TRAIT);
-    let type_node = node.child_by_field_name(FIELD_TYPE)?;
+    let trait_node = node.child_by_field_name(field::TRAIT);
+    let type_node = node.child_by_field_name(field::TYPE)?;
     let type_name = context.renderer.render_node(type_node);
     let (key, name) = match trait_node {
         Some(trait_node) => {
@@ -620,11 +613,11 @@ fn build_impl(
     let attributes = attribute_docs(declaration, context.renderer);
     let header = context
         .renderer
-        .header(node, &[WHERE_CLAUSE, DECLARATION_LIST]);
+        .header(node, &[node::WHERE_CLAUSE, node::DECLARATION_LIST]);
     let where_clause = context.renderer.where_clause_text(node);
     let members = context
         .renderer
-        .child_of_kind(node, DECLARATION_LIST)
+        .child_of_kind(node, node::DECLARATION_LIST)
         .map(|body| build_members(body, Scope::Impl, &key, true, depth + 1, context))
         .unwrap_or_default();
 
@@ -671,7 +664,7 @@ fn build_signature(
     };
     let key = context.unique(format!("{container_key}::{}::{name}", kind_token(kind)));
     let attributes = attribute_docs(declaration, context.renderer);
-    let header = context.renderer.header(node, &[WHERE_CLAUSE, BLOCK]);
+    let header = context.renderer.header(node, &[node::WHERE_CLAUSE, node::BLOCK]);
     let where_clause = context.renderer.where_clause_text(node);
     let doc = render::with_attributes(attributes, render::signature_doc(header, where_clause));
     Some(make_built(
@@ -726,10 +719,10 @@ fn build_foreign(
         return None;
     }
     let node = declaration.node;
-    let body = node.child_by_field_name(FIELD_BODY)?;
+    let body = node.child_by_field_name(field::BODY)?;
     let name = context
         .renderer
-        .child_of_kind(node, EXTERN_MODIFIER)
+        .child_of_kind(node, node::EXTERN_MODIFIER)
         .map(|modifier| context.renderer.render_node(modifier))
         .unwrap_or_else(|| "extern".to_owned());
     let key = context.unique(format!("{container_key}::extern::{name}"));
@@ -738,7 +731,7 @@ fn build_foreign(
     if members.is_empty() {
         return None;
     }
-    let header = context.renderer.header(node, &[DECLARATION_LIST]);
+    let header = context.renderer.header(node, &[node::DECLARATION_LIST]);
     let doc = render::with_attributes(
         attributes,
         render::container_doc(header, None, member_docs(&members)),
@@ -765,7 +758,7 @@ fn build_module(
 ) -> Option<Built> {
     // An out-of-line `mod name;` has no content here; the referenced file is
     // projected independently by its own path (section 12.1).
-    let body = declaration.node.child_by_field_name(FIELD_BODY)?;
+    let body = declaration.node.child_by_field_name(field::BODY)?;
     let name = field_name(declaration.node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::mod::{name}"));
     let attributes = attribute_docs(declaration, context.renderer);
@@ -773,7 +766,7 @@ fn build_module(
     if members.is_empty() {
         return None;
     }
-    let header = context.renderer.header(declaration.node, &[DECLARATION_LIST]);
+    let header = context.renderer.header(declaration.node, &[node::DECLARATION_LIST]);
     let doc = render::with_attributes(
         attributes,
         render::container_doc(header, None, member_docs(&members)),

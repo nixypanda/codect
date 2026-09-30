@@ -13,12 +13,7 @@ use base::{
 use tree_sitter::Node;
 
 use crate::render::{self, Doc, Renderer};
-use crate::syntax::{
-    self, ASSIGNMENT, ATTRIBUTE, CALL, CLASS_DEFINITION, COMMENT, DECORATED_DEFINITION, DECORATOR,
-    EXPRESSION_STATEMENT, FIELD_BODY, FIELD_DEFINITION, FIELD_LEFT, FIELD_NAME, FIELD_RETURN_TYPE,
-    FIELD_RIGHT, FIELD_SUPERCLASSES, FIELD_TYPE, FIELD_TYPE_PARAMETERS, FUNCTION_DEFINITION,
-    IDENTIFIER, PASS_STATEMENT, STRING, TYPE_ALIAS_STATEMENT,
-};
+use crate::syntax::{self, field, node};
 
 /// Whether a declaration sits at module level or inside a class body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,38 +71,38 @@ impl Builder<'_> {
         depth: usize,
     ) -> Result<Option<Built>, ProjectionError> {
         match node.kind() {
-            COMMENT | PASS_STATEMENT => Ok(None),
-            DECORATED_DEFINITION => {
+            node::COMMENT | node::PASS_STATEMENT => Ok(None),
+            node::DECORATED_DEFINITION => {
                 let decorators = self.decorators(node);
                 let definition = node
-                    .child_by_field_name(FIELD_DEFINITION)
+                    .child_by_field_name(field::DEFINITION)
                     .ok_or_else(|| self.missing(node, "decorated definition has no definition"))?;
                 match definition.kind() {
-                    CLASS_DEFINITION => Ok(Some(self.class_decl(
+                    node::CLASS_DEFINITION => Ok(Some(self.class_decl(
                         definition,
                         decorators,
                         container_key,
                         scope,
                         depth,
                     )?)),
-                    FUNCTION_DEFINITION => {
+                    node::FUNCTION_DEFINITION => {
                         self.function_decl(definition, decorators, container_key, scope, depth)
                     }
                     _ => self.invariant(node, "unsupported decorated definition"),
                 }
             }
-            CLASS_DEFINITION => Ok(Some(self.class_decl(
+            node::CLASS_DEFINITION => Ok(Some(self.class_decl(
                 node,
                 Vec::new(),
                 container_key,
                 scope,
                 depth,
             )?)),
-            FUNCTION_DEFINITION => {
+            node::FUNCTION_DEFINITION => {
                 self.function_decl(node, Vec::new(), container_key, scope, depth)
             }
-            TYPE_ALIAS_STATEMENT => Ok(Some(self.type_alias(node, container_key, scope, depth)?)),
-            EXPRESSION_STATEMENT => self.expression_statement(node, container_key, scope, depth),
+            node::TYPE_ALIAS_STATEMENT => Ok(Some(self.type_alias(node, container_key, scope, depth)?)),
+            node::EXPRESSION_STATEMENT => self.expression_statement(node, container_key, scope, depth),
             _ => Ok(None),
         }
     }
@@ -132,7 +127,7 @@ impl Builder<'_> {
         let mut docs = Vec::new();
         let mut cursor = definition.walk();
         for child in definition.children(&mut cursor) {
-            if child.kind() == DECORATOR {
+            if child.kind() == node::DECORATOR {
                 docs.push(self.renderer.decorator_doc(child));
             }
         }
@@ -149,15 +144,15 @@ impl Builder<'_> {
     ) -> Result<Built, ProjectionError> {
         let name = self
             .renderer
-            .field_text(node, FIELD_NAME)
+            .field_text(node, field::NAME)
             .ok_or_else(|| self.missing(node, "class has no name"))?
             .to_owned();
         let key = self.unique(format!("{container_key}::class::{name}"));
         let enum_like = is_enum_like(self.renderer, node);
 
         let mut header = vec![Doc::Text(format!("class {name}"))];
-        let type_parameters = node.child_by_field_name(FIELD_TYPE_PARAMETERS);
-        let superclasses = node.child_by_field_name(FIELD_SUPERCLASSES);
+        let type_parameters = node.child_by_field_name(field::TYPE_PARAMETERS);
+        let superclasses = node.child_by_field_name(field::SUPERCLASSES);
         if let Some(parameters) = type_parameters {
             let list = self.renderer.node_bracket_list(parameters, "[", "]");
             // The last list is the primary break point; an earlier list stays
@@ -174,7 +169,7 @@ impl Builder<'_> {
         header.push(Doc::Text(":".to_owned()));
         let header = Doc::Group(Box::new(Doc::Concat(header)));
 
-        let members = match node.child_by_field_name(FIELD_BODY) {
+        let members = match node.child_by_field_name(field::BODY) {
             Some(body) => self.members(body, &key, Scope::Class { enum_like }, depth + 1)?,
             None => Vec::new(),
         };
@@ -206,7 +201,7 @@ impl Builder<'_> {
         }
         let name = self
             .renderer
-            .field_text(node, FIELD_NAME)
+            .field_text(node, field::NAME)
             .ok_or_else(|| self.missing(node, "function has no name"))?
             .to_owned();
         let is_method = matches!(scope, Scope::Class { .. });
@@ -218,7 +213,7 @@ impl Builder<'_> {
             header.push(Doc::Text("async ".to_owned()));
         }
         header.push(Doc::Text(format!("def {name}")));
-        let type_parameters = node.child_by_field_name(FIELD_TYPE_PARAMETERS);
+        let type_parameters = node.child_by_field_name(field::TYPE_PARAMETERS);
         let parameters = node.child_by_field_name("parameters");
         if let Some(type_parameters) = type_parameters {
             let list = self.renderer.node_bracket_list(type_parameters, "[", "]");
@@ -234,7 +229,7 @@ impl Builder<'_> {
             Some(parameters) => header.push(self.renderer.parameters_doc(parameters)),
             None => self.invariant(node, "function has no parameter list")?,
         }
-        if let Some(return_type) = node.child_by_field_name(FIELD_RETURN_TYPE) {
+        if let Some(return_type) = node.child_by_field_name(field::RETURN_TYPE) {
             header.push(Doc::Text(" -> ".to_owned()));
             header.push(self.renderer.type_doc(return_type));
         }
@@ -269,12 +264,12 @@ impl Builder<'_> {
         depth: usize,
     ) -> Result<Built, ProjectionError> {
         let left = node
-            .child_by_field_name(FIELD_LEFT)
+            .child_by_field_name(field::LEFT)
             .ok_or_else(|| self.missing(node, "type alias has no left side"))?;
         let name = self.renderer.node_text(left);
         let key = self.unique(format!("{container_key}::alias::{name}"));
         let mut parts = vec![Doc::Text(format!("type {name}"))];
-        if let Some(right) = node.child_by_field_name(FIELD_RIGHT) {
+        if let Some(right) = node.child_by_field_name(field::RIGHT) {
             parts.push(Doc::Text(" = ".to_owned()));
             parts.push(self.renderer.type_doc(right));
         }
@@ -316,12 +311,12 @@ impl Builder<'_> {
     ) -> Result<Option<Built>, ProjectionError> {
         let mut cursor = node.walk();
         let named: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
-        if named.len() == 1 && named[0].kind() == STRING {
+        if named.len() == 1 && named[0].kind() == node::STRING {
             // A module- or class-level docstring.
             return Ok(None);
         }
         for child in named {
-            if child.kind() == ASSIGNMENT {
+            if child.kind() == node::ASSIGNMENT {
                 return self.assignment(child, container_key, scope, depth);
             }
         }
@@ -335,11 +330,11 @@ impl Builder<'_> {
         scope: Scope,
         depth: usize,
     ) -> Result<Option<Built>, ProjectionError> {
-        let Some(left) = node.child_by_field_name(FIELD_LEFT) else {
+        let Some(left) = node.child_by_field_name(field::LEFT) else {
             return Ok(None);
         };
         let left_text = self.renderer.node_text(left);
-        let type_annotation = node.child_by_field_name(FIELD_TYPE);
+        let type_annotation = node.child_by_field_name(field::TYPE);
 
         if let Some(annotation) = type_annotation {
             let doc = Doc::Concat(vec![
@@ -370,7 +365,7 @@ impl Builder<'_> {
             )));
         }
 
-        if self.is_type_constructor(node.child_by_field_name(FIELD_RIGHT)) {
+        if self.is_type_constructor(node.child_by_field_name(field::RIGHT)) {
             let text = self.renderer.node_text(node);
             let key = self.unique(format!("{container_key}::type::{left_text}"));
             return Ok(Some(make_built(
@@ -414,15 +409,15 @@ impl Builder<'_> {
         let Some(right) = right else {
             return false;
         };
-        if right.kind() != CALL {
+        if right.kind() != node::CALL {
             return false;
         }
         let Some(function) = right.child_by_field_name("function") else {
             return false;
         };
         let name = match function.kind() {
-            IDENTIFIER => function,
-            ATTRIBUTE => match function.child_by_field_name("attribute") {
+            node::IDENTIFIER => function,
+            node::ATTRIBUTE => match function.child_by_field_name("attribute") {
                 Some(attribute) => attribute,
                 None => return false,
             },
@@ -436,14 +431,14 @@ impl Builder<'_> {
 }
 
 fn is_enum_like(renderer: &Renderer<'_>, class: Node<'_>) -> bool {
-    let Some(superclasses) = class.child_by_field_name(FIELD_SUPERCLASSES) else {
+    let Some(superclasses) = class.child_by_field_name(field::SUPERCLASSES) else {
         return false;
     };
     let mut cursor = superclasses.walk();
     for child in superclasses.named_children(&mut cursor) {
         let name = match child.kind() {
-            IDENTIFIER => Some(renderer.slice(child)),
-            ATTRIBUTE => child
+            node::IDENTIFIER => Some(renderer.slice(child)),
+            node::ATTRIBUTE => child
                 .child_by_field_name("attribute")
                 .map(|attribute| renderer.slice(attribute)),
             _ => None,

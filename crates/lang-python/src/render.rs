@@ -10,10 +10,7 @@ pub(crate) use base::doc::{Doc, render};
 use base::{ProjectionError, SupportedPath};
 use tree_sitter::Node;
 
-use crate::syntax::{
-    self, BINARY_OPERATOR, CALL, COMMENT, DEFAULT_PARAMETER, FIELD_NAME, FIELD_TYPE, FIELD_VALUE,
-    GENERIC_TYPE, KEYWORD_ARGUMENT, STRING, TYPE, TYPE_PARAMETER,
-};
+use crate::syntax::{self, field, node};
 
 /// One leaf token with explicit glue flags. `glue_before` and `glue_after`
 /// suppress the default space on that side, which is how `keyword=value` is
@@ -81,31 +78,31 @@ impl<'a> Renderer<'a> {
 
     fn push_tokens(&self, node: Node<'_>, out: &mut Vec<Tok>) {
         let kind = node.kind();
-        if kind == COMMENT {
+        if kind == node::COMMENT {
             return;
         }
-        if kind == STRING {
+        if kind == node::STRING {
             out.push(Tok::plain(self.slice(node)));
             return;
         }
-        if kind == KEYWORD_ARGUMENT {
-            if let Some(name) = node.child_by_field_name(syntax::FIELD_NAME) {
+        if kind == node::KEYWORD_ARGUMENT {
+            if let Some(name) = node.child_by_field_name(field::NAME) {
                 self.push_tokens(name, out);
             }
             out.push(Tok::glued("="));
-            if let Some(value) = node.child_by_field_name(syntax::FIELD_VALUE) {
+            if let Some(value) = node.child_by_field_name(field::VALUE) {
                 self.push_tokens(value, out);
             }
             return;
         }
         // An unannotated default is written `name=value`; an annotated default
         // is written `name: T = value` and is handled by the generic path.
-        if kind == DEFAULT_PARAMETER {
-            if let Some(name) = node.child_by_field_name(FIELD_NAME) {
+        if kind == node::DEFAULT_PARAMETER {
+            if let Some(name) = node.child_by_field_name(field::NAME) {
                 self.push_tokens(name, out);
             }
             out.push(Tok::glued("="));
-            if let Some(value) = node.child_by_field_name(FIELD_VALUE) {
+            if let Some(value) = node.child_by_field_name(field::VALUE) {
                 self.push_tokens(value, out);
             }
             return;
@@ -138,7 +135,7 @@ impl<'a> Renderer<'a> {
     pub(crate) fn decorator_doc(&self, node: Node<'_>) -> Doc {
         let mut cursor = node.walk();
         let expression = node.named_children(&mut cursor).next();
-        if let Some(call) = expression.filter(|child| child.kind() == CALL)
+        if let Some(call) = expression.filter(|child| child.kind() == node::CALL)
             && let (Some(function), Some(arguments)) = (
                 call.child_by_field_name("function"),
                 call.child_by_field_name("arguments"),
@@ -229,7 +226,7 @@ impl<'a> Renderer<'a> {
     /// boundary space, so the flat form is byte-identical to
     /// [`Renderer::node_text`].
     fn parameter_doc(&self, node: Node<'_>) -> Doc {
-        let Some(type_node) = node.child_by_field_name(FIELD_TYPE) else {
+        let Some(type_node) = node.child_by_field_name(field::TYPE) else {
             return Doc::Text(self.node_text(node));
         };
 
@@ -292,7 +289,7 @@ impl<'a> Renderer<'a> {
     /// `subscript`; a bare `subscript` in an expression position is left flat.
     pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
         match node.kind() {
-            TYPE => {
+            node::TYPE => {
                 let mut cursor = node.walk();
                 let named: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
                 match named.as_slice() {
@@ -300,8 +297,8 @@ impl<'a> Renderer<'a> {
                     _ => Doc::Text(self.node_text(node)),
                 }
             }
-            GENERIC_TYPE => self.generic_type_doc(node),
-            BINARY_OPERATOR => self.binary_operator_type_doc(node),
+            node::GENERIC_TYPE => self.generic_type_doc(node),
+            node::BINARY_OPERATOR => self.binary_operator_type_doc(node),
             _ => Doc::Text(self.node_text(node)),
         }
     }
@@ -320,7 +317,7 @@ impl<'a> Renderer<'a> {
         };
         let mut parts = vec![Doc::Text(self.node_text(value))];
         for parameter in named {
-            if parameter.kind() != TYPE_PARAMETER {
+            if parameter.kind() != node::TYPE_PARAMETER {
                 return Doc::Text(self.node_text(node));
             }
             let mut cursor = parameter.walk();
@@ -368,7 +365,7 @@ impl<'a> Renderer<'a> {
 
     /// Flattens a `|` chain (left- or right-leaning) into its operands.
     fn collect_union_operands<'t>(&self, node: Node<'t>, out: &mut Vec<Node<'t>>) {
-        let is_union = node.kind() == BINARY_OPERATOR
+        let is_union = node.kind() == node::BINARY_OPERATOR
             && node
                 .child_by_field_name("operator")
                 .is_some_and(|operator| self.slice(operator) == "|");
@@ -565,7 +562,7 @@ mod tests {
         let mut stack = vec![tree.root_node()];
         let mut decorator = None;
         while let Some(node) = stack.pop() {
-            if node.kind() == crate::syntax::DECORATOR {
+            if node.kind() == node::DECORATOR {
                 decorator = Some(node);
                 break;
             }
@@ -600,9 +597,9 @@ mod tests {
         let renderer = Renderer::new(&path, source);
         let mut stack = vec![tree.root_node()];
         while let Some(node) = stack.pop() {
-            if node.kind() == crate::syntax::FUNCTION_DEFINITION {
+            if node.kind() == node::FUNCTION_DEFINITION {
                 let return_type = node
-                    .child_by_field_name(crate::syntax::FIELD_RETURN_TYPE)
+                    .child_by_field_name(field::RETURN_TYPE)
                     .expect("function has a return type");
                 return (
                     renderer.type_doc(return_type),
