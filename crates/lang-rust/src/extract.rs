@@ -51,9 +51,7 @@ impl Context<'_> {
     }
 }
 
-pub(crate) fn project_file(
-    input: ProjectionInput<'_>,
-) -> Result<ProjectedFile, ProjectionError> {
+pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
     let tree = syntax::parse(input.source, input.path)?;
     let root = tree.root_node();
     let renderer = Renderer::new(input.path, input.source);
@@ -319,7 +317,7 @@ fn build_struct(
             )
         }
         Some(body) if body.kind() == node::ORDERED_FIELD_DECLARATION_LIST => {
-            let fields = context.renderer.render_node(body);
+            let fields = context.renderer.node_text(body);
             let header = Doc::Concat(vec![header, Doc::Text(fields)]);
             let doc =
                 render::with_attributes(attributes, render::signature_doc(header, where_clause));
@@ -595,10 +593,10 @@ fn build_impl(
     let node = declaration.node;
     let trait_node = node.child_by_field_name(field::TRAIT);
     let type_node = node.child_by_field_name(field::TYPE)?;
-    let type_name = context.renderer.render_node(type_node);
+    let type_name = context.renderer.node_text(type_node);
     let (key, name) = match trait_node {
         Some(trait_node) => {
-            let trait_name = context.renderer.render_node(trait_node);
+            let trait_name = context.renderer.node_text(trait_node);
             (
                 format!("impl {trait_name} for {type_name}"),
                 format!("{trait_name} for {type_name}"),
@@ -664,7 +662,9 @@ fn build_signature(
     };
     let key = context.unique(format!("{container_key}::{}::{name}", kind_token(kind)));
     let attributes = attribute_docs(declaration, context.renderer);
-    let header = context.renderer.header(node, &[node::WHERE_CLAUSE, node::BLOCK]);
+    let header = context
+        .renderer
+        .header(node, &[node::WHERE_CLAUSE, node::BLOCK]);
     let where_clause = context.renderer.where_clause_text(node);
     let doc = render::with_attributes(attributes, render::signature_doc(header, where_clause));
     Some(make_built(
@@ -723,7 +723,7 @@ fn build_foreign(
     let name = context
         .renderer
         .child_of_kind(node, node::EXTERN_MODIFIER)
-        .map(|modifier| context.renderer.render_node(modifier))
+        .map(|modifier| context.renderer.node_text(modifier))
         .unwrap_or_else(|| "extern".to_owned());
     let key = context.unique(format!("{container_key}::extern::{name}"));
     let attributes = attribute_docs(declaration, context.renderer);
@@ -766,7 +766,9 @@ fn build_module(
     if members.is_empty() {
         return None;
     }
-    let header = context.renderer.header(declaration.node, &[node::DECLARATION_LIST]);
+    let header = context
+        .renderer
+        .header(declaration.node, &[node::DECLARATION_LIST]);
     let doc = render::with_attributes(
         attributes,
         render::container_doc(header, None, member_docs(&members)),
