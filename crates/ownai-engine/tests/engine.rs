@@ -6,8 +6,8 @@
 
 mod support;
 
-use ownai_core::{ProjectionMode, RepoPath};
-use ownai_engine::{Engine, EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_core::{Area, FileDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
+use ownai_engine::{Engine, EngineError};
 use support::TestRepo;
 
 #[test]
@@ -73,28 +73,22 @@ fn engine(repo: &TestRepo) -> Engine {
 fn path_selection(paths: &[&str]) -> Selection {
     let groups = paths
         .iter()
-        .map(|raw| SelectionGroup::Path {
-            label: (*raw).to_owned(),
-            path: RepoPath::new(*raw).expect("valid path"),
-        })
+        .map(|raw| SelectionGroup::Path(RepoPath::new(*raw).expect("valid path")))
         .collect();
-    Selection::new(groups).expect("valid selection")
+    Selection::new(groups)
 }
 
 fn area_selection(name: &str, paths: &[&str]) -> Selection {
-    let paths = paths
+    let paths: Vec<RepoPath> = paths
         .iter()
         .map(|raw| RepoPath::new(*raw).expect("valid path"))
         .collect();
-    Selection::new(vec![SelectionGroup::Area {
-        name: name.to_owned(),
-        paths,
-    }])
-    .expect("valid selection")
+    let area = Area::new(name, paths).expect("valid area");
+    Selection::new(vec![SelectionGroup::Area(area)])
 }
 
 fn paths_of(diffs: &[FileDiff]) -> Vec<String> {
-    diffs.iter().map(|diff| diff.path.to_string()).collect()
+    diffs.iter().map(|diff| diff.path().to_string()).collect()
 }
 
 #[test]
@@ -238,7 +232,7 @@ fn diff_keeps_only_changed_projections() {
         .diff("HEAD~1", "HEAD", ProjectionMode::Types, &Selection::all())
         .expect("diff types");
     assert_eq!(paths_of(&types), vec!["src/lib.rs"]);
-    assert!(types[0].old.is_some() && types[0].new.is_some());
+    assert!(matches!(types[0], FileDiff::Modified { .. }));
 }
 
 #[test]
@@ -272,8 +266,8 @@ fn diff_marks_added_and_deleted_files() {
         .expect("diff");
 
     assert_eq!(paths_of(&diffs), vec!["fresh.rs", "gone.rs"]);
-    assert!(diffs[0].old.is_none() && diffs[0].new.is_some());
-    assert!(diffs[1].old.is_some() && diffs[1].new.is_none());
+    assert!(matches!(diffs[0], FileDiff::Added { .. }));
+    assert!(matches!(diffs[1], FileDiff::Deleted { .. }));
 }
 
 #[test]
@@ -337,7 +331,7 @@ fn diff_accepts_a_path_deleted_by_the_target() {
         .expect("diff");
 
     assert_eq!(paths_of(&diffs), vec!["a.rs"]);
-    assert!(diffs[0].old.is_some() && diffs[0].new.is_none());
+    assert!(matches!(diffs[0], FileDiff::Deleted { .. }));
 }
 
 #[test]
@@ -378,11 +372,11 @@ fn identical_blobs_at_different_paths_get_path_correct_stable_keys() {
     let keys_of = |raw: &str| -> Vec<String> {
         let file = files
             .iter()
-            .find(|file| file.path.to_string() == raw)
+            .find(|file| file.path().to_string() == raw)
             .unwrap_or_else(|| panic!("no outline for {raw}"));
         file.outline
             .iter()
-            .map(|item| item.stable_key.clone())
+            .map(|item| item.item.stable_key.clone())
             .collect()
     };
 

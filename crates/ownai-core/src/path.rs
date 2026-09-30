@@ -42,10 +42,45 @@ impl PathScope {
 
 /// A named, repository-defined group of paths. Areas are data only; this crate
 /// never reads a config file.
+///
+/// The name is non-empty and the path list is non-empty, sorted, and
+/// deduplicated; [`Area::new`] establishes all three, so a constructed `Area`
+/// always satisfies them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Area {
-    pub name: String,
-    pub paths: Vec<RepoPath>,
+    name: String,
+    paths: Vec<RepoPath>,
+}
+
+impl Area {
+    /// Rejects an empty name or an empty path list, then sorts and deduplicates
+    /// the paths so the stored order is deterministic.
+    pub fn new(
+        name: impl Into<String>,
+        paths: impl IntoIterator<Item = RepoPath>,
+    ) -> Result<Self, AreaError> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(AreaError::EmptyName);
+        }
+
+        let mut paths: Vec<RepoPath> = paths.into_iter().collect();
+        if paths.is_empty() {
+            return Err(AreaError::EmptyPaths { name });
+        }
+        paths.sort();
+        paths.dedup();
+
+        Ok(Self { name, paths })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn paths(&self) -> &[RepoPath] {
+        &self.paths
+    }
 }
 
 /// A lookup of areas by name, sorted by name for deterministic iteration.
@@ -93,45 +128,21 @@ pub enum PathSelection {
     Areas(Vec<String>),
 }
 
-impl PathSelection {
-    /// Resolves to a concrete scope. `All` and an empty literal list both match
-    /// everything, so callers never need a second "no selection" branch.
-    pub fn resolve(&self, areas: &AreaSet) -> Result<PathScope, PathSelectionError> {
-        match self {
-            Self::All => Ok(PathScope::match_all()),
-            Self::Literals(paths) => Ok(PathScope::from_paths(paths.iter().cloned())),
-            Self::Areas(names) => {
-                let mut paths = Vec::new();
-                for name in names {
-                    let area = areas
-                        .get(name)
-                        .ok_or_else(|| PathSelectionError::UnknownArea { name: name.clone() })?;
-                    if area.paths.is_empty() {
-                        return Err(PathSelectionError::EmptyArea { name: name.clone() });
-                    }
-                    paths.extend(area.paths.iter().cloned());
-                }
-                Ok(PathScope::from_paths(paths))
-            }
-        }
-    }
-}
+// Resolution of a `PathSelection` into a concrete scope lives in
+// [`crate::selection::Selection::resolve`], which validates areas and records
+// the groups an unsatisfied selection needs. `path.rs` stays data-only.
 
 /// A rejected area definition.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum AreaError {
-    #[error("duplicate area name `{name}`")]
-    DuplicateName { name: String },
-}
-
-/// A selection that cannot be resolved against the defined areas.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum PathSelectionError {
-    #[error("no area named `{name}` is defined")]
-    UnknownArea { name: String },
+    #[error("area name is empty")]
+    EmptyName,
 
     #[error("area `{name}` defines no paths")]
-    EmptyArea { name: String },
+    EmptyPaths { name: String },
+
+    #[error("duplicate area name `{name}`")]
+    DuplicateName { name: String },
 }
 
 #[cfg(test)]
@@ -143,10 +154,7 @@ mod tests {
     }
 
     fn area(name: &str, paths: &[&str]) -> Area {
-        Area {
-            name: name.to_owned(),
-            paths: paths.iter().map(|raw| path(raw)).collect(),
-        }
+        Area::new(name, paths.iter().map(|raw| path(raw))).expect("valid area")
     }
 
     #[test]
@@ -197,6 +205,32 @@ mod tests {
     }
 
     #[test]
+    fn area_new_rejects_an_empty_name() {
+        let error = Area::new("", [path("src")]).unwrap_err();
+        assert_eq!(error, AreaError::EmptyName);
+    }
+
+    #[test]
+    fn area_new_rejects_an_empty_path_list() {
+        let error = Area::new("core", Vec::new()).unwrap_err();
+        assert_eq!(
+            error,
+            AreaError::EmptyPaths {
+                name: "core".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn area_new_sorts_and_dedupes_paths() {
+        let area = Area::new("core", [path("b.rs"), path("a.rs"), path("b.rs")]).unwrap();
+
+        assert_eq!(area.name(), "core");
+        let ordered: Vec<String> = area.paths().iter().map(ToString::to_string).collect();
+        assert_eq!(ordered, vec!["a.rs", "b.rs"]);
+    }
+
+    #[test]
     fn area_set_rejects_duplicate_names() {
         let error = AreaSet::new([area("ui", &["src/ui"]), area("ui", &["src/web"])]).unwrap_err();
         assert_eq!(
@@ -213,59 +247,5 @@ mod tests {
         assert_eq!(areas.names().collect::<Vec<_>>(), vec!["core", "web"]);
         assert!(areas.get("core").is_some());
         assert!(areas.get("ghost").is_none());
-    }
-
-    #[test]
-    fn resolve_all_is_match_all() {
-        let scope = PathSelection::All.resolve(&AreaSet::default()).unwrap();
-        assert!(scope.is_match_all());
-        assert!(scope.matches(&path("anywhere/x.rs")));
-    }
-
-    #[test]
-    fn resolve_areas_unions_multiple_areas() {
-        let areas = AreaSet::new([
-            area("core", &["crates/core"]),
-            area("cli", &["crates/cli", "bin"]),
-        ])
-        .unwrap();
-
-        let scope = PathSelection::Areas(vec!["core".to_owned(), "cli".to_owned()])
-            .resolve(&areas)
-            .unwrap();
-
-        assert_eq!(scope.paths().len(), 3);
-        assert!(scope.matches(&path("crates/core/src/lib.rs")));
-        assert!(scope.matches(&path("bin/ownai")));
-        assert!(!scope.matches(&path("docs/readme.md")));
-    }
-
-    #[test]
-    fn resolve_reports_an_unknown_area() {
-        let error = PathSelection::Areas(vec!["ghost".to_owned()])
-            .resolve(&AreaSet::default())
-            .unwrap_err();
-
-        assert_eq!(
-            error,
-            PathSelectionError::UnknownArea {
-                name: "ghost".to_owned()
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_reports_an_empty_area() {
-        let areas = AreaSet::new([area("empty", &[])]).unwrap();
-        let error = PathSelection::Areas(vec!["empty".to_owned()])
-            .resolve(&areas)
-            .unwrap_err();
-
-        assert_eq!(
-            error,
-            PathSelectionError::EmptyArea {
-                name: "empty".to_owned()
-            }
-        );
     }
 }

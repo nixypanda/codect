@@ -27,8 +27,11 @@
 //!   `(path, stable_key)`.
 //! - JSON output contains no ANSI and is unaffected by `--color`.
 
-use ownai_core::{ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, SourceSpan};
-use ownai_engine::{FileOutline, FileOutlineDiff, OutlineItem, SnapshotDiff};
+use ownai_core::{
+    FileOutline, FileOutlineDiff, ItemKind, Language, OutlineItem, ProjectedFile, ProjectedItem,
+    ProjectionMode, SourceSpan,
+};
+use ownai_engine::SnapshotDiff;
 use serde::Serialize;
 
 /// The schema identifier carried by every document.
@@ -101,29 +104,32 @@ struct DiffSideDocument {
 }
 
 fn diff_file_document(file: &FileOutlineDiff, diff: &SnapshotDiff) -> DiffFileDocument {
-    let exemplar = file
-        .old
-        .as_ref()
-        .or(file.new.as_ref())
-        .expect("changed file has a present side");
-    let status = match (&file.old, &file.new) {
-        (None, Some(_)) => "added",
-        (Some(_), None) => "deleted",
-        (Some(_), Some(_)) => "modified",
-        (None, None) => unreachable!("changed file has a present side"),
+    let (exemplar, status, base, target) = match file {
+        FileOutlineDiff::Added { new } => (
+            new,
+            "added",
+            None,
+            Some(diff_side_document(new, diff.target_id.clone())),
+        ),
+        FileOutlineDiff::Deleted { old } => (
+            old,
+            "deleted",
+            Some(diff_side_document(old, diff.base_id.clone())),
+            None,
+        ),
+        FileOutlineDiff::Modified { old, new } => (
+            old,
+            "modified",
+            Some(diff_side_document(old, diff.base_id.clone())),
+            Some(diff_side_document(new, diff.target_id.clone())),
+        ),
     };
     DiffFileDocument {
-        path: file.path.to_string(),
-        language: language_name(exemplar.language),
+        path: file.path().to_string(),
+        language: language_name(exemplar.language()),
         status,
-        base: file
-            .old
-            .as_ref()
-            .map(|side| diff_side_document(side, diff.base_id.clone())),
-        target: file
-            .new
-            .as_ref()
-            .map(|side| diff_side_document(side, diff.target_id.clone())),
+        base,
+        target,
         equal: false,
     }
 }
@@ -132,7 +138,11 @@ fn diff_side_document(file: &FileOutline, snapshot_id: String) -> DiffSideDocume
     DiffSideDocument {
         snapshot_id,
         projection: projection_document(&file.projection),
-        outline: file.outline.iter().map(outline_document).collect(),
+        outline: file
+            .outline
+            .iter()
+            .map(|item| outline_document(file, item))
+            .collect(),
     }
 }
 
@@ -234,10 +244,14 @@ struct SpanDocument {
 
 fn file_document(file: &FileOutline) -> FileDocument {
     FileDocument {
-        path: file.path.to_string(),
-        language: language_name(file.language),
+        path: file.path().to_string(),
+        language: language_name(file.language()),
         projection: projection_document(&file.projection),
-        outline: file.outline.iter().map(outline_document).collect(),
+        outline: file
+            .outline
+            .iter()
+            .map(|item| outline_document(file, item))
+            .collect(),
     }
 }
 
@@ -259,25 +273,25 @@ fn item_document(item: &ProjectedItem) -> ItemDocument {
     }
 }
 
-fn outline_document(item: &OutlineItem) -> OutlineDocument {
+fn outline_document(file: &FileOutline, item: &OutlineItem) -> OutlineDocument {
     OutlineDocument {
-        stable_key: item.stable_key.clone(),
-        parent_key: item.parent_key.clone(),
-        kind: kind_name(item.kind),
-        name: item.name.clone(),
-        span: span_document(&item.span),
-        signature: item.signature.clone(),
-        retained_in_mode: item.retained_in_mode,
+        stable_key: item.item.stable_key.clone(),
+        parent_key: item.item.parent_key.clone(),
+        kind: kind_name(item.item.kind),
+        name: item.item.name.clone(),
+        span: span_document(&item.item.span),
+        signature: item.item.canonical_text.clone(),
+        retained_in_mode: file.retained_in_mode(item),
     }
 }
 
 /// Converts an adapter span to the wire form: one-based lines, zero-based bytes.
 fn span_document(span: &SourceSpan) -> SpanDocument {
     SpanDocument {
-        start_line: span.start_line + 1,
-        end_line: span.end_line + 1,
-        start_byte: span.start_byte,
-        end_byte: span.end_byte,
+        start_line: span.start_line() + 1,
+        end_line: span.end_line() + 1,
+        start_byte: span.start_byte(),
+        end_byte: span.end_byte(),
     }
 }
 

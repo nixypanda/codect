@@ -1,10 +1,14 @@
 //! Projection invariance and exclusion tests.
 
-use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath};
+use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
 use ownai_language_haskell::HaskellProjector;
 
+fn supported(raw: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(raw).expect("path")).expect("supported path")
+}
+
 fn project(source: &str, mode: ProjectionMode) -> String {
-    let path = RepoPath::new("src/Sample.hs").expect("path");
+    let path = supported("src/Sample.hs");
     HaskellProjector
         .project(ProjectionInput {
             path: &path,
@@ -116,7 +120,7 @@ fn imports_are_excluded() {
 
 #[test]
 fn erroneous_syntax_is_fatal_instead_of_partial() {
-    let path = RepoPath::new("src/Sample.hs").expect("path");
+    let path = supported("src/Sample.hs");
     let error = HaskellProjector
         .project(ProjectionInput {
             path: &path,

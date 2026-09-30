@@ -569,8 +569,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::rc::Rc;
 
-    use ownai_core::ProjectionMode;
-    use ownai_engine::Selection;
+    use ownai_core::{ProjectionMode, Selection};
 
     use super::*;
 

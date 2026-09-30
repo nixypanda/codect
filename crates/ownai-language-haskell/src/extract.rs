@@ -11,8 +11,8 @@ use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 
 use ownai_core::{
-    ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
-    ProjectionMode, SourceSpan,
+    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
+    SourceSpan,
 };
 use tree_sitter::Node;
 
@@ -46,11 +46,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         keys: HashMap::new(),
     };
     builder.run(root)?;
-    Ok(ProjectedFile::new(
-        input.path.clone(),
-        Language::Haskell,
-        builder.items,
-    ))
+    ProjectedFile::try_new(input.path.clone(), builder.items)
 }
 
 impl Builder<'_> {

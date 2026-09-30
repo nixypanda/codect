@@ -56,8 +56,10 @@ crates/
       diff.rs
       language.rs
       model.rs
+      outline.rs
       path.rs
       render.rs
+      selection.rs
   ownai-git/
     src/
       lib.rs
@@ -94,7 +96,6 @@ crates/
       engine.rs
       config.rs
       error.rs
-      selection.rs
   ownai-tui/
     src/
       lib.rs
@@ -337,7 +338,7 @@ pub struct ProjectedFile {
 
 The exact enum can grow while implementing fixtures, but do not store language AST nodes, Tree-sitter nodes, or `gix` handles in it.
 
-`ProjectedFile::canonical_text` must be derived from `items` by a constructor and must not be independently mutable. Keep fields private where doing so enforces this invariant. `SourceSpan` line and column values are zero-based; CLI diagnostics may convert them to one-based display values.
+`ProjectedFile::canonical_text` must be derived from `items` by a constructor and must not be independently mutable. Keep fields private where doing so enforces this invariant. `ProjectedFile::try_new` is that constructor; it also rejects an unsupported path extension and a `language` that disagrees with `path`, so the stored language can never contradict the extension. `SourceSpan` line and column values are zero-based; CLI diagnostics may convert them to one-based display values.
 
 ### 5.1 Repository paths
 
@@ -383,7 +384,7 @@ If two declarations produce the same key, append a deterministic source-order or
 2. An item whose `parent_key` is `Some(_)` is an index-only entry. Its text is already contained in the fragment of the ancestor that owns it. It is never emitted as its own top-level block.
 3. Every item's `canonical_text` is a self-contained fragment. A top-level fragment includes the canonical rendering of its nested members, indented four spaces per nesting level (section 10). A nested item's text appears exactly once in the file text, inside its ancestor.
 4. The `parent_key` relationship is independent of the container naming used in stable keys (section 5.2). Naming a container in a stable key does not suppress emission; only `parent_key == Some(_)` does. An adapter marks each declaration it wants emitted as top-level.
-5. Every nested item must have a top-level ancestor, and an adapter must not produce an item whose `parent_key` refers to a non-existent item. This is a documented adapter obligation; core does not validate it at runtime.
+5. Every nested item must have a top-level ancestor, and an adapter must not produce an item whose `parent_key` refers to a non-existent item. `ProjectedFile::try_new`, the only way to construct a file, rejects a dangling, self-referential, or cyclic `parent_key` and a duplicate `stable_key`, so canonical-text assembly can never silently drop an item.
 
 Nested items remain in `items` so that stable keys and later per-declaration comparisons can address them, even though their text is emitted through an ancestor.
 
@@ -397,9 +398,9 @@ Nested items remain in `items` so that stable keys and later per-declaration com
 - `Literals(Vec<RepoPath>)` narrows to explicit paths.
 - `Areas(Vec<String>)` names repository-defined areas.
 
-The variants make named areas and literal paths mutually exclusive by construction. `PathSelection::resolve` turns a selection into a `PathScope`; `All` and an empty literal list both match everything.
+The variants make named areas and literal paths mutually exclusive by construction.
 
-`Area` is a named list of repository paths, and `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. Resolution reports an undefined name as `PathSelectionError::UnknownArea` and an area with no paths as `PathSelectionError::EmptyArea`. Areas are data only and core stays file-format-free: the engine loads them from `.ownai.toml` (section 14.1) and passes the resulting `AreaSet` to `PathSelection::resolve`, so `All`, literal paths, and named areas are all reachable at the frontend boundary.
+`Area` is a named list of repository paths. `Area::new` rejects an empty name or an empty path list and sorts and deduplicates the paths, so every constructed `Area` is non-empty; `AreaSet` is a name-sorted lookup that rejects duplicate names with `AreaError::DuplicateName`. `SelectionGroup` is either a literal `Path(RepoPath)` or an `Area(Area)`, so a group can never be empty and its label cannot disagree with its paths. `Selection::resolve` is the single entry point from a `PathSelection` plus the repository's `AreaSet`: it validates named areas and records one group per literal path or named area in one step, so callers never resolve a scope and then rebuild its groups by hand. It reports an undefined name as `SelectionError::UnknownArea`; an empty area is impossible by construction rather than a runtime error, and `Selection::new` is infallible for the same reason. The resulting `Selection` pairs the resolved `PathScope` with those groups, so an unsatisfied selection can name what the user asked for and no group can disagree with the scope. Areas are data only and core stays file-format-free: the engine loads them from `.ownai.toml` (section 14.1) and passes the resulting `AreaSet` to `Selection::resolve`, so `All`, literal paths, and named areas are all reachable at the frontend boundary.
 
 ## 6. Language adapter interface
 
@@ -870,7 +871,7 @@ Rules:
 - The file is read lazily, only when `--area` is present. It is read at most once per command, and it never affects `--path` or unscoped runs.
 - The on-disk shape is a single `[areas]` table of `name = [paths]`. Unknown keys are rejected, so a typo cannot silently drop the area it was meant to define.
 - Area paths are repository-root-relative. Unlike `--path`, they do not depend on the current directory.
-- Parsing lives in `crates/ownai-engine/src/config.rs`. `ownai-core` stays free of file formats: the engine turns TOML into an `AreaSet` and passes it to core's `PathSelection::resolve` (section 5.4).
+- Parsing lives in `crates/ownai-engine/src/config.rs`. `ownai-core` stays free of file formats: the engine turns TOML into an `AreaSet` and passes it to core's `Selection::resolve` (section 5.4).
 - The config is untrusted input. It is size-bounded to 1 MiB, a symlinked config is rejected rather than followed, and an empty or whitespace-only area name or an empty path list is rejected.
 - A path that is absolute, contains `..`, or is otherwise unusable is rejected. `.`, repeated slashes, and a trailing slash are normalized leniently; normalization is lexical and never consults the filesystem.
 - `--area` and `--path` are mutually exclusive: the `PathSelection` variants make the two selections disjoint by construction, and `clap` rejects a command that passes both with a usage error (exit `2`).
@@ -983,12 +984,13 @@ Contract rules:
 
 Crate placement:
 
-- `ownai-core` stays Git-free and serialization-free. The outline is assembled
-  from the existing `ProjectedItem` model, so no core type changed.
-- `ownai-engine` owns outline assembly: `Engine::show_outlines` for a committed
-  revision and the free `project_source(RepoPath, bytes, mode)` for
-  editor-supplied bytes, which needs no repository. `OutlineItem` and
-  `FileOutline` carry no serialization dependency.
+- `ownai-core` stays Git-free and serialization-free. It owns the outline model
+  (`OutlineItem`, `FileOutline`) and the pure `assemble_outline` derivation from
+  the existing `ProjectedItem` model, alongside `FileDiff` and `FileOutlineDiff`.
+- `ownai-engine` owns the Git-aware outline operations: `Engine::show_outlines`
+  for a committed revision and the free `project_source(RepoPath, bytes, mode)`
+  for editor-supplied bytes, which needs no repository. `CommitDiff` and
+  `SnapshotDiff` stay here because they carry Git snapshot identities.
 - `ownai-cli` owns the JSON types (`src/json.rs`) and serialization. The schema
   and golden fixtures are referenced by the CLI test suite, never by
   `ownai-core`.

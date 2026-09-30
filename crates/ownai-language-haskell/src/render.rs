@@ -6,7 +6,7 @@
 //! breaks; source slices are used only for atomic literals. Terminal width is
 //! never consulted.
 
-use ownai_core::{LINE_WIDTH, RepoPath};
+use ownai_core::{LINE_WIDTH, RepoPath, SupportedPath};
 use tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
@@ -140,17 +140,17 @@ fn flat_width(doc: &Doc) -> Option<usize> {
 }
 
 pub(crate) struct Renderer<'a> {
-    path: &'a RepoPath,
+    path: &'a SupportedPath,
     source: &'a str,
 }
 
 impl<'a> Renderer<'a> {
-    pub(crate) fn new(path: &'a RepoPath, source: &'a str) -> Self {
+    pub(crate) fn new(path: &'a SupportedPath, source: &'a str) -> Self {
         Self { path, source }
     }
 
     pub(crate) fn path(&self) -> &RepoPath {
-        self.path
+        self.path.path()
     }
 
     pub(crate) fn slice(&self, node: Node<'_>) -> &str {
@@ -819,6 +819,10 @@ fn needs_space(previous: &str, next: &str, before_dot: Option<&str>) -> bool {
 mod tests {
     use super::*;
 
+    fn supported(raw: &str) -> SupportedPath {
+        SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+    }
+
     fn spaced(parts: &[&str]) -> String {
         let tokens: Vec<String> = parts.iter().map(|part| (*part).to_owned()).collect();
         join(&tokens)
@@ -826,7 +830,7 @@ mod tests {
 
     /// Renders the first `type` synonym in `source` at the top level.
     fn render_type_synonym(source: &str) -> String {
-        let path = RepoPath::new("Temp.hs").expect("valid path");
+        let path = supported("Temp.hs");
         let tree = syntax::parse(source, &path).expect("the source parses");
         let renderer = Renderer::new(&path, source);
         let mut stack = vec![tree.root_node()];
@@ -844,7 +848,7 @@ mod tests {
 
     /// Renders the first `signature` in `source` at the top level.
     fn render_signature(source: &str) -> String {
-        let path = RepoPath::new("Temp.hs").expect("valid path");
+        let path = supported("Temp.hs");
         let tree = syntax::parse(source, &path).expect("the source parses");
         let renderer = Renderer::new(&path, source);
         let mut stack = vec![tree.root_node()];

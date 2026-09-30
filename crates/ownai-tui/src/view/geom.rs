@@ -1,7 +1,7 @@
 //! Pure geometry and panel chrome shared by the view and the derived-layout
 //! cache. Nothing here reads the terminal or the model's behaviour.
 
-use ownai_engine::FileDiff;
+use ownai_core::FileDiff;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Span;
@@ -309,16 +309,13 @@ pub(crate) fn render_divider(frame: &mut Frame, column: Rect, theme: &Theme) {
 
 /// The width of the line-number gutter: a sign column, the digits, and a space.
 pub(crate) fn gutter_width(diff: &FileDiff) -> usize {
-    let lines = |file: &Option<ownai_core::ProjectedFile>| {
-        file.as_ref()
-            .map_or(0, |file| file.canonical_text().lines().count())
+    let lines = |file: &ownai_core::ProjectedFile| file.canonical_text().lines().count();
+    let max_lines = match diff {
+        FileDiff::Added { new } => lines(new),
+        FileDiff::Deleted { old } => lines(old),
+        FileDiff::Modified { old, new } => lines(old).max(lines(new)),
     };
-    lines(&diff.old)
-        .max(lines(&diff.new))
-        .max(1)
-        .to_string()
-        .len()
-        + 2
+    max_lines.max(1).to_string().len() + 2
 }
 
 pub(crate) fn centered(area: Rect, width: u16, height: u16) -> Rect {

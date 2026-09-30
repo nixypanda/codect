@@ -1,10 +1,14 @@
 //! Projection invariance and exclusion tests.
 
-use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath};
+use ownai_core::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
 use ownai_language_python::PythonProjector;
 
+fn supported(raw: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(raw).expect("path")).expect("supported path")
+}
+
 fn project(source: &str, mode: ProjectionMode) -> String {
-    let path = RepoPath::new("src/sample.py").expect("path");
+    let path = supported("src/sample.py");
     PythonProjector
         .project(ProjectionInput {
             path: &path,
@@ -107,7 +111,7 @@ fn imports_and_docstrings_produce_no_items() {
 
 #[test]
 fn erroneous_syntax_is_fatal_instead_of_partial() {
-    let path = RepoPath::new("src/sample.py").expect("path");
+    let path = supported("src/sample.py");
     let error = PythonProjector
         .project(ProjectionInput {
             path: &path,

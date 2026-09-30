@@ -7,7 +7,7 @@
 //! and whitespace inside a declaration cannot leak into output. Line breaks are
 //! fixed by declaration shape; nothing here consults terminal width.
 
-use ownai_core::{LINE_WIDTH, Language, ProjectionError, RepoPath};
+use ownai_core::{LINE_WIDTH, ProjectionError, SupportedPath};
 use tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
@@ -155,12 +155,12 @@ fn text(value: impl Into<String>) -> Doc {
 }
 
 pub(crate) struct Renderer<'a> {
-    path: &'a RepoPath,
+    path: &'a SupportedPath,
     source: &'a str,
 }
 
 impl<'a> Renderer<'a> {
-    pub(crate) fn new(path: &'a RepoPath, source: &'a str) -> Self {
+    pub(crate) fn new(path: &'a SupportedPath, source: &'a str) -> Self {
         Self { path, source }
     }
 
@@ -171,7 +171,6 @@ impl<'a> Renderer<'a> {
     ) -> Result<T, ProjectionError> {
         Err(ProjectionError::AstInvariant {
             path: self.path.clone(),
-            language: Language::Elm,
             range: syntax::node_span(node),
             detail: detail.into(),
         })
@@ -552,6 +551,11 @@ impl<'a> Renderer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ownai_core::RepoPath;
+
+    fn supported(raw: &str) -> SupportedPath {
+        SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+    }
 
     /// The document shape `type_expression` builds for an arrow chain.
     fn arrow_chain(parts: &[String]) -> Doc {
@@ -598,7 +602,7 @@ mod tests {
     }
 
     fn render_record(source: &str) -> String {
-        let path = RepoPath::new("input.elm").expect("valid path");
+        let path = supported("input.elm");
         let tree = syntax::parse(source, &path).expect("the source parses");
         let renderer = Renderer::new(&path, source);
         renderer
@@ -608,7 +612,7 @@ mod tests {
     }
 
     fn render_tuple(source: &str) -> String {
-        let path = RepoPath::new("input.elm").expect("valid path");
+        let path = supported("input.elm");
         let tree = syntax::parse(source, &path).expect("the source parses");
         let renderer = Renderer::new(&path, source);
         renderer

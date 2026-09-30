@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ownai_core::{
-    AreaSet, DiagnosticContext, ItemKind, Language, LanguageProjector, ProjectedFile,
-    ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode, RepoPath, SourceSpan,
-    decode_source, select_projector,
+    AreaSet, DiagnosticContext, FileDiff, FileOutline, FileOutlineDiff, LanguageProjector,
+    Location, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
+    RepoPath, Selection, SelectionGroup, SupportedPath, assemble_outline, decode_source,
+    select_projector,
 };
 use ownai_git::{CommitStep, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use ownai_language_elm::ElmProjector;
@@ -21,7 +22,6 @@ use ownai_language_rust::RustProjector;
 
 use crate::config;
 use crate::error::EngineError;
-use crate::selection::{Selection, SelectionGroup};
 
 // ZST projectors are shared as statics so the pipeline never has to own them
 // or negotiate a borrow of a longer-lived value.
@@ -39,25 +39,6 @@ const PROJECTORS: [&dyn LanguageProjector; 4] = [
     &PYTHON_PROJECTOR,
     &RUST_PROJECTOR,
 ];
-
-/// One projected file comparison between two revisions.
-///
-/// A path present on only one side is an addition or a deletion and carries
-/// `None` for the absent projection.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileDiff {
-    pub path: RepoPath,
-    pub old: Option<ProjectedFile>,
-    pub new: Option<ProjectedFile>,
-}
-
-/// One changed file with the complete declaration outline for each present side.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileOutlineDiff {
-    pub path: RepoPath,
-    pub old: Option<FileOutline>,
-    pub new: Option<FileOutline>,
-}
 
 /// A commit-to-commit focused comparison with immutable snapshot identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,37 +65,8 @@ enum SnapshotEntry {
     Worktree,
 }
 
-/// One declaration in a file's mode-independent outline.
-///
-/// The outline is derived from the Signatures projection, which is the superset
-/// of the Types projection, so it can locate a declaration the requested mode
-/// drops entirely (for example an inherent `impl` in Types mode). The engine
-/// keeps this value free of serialization concerns; the CLI owns the JSON form.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutlineItem {
-    pub stable_key: String,
-    /// The `stable_key` of the containing declaration, or `None` at top level.
-    pub parent_key: Option<String>,
-    pub kind: ItemKind,
-    pub name: String,
-    /// The declaration's source span, as produced by the adapter (zero-based
-    /// lines; the JSON layer converts them).
-    pub span: SourceSpan,
-    /// The declaration's canonical fragment from the Signatures projection.
-    /// For a nested declaration this carries its container indentation.
-    pub signature: String,
-    /// Whether the requested mode's projection retains this `stable_key`.
-    pub retained_in_mode: bool,
-}
-
-/// A requested-mode projection paired with the file's complete outline.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileOutline {
-    pub path: RepoPath,
-    pub language: Language,
-    pub projection: ProjectedFile,
-    pub outline: Vec<OutlineItem>,
-}
+/// A resolved snapshot: its kind, its id, and its path-keyed entries.
+type SnapshotEntries = (&'static str, String, Vec<(RepoPath, SnapshotEntry)>);
 
 /// Projects explicit source bytes for `path`, returning the requested-mode
 /// projection plus a mode-independent outline.
@@ -131,53 +83,23 @@ pub fn project_source(
     let Some(projector) = select_projector(&PROJECTORS, path) else {
         return Err(EngineError::UnsupportedPath { path: path.clone() });
     };
-    let language = projector.language();
-    let source = decode_source(path, language, bytes).map_err(source_projection_failure)?;
+    let path =
+        SupportedPath::new(path.clone()).expect("a selected projector implies a supported path");
+    let source = decode_source(&path, bytes).map_err(source_projection_failure)?;
     let projection =
-        project_items(projector, path, source, mode).map_err(source_projection_failure)?;
+        project_items(projector, &path, source, mode).map_err(source_projection_failure)?;
     let superset = if mode == ProjectionMode::Signatures {
         projection.clone()
     } else {
-        project_items(projector, path, source, ProjectionMode::Signatures)
+        project_items(projector, &path, source, ProjectionMode::Signatures)
             .map_err(source_projection_failure)?
     };
-    Ok(assemble_outline(path, language, projection, superset))
-}
-
-/// Builds a [`FileOutline`] from the requested-mode and Signatures projections.
-fn assemble_outline(
-    path: &RepoPath,
-    language: Language,
-    projection: Vec<ProjectedItem>,
-    superset: Vec<ProjectedItem>,
-) -> FileOutline {
-    let retained: BTreeSet<&str> = projection
-        .iter()
-        .map(|item| item.stable_key.as_str())
-        .collect();
-    let outline = superset
-        .iter()
-        .map(|item| OutlineItem {
-            stable_key: item.stable_key.clone(),
-            parent_key: item.parent_key.clone(),
-            kind: item.kind,
-            name: item.name.clone(),
-            span: item.span.clone(),
-            signature: item.canonical_text.clone(),
-            retained_in_mode: retained.contains(item.stable_key.as_str()),
-        })
-        .collect();
-    FileOutline {
-        path: path.clone(),
-        language,
-        projection: ProjectedFile::new(path.clone(), language, projection),
-        outline,
-    }
+    assemble_outline(&path, projection, superset).map_err(source_projection_failure)
 }
 
 fn project_items(
     projector: &dyn LanguageProjector,
-    path: &RepoPath,
+    path: &SupportedPath,
     source: &str,
     mode: ProjectionMode,
 ) -> Result<Vec<ProjectedItem>, ProjectionError> {
@@ -191,9 +113,10 @@ fn project_items(
 /// [`project_source`].
 fn source_projection_failure(error: ProjectionError) -> EngineError {
     let context = DiagnosticContext {
-        path: Some(error.path().clone()),
-        language: Some(error.language()),
-        range: error.range().cloned(),
+        location: Some(Location {
+            path: error.supported_path().clone(),
+            range: error.range().cloned(),
+        }),
         ..DiagnosticContext::default()
     };
     EngineError::Projection {
@@ -392,10 +315,11 @@ impl Engine {
             if old_text == new_text {
                 continue;
             }
-            diffs.push(FileDiff {
-                path: path.clone(),
-                old,
-                new,
+            diffs.push(match (old, new) {
+                (None, Some(new)) => FileDiff::Added { new },
+                (Some(old), None) => FileDiff::Deleted { old },
+                (Some(old), Some(new)) => FileDiff::Modified { old, new },
+                (None, None) => continue, // unreachable after the entry checks
             });
         }
 
@@ -468,10 +392,11 @@ impl Engine {
             {
                 continue;
             }
-            files.push(FileOutlineDiff {
-                path: path.clone(),
-                old,
-                new,
+            files.push(match (old, new) {
+                (None, Some(new)) => FileOutlineDiff::Added { new },
+                (Some(old), None) => FileOutlineDiff::Deleted { old },
+                (Some(old), Some(new)) => FileOutlineDiff::Modified { old, new },
+                (None, None) => continue, // unreachable after the entry checks
             });
         }
         Ok(CommitDiff {
@@ -542,7 +467,12 @@ impl Engine {
             {
                 continue;
             }
-            files.push(FileOutlineDiff { path, old, new });
+            files.push(match (old, new) {
+                (None, Some(new)) => FileOutlineDiff::Added { new },
+                (Some(old), None) => FileOutlineDiff::Deleted { old },
+                (Some(old), Some(new)) => FileOutlineDiff::Modified { old, new },
+                (None, None) => continue, // unreachable after the entry checks
+            });
         }
         Ok(SnapshotDiff {
             base_kind,
@@ -553,10 +483,7 @@ impl Engine {
         })
     }
 
-    fn snapshot_entries(
-        &self,
-        spec: &str,
-    ) -> Result<(&'static str, String, Vec<(RepoPath, SnapshotEntry)>), EngineError> {
+    fn snapshot_entries(&self, spec: &str) -> Result<SnapshotEntries, EngineError> {
         if spec == ":empty"
             || matches!(
                 spec,
@@ -764,47 +691,43 @@ impl Engine {
         let Some(projector) = select_projector(projectors, &entry.path) else {
             return Ok(None);
         };
-        let language = projector.language();
+        let path = SupportedPath::new(entry.path.clone())
+            .expect("a selected projector implies a supported path");
         let items =
-            self.project_items_cached(projector, caches, revision_spec, entry, language, mode)?;
-        Ok(Some(ProjectedFile::new(
-            entry.path.clone(),
-            language,
-            items,
-        )))
+            self.project_items_cached(projector, caches, revision_spec, entry, &path, mode)?;
+        ProjectedFile::try_new(path, items)
+            .map(Some)
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))
     }
 
     /// Projects one entry's items in `mode`, reading the blob once and reusing
-    /// the `(blob id, path, language, mode)` cache.
+    /// the `(blob id, path, mode)` cache.
     ///
     /// The cache key includes the path because `stable_key` is path-namespaced
     /// for several languages (Python, Haskell, Elm, and Rust `mod`): those keys
     /// embed the repository path, so items projected for one path are not valid
     /// for a different path that happens to share the same blob. Blob bytes are
-    /// still cached on the blob id alone, so an identical blob is read once.
+    /// still cached on the blob id alone, so an identical blob is read once. The
+    /// path carries its derived language, so the key also distinguishes
+    /// languages without a separate field.
     fn project_items_cached(
         &self,
         projector: &dyn LanguageProjector,
         caches: &mut Caches,
         revision_spec: &str,
         entry: &SourceEntry,
-        language: Language,
+        path: &SupportedPath,
         mode: ProjectionMode,
     ) -> Result<Vec<ProjectedItem>, EngineError> {
-        if let Some(items) = lookup_projection(caches, &entry.blob_id, &entry.path, language, mode)
-        {
+        if let Some(items) = lookup_projection(caches, &entry.blob_id, path, mode) {
             return Ok(items);
         }
 
         let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
-        let source = decode_source(&entry.path, language, &bytes)
+        let source = decode_source(path, &bytes)
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
         let items = projector
-            .project(ProjectionInput {
-                path: &entry.path,
-                source,
-                mode,
-            })
+            .project(ProjectionInput { path, source, mode })
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))?
             .items()
             .to_vec();
@@ -814,8 +737,7 @@ impl Engine {
             .entry(entry.blob_id.clone())
             .or_default()
             .push(CachedProjection {
-                path: entry.path.clone(),
-                language,
+                path: path.clone(),
                 mode,
                 items: items.clone(),
             });
@@ -825,9 +747,9 @@ impl Engine {
     /// Reads, decodes, and projects one entry in both the requested mode and the
     /// Signatures superset, assembling the file's outline.
     ///
-    /// Both projections go through the shared `(blob id, path, language, mode)`
-    /// cache, so a blob is read once and each mode is computed at most once per
-    /// path and operation.
+    /// Both projections go through the shared `(blob id, path, mode)` cache, so
+    /// a blob is read once and each mode is computed at most once per path and
+    /// operation.
     ///
     /// Returns `None` for an unsupported path, which is an exclusion rather
     /// than a failure.
@@ -842,10 +764,11 @@ impl Engine {
         let Some(projector) = select_projector(projectors, &entry.path) else {
             return Ok(None);
         };
-        let language = projector.language();
+        let path = SupportedPath::new(entry.path.clone())
+            .expect("a selected projector implies a supported path");
 
         let projection =
-            self.project_items_cached(projector, caches, revision_spec, entry, language, mode)?;
+            self.project_items_cached(projector, caches, revision_spec, entry, &path, mode)?;
         let superset = if mode == ProjectionMode::Signatures {
             projection.clone()
         } else {
@@ -854,16 +777,13 @@ impl Engine {
                 caches,
                 revision_spec,
                 entry,
-                language,
+                &path,
                 ProjectionMode::Signatures,
             )?
         };
-        Ok(Some(assemble_outline(
-            &entry.path,
-            language,
-            projection,
-            superset,
-        )))
+        assemble_outline(&path, projection, superset)
+            .map(Some)
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))
     }
 
     fn projection_failure(
@@ -874,9 +794,10 @@ impl Engine {
         let context = DiagnosticContext {
             repository: Some(self.repository.git_dir().to_path_buf()),
             revision: revision_spec.map(str::to_owned),
-            path: Some(error.path().clone()),
-            language: Some(error.language()),
-            range: error.range().cloned(),
+            location: Some(Location {
+                path: error.supported_path().clone(),
+                range: error.range().cloned(),
+            }),
         };
         EngineError::Projection {
             context: Box::new(context),
@@ -893,8 +814,7 @@ struct Caches {
 }
 
 struct CachedProjection {
-    path: RepoPath,
-    language: Language,
+    path: SupportedPath,
     mode: ProjectionMode,
     items: Vec<ProjectedItem>,
 }
@@ -902,14 +822,13 @@ struct CachedProjection {
 fn lookup_projection(
     caches: &Caches,
     id: &ObjectId,
-    path: &RepoPath,
-    language: Language,
+    path: &SupportedPath,
     mode: ProjectionMode,
 ) -> Option<Vec<ProjectedItem>> {
     caches.projections.get(id).and_then(|entries| {
         entries
             .iter()
-            .find(|entry| entry.path == *path && entry.language == language && entry.mode == mode)
+            .find(|entry| entry.path == *path && entry.mode == mode)
             .map(|entry| entry.items.clone())
     })
 }

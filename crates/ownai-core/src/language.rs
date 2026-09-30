@@ -1,12 +1,14 @@
 //! The language adapter interface.
 
 use crate::diagnostic::ProjectionError;
-use crate::model::{Language, ProjectedFile, ProjectionMode, RepoPath};
+use crate::model::{Language, ProjectedFile, ProjectionMode, RepoPath, SupportedPath};
 
 /// `source` is already validated UTF-8 (TECHNICAL_DESIGN.md section 5.1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectionInput<'a> {
-    pub path: &'a RepoPath,
+    /// The path and the language derived from its extension, so the two cannot
+    /// disagree.
+    pub path: &'a SupportedPath,
     pub source: &'a str,
     pub mode: ProjectionMode,
 }

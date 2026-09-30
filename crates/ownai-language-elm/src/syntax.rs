@@ -3,7 +3,7 @@
 //! Tree-sitter node names are centralized here so that grammar upgrades fail
 //! focused tests when node names or shapes change.
 
-use ownai_core::{Language, ProjectionError, RepoPath, SourceSpan};
+use ownai_core::{ProjectionError, SourceSpan, SupportedPath};
 use tree_sitter::{Node, Parser, Tree};
 
 // Visible node kinds.
@@ -59,13 +59,12 @@ pub const FIELD_OPERATOR: &str = "operator";
 /// Parses one Elm source file and rejects any tree containing `ERROR` or
 /// missing nodes. `None` parse results and error nodes are fatal so that no
 /// caller can emit a partial projection (TECHNICAL_DESIGN.md section 9).
-pub(crate) fn parse(source: &str, path: &RepoPath) -> Result<Tree, ProjectionError> {
+pub(crate) fn parse(source: &str, path: &SupportedPath) -> Result<Tree, ProjectionError> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_elm::LANGUAGE.into())
         .map_err(|_| ProjectionError::AstInvariant {
             path: path.clone(),
-            language: Language::Elm,
             range: whole_file_span(source),
             detail: "the Elm grammar could not be assigned to a parser".to_owned(),
         })?;
@@ -74,7 +73,6 @@ pub(crate) fn parse(source: &str, path: &RepoPath) -> Result<Tree, ProjectionErr
         .parse(source, None)
         .ok_or_else(|| ProjectionError::ParseFailed {
             path: path.clone(),
-            language: Language::Elm,
             range: whole_file_span(source),
         })?;
 
@@ -82,7 +80,6 @@ pub(crate) fn parse(source: &str, path: &RepoPath) -> Result<Tree, ProjectionErr
         let range = first_error_range(tree.root_node()).unwrap_or_else(|| whole_file_span(source));
         return Err(ProjectionError::ErroneousSyntax {
             path: path.clone(),
-            language: Language::Elm,
             range,
         });
     }
@@ -111,14 +108,14 @@ pub(crate) fn first_error_range(root: Node<'_>) -> Option<SourceSpan> {
 pub(crate) fn node_span(node: Node<'_>) -> SourceSpan {
     let start = node.start_position();
     let end = node.end_position();
-    SourceSpan {
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: start.row,
-        start_column: start.column,
-        end_line: end.row,
-        end_column: end.column,
-    }
+    SourceSpan::new(
+        node.start_byte(),
+        node.end_byte(),
+        start.row,
+        start.column,
+        end.row,
+        end.column,
+    )
 }
 
 pub(crate) fn whole_file_span(source: &str) -> SourceSpan {
@@ -133,14 +130,7 @@ pub(crate) fn whole_file_span(source: &str) -> SourceSpan {
         }
     }
 
-    SourceSpan {
-        start_byte: 0,
-        end_byte: source.len(),
-        start_line: 0,
-        start_column: 0,
-        end_line: line,
-        end_column: column,
-    }
+    SourceSpan::new(0, source.len(), 0, 0, line, column)
 }
 
 #[cfg(test)]

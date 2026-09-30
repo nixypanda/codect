@@ -1,8 +1,7 @@
 //! Side-by-side diff rendering: aligned rows, hunk headers, line-number gutters,
 //! and delta-style backgrounds.
 
-use ownai_core::{AlignedRow, DiffRowKind, ProjectedFile};
-use ownai_engine::FileDiff;
+use ownai_core::{AlignedRow, DiffRowKind, FileDiff};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -242,8 +241,11 @@ pub(crate) fn layout_diff(
     new_highlight: &[StyledLine],
     theme: &Theme,
 ) -> Vec<VisualRow> {
-    let old_text = diff.old.as_ref().map_or("", ProjectedFile::canonical_text);
-    let new_text = diff.new.as_ref().map_or("", ProjectedFile::canonical_text);
+    let (old_text, new_text) = match diff {
+        FileDiff::Added { new } => ("", new.canonical_text()),
+        FileDiff::Deleted { old } => (old.canonical_text(), ""),
+        FileDiff::Modified { old, new } => (old.canonical_text(), new.canonical_text()),
+    };
     let rows = ownai_core::aligned_rows(old_text, new_text);
 
     let mut visual = Vec::new();
@@ -257,15 +259,18 @@ pub(crate) fn layout_diff(
         }
         visual.push(hunk_header(&rows, start, end));
         for row in &rows[start..=end] {
-            let (old_emphasis, new_emphasis) = match (row.old, row.new, row.kind) {
-                (Some(old), Some(new), DiffRowKind::Change) => {
-                    highlight::emphasis_ranges(old.text, new.text)
+            let (old, new, old_emphasis, new_emphasis) = match row {
+                AlignedRow::Equal { old, new } => (Some(old), Some(new), Vec::new(), Vec::new()),
+                AlignedRow::Add { new } => (None, Some(new), Vec::new(), Vec::new()),
+                AlignedRow::Delete { old } => (Some(old), None, Vec::new(), Vec::new()),
+                AlignedRow::Change { old, new } => {
+                    let (old_emphasis, new_emphasis) =
+                        highlight::emphasis_ranges(old.text, new.text);
+                    (Some(old), Some(new), old_emphasis, new_emphasis)
                 }
-                _ => (Vec::new(), Vec::new()),
             };
 
-            let old_segments = row
-                .old
+            let old_segments = old
                 .map(|line| {
                     let runs = styled_line(old_highlight, line.number, line.text);
                     let runs = highlight::apply_emphasis(
@@ -276,8 +281,7 @@ pub(crate) fn layout_diff(
                     highlight::wrap_runs(&runs, old_width)
                 })
                 .unwrap_or_default();
-            let new_segments = row
-                .new
+            let new_segments = new
                 .map(|line| {
                     let runs = styled_line(new_highlight, line.number, line.text);
                     let runs = highlight::apply_emphasis(
@@ -292,14 +296,14 @@ pub(crate) fn layout_diff(
             let height = old_segments.len().max(new_segments.len()).max(1);
             for index in 0..height {
                 visual.push(VisualRow {
-                    kind: VisualRowKind::Diff(row.kind),
+                    kind: VisualRowKind::Diff(row.kind()),
                     old_number: if index == 0 {
-                        row.old.map(|line| line.number)
+                        old.map(|line| line.number)
                     } else {
                         None
                     },
                     new_number: if index == 0 {
-                        row.new.map(|line| line.number)
+                        new.map(|line| line.number)
                     } else {
                         None
                     },
@@ -339,7 +343,7 @@ fn context_windows(rows: &[AlignedRow<'_>]) -> Vec<(usize, usize)> {
     let changes: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.kind != DiffRowKind::Equal)
+        .filter(|(_, row)| row.kind() != DiffRowKind::Equal)
         .map(|(index, _)| index)
         .collect();
 
@@ -368,11 +372,21 @@ fn hunk_header(rows: &[AlignedRow<'_>], start: usize, end: usize) -> VisualRow {
     let slice = &rows[start..=end];
     let old_numbers: Vec<usize> = slice
         .iter()
-        .filter_map(|row| row.old.map(|line| line.number))
+        .filter_map(|row| match row {
+            AlignedRow::Equal { old, .. }
+            | AlignedRow::Delete { old }
+            | AlignedRow::Change { old, .. } => Some(old.number),
+            AlignedRow::Add { .. } => None,
+        })
         .collect();
     let new_numbers: Vec<usize> = slice
         .iter()
-        .filter_map(|row| row.new.map(|line| line.number))
+        .filter_map(|row| match row {
+            AlignedRow::Equal { new, .. }
+            | AlignedRow::Add { new }
+            | AlignedRow::Change { new, .. } => Some(new.number),
+            AlignedRow::Delete { .. } => None,
+        })
         .collect();
     let old_start = old_numbers.first().copied().unwrap_or(0);
     let new_start = new_numbers.first().copied().unwrap_or(0);

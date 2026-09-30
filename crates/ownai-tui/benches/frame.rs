@@ -35,8 +35,7 @@ use criterion::measurement::WallTime;
 use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
 };
-use ownai_core::{Language, ProjectedFile};
-use ownai_engine::FileDiff;
+use ownai_core::{FileDiff, Language, ProjectedFile};
 use ownai_tui::bench::{self, Key, Model, Msg};
 
 /// A wide terminal: tree and content side by side.
@@ -83,8 +82,8 @@ fn long_rust(lines: usize) -> String {
 fn show_two_files(width: u16, height: u16) -> Model {
     bench::show_model(
         vec![
-            bench::projected("src/Main.elm", Language::Elm, &elm_source()),
-            bench::projected("src/lib.rs", Language::Rust, &rust_source()),
+            bench::projected("src/Main.elm", &elm_source()),
+            bench::projected("src/lib.rs", &rust_source()),
         ],
         width,
         height,
@@ -94,11 +93,7 @@ fn show_two_files(width: u16, height: u16) -> Model {
 /// A `show` projection of one long Rust file.
 fn show_long_file(width: u16, height: u16) -> Model {
     bench::show_model(
-        vec![bench::projected(
-            "src/lib.rs",
-            Language::Rust,
-            &long_rust(4000),
-        )],
+        vec![bench::projected("src/lib.rs", &long_rust(4000))],
         width,
         height,
     )
@@ -113,7 +108,7 @@ fn many_files(count: usize, width: u16, height: u16) -> Model {
     let files = (0..count)
         .map(|index| {
             let path = format!("src/file_{index:03}.rs");
-            bench::projected(&path, Language::Rust, &long_rust(20))
+            bench::projected(&path, &long_rust(20))
         })
         .collect();
     bench::show_model(files, width, height)
@@ -134,11 +129,7 @@ fn large_diff() -> FileDiff {
     }
     let old = old_lines.join("\n") + "\n";
     let new = new_lines.join("\n") + "\n";
-    bench::file_diff(
-        "src/lib.rs",
-        Some((&old, Language::Rust)),
-        Some((&new, Language::Rust)),
-    )
+    bench::file_diff("src/lib.rs", Some(&old), Some(&new))
 }
 
 /// Many focused diffs, so moving the selection recomputes highlight and layout.
@@ -147,11 +138,7 @@ fn many_diffs(count: usize) -> Vec<FileDiff> {
         .map(|index| {
             let old = format!("pub fn item_{index}() -> u32 {{\n    0\n}}\n");
             let new = format!("pub fn item_{index}() -> u64 {{\n    0\n}}\n");
-            bench::file_diff(
-                &format!("src/file_{index:03}.rs"),
-                Some((&old, Language::Rust)),
-                Some((&new, Language::Rust)),
-            )
+            bench::file_diff(&format!("src/file_{index:03}.rs"), Some(&old), Some(&new))
         })
         .collect()
 }
@@ -164,7 +151,7 @@ fn show_files(count: usize) -> Vec<ProjectedFile> {
     (0..count)
         .map(|index| {
             let path = format!("src/file_{index:03}.rs");
-            bench::projected(&path, Language::Rust, &long_rust(20))
+            bench::projected(&path, &long_rust(20))
         })
         .collect()
 }

@@ -32,10 +32,14 @@ impl LanguageProjector for RustProjector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ownai_core::{ItemKind, ProjectionMode};
+    use ownai_core::{ItemKind, ProjectionMode, SupportedPath};
+
+    fn supported(raw: &str) -> SupportedPath {
+        SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+    }
 
     fn project(source: &str, mode: ProjectionMode) -> ProjectedFile {
-        let path = RepoPath::new("src/lib.rs").unwrap();
+        let path = supported("src/lib.rs");
         RustProjector
             .project(ProjectionInput {
                 path: &path,
@@ -55,7 +59,7 @@ mod tests {
 
     #[test]
     fn erroneous_source_is_fatal() {
-        let path = RepoPath::new("src/lib.rs").unwrap();
+        let path = supported("src/lib.rs");
         for source in ["pub struct Broken {", "pub struct Truncated", "fn f( {"] {
             let error = RustProjector
                 .project(ProjectionInput {

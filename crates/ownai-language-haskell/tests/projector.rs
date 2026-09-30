@@ -2,12 +2,16 @@
 
 use ownai_core::{
     ItemKind, Language, LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode,
-    RepoPath,
+    RepoPath, SupportedPath,
 };
 use ownai_language_haskell::HaskellProjector;
 
+fn supported(raw: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+}
+
 fn project(source: &str, mode: ProjectionMode) -> ownai_core::ProjectedFile {
-    let path = RepoPath::new("src/Sample.hs").unwrap();
+    let path = supported("src/Sample.hs");
     HaskellProjector
         .project(ProjectionInput {
             path: &path,
@@ -67,7 +71,7 @@ fn nested_class_members_are_not_emitted_separately() {
 
 #[test]
 fn erroneous_source_is_fatal() {
-    let path = RepoPath::new("src/Sample.hs").unwrap();
+    let path = supported("src/Sample.hs");
     let error = HaskellProjector
         .project(ProjectionInput {
             path: &path,

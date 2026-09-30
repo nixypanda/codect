@@ -6,7 +6,7 @@
 //! breaks; source slices are used only for atomic literals such as strings,
 //! where internal bytes carry meaning. Terminal width is never consulted.
 
-use ownai_core::{LINE_WIDTH, Language, ProjectionError, RepoPath};
+use ownai_core::{LINE_WIDTH, ProjectionError, SupportedPath};
 use tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
@@ -173,12 +173,12 @@ impl Tok {
 }
 
 pub(crate) struct Renderer<'a> {
-    path: &'a RepoPath,
+    path: &'a SupportedPath,
     source: &'a str,
 }
 
 impl<'a> Renderer<'a> {
-    pub(crate) fn new(path: &'a RepoPath, source: &'a str) -> Self {
+    pub(crate) fn new(path: &'a SupportedPath, source: &'a str) -> Self {
         Self { path, source }
     }
 
@@ -189,13 +189,13 @@ impl<'a> Renderer<'a> {
     ) -> Result<T, ProjectionError> {
         Err(ProjectionError::AstInvariant {
             path: self.path.clone(),
-            language: Language::Python,
             range: syntax::node_span(node),
             detail: detail.into(),
         })
     }
 
-    pub(crate) fn path(&self) -> &RepoPath {
+    /// The path and its derived language, for building a [`ProjectionError`].
+    pub(crate) fn supported_path(&self) -> &SupportedPath {
         self.path
     }
 
@@ -599,6 +599,11 @@ fn needs_space(previous: &str, next: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ownai_core::RepoPath;
+
+    fn supported(raw: impl AsRef<[u8]>) -> SupportedPath {
+        SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+    }
 
     fn spaced(parts: &[&str]) -> String {
         let tokens: Vec<Tok> = parts.iter().map(|part| Tok::plain(*part)).collect();
@@ -683,7 +688,7 @@ mod tests {
     }
 
     fn decorator_doc_for(source: &str) -> Doc {
-        let path = RepoPath::new(b"fixtures/python/decorators/input.py").expect("fixture path");
+        let path = supported(b"fixtures/python/decorators/input.py");
         let tree = syntax::parse(source, &path).expect("decorated source parses");
         let renderer = Renderer::new(&path, source);
         let mut stack = vec![tree.root_node()];
@@ -719,7 +724,7 @@ mod tests {
     /// The `type_doc` for the return annotation of the first function in
     /// `source`, alongside its flat `node_text`.
     fn return_type_doc_for(source: &str) -> (Doc, String) {
-        let path = RepoPath::new("src/sample.py").expect("sample path");
+        let path = supported("src/sample.py");
         let tree = syntax::parse(source, &path).expect("annotated source parses");
         let renderer = Renderer::new(&path, source);
         let mut stack = vec![tree.root_node()];

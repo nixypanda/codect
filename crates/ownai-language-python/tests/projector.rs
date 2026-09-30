@@ -2,12 +2,16 @@
 
 use ownai_core::{
     ItemKind, Language, LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode,
-    RepoPath,
+    RepoPath, SupportedPath,
 };
 use ownai_language_python::PythonProjector;
 
+fn supported(raw: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
+}
+
 fn project(source: &str, mode: ProjectionMode) -> ownai_core::ProjectedFile {
-    let path = RepoPath::new("src/sample.py").unwrap();
+    let path = supported("src/sample.py");
     PythonProjector
         .project(ProjectionInput {
             path: &path,
@@ -49,7 +53,7 @@ fn nested_members_are_not_emitted_separately() {
 
 #[test]
 fn erroneous_source_is_fatal() {
-    let path = RepoPath::new("src/sample.py").unwrap();
+    let path = supported("src/sample.py");
     let error = PythonProjector
         .project(ProjectionInput {
             path: &path,

@@ -8,8 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use ownai_core::{
-    LanguageProjector, ProjectedFile, ProjectionInput, ProjectionMode, RepoPath, diff_document,
-    show_document,
+    LanguageProjector, ProjectedFile, ProjectionInput, ProjectionMode, RepoPath, SupportedPath,
+    diff_document, show_document,
 };
 use ownai_language_elm::ElmProjector;
 use ownai_language_haskell::HaskellProjector;
@@ -31,7 +31,8 @@ fn project(
     source: &str,
     mode: ProjectionMode,
 ) -> ProjectedFile {
-    let path = RepoPath::new(path).expect("fixture path is valid");
+    let path = SupportedPath::new(RepoPath::new(path).expect("fixture path is valid"))
+        .expect("fixture path has a supported extension");
     projector
         .project(ProjectionInput {
             path: &path,

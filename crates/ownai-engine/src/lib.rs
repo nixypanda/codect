@@ -3,7 +3,7 @@
 //!
 //! `ownai-engine` is the Git-aware pipeline both the command line and the
 //! terminal frontend run. It discovers repositories, resolves revisions,
-//! validates a [`Selection`], and projects committed blobs; it never renders a
+//! validates a selection, and projects committed blobs; it never renders a
 //! document and never reads command-line arguments.
 //!
 //! # Boundaries
@@ -17,12 +17,7 @@
 pub mod config;
 pub mod engine;
 pub mod error;
-pub mod selection;
 
-pub use engine::{
-    CommitDiff, Engine, FileDiff, FileOutline, FileOutlineDiff, OutlineItem, SnapshotDiff,
-    project_source,
-};
+pub use engine::{CommitDiff, Engine, SnapshotDiff, project_source};
 pub use error::EngineError;
 pub use ownai_git::CommitStep;
-pub use selection::{Selection, SelectionError, SelectionGroup};

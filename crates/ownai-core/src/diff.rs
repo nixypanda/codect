@@ -5,6 +5,42 @@
 
 use similar::{Algorithm, DiffOp, DiffableStr, TextDiff};
 
+use crate::model::{ProjectedFile, RepoPath};
+
+/// One projected file comparison between two revisions.
+///
+/// The variant says which sides exist, so a comparison with neither side, or a
+/// path that disagrees with a present side, is not representable. The comparison
+/// carries no Git identity; the engine pairs it with the snapshot it came from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileDiff {
+    /// Only the new side is present.
+    Added { new: ProjectedFile },
+    /// Only the old side is present.
+    Deleted { old: ProjectedFile },
+    /// Both sides are present. They may still be textually equal; the engine
+    /// omits equal projections before constructing a diff, so `Modified` never
+    /// means "no visible change" (its focused file-list policy, not core).
+    Modified {
+        old: ProjectedFile,
+        new: ProjectedFile,
+    },
+}
+
+impl FileDiff {
+    /// The compared file's path.
+    ///
+    /// It is taken from a present side, so it can never disagree with the
+    /// variant. A future variant with two paths (a rename) must revisit this.
+    pub fn path(&self) -> &RepoPath {
+        match self {
+            Self::Added { new } => new.path(),
+            Self::Deleted { old } => old.path(),
+            Self::Modified { old, .. } => old.path(),
+        }
+    }
+}
+
 /// Context lines emitted around each change. Three is the conventional default
 /// and keeps focused diffs readable without depending on terminal width
 /// (TECHNICAL_DESIGN.md section 13).
@@ -35,21 +71,50 @@ pub struct DiffLine<'a> {
 
 /// One ordered row of a side-by-side alignment of two projection texts.
 ///
-/// A missing side (`None`) is an addition or a deletion rather than an empty
-/// line, which is what lets a caller render added and deleted files cleanly.
+/// Each variant carries exactly the sides that exist, so a row cannot claim a
+/// side it does not have. A row without an old side is an addition, and a row
+/// without a new side is a deletion, rather than an empty line; that is what
+/// lets a caller render added and deleted files cleanly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AlignedRow<'a> {
-    pub kind: DiffRowKind,
-    pub old: Option<DiffLine<'a>>,
-    pub new: Option<DiffLine<'a>>,
+pub enum AlignedRow<'a> {
+    /// Both sides are present and identical.
+    Equal {
+        old: DiffLine<'a>,
+        new: DiffLine<'a>,
+    },
+    /// Only the new side is present.
+    Add { new: DiffLine<'a> },
+    /// Only the old side is present.
+    Delete { old: DiffLine<'a> },
+    /// Both sides are present and differ.
+    Change {
+        old: DiffLine<'a>,
+        new: DiffLine<'a>,
+    },
+}
+
+impl AlignedRow<'_> {
+    /// The row's [`DiffRowKind`].
+    ///
+    /// The kind is derived from the variant rather than stored beside it, so it
+    /// can never contradict which sides are present.
+    pub fn kind(&self) -> DiffRowKind {
+        match self {
+            Self::Equal { .. } => DiffRowKind::Equal,
+            Self::Add { .. } => DiffRowKind::Add,
+            Self::Delete { .. } => DiffRowKind::Delete,
+            Self::Change { .. } => DiffRowKind::Change,
+        }
+    }
 }
 
 /// Aligns two canonical projection texts into ordered rows.
 ///
 /// The alignment shares [`unified_hunks`]'s patience-diff configuration and
 /// line tokenization, so the two always identify the same changed lines. A
-/// replacement pairs as many old and new lines as it can into [`DiffRowKind::Change`]
-/// rows and emits the remainder as [`DiffRowKind::Delete`] or [`DiffRowKind::Add`].
+/// replacement pairs as many old and new lines as it can into
+/// [`AlignedRow::Change`] rows and emits the remainder as [`AlignedRow::Delete`]
+/// or [`AlignedRow::Add`].
 ///
 /// Empty text is treated as zero lines, matching the core invariant that a
 /// projection with no items has empty canonical text.
@@ -69,10 +134,9 @@ pub fn aligned_rows<'a>(old: &'a str, new: &'a str) -> Vec<AlignedRow<'a>> {
                 len,
             } => {
                 for offset in 0..len {
-                    rows.push(AlignedRow {
-                        kind: DiffRowKind::Equal,
-                        old: Some(line(&old_lines, old_index + offset)),
-                        new: Some(line(&new_lines, new_index + offset)),
+                    rows.push(AlignedRow::Equal {
+                        old: line(&old_lines, old_index + offset),
+                        new: line(&new_lines, new_index + offset),
                     });
                 }
             }
@@ -80,10 +144,8 @@ pub fn aligned_rows<'a>(old: &'a str, new: &'a str) -> Vec<AlignedRow<'a>> {
                 old_index, old_len, ..
             } => {
                 for offset in 0..old_len {
-                    rows.push(AlignedRow {
-                        kind: DiffRowKind::Delete,
-                        old: Some(line(&old_lines, old_index + offset)),
-                        new: None,
+                    rows.push(AlignedRow::Delete {
+                        old: line(&old_lines, old_index + offset),
                     });
                 }
             }
@@ -91,10 +153,8 @@ pub fn aligned_rows<'a>(old: &'a str, new: &'a str) -> Vec<AlignedRow<'a>> {
                 new_index, new_len, ..
             } => {
                 for offset in 0..new_len {
-                    rows.push(AlignedRow {
-                        kind: DiffRowKind::Add,
-                        old: None,
-                        new: Some(line(&new_lines, new_index + offset)),
+                    rows.push(AlignedRow::Add {
+                        new: line(&new_lines, new_index + offset),
                     });
                 }
             }
@@ -106,24 +166,19 @@ pub fn aligned_rows<'a>(old: &'a str, new: &'a str) -> Vec<AlignedRow<'a>> {
             } => {
                 let paired = old_len.min(new_len);
                 for offset in 0..paired {
-                    rows.push(AlignedRow {
-                        kind: DiffRowKind::Change,
-                        old: Some(line(&old_lines, old_index + offset)),
-                        new: Some(line(&new_lines, new_index + offset)),
+                    rows.push(AlignedRow::Change {
+                        old: line(&old_lines, old_index + offset),
+                        new: line(&new_lines, new_index + offset),
                     });
                 }
                 for offset in paired..old_len {
-                    rows.push(AlignedRow {
-                        kind: DiffRowKind::Delete,
-                        old: Some(line(&old_lines, old_index + offset)),
-                        new: None,
+                    rows.push(AlignedRow::Delete {
+                        old: line(&old_lines, old_index + offset),
                     });
                 }
                 for offset in paired..new_len {
-                    rows.push(AlignedRow {
-                        kind: DiffRowKind::Add,
-                        old: None,
-                        new: Some(line(&new_lines, new_index + offset)),
+                    rows.push(AlignedRow::Add {
+                        new: line(&new_lines, new_index + offset),
                     });
                 }
             }
@@ -162,6 +217,45 @@ pub fn unified_hunks(old: &str, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{ItemKind, ProjectedItem, SourceSpan, SupportedPath};
+
+    fn projected(path: &str, text: &str) -> ProjectedFile {
+        let path = SupportedPath::new(RepoPath::new(path).expect("valid test path"))
+            .expect("supported test path");
+        ProjectedFile::try_new(
+            path,
+            vec![ProjectedItem {
+                stable_key: "item".to_owned(),
+                parent_key: None,
+                kind: ItemKind::Function,
+                name: "item".to_owned(),
+                span: SourceSpan::new(0, 0, 0, 0, 0, 0),
+                canonical_text: text.to_owned(),
+            }],
+        )
+        .expect("valid fixture")
+    }
+
+    #[test]
+    fn file_diff_path_agrees_with_each_present_side() {
+        let old = projected("src/lib.rs", "fn a() {}\n");
+        let new = projected("src/lib.rs", "fn a() -> u8 {}\n");
+        let cases = [
+            FileDiff::Added { new: new.clone() },
+            FileDiff::Deleted { old: old.clone() },
+            FileDiff::Modified { old, new },
+        ];
+        for diff in &cases {
+            match diff {
+                FileDiff::Added { new } => assert_eq!(diff.path(), new.path()),
+                FileDiff::Deleted { old } => assert_eq!(diff.path(), old.path()),
+                FileDiff::Modified { old, new } => {
+                    assert_eq!(diff.path(), old.path());
+                    assert_eq!(old.path(), new.path());
+                }
+            }
+        }
+    }
 
     #[test]
     fn equal_texts_produce_no_hunks() {
@@ -239,10 +333,18 @@ mod tests {
     fn aligned_rows_of_equal_texts_are_all_equal() {
         let rows = aligned_rows("a\nb\n", "a\nb\n");
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|row| row.kind == DiffRowKind::Equal));
-        assert_eq!(rows[0].old.unwrap().number, 1);
-        assert_eq!(rows[1].new.unwrap().number, 2);
-        assert_eq!(rows[1].new.unwrap().text, "b");
+        assert!(rows.iter().all(|row| row.kind() == DiffRowKind::Equal));
+
+        let AlignedRow::Equal { old, .. } = rows[0] else {
+            panic!("expected an equal row, got {:?}", rows[0]);
+        };
+        assert_eq!(old.number, 1);
+
+        let AlignedRow::Equal { new, .. } = rows[1] else {
+            panic!("expected an equal row, got {:?}", rows[1]);
+        };
+        assert_eq!(new.number, 2);
+        assert_eq!(new.text, "b");
     }
 
     #[test]
@@ -254,34 +356,44 @@ mod tests {
     fn aligned_rows_marks_an_insertion() {
         let rows = aligned_rows("a\nc\n", "a\nb\nc\n");
         assert_eq!(
-            rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
+            rows.iter().map(|row| row.kind()).collect::<Vec<_>>(),
             vec![DiffRowKind::Equal, DiffRowKind::Add, DiffRowKind::Equal]
         );
-        assert!(rows[1].old.is_none());
-        assert_eq!(rows[1].new.unwrap().number, 2);
-        assert_eq!(rows[1].new.unwrap().text, "b");
+
+        let AlignedRow::Add { new } = rows[1] else {
+            panic!("expected an added row, got {:?}", rows[1]);
+        };
+        assert_eq!(new.number, 2);
+        assert_eq!(new.text, "b");
     }
 
     #[test]
     fn aligned_rows_marks_a_deletion() {
         let rows = aligned_rows("a\nb\nc\n", "a\nc\n");
-        assert_eq!(rows[1].kind, DiffRowKind::Delete);
-        assert!(rows[1].new.is_none());
-        assert_eq!(rows[1].old.unwrap().text, "b");
+        assert_eq!(rows[1].kind(), DiffRowKind::Delete);
+
+        let AlignedRow::Delete { old } = rows[1] else {
+            panic!("expected a deleted row, got {:?}", rows[1]);
+        };
+        assert_eq!(old.text, "b");
     }
 
     #[test]
     fn aligned_rows_marks_a_replacement_as_change() {
         let rows = aligned_rows("a\nb\nc\n", "a\nB\nc\n");
-        assert_eq!(rows[1].kind, DiffRowKind::Change);
-        assert_eq!(rows[1].old.unwrap().text, "b");
-        assert_eq!(rows[1].new.unwrap().text, "B");
+        assert_eq!(rows[1].kind(), DiffRowKind::Change);
+
+        let AlignedRow::Change { old, new } = rows[1] else {
+            panic!("expected a changed row, got {:?}", rows[1]);
+        };
+        assert_eq!(old.text, "b");
+        assert_eq!(new.text, "B");
     }
 
     #[test]
     fn aligned_rows_pads_an_uneven_replacement() {
         let rows = aligned_rows("a\nb\nc\nd\n", "a\nX\n");
-        let kinds: Vec<DiffRowKind> = rows.iter().map(|row| row.kind).collect();
+        let kinds: Vec<DiffRowKind> = rows.iter().map(|row| row.kind()).collect();
         assert_eq!(
             kinds,
             vec![
@@ -291,21 +403,29 @@ mod tests {
                 DiffRowKind::Delete
             ]
         );
-        assert_eq!(rows[1].old.unwrap().text, "b");
-        assert_eq!(rows[1].new.unwrap().text, "X");
+
+        let AlignedRow::Change { old, new } = rows[1] else {
+            panic!("expected a changed row, got {:?}", rows[1]);
+        };
+        assert_eq!(old.text, "b");
+        assert_eq!(new.text, "X");
     }
 
     #[test]
     fn aligned_rows_handles_missing_sides() {
         let added = aligned_rows("", "x\n");
         assert_eq!(added.len(), 1);
-        assert_eq!(added[0].kind, DiffRowKind::Add);
-        assert!(added[0].old.is_none());
+        let AlignedRow::Add { new } = added[0] else {
+            panic!("expected an added row, got {:?}", added[0]);
+        };
+        assert_eq!(new.number, 1);
 
         let deleted = aligned_rows("x\n", "");
         assert_eq!(deleted.len(), 1);
-        assert_eq!(deleted[0].kind, DiffRowKind::Delete);
-        assert!(deleted[0].new.is_none());
+        let AlignedRow::Delete { old } = deleted[0] else {
+            panic!("expected a deleted row, got {:?}", deleted[0]);
+        };
+        assert_eq!(old.number, 1);
     }
 
     #[test]
@@ -327,16 +447,16 @@ mod tests {
             let rows = aligned_rows(old, new);
             let old_changed: Vec<usize> = rows
                 .iter()
-                .filter_map(|row| match row.kind {
-                    DiffRowKind::Delete | DiffRowKind::Change => row.old.map(|line| line.number),
-                    _ => None,
+                .filter_map(|row| match row {
+                    AlignedRow::Delete { old } | AlignedRow::Change { old, .. } => Some(old.number),
+                    AlignedRow::Equal { .. } | AlignedRow::Add { .. } => None,
                 })
                 .collect();
             let new_changed: Vec<usize> = rows
                 .iter()
-                .filter_map(|row| match row.kind {
-                    DiffRowKind::Add | DiffRowKind::Change => row.new.map(|line| line.number),
-                    _ => None,
+                .filter_map(|row| match row {
+                    AlignedRow::Add { new } | AlignedRow::Change { new, .. } => Some(new.number),
+                    AlignedRow::Equal { .. } | AlignedRow::Delete { .. } => None,
                 })
                 .collect();
 

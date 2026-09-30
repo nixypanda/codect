@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use ownai_core::{
-    ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
-    ProjectionMode, SourceSpan,
+    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
+    SourceSpan,
 };
 use tree_sitter::Node;
 
@@ -63,11 +63,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         }
     }
 
-    Ok(ProjectedFile::new(
-        input.path.clone(),
-        Language::Python,
-        builder.items,
-    ))
+    ProjectedFile::try_new(input.path.clone(), builder.items)
 }
 
 impl Builder<'_> {
@@ -142,8 +138,7 @@ impl Builder<'_> {
 
     fn missing(&self, node: Node<'_>, detail: impl Into<String>) -> ProjectionError {
         ProjectionError::AstInvariant {
-            path: self.renderer.path().clone(),
-            language: Language::Python,
+            path: self.renderer.supported_path().clone(),
             range: syntax::node_span(node),
             detail: detail.into(),
         }

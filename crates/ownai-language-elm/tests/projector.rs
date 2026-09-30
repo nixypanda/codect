@@ -1,10 +1,15 @@
 use ownai_core::{
     Language, LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
+    SupportedPath,
 };
 use ownai_language_elm::ElmProjector;
 
+fn supported(raw: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(raw).expect("test path is valid")).expect("supported path")
+}
+
 fn project(source: &str, mode: ProjectionMode) -> Result<String, ProjectionError> {
-    let path = RepoPath::new("input.elm").expect("test path is valid");
+    let path = supported("input.elm");
     ElmProjector::new()
         .project(ProjectionInput {
             path: &path,
@@ -30,8 +35,8 @@ fn erroneous_syntax_is_fatal_with_a_bounded_range() {
 
     match error {
         ProjectionError::ErroneousSyntax { range, .. } => {
-            assert!(range.start_byte <= range.end_byte);
-            assert!(range.end_byte <= source.len());
+            assert!(range.start_byte() <= range.end_byte());
+            assert!(range.end_byte() <= source.len());
         }
         other => panic!("expected ErroneousSyntax, got {other:?}"),
     }

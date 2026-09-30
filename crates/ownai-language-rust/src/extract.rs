@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use ownai_core::{
-    ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
-    ProjectionMode, SourceSpan,
+    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
+    SourceSpan,
 };
 use tree_sitter::Node;
 
@@ -71,11 +71,9 @@ impl Context<'_> {
 pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
     let path = input.path;
     let source = input.source;
-    let language = Language::Rust;
 
     let mut parser = syntax::parser().map_err(|_| ProjectionError::ParseFailed {
         path: path.clone(),
-        language,
         range: whole_span(source),
     })?;
 
@@ -84,7 +82,6 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
             .parse(source.as_bytes(), None)
             .ok_or_else(|| ProjectionError::ParseFailed {
                 path: path.clone(),
-                language,
                 range: whole_span(source),
             })?;
 
@@ -93,7 +90,6 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
         let range = first_error_span(root).unwrap_or_else(|| whole_span(source));
         return Err(ProjectionError::ErroneousSyntax {
             path: path.clone(),
-            language,
             range,
         });
     }
@@ -110,7 +106,7 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
         items.extend(built.items);
     }
 
-    Ok(ProjectedFile::new(path.clone(), language, items))
+    ProjectedFile::try_new(path.clone(), items)
 }
 
 fn is_comment(kind: &str) -> bool {
@@ -857,14 +853,14 @@ fn kind_token(kind: ItemKind) -> &'static str {
 fn span_of(node: Node<'_>) -> SourceSpan {
     let start = node.start_position();
     let end = node.end_position();
-    SourceSpan {
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: start.row,
-        start_column: start.column,
-        end_line: end.row,
-        end_column: end.column,
-    }
+    SourceSpan::new(
+        node.start_byte(),
+        node.end_byte(),
+        start.row,
+        start.column,
+        end.row,
+        end.column,
+    )
 }
 
 fn whole_span(source: &str) -> SourceSpan {
@@ -879,14 +875,7 @@ fn whole_span(source: &str) -> SourceSpan {
             column += 1;
         }
     }
-    SourceSpan {
-        start_byte: 0,
-        end_byte: source.len(),
-        start_line: 0,
-        start_column: 0,
-        end_line: line,
-        end_column: column,
-    }
+    SourceSpan::new(0, source.len(), 0, 0, line, column)
 }
 
 /// The first `ERROR` or missing node in source order, used for the diagnostic

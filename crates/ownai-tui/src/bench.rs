@@ -13,9 +13,9 @@
 #![doc(hidden)]
 
 use ownai_core::{
-    ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath, SourceSpan,
+    FileDiff, ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath,
+    Selection, SourceSpan, SupportedPath,
 };
-use ownai_engine::{FileDiff, Selection};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -73,8 +73,12 @@ pub fn settle(model: Model) -> Model {
 
 /// A projected file whose canonical text is `text`, built the same way the
 /// language adapters build one: a single top-level item with that fragment.
-pub fn projected(path: &str, language: Language, text: &str) -> ProjectedFile {
-    let path = RepoPath::new(path).expect("benchmark path is valid");
+///
+/// The language is derived from `path`, so a caller cannot pass a language that
+/// disagrees with the extension.
+pub fn projected(path: &str, text: &str) -> ProjectedFile {
+    let path = SupportedPath::new(RepoPath::new(path).expect("benchmark path is valid"))
+        .expect("benchmark path has a supported extension");
     let items = if text.is_empty() {
         Vec::new()
     } else {
@@ -83,31 +87,27 @@ pub fn projected(path: &str, language: Language, text: &str) -> ProjectedFile {
             parent_key: None,
             kind: ItemKind::Function,
             name: "item".to_owned(),
-            span: SourceSpan {
-                start_byte: 0,
-                end_byte: 0,
-                start_line: 0,
-                start_column: 0,
-                end_line: 0,
-                end_column: 0,
-            },
+            span: SourceSpan::new(0, 0, 0, 0, 0, 0),
             canonical_text: text.to_owned(),
         }]
     };
-    ProjectedFile::new(path, language, items)
+    ProjectedFile::try_new(path, items).expect("valid benchmark projection")
 }
 
 /// A one-path diff with the given old and new projections.
-pub fn file_diff(
-    path: &str,
-    old: Option<(&str, Language)>,
-    new: Option<(&str, Language)>,
-) -> FileDiff {
-    let repo_path = RepoPath::new(path).expect("benchmark path is valid");
-    FileDiff {
-        path: repo_path,
-        old: old.map(|(text, language)| projected(path, language, text)),
-        new: new.map(|(text, language)| projected(path, language, text)),
+pub fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
+    match (old, new) {
+        (None, Some(text)) => FileDiff::Added {
+            new: projected(path, text),
+        },
+        (Some(text), None) => FileDiff::Deleted {
+            old: projected(path, text),
+        },
+        (Some(old_text), Some(new_text)) => FileDiff::Modified {
+            old: projected(path, old_text),
+            new: projected(path, new_text),
+        },
+        (None, None) => panic!("a benchmark diff needs at least one side"),
     }
 }
 

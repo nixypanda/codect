@@ -8,8 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use ownai_core::{AreaSet, DiffRowKind, Language, ProjectedFile, ProjectionMode, RepoPath};
-use ownai_engine::{CommitStep, EngineError, FileDiff, Selection, SelectionGroup};
+use ownai_core::{
+    AreaSet, DiffRowKind, FileDiff, ProjectedFile, ProjectionMode, RepoPath, Selection,
+    SelectionGroup,
+};
+use ownai_engine::{CommitStep, EngineError};
 use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
@@ -508,7 +511,7 @@ impl Content {
                 .filter(|file| !file.canonical_text().is_empty())
                 .map(|file| file.path().clone())
                 .collect(),
-            Self::Diff(diffs) => diffs.iter().map(|diff| diff.path.clone()).collect(),
+            Self::Diff(diffs) => diffs.iter().map(|diff| diff.path().clone()).collect(),
         }
     }
 }
@@ -764,15 +767,15 @@ impl Model {
         else {
             return None;
         };
-        if *view == DiffView::Commits {
-            if let Some(step) = self.commits.get(self.commit_cursor) {
-                let parent = step.parent_id.to_string();
-                let commit = step.commit_id.to_string();
-                return Some((
-                    parent[..parent.len().min(7)].to_owned(),
-                    commit[..commit.len().min(7)].to_owned(),
-                ));
-            }
+        if *view == DiffView::Commits
+            && let Some(step) = self.commits.get(self.commit_cursor)
+        {
+            let parent = step.parent_id.to_string();
+            let commit = step.commit_id.to_string();
+            return Some((
+                parent[..parent.len().min(7)].to_owned(),
+                commit[..commit.len().min(7)].to_owned(),
+            ));
         }
         Some((base.clone(), target.clone()))
     }
@@ -841,7 +844,7 @@ impl Model {
     pub fn active_diff(&self) -> Option<&FileDiff> {
         let path = self.selected.as_ref()?;
         match &self.content {
-            Content::Diff(diffs) => diffs.iter().find(|diff| &diff.path == path),
+            Content::Diff(diffs) => diffs.iter().find(|diff| diff.path() == path),
             Content::Show(_) => None,
         }
     }
@@ -868,11 +871,11 @@ impl Model {
         let Content::Diff(diffs) = &self.content else {
             return None;
         };
-        let diff = diffs.iter().find(|diff| &diff.path == path)?;
-        Some(match (&diff.old, &diff.new) {
-            (None, Some(_)) => ChangeKind::Added,
-            (Some(_), None) => ChangeKind::Deleted,
-            _ => ChangeKind::Modified,
+        let diff = diffs.iter().find(|diff| diff.path() == path)?;
+        Some(match diff {
+            FileDiff::Added { .. } => ChangeKind::Added,
+            FileDiff::Deleted { .. } => ChangeKind::Deleted,
+            FileDiff::Modified { .. } => ChangeKind::Modified,
         })
     }
 
@@ -924,20 +927,22 @@ impl Model {
                 if self.highlights.diff.contains_key(&path) {
                     return;
                 }
-                let Some(diff) = diffs.iter().find(|diff| diff.path == path) else {
+                let Some(diff) = diffs.iter().find(|diff| *diff.path() == path) else {
                     return;
                 };
-                let language = diff
-                    .old
-                    .as_ref()
-                    .or(diff.new.as_ref())
-                    .map_or(Language::Rust, ProjectedFile::language);
-                let old = diff.old.as_ref().map_or_else(Vec::new, |file| {
+                let language = match diff {
+                    FileDiff::Added { new } => new.language(),
+                    FileDiff::Deleted { old } => old.language(),
+                    FileDiff::Modified { old, .. } => old.language(),
+                };
+                let highlight_side = |file: &ProjectedFile| {
                     highlight::highlight(file.canonical_text(), language, &self.theme)
-                });
-                let new = diff.new.as_ref().map_or_else(Vec::new, |file| {
-                    highlight::highlight(file.canonical_text(), language, &self.theme)
-                });
+                };
+                let (old, new) = match diff {
+                    FileDiff::Added { new } => (Vec::new(), highlight_side(new)),
+                    FileDiff::Deleted { old } => (highlight_side(old), Vec::new()),
+                    FileDiff::Modified { old, new } => (highlight_side(old), highlight_side(new)),
+                };
                 self.highlights
                     .diff
                     .insert(path, Arc::new(DiffHighlight { old, new }));
@@ -1658,21 +1663,33 @@ fn search_matches(model: &Model, needle: &str) -> Vec<SearchMatch> {
         }
         Content::Diff(_) => {
             if let Some(diff) = model.active_diff() {
-                if let Some(old) = &diff.old {
-                    collect_matches(
-                        old.canonical_text(),
-                        &needle_lower,
-                        SearchSide::Old,
-                        &mut matches,
-                    );
-                }
-                if let Some(new) = &diff.new {
-                    collect_matches(
+                match diff {
+                    FileDiff::Added { new } => collect_matches(
                         new.canonical_text(),
                         &needle_lower,
                         SearchSide::New,
                         &mut matches,
-                    );
+                    ),
+                    FileDiff::Deleted { old } => collect_matches(
+                        old.canonical_text(),
+                        &needle_lower,
+                        SearchSide::Old,
+                        &mut matches,
+                    ),
+                    FileDiff::Modified { old, new } => {
+                        collect_matches(
+                            old.canonical_text(),
+                            &needle_lower,
+                            SearchSide::Old,
+                            &mut matches,
+                        );
+                        collect_matches(
+                            new.canonical_text(),
+                            &needle_lower,
+                            SearchSide::New,
+                            &mut matches,
+                        );
+                    }
                 }
             }
         }
@@ -1823,17 +1840,9 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                     if let Some(input) = chooser.input.take() {
                         match RepoPath::new(input.value()) {
                             Ok(path) => {
-                                let label = path.to_string();
-                                match Selection::new(vec![SelectionGroup::Path { label, path }]) {
-                                    Ok(selection) => {
-                                        apply_selection(model, cmds, selection);
-                                        reopen = false;
-                                    }
-                                    Err(error) => {
-                                        chooser.error = Some(error.to_string());
-                                        chooser.input = Some(input);
-                                    }
-                                }
+                                let selection = Selection::new(vec![SelectionGroup::Path(path)]);
+                                apply_selection(model, cmds, selection);
+                                reopen = false;
                             }
                             Err(error) => {
                                 chooser.error = Some(error.to_string());
@@ -1849,24 +1858,14 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
                         apply_selection(model, cmds, Selection::all());
                         reopen = false;
                     } else if cursor <= area_count {
-                        if let Some(area) = chooser
-                            .areas
-                            .as_ref()
-                            .and_then(|areas| areas.names().nth(cursor - 1).map(str::to_owned))
-                        {
-                            let paths = chooser
-                                .areas
-                                .as_ref()
-                                .and_then(|areas| areas.get(&area))
-                                .map(|area| area.paths.clone())
-                                .unwrap_or_default();
-                            match Selection::new(vec![SelectionGroup::Area { name: area, paths }]) {
-                                Ok(selection) => {
-                                    apply_selection(model, cmds, selection);
-                                    reopen = false;
-                                }
-                                Err(error) => chooser.error = Some(error.to_string()),
-                            }
+                        let area = chooser.areas.as_ref().and_then(|areas| {
+                            let name = areas.names().nth(cursor - 1)?;
+                            areas.get(name)
+                        });
+                        if let Some(area) = area.cloned() {
+                            let selection = Selection::new(vec![SelectionGroup::Area(area)]);
+                            apply_selection(model, cmds, selection);
+                            reopen = false;
                         }
                     } else {
                         chooser.input = Some(TextInput::new(""));
@@ -2498,8 +2497,7 @@ mod tests {
     use crate::view::geom::{centered, window_offset};
     use crate::view::text::clip_line;
     use crate::view::view;
-    use ownai_core::{Area, ItemKind, Language, ProjectedItem, SourceSpan};
-    use ownai_engine::SelectionError;
+    use ownai_core::{Area, ItemKind, ProjectedItem, SelectionError, SourceSpan, SupportedPath};
     use ratatui::style::Color;
 
     fn item(text: &str) -> ProjectedItem {
@@ -2508,24 +2506,18 @@ mod tests {
             parent_key: None,
             kind: ItemKind::Function,
             name: "item".to_owned(),
-            span: SourceSpan {
-                start_byte: 0,
-                end_byte: 0,
-                start_line: 0,
-                start_column: 0,
-                end_line: 0,
-                end_column: 0,
-            },
+            span: SourceSpan::new(0, 0, 0, 0, 0, 0),
             canonical_text: text.to_owned(),
         }
     }
 
     fn projected(path: &str, text: &str) -> ProjectedFile {
-        let path = RepoPath::new(path).expect("valid path");
+        let path = SupportedPath::new(RepoPath::new(path).expect("valid path"))
+            .expect("test path is supported");
         if text.is_empty() {
-            return ProjectedFile::new(path, Language::Rust, Vec::new());
+            return ProjectedFile::try_new(path, Vec::new()).expect("valid fixture");
         }
-        ProjectedFile::new(path, Language::Rust, vec![item(text)])
+        ProjectedFile::try_new(path, vec![item(text)]).expect("valid fixture")
     }
 
     fn show_request() -> LoadRequest {
@@ -2684,8 +2676,8 @@ mod tests {
                 request: model.request.clone(),
                 index: 3,
                 result: Err(Box::new(EngineError::Selection(
-                    SelectionError::EmptyGroup {
-                        label: "missing".to_owned(),
+                    SelectionError::UnknownArea {
+                        name: "missing".to_owned(),
                     },
                 ))),
             },
@@ -2739,10 +2731,18 @@ mod tests {
     }
 
     fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
-        FileDiff {
-            path: RepoPath::new(path).expect("valid path"),
-            old: old.map(|text| projected(path, text)),
-            new: new.map(|text| projected(path, text)),
+        match (old, new) {
+            (None, Some(text)) => FileDiff::Added {
+                new: projected(path, text),
+            },
+            (Some(text), None) => FileDiff::Deleted {
+                old: projected(path, text),
+            },
+            (Some(old_text), Some(new_text)) => FileDiff::Modified {
+                old: projected(path, old_text),
+                new: projected(path, new_text),
+            },
+            (None, None) => panic!("a test diff needs at least one side"),
         }
     }
 
@@ -3007,8 +3007,8 @@ mod tests {
     #[test]
     fn a_tick_advances_the_spinner_and_expires_a_diagnostic() {
         let mut model = two_files();
-        let error = EngineError::Selection(SelectionError::EmptyGroup {
-            label: "x".to_owned(),
+        let error = EngineError::Selection(SelectionError::UnknownArea {
+            name: "x".to_owned(),
         });
         let (failed, _) = update(
             Msg::Loaded {
@@ -3335,8 +3335,8 @@ mod tests {
     #[test]
     fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
         let model = two_files();
-        let error = EngineError::Selection(SelectionError::EmptyGroup {
-            label: "x".to_owned(),
+        let error = EngineError::Selection(SelectionError::UnknownArea {
+            name: "x".to_owned(),
         });
         let (next, _) = update(
             Msg::Loaded {
@@ -3602,14 +3602,8 @@ mod tests {
 
     fn area_set() -> AreaSet {
         AreaSet::new([
-            Area {
-                name: "core".to_owned(),
-                paths: vec![RepoPath::new("src/core").unwrap()],
-            },
-            Area {
-                name: "web".to_owned(),
-                paths: vec![RepoPath::new("src/web").unwrap()],
-            },
+            Area::new("core", [RepoPath::new("src/core").unwrap()]).unwrap(),
+            Area::new("web", [RepoPath::new("src/web").unwrap()]).unwrap(),
         ])
         .unwrap()
     }
@@ -3647,11 +3641,9 @@ mod tests {
 
         let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
         assert_eq!(chosen.overlay, None);
-        let expected = Selection::new(vec![SelectionGroup::Area {
-            name: "core".to_owned(),
-            paths: vec![RepoPath::new("src/core").unwrap()],
-        }])
-        .unwrap();
+        let expected = Selection::new(vec![SelectionGroup::Area(
+            Area::new("core", [RepoPath::new("src/core").unwrap()]).unwrap(),
+        )]);
         assert_eq!(
             cmds,
             vec![Cmd::Load {
@@ -3664,8 +3656,8 @@ mod tests {
     fn a_config_error_keeps_the_chooser_open_with_a_message() {
         let model = two_files();
         let (opened, _) = update(Msg::Key(Key::Char('s')), &model);
-        let error = EngineError::Selection(SelectionError::EmptyGroup {
-            label: "x".to_owned(),
+        let error = EngineError::Selection(SelectionError::UnknownArea {
+            name: "x".to_owned(),
         });
         let (loaded, _) = update(Msg::AreasLoaded(Err(Box::new(error))), &opened);
 
@@ -3696,11 +3688,9 @@ mod tests {
 
         let (chosen, cmds) = update(Msg::Key(Key::Enter), &typed);
         assert_eq!(chosen.overlay, None);
-        let expected = Selection::new(vec![SelectionGroup::Path {
-            label: "src/lib.rs".to_owned(),
-            path: RepoPath::new("src/lib.rs").unwrap(),
-        }])
-        .unwrap();
+        let expected = Selection::new(vec![SelectionGroup::Path(
+            RepoPath::new("src/lib.rs").unwrap(),
+        )]);
         assert_eq!(
             cmds,
             vec![Cmd::Load {
@@ -4352,8 +4342,10 @@ mod tests {
 
     #[test]
     fn non_utf8_path_components_render_escaped() {
-        let path = RepoPath::new(b"src/\xFF/lib.rs".as_slice()).expect("valid path");
-        let file = ProjectedFile::new(path, Language::Rust, vec![item("x\n")]);
+        let path =
+            SupportedPath::new(RepoPath::new(b"src/\xFF/lib.rs".as_slice()).expect("valid path"))
+                .expect("supported path");
+        let file = ProjectedFile::try_new(path, vec![item("x\n")]).expect("valid fixture");
         let model = model_with(vec![file]);
 
         let labels: Vec<String> = model.rows.iter().map(|row| row.label.clone()).collect();
