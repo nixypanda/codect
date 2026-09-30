@@ -1,5 +1,3 @@
-//! Repository discovery integration tests (TECHNICAL_DESIGN.md section 8.1).
-
 mod support;
 
 use git::GitError;

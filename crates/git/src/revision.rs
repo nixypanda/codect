@@ -7,8 +7,8 @@ use bstr::BStr;
 use crate::GitError;
 use crate::repository::{CommitStep, GitRepository, ObjectId, Revision};
 
-/// Traverses only the first parent of each commit. Reading metadata here does
-/// not inspect trees or project source, so long histories remain cheap to list.
+// Traverses only the first parent of each commit. Reading metadata here does
+// not inspect trees or project source, so long histories remain cheap to list.
 pub(crate) fn first_parent_steps(
     repo: &GitRepository,
     base: &Revision,
@@ -80,8 +80,8 @@ pub(crate) fn resolve_commit(repo: &GitRepository, spec: &str) -> Result<Revisio
     })
 }
 
-/// Distinguishes a genuinely non-peelable object (a tree or blob) from a read
-/// failure.
+// Distinguishes a genuinely non-peelable object (a tree or blob) from a read
+// failure.
 fn peel_to_commit(
     repo: &GitRepository,
     repository: &Path,
@@ -119,10 +119,10 @@ fn peel_to_commit(
     }
 }
 
-/// `gix` reports both "not found" and "ambiguous" as generic error chains, so
-/// inspect the retained chain for the disambiguation marker; everything else is
-/// treated as not found. Ranges parse successfully and are rejected via
-/// [`gix::revision::Spec::single`].
+// `gix` reports both "not found" and "ambiguous" as generic error chains, so
+// inspect the retained chain for the disambiguation marker; everything else is
+// treated as not found. Ranges parse successfully and are rejected via
+// [`gix::revision::Spec::single`].
 fn classify_parse_error(
     repository: std::path::PathBuf,
     spec: &str,

@@ -6,8 +6,6 @@ use crate::GitError;
 use crate::repository::{GitRepository, ObjectId, Revision, SourceEntry};
 use base::RepoPath;
 
-/// Lists the supported source entries of `revision`'s tree, sorted by raw
-/// repository path bytes.
 pub(crate) fn source_entries(
     repo: &GitRepository,
     revision: &Revision,
@@ -84,7 +82,6 @@ pub(crate) fn source_entries(
     Ok(entries)
 }
 
-/// Reports whether `path` names a tree or blob in `revision`'s tree.
 pub(crate) fn path_exists(
     repo: &GitRepository,
     revision: &Revision,
@@ -151,7 +148,6 @@ pub(crate) fn path_exists(
     Ok(false)
 }
 
-/// Reads the exact bytes of the blob `id`.
 pub(crate) fn read_blob(repo: &GitRepository, id: &ObjectId) -> Result<Vec<u8>, GitError> {
     let repository = repo.location();
     let blob_id = id.to_gix(&repository)?;

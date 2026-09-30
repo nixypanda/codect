@@ -1,6 +1,3 @@
-//! Revision resolution and peeling integration tests
-//! (TECHNICAL_DESIGN.md section 8.2).
-
 mod support;
 
 use git::GitError;

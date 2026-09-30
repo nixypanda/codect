@@ -1,22 +1,22 @@
-//! Shared fixtures for `git` integration tests.
-//!
-//! # Why the `git` executable appears here
-//!
-//! `git` is read-only and never invokes the Git executable. The approved
-//! `gix` feature set (TECHNICAL_DESIGN.md section 4.1) cannot create commits or
-//! references, so tests need real repositories. Every `git` invocation in this
-//! module is **test setup only** and is isolated from host configuration and
-//! network access.
-//!
-//! Tests never call `git` after fixtures are built: they exercise only
-//! `GitRepository` and `SnapshotRepository`.
-//!
-//! Environment isolation:
-//!
-//! - `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` point at `/dev/null`.
-//! - `GIT_CONFIG_NOSYSTEM` disables the system configuration.
-//! - Author, committer, and date are fixed so commit ids are reproducible.
-//! - Prompting and pagers are disabled so a test can never hang.
+// Shared fixtures for `git` integration tests.
+//
+// # Why the `git` executable appears here
+//
+// `git` is read-only and never invokes the Git executable. The approved
+// `gix` feature set (TECHNICAL_DESIGN.md section 4.1) cannot create commits or
+// references, so tests need real repositories. Every `git` invocation in this
+// module is **test setup only** and is isolated from host configuration and
+// network access.
+//
+// Tests never call `git` after fixtures are built: they exercise only
+// `GitRepository` and `SnapshotRepository`.
+//
+// Environment isolation:
+//
+// - `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` point at `/dev/null`.
+// - `GIT_CONFIG_NOSYSTEM` disables the system configuration.
+// - Author, committer, and date are fixed so commit ids are reproducible.
+// - Prompting and pagers are disabled so a test can never hang.
 
 #![allow(dead_code)]
 
@@ -27,7 +27,7 @@ use std::process::{Command, Output};
 
 use tempfile::TempDir;
 
-/// A fixed commit date so generated commit ids are reproducible.
+// A fixed commit date so generated commit ids are reproducible.
 const FIXED_DATE: &str = "2020-01-01T00:00:00+0000";
 
 pub struct TestRepo {
@@ -53,8 +53,8 @@ impl TestRepo {
         repo
     }
 
-    /// Creates a SHA-256 repository, or `None` when the environment's Git
-    /// cannot create one.
+    // Creates a SHA-256 repository, or `None` when the environment's Git
+    // cannot create one.
     pub fn init_sha256() -> Option<Self> {
         let repo = Self::new();
         let output = repo.git(&["init", "-q", "--object-format=sha256"]);
@@ -130,7 +130,7 @@ pub fn git(dir: &Path, args: &[&str]) -> Output {
     )
 }
 
-/// Runs `git` in `dir`, isolated from host configuration and network access.
+// Runs `git` in `dir`, isolated from host configuration and network access.
 pub fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
     let mut command = Command::new("git");
     for prefix in [
@@ -184,7 +184,7 @@ pub fn write(dir: &Path, rel: &str, contents: &[u8]) {
     std::fs::write(&path, contents).expect("write fixture file");
 }
 
-/// Used to build a genuinely ambiguous abbreviated revision.
+// Used to build a genuinely ambiguous abbreviated revision.
 pub fn find_ambiguous_prefix(dir: &Path) -> Option<String> {
     let listing = git_ok(dir, &["cat-file", "--batch-check", "--batch-all-objects"]);
     let mut seen = std::collections::HashMap::<String, String>::new();
