@@ -68,15 +68,12 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// Canonical text for a type, signature, or declaration fragment, with
-    /// comments removed and spacing normalized.
     pub(crate) fn node_text(&self, node: Node<'_>) -> String {
         let mut tokens = Vec::new();
         self.push_tokens(node, &mut tokens);
         join(&tokens)
     }
 
-    /// A `type_params` fragment, prefixed with a single leading space.
     pub(crate) fn params_text(&self, node: Option<Node<'_>>) -> String {
         match node {
             Some(node) => {
@@ -91,7 +88,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// A `context` fragment (`Eq a =>`) with a trailing space.
     pub(crate) fn context_text(&self, node: Option<Node<'_>>) -> String {
         match node {
             Some(node) => {
@@ -106,7 +102,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// A list of `field` fragments, each `name :: type`.
     pub(crate) fn record_fields(&self, fields: Node<'_>) -> Vec<String> {
         let mut out = Vec::new();
         let mut cursor = fields.walk();
@@ -118,8 +113,6 @@ impl<'a> Renderer<'a> {
         out
     }
 
-    /// A data or newtype declaration, with record fields and constructors one
-    /// per indented line.
     pub(crate) fn data_doc(&self, node: Node<'_>, keyword: &str) -> Doc {
         let name = self.field_text(node, field::NAME).unwrap_or_default();
         let context = self.context_text(self.field(node, "context"));
@@ -170,7 +163,6 @@ impl<'a> Renderer<'a> {
                 lines.push(Doc::Indent(Box::new(Doc::Concat(body))));
             }
         } else if let Some(constructor) = self.field(node, "constructor") {
-            // `newtype Email = Email Text`, or a record newtype.
             match self.child_of_kind(constructor, "record") {
                 Some(record) => {
                     let ctor_name = self
@@ -235,7 +227,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// A record body as `{ field, field }`, one field per line.
     pub(crate) fn record_block(&self, record: Node<'_>) -> Doc {
         let fields = self.record_field_texts(record);
         if fields.is_empty() {
@@ -254,8 +245,8 @@ impl<'a> Renderer<'a> {
         Doc::Indent(Box::new(Doc::Concat(body)))
     }
 
-    /// The `field` fragments of a record, whether they sit under a `fields`
-    /// wrapper (`data`) or directly on the record (`newtype`).
+    // The `field` fragments of a record, whether they sit under a `fields`
+    // wrapper (`data`) or directly on the record (`newtype`).
     fn record_field_texts(&self, record: Node<'_>) -> Vec<String> {
         if let Some(fields) = self.field(record, "fields") {
             return self.record_fields(fields);
@@ -270,8 +261,6 @@ impl<'a> Renderer<'a> {
         out
     }
 
-    /// A type or data family, with a closed family's equations one per indented
-    /// line.
     pub(crate) fn family_doc(&self, node: Node<'_>, keyword: &str) -> Doc {
         let name = self.field_text(node, field::NAME).unwrap_or_default();
         let params = self.params_text(self.field(node, "patterns"));
@@ -301,7 +290,6 @@ impl<'a> Renderer<'a> {
         ])
     }
 
-    /// A class or instance header without the `where` keyword.
     pub(crate) fn class_header(&self, node: Node<'_>, keyword: &str) -> String {
         let context = self.context_text(self.field(node, "context"));
         let forall = self
@@ -317,8 +305,6 @@ impl<'a> Renderer<'a> {
         format!("{keyword} {context}{forall}{name}{params}{fundeps}")
     }
 
-    /// A signature declaration, e.g. `f, g :: Int -> Int`, wrapping the type's
-    /// top-level arrows when it does not fit the line budget.
     pub(crate) fn signature_doc(&self, node: Node<'_>) -> Doc {
         let names = match self.field(node, "names") {
             Some(names) => self.node_text(names),
@@ -346,9 +332,6 @@ impl<'a> Renderer<'a> {
         ])
     }
 
-    /// A recursive type document. Long bracketed atoms (`parens`, `tuple`,
-    /// `list`, `apply`, `infix`) and arrow chains break at their own structure
-    /// when they do not fit; every other node kind stays flat.
     pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
         match node.kind() {
             node::FUNCTION | node::CONTEXT => self.arrow_type_doc(node),
@@ -362,8 +345,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// A type synonym: `type Name params =` followed by an indented, wrapped
-    /// right-hand side.
     pub(crate) fn type_synonym_doc(&self, node: Node<'_>) -> Doc {
         let name = self.field_text(node, field::NAME).unwrap_or_default();
         let params = self.params_text(self.field(node, "patterns"));
@@ -380,8 +361,6 @@ impl<'a> Renderer<'a> {
         ])))
     }
 
-    /// A function type's top-level arrow chain (and a leading `C a =>` context),
-    /// rendered with each parameter and result as a recursive [`type_doc`].
     fn arrow_type_doc(&self, node: Node<'_>) -> Doc {
         let mut node = node;
         let mut head = None;
@@ -454,9 +433,6 @@ impl<'a> Renderer<'a> {
         ])))
     }
 
-    /// A bracketed list of `field` elements in the leading-comma block shape:
-    /// `(A, B)` flat, `( A\n, B\n)` broken. `spaced_open` adds a space after the
-    /// open delimiter only when broken.
     fn bracket_elements_doc(
         &self,
         node: Node<'_>,
@@ -519,7 +495,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// An infix type chain, breaking before each operator like the arrow layout.
     fn infix_type_doc(&self, node: Node<'_>) -> Doc {
         let mut operands: Vec<Doc> = Vec::new();
         let mut operators: Vec<String> = Vec::new();
@@ -557,7 +532,6 @@ impl<'a> Renderer<'a> {
         ])))
     }
 
-    /// The written head of a function definition, without the body.
     pub(crate) fn function_head(&self, node: Node<'_>) -> String {
         let name = self.field_text(node, field::NAME).unwrap_or_default();
         let params = self
@@ -567,12 +541,11 @@ impl<'a> Renderer<'a> {
         format!("{name}{params}")
     }
 
-    /// The written name of a binding, or `None` for a pattern binding.
     pub(crate) fn bind_name(&self, node: Node<'_>) -> Option<String> {
         self.field_text(node, field::NAME)
     }
 
-    /// The names declared by a signature, for pairing with definitions.
+    // The names declared by a signature, for pairing with definitions.
     pub(crate) fn signature_names(&self, node: Node<'_>) -> Vec<String> {
         if let Some(names) = self.field(node, "names") {
             let mut out = Vec::new();
@@ -600,8 +573,8 @@ fn join_lines(lines: Vec<Doc>) -> Doc {
     Doc::Concat(parts)
 }
 
-/// Spacing is a function of the two adjacent leaf tokens, never of source
-/// whitespace.
+// Spacing is a function of the two adjacent leaf tokens, never of source
+// whitespace.
 pub(crate) fn join(tokens: &[String]) -> String {
     let mut text = String::new();
     for (index, token) in tokens.iter().enumerate() {
@@ -690,7 +663,6 @@ mod tests {
         join(&tokens)
     }
 
-    /// Renders the first `type` synonym in `source` at the top level.
     fn render_type_synonym(source: &str) -> String {
         let path = supported("Temp.hs");
         let tree = syntax::parse(source, &path).expect("the source parses");
@@ -708,7 +680,6 @@ mod tests {
         panic!("no type synonym in {source:?}");
     }
 
-    /// Renders the first `signature` in `source` at the top level.
     fn render_signature(source: &str) -> String {
         let path = supported("Temp.hs");
         let tree = syntax::parse(source, &path).expect("the source parses");

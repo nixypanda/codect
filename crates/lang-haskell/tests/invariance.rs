@@ -1,5 +1,3 @@
-//! Projection invariance and exclusion tests.
-
 use base::{LanguageProjector, ProjectionInput, ProjectionMode, RepoPath, SupportedPath};
 use lang_haskell::HaskellProjector;
 
