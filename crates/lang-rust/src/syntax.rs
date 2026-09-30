@@ -1,10 +1,11 @@
-//! Rust grammar node-kind constants and the parser constructor.
+//! Rust grammar node-kind constants.
 //!
 //! Tree-sitter node names are centralized here so that grammar upgrades fail
 //! focused tests when node names or shapes change. Every other module in this
 //! crate refers to nodes through these constants.
 
-use tree_sitter::{Language, LanguageError, Parser};
+use base::{ProjectionError, SourceSpan, SupportedPath};
+use tree_sitter::{Node, Parser, Tree};
 
 /// Tree-sitter node kinds referenced by extraction and rendering.
 pub mod node {
@@ -109,15 +110,78 @@ pub mod field {
     pub const PATTERN: &str = "pattern";
 }
 
-/// The Rust grammar, loaded through the native Tree-sitter runtime.
-pub fn language() -> Language {
-    tree_sitter_rust::LANGUAGE.into()
+/// Parses one Rust source file and rejects any tree containing `ERROR` or
+/// missing nodes. `None` parse results and error nodes are fatal so that no
+/// caller can emit a partial projection (TECHNICAL_DESIGN.md section 9).
+pub(crate) fn parse(source: &str, path: &SupportedPath) -> Result<Tree, ProjectionError> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .map_err(|_| ProjectionError::AstInvariant {
+            path: path.clone(),
+            range: whole_file_span(source),
+            detail: "the Rust grammar could not be assigned to a parser".to_owned(),
+        })?;
+
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| ProjectionError::ParseFailed {
+            path: path.clone(),
+            range: whole_file_span(source),
+        })?;
+
+    if tree.root_node().has_error() {
+        let range = first_error_range(tree.root_node()).unwrap_or_else(|| whole_file_span(source));
+        return Err(ProjectionError::ErroneousSyntax {
+            path: path.clone(),
+            range,
+        });
+    }
+
+    Ok(tree)
 }
 
-/// Builds a parser with the Rust grammar assigned. A fresh parser is created
-/// per projection operation; see TECHNICAL_DESIGN.md section 9.
-pub fn parser() -> Result<Parser, LanguageError> {
-    let mut parser = Parser::new();
-    parser.set_language(&language())?;
-    Ok(parser)
+/// The first `ERROR` or missing node in source order, walked iteratively so the
+/// cost is independent of expression depth.
+pub(crate) fn first_error_range(root: Node<'_>) -> Option<SourceSpan> {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            return Some(node_span(node));
+        }
+        let mut cursor = node.walk();
+        let mut children: Vec<Node<'_>> = node.children(&mut cursor).collect();
+        while let Some(child) = children.pop() {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+pub(crate) fn node_span(node: Node<'_>) -> SourceSpan {
+    let start = node.start_position();
+    let end = node.end_position();
+    SourceSpan::new(
+        node.start_byte(),
+        node.end_byte(),
+        start.row,
+        start.column,
+        end.row,
+        end.column,
+    )
+}
+
+pub(crate) fn whole_file_span(source: &str) -> SourceSpan {
+    let mut line = 0;
+    let mut column = 0;
+    for character in source.chars() {
+        if character == '\n' {
+            line += 1;
+            column = 0;
+        } else {
+            column += character.len_utf8();
+        }
+    }
+
+    SourceSpan::new(0, source.len(), 0, 0, line, column)
 }

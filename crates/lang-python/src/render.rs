@@ -6,143 +6,11 @@
 //! breaks; source slices are used only for atomic literals such as strings,
 //! where internal bytes carry meaning. Terminal width is never consulted.
 
-use base::{LINE_WIDTH, ProjectionError, SupportedPath};
+pub(crate) use base::doc::{Doc, render};
+use base::{ProjectionError, SupportedPath};
 use tree_sitter::Node;
-use unicode_width::UnicodeWidthStr;
 
-use crate::syntax::{
-    self, BINARY_OPERATOR, CALL, COMMENT, DEFAULT_PARAMETER, FIELD_NAME, FIELD_TYPE, FIELD_VALUE,
-    GENERIC_TYPE, KEYWORD_ARGUMENT, STRING, TYPE, TYPE_PARAMETER,
-};
-
-/// A small layout document. `Indent` is relative, so the same document can be
-/// rendered at any nesting depth.
-///
-/// [`Doc::Group`] is the only width-sensitive construct: it renders flat (soft
-/// breaks as spaces) when the flat form fits within [`LINE_WIDTH`], and broken
-/// (soft breaks as newlines) otherwise. Hard [`Doc::Line`] breaks are always
-/// newlines and force any enclosing group to break.
-#[derive(Clone, Debug)]
-pub(crate) enum Doc {
-    Text(String),
-    Line,
-    /// A space when flat, a line break when broken.
-    SoftLine,
-    /// Nothing when flat, a line break when broken.
-    SoftNil,
-    /// Text emitted only when the enclosing group is broken, used for the
-    /// trailing comma that keeps an appended list item on a single diff line.
-    Broken(&'static str),
-    Indent(Box<Doc>),
-    Group(Box<Doc>),
-    Concat(Vec<Doc>),
-}
-
-struct Output {
-    text: String,
-    depth: usize,
-    at_line_start: bool,
-    column: usize,
-}
-
-impl Output {
-    fn write(&mut self, value: &str) {
-        if self.at_line_start {
-            for _ in 0..self.depth {
-                self.text.push_str("    ");
-            }
-            self.column = self.depth * 4;
-            self.at_line_start = false;
-        }
-        self.text.push_str(value);
-        self.column += UnicodeWidthStr::width(value);
-    }
-
-    fn line(&mut self) {
-        self.text.push('\n');
-        self.at_line_start = true;
-        self.column = 0;
-    }
-
-    /// The column the next written character would land in.
-    fn column_now(&self) -> usize {
-        if self.at_line_start {
-            self.depth * 4
-        } else {
-            self.column
-        }
-    }
-}
-
-/// Renders a document at a nesting depth of four spaces per level.
-pub(crate) fn render(doc: &Doc, depth: usize) -> String {
-    let mut output = Output {
-        text: String::new(),
-        depth,
-        at_line_start: true,
-        column: 0,
-    };
-    render_into(doc, &mut output, false);
-    output.text
-}
-
-fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
-    match doc {
-        Doc::Text(value) => output.write(value),
-        Doc::Line => output.line(),
-        Doc::SoftLine => {
-            if flat {
-                output.write(" ");
-            } else {
-                output.line();
-            }
-        }
-        Doc::SoftNil => {
-            if !flat {
-                output.line();
-            }
-        }
-        Doc::Broken(value) => {
-            if !flat {
-                output.write(value);
-            }
-        }
-        Doc::Indent(inner) => {
-            output.depth += 1;
-            render_into(inner, output, flat);
-            output.depth -= 1;
-        }
-        Doc::Group(inner) => {
-            let flat_here = flat
-                || flat_width(inner).is_some_and(|width| output.column_now() + width <= LINE_WIDTH);
-            render_into(inner, output, flat_here);
-        }
-        Doc::Concat(parts) => {
-            for part in parts {
-                render_into(part, output, flat);
-            }
-        }
-    }
-}
-
-/// The display width of `doc` rendered flat, or `None` when it contains a hard
-/// [`Doc::Line`] and can therefore never be flat.
-fn flat_width(doc: &Doc) -> Option<usize> {
-    match doc {
-        Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
-        Doc::Line => None,
-        Doc::SoftLine => Some(1),
-        Doc::SoftNil | Doc::Broken(_) => Some(0),
-        Doc::Indent(inner) | Doc::Group(inner) => flat_width(inner),
-        Doc::Concat(parts) => {
-            let mut total = 0;
-            for part in parts {
-                total += flat_width(part)?;
-            }
-            Some(total)
-        }
-    }
-}
+use crate::syntax::{self, field, node};
 
 /// One leaf token with explicit glue flags. `glue_before` and `glue_after`
 /// suppress the default space on that side, which is how `keyword=value` is
@@ -210,31 +78,31 @@ impl<'a> Renderer<'a> {
 
     fn push_tokens(&self, node: Node<'_>, out: &mut Vec<Tok>) {
         let kind = node.kind();
-        if kind == COMMENT {
+        if kind == node::COMMENT {
             return;
         }
-        if kind == STRING {
+        if kind == node::STRING {
             out.push(Tok::plain(self.slice(node)));
             return;
         }
-        if kind == KEYWORD_ARGUMENT {
-            if let Some(name) = node.child_by_field_name(syntax::FIELD_NAME) {
+        if kind == node::KEYWORD_ARGUMENT {
+            if let Some(name) = node.child_by_field_name(field::NAME) {
                 self.push_tokens(name, out);
             }
             out.push(Tok::glued("="));
-            if let Some(value) = node.child_by_field_name(syntax::FIELD_VALUE) {
+            if let Some(value) = node.child_by_field_name(field::VALUE) {
                 self.push_tokens(value, out);
             }
             return;
         }
         // An unannotated default is written `name=value`; an annotated default
         // is written `name: T = value` and is handled by the generic path.
-        if kind == DEFAULT_PARAMETER {
-            if let Some(name) = node.child_by_field_name(FIELD_NAME) {
+        if kind == node::DEFAULT_PARAMETER {
+            if let Some(name) = node.child_by_field_name(field::NAME) {
                 self.push_tokens(name, out);
             }
             out.push(Tok::glued("="));
-            if let Some(value) = node.child_by_field_name(FIELD_VALUE) {
+            if let Some(value) = node.child_by_field_name(field::VALUE) {
                 self.push_tokens(value, out);
             }
             return;
@@ -267,7 +135,7 @@ impl<'a> Renderer<'a> {
     pub(crate) fn decorator_doc(&self, node: Node<'_>) -> Doc {
         let mut cursor = node.walk();
         let expression = node.named_children(&mut cursor).next();
-        if let Some(call) = expression.filter(|child| child.kind() == CALL)
+        if let Some(call) = expression.filter(|child| child.kind() == node::CALL)
             && let (Some(function), Some(arguments)) = (
                 call.child_by_field_name("function"),
                 call.child_by_field_name("arguments"),
@@ -358,7 +226,7 @@ impl<'a> Renderer<'a> {
     /// boundary space, so the flat form is byte-identical to
     /// [`Renderer::node_text`].
     fn parameter_doc(&self, node: Node<'_>) -> Doc {
-        let Some(type_node) = node.child_by_field_name(FIELD_TYPE) else {
+        let Some(type_node) = node.child_by_field_name(field::TYPE) else {
             return Doc::Text(self.node_text(node));
         };
 
@@ -421,7 +289,7 @@ impl<'a> Renderer<'a> {
     /// `subscript`; a bare `subscript` in an expression position is left flat.
     pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
         match node.kind() {
-            TYPE => {
+            node::TYPE => {
                 let mut cursor = node.walk();
                 let named: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
                 match named.as_slice() {
@@ -429,8 +297,8 @@ impl<'a> Renderer<'a> {
                     _ => Doc::Text(self.node_text(node)),
                 }
             }
-            GENERIC_TYPE => self.generic_type_doc(node),
-            BINARY_OPERATOR => self.binary_operator_type_doc(node),
+            node::GENERIC_TYPE => self.generic_type_doc(node),
+            node::BINARY_OPERATOR => self.binary_operator_type_doc(node),
             _ => Doc::Text(self.node_text(node)),
         }
     }
@@ -449,7 +317,7 @@ impl<'a> Renderer<'a> {
         };
         let mut parts = vec![Doc::Text(self.node_text(value))];
         for parameter in named {
-            if parameter.kind() != TYPE_PARAMETER {
+            if parameter.kind() != node::TYPE_PARAMETER {
                 return Doc::Text(self.node_text(node));
             }
             let mut cursor = parameter.walk();
@@ -497,7 +365,7 @@ impl<'a> Renderer<'a> {
 
     /// Flattens a `|` chain (left- or right-leaning) into its operands.
     fn collect_union_operands<'t>(&self, node: Node<'t>, out: &mut Vec<Node<'t>>) {
-        let is_union = node.kind() == BINARY_OPERATOR
+        let is_union = node.kind() == node::BINARY_OPERATOR
             && node
                 .child_by_field_name("operator")
                 .is_some_and(|operator| self.slice(operator) == "|");
@@ -694,7 +562,7 @@ mod tests {
         let mut stack = vec![tree.root_node()];
         let mut decorator = None;
         while let Some(node) = stack.pop() {
-            if node.kind() == crate::syntax::DECORATOR {
+            if node.kind() == node::DECORATOR {
                 decorator = Some(node);
                 break;
             }
@@ -729,9 +597,9 @@ mod tests {
         let renderer = Renderer::new(&path, source);
         let mut stack = vec![tree.root_node()];
         while let Some(node) = stack.pop() {
-            if node.kind() == crate::syntax::FUNCTION_DEFINITION {
+            if node.kind() == node::FUNCTION_DEFINITION {
                 let return_type = node
-                    .child_by_field_name(crate::syntax::FIELD_RETURN_TYPE)
+                    .child_by_field_name(field::RETURN_TYPE)
                     .expect("function has a return type");
                 return (
                     renderer.type_doc(return_type),

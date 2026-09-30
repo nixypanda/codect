@@ -6,22 +6,16 @@
 //! considered. Type declarations, classes, and instances appear in both modes;
 //! signatures, foreign imports, and pattern-synonym signatures are signatures.
 
-use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::hash_map::Entry;
 
 use base::{
-    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
-    SourceSpan,
+    ItemKind, KeyAllocator, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
+    ProjectionMode, SourceSpan,
 };
 use tree_sitter::Node;
 
 use crate::render::{self, Doc, Renderer};
-use crate::syntax::{
-    self, BIND, CLASS, COMMENT, DATA_FAMILY, DATA_INSTANCE, DATA_TYPE, DERIVING_INSTANCE,
-    FOREIGN_IMPORT, FUNCTION, HADDOCK, KIND_SIGNATURE, NEWTYPE, PATTERN_SYNONYM, PRAGMA, SIGNATURE,
-    TYPE_FAMILY, TYPE_INSTANCE, TYPE_ROLE, TYPE_SYNONYM,
-};
+use crate::syntax::{self, field, node};
 
 struct Built {
     doc: Doc,
@@ -32,7 +26,7 @@ struct Builder<'a> {
     renderer: &'a Renderer<'a>,
     mode: ProjectionMode,
     items: Vec<ProjectedItem>,
-    keys: HashMap<String, usize>,
+    keys: KeyAllocator,
 }
 
 pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
@@ -43,7 +37,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         renderer: &renderer,
         mode: input.mode,
         items: Vec::new(),
-        keys: HashMap::new(),
+        keys: KeyAllocator::new(),
     };
     builder.run(root)?;
     ProjectedFile::try_new(input.path.clone(), builder.items)
@@ -51,18 +45,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
 
 impl Builder<'_> {
     fn unique(&mut self, base: String) -> String {
-        match self.keys.entry(base.clone()) {
-            Entry::Vacant(entry) => {
-                entry.insert(1);
-                base
-            }
-            Entry::Occupied(mut entry) => {
-                let ordinal = entry.get_mut();
-                let key = format!("{base}~{ordinal}");
-                *ordinal += 1;
-                key
-            }
-        }
+        self.keys.unique(base)
     }
 
     fn run(&mut self, root: Node<'_>) -> Result<(), ProjectionError> {
@@ -70,8 +53,8 @@ impl Builder<'_> {
         let mut cursor = root.walk();
         for child in root.named_children(&mut cursor) {
             match child.kind() {
-                PRAGMA => pending.push(self.renderer.node_text(child)),
-                COMMENT | HADDOCK => {}
+                node::PRAGMA => pending.push(self.renderer.node_text(child)),
+                node::COMMENT | node::HADDOCK => {}
                 "header" => {
                     let prefixes = std::mem::take(&mut pending);
                     if let Some(built) = self.module_decl(child, prefixes)? {
@@ -93,7 +76,7 @@ impl Builder<'_> {
         header: Node<'_>,
         prefixes: Vec<String>,
     ) -> Result<Option<Vec<ProjectedItem>>, ProjectionError> {
-        let Some(module) = self.renderer.field(header, syntax::FIELD_MODULE) else {
+        let Some(module) = self.renderer.field(header, field::MODULE) else {
             return Ok(None);
         };
         let name = self.renderer.node_text(module);
@@ -120,7 +103,7 @@ impl Builder<'_> {
             let mut cursor = declarations.walk();
             declarations
                 .named_children(&mut cursor)
-                .filter(|child| !matches!(child.kind(), COMMENT | HADDOCK))
+                .filter(|child| !matches!(child.kind(), node::COMMENT | node::HADDOCK))
                 .collect()
         };
 
@@ -129,7 +112,7 @@ impl Builder<'_> {
         // be skipped regardless of source order.
         let mut signed: HashSet<String> = HashSet::new();
         for node in &nodes {
-            if node.kind() == SIGNATURE {
+            if node.kind() == node::SIGNATURE {
                 signed.extend(self.renderer.signature_names(*node));
             }
         }
@@ -151,37 +134,37 @@ impl Builder<'_> {
         signed: &HashSet<String>,
         prefixes: Vec<String>,
     ) -> Result<(Vec<ProjectedItem>, Vec<String>), ProjectionError> {
-        if node.kind() == PRAGMA {
+        if node.kind() == node::PRAGMA {
             let mut pending = prefixes;
             pending.push(self.renderer.node_text(node));
             return Ok((Vec::new(), pending));
         }
 
         let built = match node.kind() {
-            DATA_TYPE => Some(self.data_decl(node, prefixes, "data")),
-            NEWTYPE => Some(self.data_decl(node, prefixes, "newtype")),
-            TYPE_SYNONYM => Some(self.type_synonym_decl(node, prefixes)),
-            KIND_SIGNATURE => Some(self.simple_decl(node, prefixes, ItemKind::Type, "kind")),
-            TYPE_ROLE => Some(self.simple_decl(node, prefixes, ItemKind::Type, "role")),
-            TYPE_FAMILY | DATA_FAMILY => {
-                let keyword = if node.kind() == TYPE_FAMILY {
+            node::DATA_TYPE => Some(self.data_decl(node, prefixes, "data")),
+            node::NEWTYPE => Some(self.data_decl(node, prefixes, "newtype")),
+            node::TYPE_SYNONYM => Some(self.type_synonym_decl(node, prefixes)),
+            node::KIND_SIGNATURE => Some(self.simple_decl(node, prefixes, ItemKind::Type, "kind")),
+            node::TYPE_ROLE => Some(self.simple_decl(node, prefixes, ItemKind::Type, "role")),
+            node::TYPE_FAMILY | node::DATA_FAMILY => {
+                let keyword = if node.kind() == node::TYPE_FAMILY {
                     "type family"
                 } else {
                     "data family"
                 };
                 Some(self.family_decl(node, prefixes, keyword))
             }
-            TYPE_INSTANCE | DATA_INSTANCE => {
+            node::TYPE_INSTANCE | node::DATA_INSTANCE => {
                 Some(self.simple_decl(node, prefixes, ItemKind::AssociatedType, "instance"))
             }
-            DERIVING_INSTANCE => {
+            node::DERIVING_INSTANCE => {
                 Some(self.simple_decl(node, prefixes, ItemKind::TraitImplementation, "deriving"))
             }
-            CLASS => Some(self.class_decl(node, prefixes, "class", ItemKind::Trait)?),
+            node::CLASS => Some(self.class_decl(node, prefixes, "class", ItemKind::Trait)?),
             "instance" => {
                 Some(self.class_decl(node, prefixes, "instance", ItemKind::TraitImplementation)?)
             }
-            SIGNATURE => {
+            node::SIGNATURE => {
                 if self.mode == ProjectionMode::Signatures {
                     Some(self.value_decl(
                         node,
@@ -193,11 +176,11 @@ impl Builder<'_> {
                     None
                 }
             }
-            FUNCTION => {
+            node::FUNCTION => {
                 if self.mode == ProjectionMode::Signatures {
                     let name = self
                         .renderer
-                        .field_text(node, syntax::FIELD_NAME_FIELD)
+                        .field_text(node, field::NAME)
                         .unwrap_or_default();
                     let head = self.renderer.function_head(node);
                     if head.is_empty() || signed.contains(&name) {
@@ -209,7 +192,7 @@ impl Builder<'_> {
                     None
                 }
             }
-            BIND => {
+            node::BIND => {
                 if self.mode == ProjectionMode::Signatures {
                     match self.renderer.bind_name(node) {
                         Some(name) if !signed.contains(&name) => {
@@ -221,14 +204,14 @@ impl Builder<'_> {
                     None
                 }
             }
-            FOREIGN_IMPORT => {
+            node::FOREIGN_IMPORT => {
                 if self.mode == ProjectionMode::Signatures {
                     Some(self.simple_decl(node, prefixes, ItemKind::Function, "foreign"))
                 } else {
                     None
                 }
             }
-            PATTERN_SYNONYM => {
+            node::PATTERN_SYNONYM => {
                 if self.mode == ProjectionMode::Signatures
                     && self.renderer.field(node, "signature").is_some()
                 {
@@ -248,7 +231,7 @@ impl Builder<'_> {
 
     fn name_of(&self, node: Node<'_>) -> String {
         self.renderer
-            .field_text(node, syntax::FIELD_NAME_FIELD)
+            .field_text(node, field::NAME)
             .or_else(|| self.renderer.field_text(node, "synonym"))
             .or_else(|| self.renderer.field_text(node, "type"))
             .unwrap_or_default()
@@ -373,7 +356,7 @@ impl Builder<'_> {
         {
             let mut cursor = declarations.walk();
             for child in declarations.named_children(&mut cursor) {
-                if matches!(child.kind(), SIGNATURE | "default_signature") {
+                if matches!(child.kind(), node::SIGNATURE | "default_signature") {
                     signed.extend(self.renderer.signature_names(child));
                 }
             }
@@ -383,19 +366,19 @@ impl Builder<'_> {
         let mut cursor = declarations.walk();
         for child in declarations.named_children(&mut cursor) {
             let built = match child.kind() {
-                COMMENT | HADDOCK => None,
-                SIGNATURE | "default_signature" => {
+                node::COMMENT | node::HADDOCK => None,
+                node::SIGNATURE | "default_signature" => {
                     if self.mode == ProjectionMode::Signatures {
                         Some(self.member(child, container_key, self.renderer.signature_doc(child)))
                     } else {
                         None
                     }
                 }
-                FUNCTION => {
+                node::FUNCTION => {
                     if self.mode == ProjectionMode::Signatures {
                         let name = self
                             .renderer
-                            .field_text(child, syntax::FIELD_NAME_FIELD)
+                            .field_text(child, field::NAME)
                             .unwrap_or_default();
                         let head = self.renderer.function_head(child);
                         if head.is_empty() || signed.contains(&name) {
@@ -407,7 +390,7 @@ impl Builder<'_> {
                         None
                     }
                 }
-                BIND => {
+                node::BIND => {
                     if self.mode == ProjectionMode::Signatures {
                         match self.renderer.bind_name(child) {
                             Some(name) if !signed.contains(&name) => {
@@ -419,7 +402,7 @@ impl Builder<'_> {
                         None
                     }
                 }
-                TYPE_INSTANCE | DATA_INSTANCE => Some(self.member(
+                node::TYPE_INSTANCE | node::DATA_INSTANCE => Some(self.member(
                     child,
                     container_key,
                     Doc::Text(self.renderer.node_text(child)),

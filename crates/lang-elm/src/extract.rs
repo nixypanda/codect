@@ -7,17 +7,13 @@
 use std::collections::HashMap;
 
 use base::{
-    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
-    SourceSpan,
+    ItemKind, KeyAllocator, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
+    ProjectionMode, SourceSpan,
 };
 use tree_sitter::Node;
 
 use crate::render::Renderer;
-use crate::syntax::{
-    self, FIELD_FIELD_TYPE, FIELD_FUNCTION_LEFT, FIELD_PATTERN, FIELD_UNION_VARIANT,
-    INFIX_DECLARATION, MODULE_DECLARATION, PORT_ANNOTATION, TYPE_ALIAS_DECLARATION,
-    TYPE_ANNOTATION, TYPE_DECLARATION, VALUE_DECLARATION,
-};
+use crate::syntax::{self, field, node};
 
 pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
     let tree = syntax::parse(input.source, input.path)?;
@@ -29,13 +25,13 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         module: module_name(&renderer, root)?,
         mode: input.mode,
         items: Vec::new(),
-        keys: HashMap::new(),
+        keys: KeyAllocator::new(),
     };
 
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         match child.kind() {
-            MODULE_DECLARATION => {
+            node::MODULE_DECLARATION => {
                 let (name, is_port) = renderer.module_name_and_port(child)?;
                 let canonical_text = renderer.module(child, is_port)?.render();
                 builder.push(
@@ -46,7 +42,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                     None,
                 );
             }
-            TYPE_DECLARATION => {
+            node::TYPE_DECLARATION => {
                 let key = builder.push(
                     ItemKind::Type,
                     renderer.field_name(child)?.to_owned(),
@@ -55,7 +51,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                     None,
                 );
                 let mut variants = child.walk();
-                for variant in child.children_by_field_name(FIELD_UNION_VARIANT, &mut variants) {
+                for variant in child.children_by_field_name(field::UNION_VARIANT, &mut variants) {
                     builder.push(
                         ItemKind::Constructor,
                         renderer.field_name(variant)?.to_owned(),
@@ -65,7 +61,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                     );
                 }
             }
-            TYPE_ALIAS_DECLARATION => {
+            node::TYPE_ALIAS_DECLARATION => {
                 let key = builder.push(
                     ItemKind::TypeAlias,
                     renderer.field_name(child)?.to_owned(),
@@ -74,7 +70,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                     None,
                 );
                 let mut fields = child.walk();
-                for field in child.children_by_field_name(FIELD_FIELD_TYPE, &mut fields) {
+                for field in child.children_by_field_name(field::FIELD_TYPE, &mut fields) {
                     builder.push(
                         ItemKind::Field,
                         renderer.field_name(field)?.to_owned(),
@@ -84,10 +80,10 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                     );
                 }
             }
-            VALUE_DECLARATION if builder.mode == ProjectionMode::Signatures => {
+            node::VALUE_DECLARATION if builder.mode == ProjectionMode::Signatures => {
                 // A destructuring declaration has no declared lower-case name
                 // to key or render, so it is not part of the named surface.
-                if let Some(left) = child.child_by_field_name(FIELD_FUNCTION_LEFT) {
+                if let Some(left) = child.child_by_field_name(field::FUNCTION_LEFT) {
                     let name = renderer.declaration_name(left)?.to_owned();
                     let text = match annotations.get(&name) {
                         Some(annotation) => annotation.clone(),
@@ -95,7 +91,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                     };
                     let mut patterns = left.walk();
                     let kind = if left
-                        .children_by_field_name(FIELD_PATTERN, &mut patterns)
+                        .children_by_field_name(field::PATTERN, &mut patterns)
                         .next()
                         .is_some()
                     {
@@ -106,7 +102,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                     builder.push(kind, name, syntax::node_span(child), text, None);
                 }
             }
-            PORT_ANNOTATION if builder.mode == ProjectionMode::Signatures => {
+            node::PORT_ANNOTATION if builder.mode == ProjectionMode::Signatures => {
                 builder.push(
                     ItemKind::Port,
                     renderer.field_name(child)?.to_owned(),
@@ -115,7 +111,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                     None,
                 );
             }
-            INFIX_DECLARATION if builder.mode == ProjectionMode::Signatures => {
+            node::INFIX_DECLARATION if builder.mode == ProjectionMode::Signatures => {
                 builder.push(
                     ItemKind::Operator,
                     renderer.operator(child)?.to_owned(),
@@ -135,7 +131,7 @@ fn module_name(renderer: &Renderer<'_>, root: Node<'_>) -> Result<String, Projec
     let mut cursor = root.walk();
     match root
         .named_children(&mut cursor)
-        .find(|child| child.kind() == MODULE_DECLARATION)
+        .find(|child| child.kind() == node::MODULE_DECLARATION)
     {
         Some(module) => Ok(renderer.module_name_and_port(module)?.0),
         None => Ok(String::new()),
@@ -151,7 +147,7 @@ fn collect_annotations(
     let mut annotations = HashMap::new();
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
-        if child.kind() == TYPE_ANNOTATION {
+        if child.kind() == node::TYPE_ANNOTATION {
             let name = renderer.field_name(child)?.to_owned();
             let text = renderer.type_annotation(child, false)?.render();
             annotations.entry(name).or_insert(text);
@@ -164,7 +160,7 @@ struct Builder {
     module: String,
     mode: ProjectionMode,
     items: Vec<ProjectedItem>,
-    keys: HashMap<String, usize>,
+    keys: KeyAllocator,
 }
 
 impl Builder {
@@ -199,13 +195,7 @@ impl Builder {
         } else {
             format!("{} {} {name}", self.module, kind_label(kind))
         };
-        let ordinal = self.keys.entry(base.clone()).or_insert(0);
-        *ordinal += 1;
-        if *ordinal == 1 {
-            base
-        } else {
-            format!("{base}#{ordinal}")
-        }
+        self.keys.unique(base)
     }
 }
 

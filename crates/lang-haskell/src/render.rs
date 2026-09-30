@@ -6,138 +6,11 @@
 //! breaks; source slices are used only for atomic literals. Terminal width is
 //! never consulted.
 
-use base::{LINE_WIDTH, RepoPath, SupportedPath};
+pub(crate) use base::doc::{Doc, render};
+use base::{RepoPath, SupportedPath};
 use tree_sitter::Node;
-use unicode_width::UnicodeWidthStr;
 
-use crate::syntax;
-
-/// A small layout document. `Indent` is relative, so the same document can be
-/// rendered at any nesting depth.
-///
-/// [`Doc::Group`] is the only width-sensitive construct: it renders flat (soft
-/// breaks as spaces) when the flat form fits within [`LINE_WIDTH`], and broken
-/// (soft breaks as newlines) otherwise.
-#[derive(Clone, Debug)]
-pub(crate) enum Doc {
-    Text(String),
-    Line,
-    /// A space when flat, a line break when broken.
-    SoftLine,
-    /// Nothing when flat, a line break when broken.
-    SoftNil,
-    /// Emitted only when the enclosing group is broken.
-    Broken(&'static str),
-    Indent(Box<Doc>),
-    Group(Box<Doc>),
-    Concat(Vec<Doc>),
-}
-
-struct Output {
-    text: String,
-    depth: usize,
-    at_line_start: bool,
-    column: usize,
-}
-
-impl Output {
-    fn write(&mut self, value: &str) {
-        if self.at_line_start {
-            for _ in 0..self.depth {
-                self.text.push_str("    ");
-            }
-            self.column = self.depth * 4;
-            self.at_line_start = false;
-        }
-        self.text.push_str(value);
-        self.column += UnicodeWidthStr::width(value);
-    }
-
-    fn line(&mut self) {
-        self.text.push('\n');
-        self.at_line_start = true;
-        self.column = 0;
-    }
-
-    /// The column the next written character would land in.
-    fn column_now(&self) -> usize {
-        if self.at_line_start {
-            self.depth * 4
-        } else {
-            self.column
-        }
-    }
-}
-
-/// Renders a document at a nesting depth of four spaces per level.
-pub(crate) fn render(doc: &Doc, depth: usize) -> String {
-    let mut output = Output {
-        text: String::new(),
-        depth,
-        at_line_start: true,
-        column: 0,
-    };
-    render_into(doc, &mut output, false);
-    output.text
-}
-
-fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
-    match doc {
-        Doc::Text(value) => output.write(value),
-        Doc::Line => output.line(),
-        Doc::SoftLine => {
-            if flat {
-                output.write(" ");
-            } else {
-                output.line();
-            }
-        }
-        Doc::SoftNil => {
-            if !flat {
-                output.line();
-            }
-        }
-        Doc::Broken(value) => {
-            if !flat {
-                output.write(value);
-            }
-        }
-        Doc::Indent(inner) => {
-            output.depth += 1;
-            render_into(inner, output, flat);
-            output.depth -= 1;
-        }
-        Doc::Group(inner) => {
-            let flat_here = flat
-                || flat_width(inner).is_some_and(|width| output.column_now() + width <= LINE_WIDTH);
-            render_into(inner, output, flat_here);
-        }
-        Doc::Concat(parts) => {
-            for part in parts {
-                render_into(part, output, flat);
-            }
-        }
-    }
-}
-
-/// The display width of `doc` rendered flat, or `None` when it contains a hard
-/// [`Doc::Line`] and can therefore never be flat.
-fn flat_width(doc: &Doc) -> Option<usize> {
-    match doc {
-        Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
-        Doc::Line => None,
-        Doc::SoftLine => Some(1),
-        Doc::SoftNil | Doc::Broken(_) => Some(0),
-        Doc::Indent(inner) | Doc::Group(inner) => flat_width(inner),
-        Doc::Concat(parts) => {
-            let mut total = 0;
-            for part in parts {
-                total += flat_width(part)?;
-            }
-            Some(total)
-        }
-    }
-}
+use crate::syntax::{field, node};
 
 pub(crate) struct Renderer<'a> {
     path: &'a SupportedPath,
@@ -173,7 +46,7 @@ impl<'a> Renderer<'a> {
 
     fn push_tokens(&self, node: Node<'_>, out: &mut Vec<String>) {
         let kind = node.kind();
-        if kind == syntax::COMMENT || kind == syntax::HADDOCK {
+        if kind == node::COMMENT || kind == node::HADDOCK {
             return;
         }
         // Strings and characters carry meaningful internal bytes.
@@ -238,7 +111,7 @@ impl<'a> Renderer<'a> {
         let mut out = Vec::new();
         let mut cursor = fields.walk();
         for child in fields.named_children(&mut cursor) {
-            if child.kind() == syntax::FIELD {
+            if child.kind() == node::FIELD {
                 out.push(self.node_text(child));
             }
         }
@@ -249,7 +122,7 @@ impl<'a> Renderer<'a> {
     /// per indented line.
     pub(crate) fn data_doc(&self, node: Node<'_>, keyword: &str) -> Doc {
         let name = self
-            .field_text(node, syntax::FIELD_NAME_FIELD)
+            .field_text(node, field::NAME)
             .unwrap_or_default();
         let context = self.context_text(self.field(node, "context"));
         let params = self.params_text(self.field(node, "patterns"));
@@ -340,7 +213,7 @@ impl<'a> Renderer<'a> {
         let mut out = Vec::new();
         let mut cursor = constructors.walk();
         for child in constructors.named_children(&mut cursor) {
-            if child.kind() == syntax::DATA_CONSTRUCTOR {
+            if child.kind() == node::DATA_CONSTRUCTOR {
                 out.push(self.node_text(child));
             }
         }
@@ -392,7 +265,7 @@ impl<'a> Renderer<'a> {
         let mut out = Vec::new();
         let mut cursor = record.walk();
         for child in record.children_by_field_name("field", &mut cursor) {
-            if child.kind() == syntax::FIELD {
+            if child.kind() == node::FIELD {
                 out.push(self.node_text(child));
             }
         }
@@ -403,7 +276,7 @@ impl<'a> Renderer<'a> {
     /// line.
     pub(crate) fn family_doc(&self, node: Node<'_>, keyword: &str) -> Doc {
         let name = self
-            .field_text(node, syntax::FIELD_NAME_FIELD)
+            .field_text(node, field::NAME)
             .unwrap_or_default();
         let params = self.params_text(self.field(node, "patterns"));
         let header = format!("{keyword} {name}{params}");
@@ -440,7 +313,7 @@ impl<'a> Renderer<'a> {
             .map(|forall| format!("{} ", self.node_text(forall)))
             .unwrap_or_default();
         let name = self
-            .field_text(node, syntax::FIELD_NAME_FIELD)
+            .field_text(node, field::NAME)
             .unwrap_or_default();
         let params = self.params_text(self.field(node, "patterns"));
         let fundeps = self
@@ -456,13 +329,13 @@ impl<'a> Renderer<'a> {
         let names = match self.field(node, "names") {
             Some(names) => self.node_text(names),
             None => self
-                .field_text(node, syntax::FIELD_NAME_FIELD)
+                .field_text(node, field::NAME)
                 .unwrap_or_default(),
         };
-        let Some(type_node) = self.field(node, syntax::FIELD_TYPE) else {
+        let Some(type_node) = self.field(node, field::TYPE) else {
             return Doc::Text(format!("{names} ::"));
         };
-        if matches!(type_node.kind(), syntax::FUNCTION | syntax::CONTEXT) {
+        if matches!(type_node.kind(), node::FUNCTION | node::CONTEXT) {
             // Arrow chains (and a leading context) already break at their own
             // `->`/`=>` structure, so keep the type on the `::` line.
             return Doc::Concat(vec![
@@ -486,7 +359,7 @@ impl<'a> Renderer<'a> {
     /// when they do not fit; every other node kind stays flat.
     pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
         match node.kind() {
-            syntax::FUNCTION | syntax::CONTEXT => self.arrow_type_doc(node),
+            node::FUNCTION | node::CONTEXT => self.arrow_type_doc(node),
             "parens" => self.parens_type_doc(node),
             "tuple" => self.bracket_elements_doc(node, "element", "(", ")", true),
             "unboxed_tuple" => self.bracket_elements_doc(node, "element", "(# ", " #)", false),
@@ -501,11 +374,11 @@ impl<'a> Renderer<'a> {
     /// right-hand side.
     pub(crate) fn type_synonym_doc(&self, node: Node<'_>) -> Doc {
         let name = self
-            .field_text(node, syntax::FIELD_NAME_FIELD)
+            .field_text(node, field::NAME)
             .unwrap_or_default();
         let params = self.params_text(self.field(node, "patterns"));
         let header = format!("type {name}{params} =");
-        let Some(rhs) = self.field(node, syntax::FIELD_TYPE) else {
+        let Some(rhs) = self.field(node, field::TYPE) else {
             return Doc::Text(header);
         };
         Doc::Group(Box::new(Doc::Concat(vec![
@@ -522,13 +395,13 @@ impl<'a> Renderer<'a> {
     fn arrow_type_doc(&self, node: Node<'_>) -> Doc {
         let mut node = node;
         let mut head = None;
-        if node.kind() == syntax::CONTEXT {
+        if node.kind() == node::CONTEXT {
             let context = self
                 .field(node, "context")
                 .map(|context| self.node_text(context))
                 .unwrap_or_default();
             head = Some(Doc::Text(context));
-            match self.field(node, syntax::FIELD_TYPE) {
+            match self.field(node, field::TYPE) {
                 Some(inner) => node = inner,
                 None => return head.unwrap_or_else(|| Doc::Text(String::new())),
             }
@@ -537,7 +410,7 @@ impl<'a> Renderer<'a> {
         let mut atoms: Vec<Doc> = Vec::new();
         let mut current = node;
         loop {
-            if current.kind() == syntax::FUNCTION {
+            if current.kind() == node::FUNCTION {
                 if let Some(parameter) = self.field(current, "parameter") {
                     atoms.push(self.type_doc(parameter));
                 }
@@ -577,7 +450,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn parens_type_doc(&self, node: Node<'_>) -> Doc {
-        let Some(inner) = self.field(node, syntax::FIELD_TYPE) else {
+        let Some(inner) = self.field(node, field::TYPE) else {
             return Doc::Text(self.node_text(node));
         };
         Doc::Group(Box::new(Doc::Concat(vec![
@@ -697,7 +570,7 @@ impl<'a> Renderer<'a> {
     /// The written head of a function definition, without the body.
     pub(crate) fn function_head(&self, node: Node<'_>) -> String {
         let name = self
-            .field_text(node, syntax::FIELD_NAME_FIELD)
+            .field_text(node, field::NAME)
             .unwrap_or_default();
         let params = self
             .field(node, "patterns")
@@ -708,7 +581,7 @@ impl<'a> Renderer<'a> {
 
     /// The written name of a binding, or `None` for a pattern binding.
     pub(crate) fn bind_name(&self, node: Node<'_>) -> Option<String> {
-        self.field_text(node, syntax::FIELD_NAME_FIELD)
+        self.field_text(node, field::NAME)
     }
 
     /// The names declared by a signature, for pairing with definitions.
@@ -720,7 +593,7 @@ impl<'a> Renderer<'a> {
                 out.push(self.node_text(child));
             }
             out
-        } else if let Some(name) = self.field_text(node, syntax::FIELD_NAME_FIELD) {
+        } else if let Some(name) = self.field_text(node, field::NAME) {
             vec![name]
         } else {
             Vec::new()
@@ -818,6 +691,7 @@ fn needs_space(previous: &str, next: &str, before_dot: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::syntax;
 
     fn supported(raw: &str) -> SupportedPath {
         SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
@@ -835,7 +709,7 @@ mod tests {
         let renderer = Renderer::new(&path, source);
         let mut stack = vec![tree.root_node()];
         while let Some(node) = stack.pop() {
-            if node.kind() == syntax::TYPE_SYNONYM {
+            if node.kind() == node::TYPE_SYNONYM {
                 return render(&renderer.type_synonym_doc(node), 0);
             }
             let mut cursor = node.walk();
@@ -853,7 +727,7 @@ mod tests {
         let renderer = Renderer::new(&path, source);
         let mut stack = vec![tree.root_node()];
         while let Some(node) = stack.pop() {
-            if node.kind() == syntax::SIGNATURE {
+            if node.kind() == node::SIGNATURE {
                 return render(&renderer.signature_doc(node), 0);
             }
             let mut cursor = node.walk();

@@ -10,53 +10,57 @@
 use base::{ProjectionError, SourceSpan, SupportedPath};
 use tree_sitter::{Node, Parser};
 
-// Visible node kinds.
-pub const MODULE: &str = "module";
-pub const CLASS_DEFINITION: &str = "class_definition";
-pub const FUNCTION_DEFINITION: &str = "function_definition";
-pub const DECORATED_DEFINITION: &str = "decorated_definition";
-pub const DECORATOR: &str = "decorator";
-pub const BLOCK: &str = "block";
-pub const EXPRESSION_STATEMENT: &str = "expression_statement";
-pub const ASSIGNMENT: &str = "assignment";
-pub const AUGMENTED_ASSIGNMENT: &str = "augmented_assignment";
-pub const TYPE_ALIAS_STATEMENT: &str = "type_alias_statement";
-pub const COMMENT: &str = "comment";
-pub const STRING: &str = "string";
-pub const IDENTIFIER: &str = "identifier";
-pub const TYPE: &str = "type";
-pub const GENERIC_TYPE: &str = "generic_type";
-pub const BINARY_OPERATOR: &str = "binary_operator";
-pub const TYPE_PARAMETER: &str = "type_parameter";
-pub const PARAMETERS: &str = "parameters";
-pub const TYPED_PARAMETER: &str = "typed_parameter";
-pub const DEFAULT_PARAMETER: &str = "default_parameter";
-pub const TYPED_DEFAULT_PARAMETER: &str = "typed_default_parameter";
-pub const LIST_SPLAT_PATTERN: &str = "list_splat_pattern";
-pub const DICTIONARY_SPLAT_PATTERN: &str = "dictionary_splat_pattern";
-pub const TUPLE_PATTERN: &str = "tuple_pattern";
-pub const KEYWORD_SEPARATOR: &str = "keyword_separator";
-pub const KEYWORD_ARGUMENT: &str = "keyword_argument";
-pub const POSITIONAL_SEPARATOR: &str = "positional_separator";
-pub const PASS_STATEMENT: &str = "pass_statement";
-pub const CALL: &str = "call";
-pub const ATTRIBUTE: &str = "attribute";
-pub const DOTTED_NAME: &str = "dotted_name";
-pub const ARGUMENT_LIST: &str = "argument_list";
-pub const ELIPSIS: &str = "ellipsis";
+/// Tree-sitter node kinds referenced by extraction and rendering.
+pub mod node {
+    pub const MODULE: &str = "module";
+    pub const CLASS_DEFINITION: &str = "class_definition";
+    pub const FUNCTION_DEFINITION: &str = "function_definition";
+    pub const DECORATED_DEFINITION: &str = "decorated_definition";
+    pub const DECORATOR: &str = "decorator";
+    pub const BLOCK: &str = "block";
+    pub const EXPRESSION_STATEMENT: &str = "expression_statement";
+    pub const ASSIGNMENT: &str = "assignment";
+    pub const AUGMENTED_ASSIGNMENT: &str = "augmented_assignment";
+    pub const TYPE_ALIAS_STATEMENT: &str = "type_alias_statement";
+    pub const COMMENT: &str = "comment";
+    pub const STRING: &str = "string";
+    pub const IDENTIFIER: &str = "identifier";
+    pub const TYPE: &str = "type";
+    pub const GENERIC_TYPE: &str = "generic_type";
+    pub const BINARY_OPERATOR: &str = "binary_operator";
+    pub const TYPE_PARAMETER: &str = "type_parameter";
+    pub const PARAMETERS: &str = "parameters";
+    pub const TYPED_PARAMETER: &str = "typed_parameter";
+    pub const DEFAULT_PARAMETER: &str = "default_parameter";
+    pub const TYPED_DEFAULT_PARAMETER: &str = "typed_default_parameter";
+    pub const LIST_SPLAT_PATTERN: &str = "list_splat_pattern";
+    pub const DICTIONARY_SPLAT_PATTERN: &str = "dictionary_splat_pattern";
+    pub const TUPLE_PATTERN: &str = "tuple_pattern";
+    pub const KEYWORD_SEPARATOR: &str = "keyword_separator";
+    pub const KEYWORD_ARGUMENT: &str = "keyword_argument";
+    pub const POSITIONAL_SEPARATOR: &str = "positional_separator";
+    pub const PASS_STATEMENT: &str = "pass_statement";
+    pub const CALL: &str = "call";
+    pub const ATTRIBUTE: &str = "attribute";
+    pub const DOTTED_NAME: &str = "dotted_name";
+    pub const ARGUMENT_LIST: &str = "argument_list";
+    pub const ELIPSIS: &str = "ellipsis";
+}
 
-// Named-field names used during traversal.
-pub const FIELD_NAME: &str = "name";
-pub const FIELD_BODY: &str = "body";
-pub const FIELD_SUPERCLASSES: &str = "superclasses";
-pub const FIELD_TYPE_PARAMETERS: &str = "type_parameters";
-pub const FIELD_PARAMETERS: &str = "parameters";
-pub const FIELD_RETURN_TYPE: &str = "return_type";
-pub const FIELD_DEFINITION: &str = "definition";
-pub const FIELD_LEFT: &str = "left";
-pub const FIELD_RIGHT: &str = "right";
-pub const FIELD_TYPE: &str = "type";
-pub const FIELD_VALUE: &str = "value";
+/// Named fields accessed through `Node::child_by_field_name`.
+pub mod field {
+    pub const NAME: &str = "name";
+    pub const BODY: &str = "body";
+    pub const SUPERCLASSES: &str = "superclasses";
+    pub const TYPE_PARAMETERS: &str = "type_parameters";
+    pub const PARAMETERS: &str = "parameters";
+    pub const RETURN_TYPE: &str = "return_type";
+    pub const DEFINITION: &str = "definition";
+    pub const LEFT: &str = "left";
+    pub const RIGHT: &str = "right";
+    pub const TYPE: &str = "type";
+    pub const VALUE: &str = "value";
+}
 
 /// Parses one Python source file and rejects any tree containing `ERROR` or
 /// missing nodes. `None` parse results and error nodes are fatal so that no
