@@ -54,6 +54,8 @@ crates/
       lib.rs
       diagnostic.rs
       diff.rs
+      doc.rs
+      keys.rs
       language.rs
       model.rs
       outline.rs
@@ -374,7 +376,7 @@ Stable keys identify declarations inside a projected file. They are not global d
 - Python class or type declaration: container, item kind, and declared name.
 - Python class member: class key, item kind (field, method, or variant), and declared name.
 
-If two declarations produce the same key, append a deterministic source-order ordinal. Never include byte offsets in the primary key because harmless edits before a declaration would destabilize it.
+If two declarations produce the same key, append a deterministic source-order ordinal. Never include byte offsets in the primary key because harmless edits before a declaration would destabilize it. The collision suffix is allocated by `base::KeyAllocator`, the single implementation every adapter uses.
 
 ### 5.3 Canonical text assembly
 
@@ -599,7 +601,7 @@ Line breaks are fixed by declaration shape and by a single compile-time width bu
 - Four spaces per nesting level.
 - Exactly one trailing newline per projected file.
 
-Build a small internal document representation such as `Text`, `Line`, `Indent`, and `Concat`, plus a width-aware `Group` with soft line breaks for the two shapes above, or equivalent direct rendering helpers. Do not add a complete source formatter.
+Build a small internal document representation such as `Text`, `Line`, `Indent`, and `Concat`, plus a width-aware `Group` with soft line breaks for the two shapes above, or equivalent direct rendering helpers. This grammar-agnostic layout document lives in `base` as `base::Doc` (module `doc.rs`), shared by every adapter; `base` stays free of Tree-sitter, and each adapter lowers its own parsed tree into `Doc`. Do not add a complete source formatter.
 
 For type expressions and signature fragments, walk leaf tokens while excluding comments. Normalize spacing with language-specific rules. At minimum:
 
