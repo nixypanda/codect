@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use base::{
-    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
-    SourceSpan,
+    ItemKind, KeyAllocator, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
+    ProjectionMode, SourceSpan,
 };
 use tree_sitter::Node;
 
@@ -29,7 +29,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         module: module_name(&renderer, root)?,
         mode: input.mode,
         items: Vec::new(),
-        keys: HashMap::new(),
+        keys: KeyAllocator::new(),
     };
 
     let mut cursor = root.walk();
@@ -164,7 +164,7 @@ struct Builder {
     module: String,
     mode: ProjectionMode,
     items: Vec<ProjectedItem>,
-    keys: HashMap<String, usize>,
+    keys: KeyAllocator,
 }
 
 impl Builder {
@@ -199,13 +199,7 @@ impl Builder {
         } else {
             format!("{} {} {name}", self.module, kind_label(kind))
         };
-        let ordinal = self.keys.entry(base.clone()).or_insert(0);
-        *ordinal += 1;
-        if *ordinal == 1 {
-            base
-        } else {
-            format!("{base}#{ordinal}")
-        }
+        self.keys.unique(base)
     }
 }
 

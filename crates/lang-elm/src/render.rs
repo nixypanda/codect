@@ -7,9 +7,9 @@
 //! and whitespace inside a declaration cannot leak into output. Line breaks are
 //! fixed by declaration shape; nothing here consults terminal width.
 
-use base::{LINE_WIDTH, ProjectionError, SupportedPath};
+use base::doc::Doc;
+use base::{ProjectionError, SupportedPath};
 use tree_sitter::Node;
-use unicode_width::UnicodeWidthStr;
 
 use crate::syntax::{
     self, ARROW, DOT, FIELD_ASSOCIATIVITY, FIELD_BASE_RECORD, FIELD_FIELD_TYPE, FIELD_NAME,
@@ -18,137 +18,6 @@ use crate::syntax::{
     RECORD_TYPE, TUPLE_TYPE, TYPE_EXPRESSION, TYPE_REF, TYPE_VARIABLE, UPPER_CASE_IDENTIFIER,
     UPPER_CASE_QID, VALUE_EXPR,
 };
-
-const INDENT: &str = "    ";
-
-/// A minimal document representation: this is a structural pretty-printer for a
-/// handful of declaration shapes, not a general Elm source formatter.
-///
-/// [`Doc::Group`] is the only width-sensitive construct: it renders flat (soft
-/// breaks as spaces) when the flat form fits within [`LINE_WIDTH`], and broken
-/// (soft breaks as newlines) otherwise.
-pub(crate) enum Doc {
-    Text(String),
-    Line,
-    /// A space when flat, a line break when broken.
-    SoftLine,
-    /// Nothing when flat, a line break when broken.
-    SoftNil,
-    /// Emitted only when the enclosing group is broken.
-    Broken(&'static str),
-    Indent(Box<Doc>),
-    Group(Box<Doc>),
-    Concat(Vec<Doc>),
-}
-
-struct Writer {
-    out: String,
-    indent: usize,
-    column: usize,
-    at_line_start: bool,
-}
-
-impl Writer {
-    fn write(&mut self, value: &str) {
-        if self.at_line_start {
-            for _ in 0..self.indent {
-                self.out.push_str(INDENT);
-            }
-            self.column = self.indent * INDENT.len();
-            self.at_line_start = false;
-        }
-        self.out.push_str(value);
-        self.column += UnicodeWidthStr::width(value);
-    }
-
-    fn line(&mut self) {
-        self.out.push('\n');
-        self.at_line_start = true;
-        self.column = 0;
-    }
-
-    /// The column the next written character would land in.
-    fn column_now(&self) -> usize {
-        if self.at_line_start {
-            self.indent * INDENT.len()
-        } else {
-            self.column
-        }
-    }
-}
-
-impl Doc {
-    pub(crate) fn render(&self) -> String {
-        let mut writer = Writer {
-            out: String::new(),
-            indent: 0,
-            column: 0,
-            at_line_start: true,
-        };
-        self.write(&mut writer, false);
-        writer.out
-    }
-
-    fn write(&self, writer: &mut Writer, flat: bool) {
-        match self {
-            Doc::Text(value) => writer.write(value),
-            Doc::Line => writer.line(),
-            Doc::SoftLine => {
-                if flat {
-                    writer.write(" ");
-                } else {
-                    writer.line();
-                }
-            }
-            Doc::SoftNil => {
-                if !flat {
-                    writer.line();
-                }
-            }
-            Doc::Broken(value) => {
-                if !flat {
-                    writer.write(value);
-                }
-            }
-            Doc::Indent(inner) => {
-                writer.indent += 1;
-                inner.write(writer, flat);
-                writer.indent -= 1;
-            }
-            Doc::Group(inner) => {
-                let flat_here = flat
-                    || inner
-                        .flat_width()
-                        .is_some_and(|width| writer.column_now() + width <= LINE_WIDTH);
-                inner.write(writer, flat_here);
-            }
-            Doc::Concat(parts) => {
-                for part in parts {
-                    part.write(writer, flat);
-                }
-            }
-        }
-    }
-
-    /// The display width of the document rendered flat, or `None` when it
-    /// contains a hard [`Doc::Line`] and can therefore never be flat.
-    fn flat_width(&self) -> Option<usize> {
-        match self {
-            Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
-            Doc::Line => None,
-            Doc::SoftLine => Some(1),
-            Doc::SoftNil | Doc::Broken(_) => Some(0),
-            Doc::Indent(inner) | Doc::Group(inner) => inner.flat_width(),
-            Doc::Concat(parts) => {
-                let mut total = 0;
-                for part in parts {
-                    total += part.flat_width()?;
-                }
-                Some(total)
-            }
-        }
-    }
-}
 
 fn text(value: impl Into<String>) -> Doc {
     Doc::Text(value.into())

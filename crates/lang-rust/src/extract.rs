@@ -5,12 +5,9 @@
 //! nesting, never resolves `mod name;` into another file, and never expands a
 //! macro. Macro definitions and invocation output produce no items.
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-
 use base::{
-    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
-    SourceSpan,
+    ItemKind, KeyAllocator, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
+    ProjectionMode, SourceSpan,
 };
 use tree_sitter::Node;
 
@@ -45,26 +42,12 @@ struct Built {
 struct Context<'a> {
     source: &'a str,
     mode: ProjectionMode,
-    keys: HashMap<String, usize>,
+    keys: KeyAllocator,
 }
 
 impl Context<'_> {
-    /// Stable keys are unique inside a projected file; collisions take a
-    /// deterministic source-order ordinal instead of a byte offset
-    /// (TECHNICAL_DESIGN.md section 5.2).
     fn unique(&mut self, base: String) -> String {
-        match self.keys.entry(base.clone()) {
-            Entry::Vacant(entry) => {
-                entry.insert(1);
-                base
-            }
-            Entry::Occupied(mut entry) => {
-                let ordinal = entry.get_mut();
-                let key = format!("{base}~{ordinal}");
-                *ordinal += 1;
-                key
-            }
-        }
+        self.keys.unique(base)
     }
 }
 
@@ -98,7 +81,7 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
     let mut context = Context {
         source,
         mode: input.mode,
-        keys: HashMap::new(),
+        keys: KeyAllocator::new(),
     };
 
     let mut items = Vec::new();

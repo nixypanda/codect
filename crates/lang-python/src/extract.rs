@@ -6,12 +6,9 @@
 //! are preserved because they can change a declaration's meaning, while
 //! docstrings, comments, imports, and initializers are omitted.
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-
 use base::{
-    ItemKind, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
-    SourceSpan,
+    ItemKind, KeyAllocator, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
+    ProjectionMode, SourceSpan,
 };
 use tree_sitter::Node;
 
@@ -40,7 +37,7 @@ struct Builder<'a> {
     renderer: &'a Renderer<'a>,
     mode: ProjectionMode,
     items: Vec<ProjectedItem>,
-    keys: HashMap<String, usize>,
+    keys: KeyAllocator,
 }
 
 pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
@@ -52,7 +49,7 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
         renderer: &renderer,
         mode: input.mode,
         items: Vec::new(),
-        keys: HashMap::new(),
+        keys: KeyAllocator::new(),
     };
 
     let file_key = input.path.to_string();
@@ -67,21 +64,8 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
 }
 
 impl Builder<'_> {
-    /// Stable keys are unique inside a projected file; collisions take a
-    /// deterministic source-order ordinal instead of a byte offset.
     fn unique(&mut self, base: String) -> String {
-        match self.keys.entry(base.clone()) {
-            Entry::Vacant(entry) => {
-                entry.insert(1);
-                base
-            }
-            Entry::Occupied(mut entry) => {
-                let ordinal = entry.get_mut();
-                let key = format!("{base}~{ordinal}");
-                *ordinal += 1;
-                key
-            }
-        }
+        self.keys.unique(base)
     }
 
     fn member(

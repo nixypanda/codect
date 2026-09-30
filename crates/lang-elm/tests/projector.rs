@@ -39,3 +39,23 @@ fn a_valid_file_without_declarations_is_not_an_error() {
         "module A\n"
     );
 }
+
+#[test]
+fn colliding_declarations_get_a_source_order_ordinal_key() {
+    let source =
+        "module A exposing (..)\n\ntype alias Foo =\n    Int\n\ntype alias Foo =\n    String\n";
+    let path = supported("input.elm");
+    let file = ElmProjector::new()
+        .project(ProjectionInput {
+            path: &path,
+            source,
+            mode: ProjectionMode::Types,
+        })
+        .expect("duplicate aliases are syntactically valid");
+    let keys: Vec<&str> = file
+        .items()
+        .iter()
+        .map(|item| item.stable_key.as_str())
+        .collect();
+    assert_eq!(keys, ["A", "A type alias Foo", "A type alias Foo~1"]);
+}
