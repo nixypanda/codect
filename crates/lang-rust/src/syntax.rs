@@ -110,9 +110,9 @@ pub mod field {
     pub const PATTERN: &str = "pattern";
 }
 
-/// Parses one Rust source file and rejects any tree containing `ERROR` or
-/// missing nodes. `None` parse results and error nodes are fatal so that no
-/// caller can emit a partial projection (TECHNICAL_DESIGN.md section 9).
+// Parses one Rust source file and rejects any tree containing `ERROR` or
+// missing nodes. `None` parse results and error nodes are fatal so that no
+// caller can emit a partial projection (TECHNICAL_DESIGN.md section 9).
 pub(crate) fn parse(source: &str, path: &SupportedPath) -> Result<Tree, ProjectionError> {
     let mut parser = Parser::new();
     parser
@@ -141,8 +141,8 @@ pub(crate) fn parse(source: &str, path: &SupportedPath) -> Result<Tree, Projecti
     Ok(tree)
 }
 
-/// The first `ERROR` or missing node in source order, walked iteratively so the
-/// cost is independent of expression depth.
+// The first `ERROR` or missing node in source order, walked iteratively so the
+// cost is independent of expression depth.
 pub(crate) fn first_error_range(root: Node<'_>) -> Option<SourceSpan> {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {

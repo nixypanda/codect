@@ -1,6 +1,4 @@
-//! Fixture-driven projection tests (TECHNICAL_DESIGN.md section 16.2).
-//!
-//! Expected projections are plain text so a failure shows a readable diff.
+// Expected projections are plain text so a failure shows a readable diff.
 
 use std::fs;
 use std::path::PathBuf;
