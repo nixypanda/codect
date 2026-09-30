@@ -123,6 +123,17 @@ impl<'a> Renderer<'a> {
         self.source.get(node.byte_range()).unwrap_or("")
     }
 
+    fn field<'t>(&self, node: Node<'t>, name: &str) -> Option<Node<'t>> {
+        node.child_by_field_name(name)
+    }
+
+    /// The first named child of `kind`.
+    pub(crate) fn child_of_kind<'t>(&self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .find(|child| child.kind() == kind)
+    }
+
     fn push_tokens(&self, node: Node<'_>, out: &mut Vec<String>) {
         let mut stack = vec![node];
         while let Some(current) = stack.pop() {
@@ -147,23 +158,14 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    pub(crate) fn tokens(&self, node: Node<'_>) -> Vec<String> {
-        let mut out = Vec::new();
-        self.push_tokens(node, &mut out);
-        out
-    }
-
-    pub(crate) fn render_node(&self, node: Node<'_>) -> String {
+    pub(crate) fn node_text(&self, node: Node<'_>) -> String {
         join(&self.tokens(node))
     }
 
-    fn child_by_field_name<'t>(&self, node: Node<'t>, name: &str) -> Option<Node<'t>> {
-        node.child_by_field_name(name)
-    }
-
-    pub(crate) fn child_of_kind<'t>(&self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
-        let mut cursor = node.walk();
-        node.children(&mut cursor).find(|child| child.kind() == kind)
+    fn tokens(&self, node: Node<'_>) -> Vec<String> {
+        let mut out = Vec::new();
+        self.push_tokens(node, &mut out);
+        out
     }
 
     /// One element of a declaration header: either flattened tokens, a
@@ -183,7 +185,7 @@ impl<'a> Renderer<'a> {
 
     fn header_elements(&self, node: Node<'_>, stop_kinds: &[&str]) -> Vec<Elem> {
         let mut elements = Vec::new();
-        let return_type = self.child_by_field_name(node, field::RETURN_TYPE);
+        let return_type = self.field(node, field::RETURN_TYPE);
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             let kind = child.kind();
@@ -222,12 +224,12 @@ impl<'a> Renderer<'a> {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
             if child.kind() == node::PARAMETER
-                && self.child_by_field_name(child, field::PATTERN).is_some()
-                && self.child_by_field_name(child, field::TYPE).is_some()
+                && self.field(child, field::PATTERN).is_some()
+                && self.field(child, field::TYPE).is_some()
             {
                 items.push(self.parameter_doc(child));
             } else {
-                items.push(Doc::Text(self.render_node(child)));
+                items.push(Doc::Text(self.node_text(child)));
             }
         }
         Elem::List { items, open, close }
@@ -237,9 +239,9 @@ impl<'a> Renderer<'a> {
     /// rendered type. A parameter type can therefore break inside an already-broken
     /// parameter list. Anything else (notably `self`) is rendered flat.
     fn parameter_doc(&self, node: Node<'_>) -> Doc {
-        match self.child_by_field_name(node, field::TYPE) {
+        match self.field(node, field::TYPE) {
             Some(ty) => self.prefix_then_type(node, ty),
-            None => Doc::Text(self.render_node(node)),
+            None => Doc::Text(self.node_text(node)),
         }
     }
 
@@ -251,10 +253,10 @@ impl<'a> Renderer<'a> {
         match node.kind() {
             node::GENERIC_TYPE => {
                 let mut parts = Vec::new();
-                if let Some(ty) = self.child_by_field_name(node, field::TYPE) {
+                if let Some(ty) = self.field(node, field::TYPE) {
                     parts.push(self.type_doc(ty));
                 }
-                if let Some(arguments) = self.child_by_field_name(node, field::TYPE_ARGUMENTS) {
+                if let Some(arguments) = self.field(node, field::TYPE_ARGUMENTS) {
                     let items = self.named_type_children(arguments);
                     parts.push(bracket_list(&items, "<", ">"));
                 }
@@ -265,8 +267,8 @@ impl<'a> Renderer<'a> {
                 Doc::Group(Box::new(bracket_list(&items, "(", ")")))
             }
             node::REFERENCE_TYPE => {
-                let Some(inner) = self.child_by_field_name(node, field::TYPE) else {
-                    return Doc::Text(self.render_node(node));
+                let Some(inner) = self.field(node, field::TYPE) else {
+                    return Doc::Text(self.node_text(node));
                 };
                 let mut prefix_tokens = Vec::new();
                 let mut cursor = node.walk();
@@ -285,7 +287,7 @@ impl<'a> Renderer<'a> {
                 Doc::Concat(parts)
             }
             node::FUNCTION_TYPE => {
-                let parameters = self.child_by_field_name(node, field::PARAMETERS);
+                let parameters = self.field(node, field::PARAMETERS);
                 let mut parts = Vec::new();
                 // The prefix before `parameters` is the `fn` keyword for a bare
                 // function type, or the trait name (`Fn`) when nested under
@@ -303,13 +305,13 @@ impl<'a> Renderer<'a> {
                     let items = self.named_type_children(parameters);
                     parts.push(bracket_list(&items, "(", ")"));
                 }
-                if let Some(return_type) = self.child_by_field_name(node, field::RETURN_TYPE) {
+                if let Some(return_type) = self.field(node, field::RETURN_TYPE) {
                     parts.push(Doc::Text(" -> ".to_owned()));
                     parts.push(self.type_doc(return_type));
                 }
                 Doc::Group(Box::new(Doc::Concat(parts)))
             }
-            _ => Doc::Text(self.render_node(node)),
+            _ => Doc::Text(self.node_text(node)),
         }
     }
 
@@ -324,7 +326,7 @@ impl<'a> Renderer<'a> {
 
     pub(crate) fn where_clause_text(&self, node: Node<'_>) -> Option<String> {
         self.child_of_kind(node, node::WHERE_CLAUSE)
-            .map(|clause| self.render_node(clause))
+            .map(|clause| self.node_text(clause))
     }
 
     /// The depth-1 comma-separated argument items of an attribute's `token_tree`,
@@ -334,7 +336,7 @@ impl<'a> Renderer<'a> {
     /// are dropped so the caller can re-emit the list through [`bracket_list`].
     /// Nested token trees are single children, so a comma inside one never splits.
     fn attribute_argument_items(&self, attribute: Node<'_>) -> Option<Vec<String>> {
-        let arguments = attribute.child_by_field_name(field::ARGUMENTS)?;
+        let arguments = self.field(attribute, field::ARGUMENTS)?;
         if arguments.kind() != node::TOKEN_TREE {
             return None;
         }
@@ -395,21 +397,21 @@ impl<'a> Renderer<'a> {
         } else {
             match self.child_of_kind(attribute_item, node::ATTRIBUTE) {
                 Some(attribute) => attribute,
-                None => return Doc::Text(self.render_node(attribute_item)),
+                None => return Doc::Text(self.node_text(attribute_item)),
             }
         };
-        let arguments = attribute.child_by_field_name(field::ARGUMENTS);
+        let arguments = self.field(attribute, field::ARGUMENTS);
         let mut cursor = attribute.walk();
         let path = attribute
             .named_children(&mut cursor)
             .find(|child| Some(*child) != arguments);
         let (Some(path), Some(items)) = (path, self.attribute_argument_items(attribute)) else {
-            return Doc::Text(self.render_node(attribute_item));
+            return Doc::Text(self.node_text(attribute_item));
         };
         let arguments: Vec<Doc> = items.into_iter().map(Doc::Text).collect();
         Doc::Group(Box::new(Doc::Concat(vec![
             Doc::Text("#[".to_owned()),
-            Doc::Text(self.render_node(path)),
+            Doc::Text(self.node_text(path)),
             bracket_list(&arguments, "(", ")"),
             Doc::Text("]".to_owned()),
         ])))
@@ -428,18 +430,18 @@ impl<'a> Renderer<'a> {
 
     /// A named field's document: everything before the declared type (visibility,
     /// name, and `:`), then the recursively rendered type. The flat rendering is
-    /// byte-identical to the previous `render_node(field)`, but a long type can now
+    /// byte-identical to the previous `node_text(field)`, but a long type can now
     /// break.
     pub(crate) fn field_doc(&self, node: Node<'_>) -> Doc {
-        match self.child_by_field_name(node, field::TYPE) {
+        match self.field(node, field::TYPE) {
             Some(ty) => self.prefix_then_type(node, ty),
-            None => Doc::Text(self.render_node(node)),
+            None => Doc::Text(self.node_text(node)),
         }
     }
 
     /// Everything before `ty` (its sibling tokens are rendered with [`join`]), then
     /// a space when required, then the recursively rendered type. This keeps the
-    /// prefix byte-identical to [`render_node`] while letting `ty` break.
+    /// prefix byte-identical to [`node_text`] while letting `ty` break.
     fn prefix_then_type(&self, node: Node<'_>, ty: Node<'_>) -> Doc {
         let mut prefix = Vec::new();
         let mut cursor = node.walk();
@@ -462,14 +464,14 @@ impl<'a> Renderer<'a> {
     /// is a brace list the caller can group with the trailing comma.
     pub(crate) fn variant_doc(&self, variant: Node<'_>) -> Doc {
         let name = self
-            .child_by_field_name(variant, field::NAME)
-            .map(|node| self.render_node(node))
+            .field(variant, field::NAME)
+            .map(|node| self.node_text(node))
             .unwrap_or_default();
 
-        match self.child_by_field_name(variant, field::BODY) {
-            None => Doc::Text(self.render_node(variant)),
+        match self.field(variant, field::BODY) {
+            None => Doc::Text(self.node_text(variant)),
             Some(body) if body.kind() == node::ORDERED_FIELD_DECLARATION_LIST => {
-                Doc::Text(format!("{name}{}", self.render_node(body)))
+                Doc::Text(format!("{name}{}", self.node_text(body)))
             }
             Some(body) => {
                 let fields = self.field_docs(body);
@@ -489,7 +491,7 @@ impl<'a> Renderer<'a> {
             self.push_tokens(visibility, &mut out);
         }
         out.push("type".to_owned());
-        if let Some(name) = self.child_by_field_name(node, field::NAME) {
+        if let Some(name) = self.field(node, field::NAME) {
             self.push_tokens(name, &mut out);
         }
         if let Some(parameters) = self.child_of_kind(node, node::TYPE_PARAMETERS) {
@@ -497,7 +499,7 @@ impl<'a> Renderer<'a> {
         }
         out.push(node::EQUAL.to_owned());
         let mut parts = vec![Doc::Text(join(&out))];
-        if let Some(right) = self.child_by_field_name(node, field::TYPE) {
+        if let Some(right) = self.field(node, field::TYPE) {
             let first = self.tokens(right).into_iter().next().unwrap_or_default();
             if needs_space(last_or_empty(&out), &first) {
                 parts.push(Doc::Text(" ".to_owned()));
@@ -510,7 +512,7 @@ impl<'a> Renderer<'a> {
     /// `type Error: Bound + Bound`, without the terminator or where clause.
     pub(crate) fn associated_type_text(&self, node: Node<'_>) -> String {
         let mut out = vec!["type".to_owned()];
-        if let Some(name) = self.child_by_field_name(node, field::NAME) {
+        if let Some(name) = self.field(node, field::NAME) {
             self.push_tokens(name, &mut out);
         }
         if let Some(parameters) = self.child_of_kind(node, node::TYPE_PARAMETERS) {
@@ -848,7 +850,7 @@ mod tests {
         assert_eq!(attribute_item.kind(), "attribute_item");
         (
             renderer.attribute_doc(attribute_item),
-            renderer.render_node(attribute_item),
+            renderer.node_text(attribute_item),
         )
     }
 
@@ -860,7 +862,7 @@ mod tests {
         let renderer = Renderer::new(&path, source);
         let item = tree.root_node().named_child(0).expect("a type item");
         let ty = item.child_by_field_name("type").expect("the alias type");
-        (renderer.type_doc(ty), renderer.render_node(ty))
+        (renderer.type_doc(ty), renderer.node_text(ty))
     }
 
     #[test]
@@ -895,7 +897,7 @@ mod tests {
         let inner = dynamic
             .child_by_field_name("trait")
             .expect("the function type");
-        assert_eq!(renderer.render_node(inner), "Fn(A) -> B");
+        assert_eq!(renderer.node_text(inner), "Fn(A) -> B");
         assert_eq!(render(&renderer.type_doc(inner), 0), "Fn(A) -> B");
     }
 
