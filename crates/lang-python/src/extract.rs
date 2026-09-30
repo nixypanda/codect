@@ -101,8 +101,12 @@ impl Builder<'_> {
             node::FUNCTION_DEFINITION => {
                 self.function_decl(node, Vec::new(), container_key, scope, depth)
             }
-            node::TYPE_ALIAS_STATEMENT => Ok(Some(self.type_alias(node, container_key, scope, depth)?)),
-            node::EXPRESSION_STATEMENT => self.expression_statement(node, container_key, scope, depth),
+            node::TYPE_ALIAS_STATEMENT => {
+                Ok(Some(self.type_alias(node, container_key, scope, depth)?))
+            }
+            node::EXPRESSION_STATEMENT => {
+                self.expression_statement(node, container_key, scope, depth)
+            }
             _ => Ok(None),
         }
     }
@@ -145,8 +149,7 @@ impl Builder<'_> {
         let name = self
             .renderer
             .field_text(node, field::NAME)
-            .ok_or_else(|| self.missing(node, "class has no name"))?
-            .to_owned();
+            .ok_or_else(|| self.missing(node, "class has no name"))?;
         let key = self.unique(format!("{container_key}::class::{name}"));
         let enum_like = is_enum_like(self.renderer, node);
 
@@ -202,14 +205,13 @@ impl Builder<'_> {
         let name = self
             .renderer
             .field_text(node, field::NAME)
-            .ok_or_else(|| self.missing(node, "function has no name"))?
-            .to_owned();
+            .ok_or_else(|| self.missing(node, "function has no name"))?;
         let is_method = matches!(scope, Scope::Class { .. });
         let kind_tag = if is_method { "method" } else { "fn" };
         let key = self.unique(format!("{container_key}::{kind_tag}::{name}"));
 
         let mut header = Vec::new();
-        if self.renderer.has_child_of_kind(node, "async") {
+        if self.renderer.child_of_kind_any(node, "async").is_some() {
             header.push(Doc::Text("async ".to_owned()));
         }
         header.push(Doc::Text(format!("def {name}")));

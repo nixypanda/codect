@@ -50,6 +50,15 @@ impl<'a> Renderer<'a> {
         Self { path, source }
     }
 
+    /// The path and its derived language, for building a [`ProjectionError`].
+    pub(crate) fn supported_path(&self) -> &SupportedPath {
+        self.path
+    }
+
+    pub(crate) fn slice(&self, node: Node<'_>) -> &'a str {
+        self.source.get(node.byte_range()).unwrap_or("")
+    }
+
     pub(crate) fn invariant<T>(
         &self,
         node: Node<'_>,
@@ -62,18 +71,20 @@ impl<'a> Renderer<'a> {
         })
     }
 
-    /// The path and its derived language, for building a [`ProjectionError`].
-    pub(crate) fn supported_path(&self) -> &SupportedPath {
-        self.path
+    pub(crate) fn field<'n>(&self, node: Node<'n>, name: &str) -> Option<Node<'n>> {
+        node.child_by_field_name(name)
     }
 
-    pub(crate) fn slice(&self, node: Node<'_>) -> &str {
-        self.source.get(node.byte_range()).unwrap_or("")
+    pub(crate) fn field_text(&self, node: Node<'_>, field: &str) -> Option<String> {
+        self.field(node, field).map(|child| self.node_text(child))
     }
 
-    pub(crate) fn field_text(&self, node: Node<'_>, field: &str) -> Option<&str> {
-        node.child_by_field_name(field)
-            .and_then(|child| self.source.get(child.byte_range()))
+    /// The first child of `kind`, named or not. Python needs this for anonymous
+    /// keyword tokens such as `async`.
+    pub(crate) fn child_of_kind_any<'t>(&self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+        let mut cursor = node.walk();
+        node.children(&mut cursor)
+            .find(|child| child.kind() == kind)
     }
 
     fn push_tokens(&self, node: Node<'_>, out: &mut Vec<Tok>) {
@@ -148,16 +159,6 @@ impl<'a> Renderer<'a> {
             ])));
         }
         Doc::Text(self.node_text(node))
-    }
-
-    pub(crate) fn child_of_kind<'t>(&self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
-        let mut cursor = node.walk();
-        node.children(&mut cursor)
-            .find(|child| child.kind() == kind)
-    }
-
-    pub(crate) fn has_child_of_kind(&self, node: Node<'_>, kind: &str) -> bool {
-        self.child_of_kind(node, kind).is_some()
     }
 
     /// A bracketed list body: inline while the enclosing [`Doc::Group`] fits,
