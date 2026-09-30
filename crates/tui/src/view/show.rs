@@ -4,14 +4,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::app::App;
-use crate::content::Loaded;
-use crate::highlight;
-use crate::layout::Edge;
-use crate::text::clip_line;
-use crate::theme::Theme;
-use crate::view::block::pane_block;
+use crate::page::Loaded;
+use crate::render::block::pane_block;
+use crate::render::highlight;
+use crate::render::layout::Edge;
+use crate::render::text::clip_line;
+use crate::render::theme::Theme;
 
-use super::empty::render_empty;
+use crate::render::empty::render_empty;
 
 pub(crate) fn render_show_body(
     app: &App,

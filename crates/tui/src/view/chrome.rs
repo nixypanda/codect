@@ -5,12 +5,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Focus, layout_focus};
-use crate::components::overlay::Overlay;
-use crate::content::{Loaded, mode_label};
-use crate::layout::VisualRowKind;
-use crate::text::clip_line;
-use crate::theme::{Rgb, Theme};
+use crate::app::{App, layout_focus};
+use crate::component::overlay::Overlay;
+use crate::page::{Loaded, mode_label};
+use crate::render::layout::VisualRowKind;
+use crate::render::metrics::Focus;
+use crate::render::text::clip_line;
+use crate::render::theme::{Rgb, Theme};
 
 pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.chrome.theme;
@@ -170,10 +171,7 @@ fn compact_hints(app: &App) -> &'static str {
 }
 
 fn prompt_active(app: &App) -> bool {
-    match &app.loaded {
-        Loaded::Show(show) => show.prompt.is_some(),
-        Loaded::Diff(diff) => diff.prompt.is_some(),
-    }
+    app.loaded.prompt_active()
 }
 
 fn hints(app: &App) -> String {

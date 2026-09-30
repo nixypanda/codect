@@ -14,10 +14,10 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::layout::{Edge, commit_offset};
-use crate::text::truncate_ellipsis;
-use crate::view::block::pane_block;
-use crate::view::empty::render_empty;
+use crate::render::block::pane_block;
+use crate::render::empty::render_empty;
+use crate::render::layout::{Edge, commit_offset};
+use crate::render::text::truncate_ellipsis;
 
 use super::RenderCtx;
 

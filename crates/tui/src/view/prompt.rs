@@ -10,10 +10,10 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::App;
-use crate::components::text_input::{TextInput, input_line};
-use crate::content::{DiffSide, Loaded};
-use crate::theme::Theme;
-use crate::view::block::{popup_block, scrim};
+use crate::component::text_input::{TextInput, input_line};
+use crate::page::{DiffSide, Loaded};
+use crate::render::block::{popup_block, scrim};
+use crate::render::theme::Theme;
 
 pub(crate) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.chrome.theme;

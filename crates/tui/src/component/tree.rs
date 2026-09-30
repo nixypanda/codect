@@ -16,12 +16,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::content::{ChangeKind, Loaded};
-use crate::layout::{Edge, window_offset};
-use crate::text::truncate_ellipsis;
-use crate::theme::Theme;
-use crate::view::block::pane_block;
-use crate::view::empty::render_empty;
+use crate::page::{ChangeKind, Loaded};
+use crate::render::block::pane_block;
+use crate::render::empty::render_empty;
+use crate::render::layout::{Edge, window_offset};
+use crate::render::text::truncate_ellipsis;
+use crate::render::theme::Theme;
 
 use super::RenderCtx;
 
@@ -530,7 +530,7 @@ fn badge(
     ctx: &RenderCtx,
     row: &TreeRow,
     theme: &Theme,
-) -> Option<(&'static str, crate::theme::Rgb)> {
+) -> Option<(&'static str, crate::render::theme::Rgb)> {
     let RowKind::File { path } = &row.kind else {
         return None;
     };

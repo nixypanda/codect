@@ -16,12 +16,12 @@ use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::action::Action;
-use crate::content::{available_modes, mode_label};
-use crate::fuzzy;
-use crate::input::Key;
-use crate::layout::{centered, window_offset};
-use crate::theme::Theme;
-use crate::view::block::{popup_block, scrim};
+use crate::page::{available_modes, mode_label};
+use crate::render::block::{popup_block, scrim};
+use crate::render::layout::{centered, window_offset};
+use crate::render::theme::Theme;
+use crate::util::fuzzy;
+use crate::util::input::Key;
 
 use super::text_input::{Edit, TextInput, input_line};
 

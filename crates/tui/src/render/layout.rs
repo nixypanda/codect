@@ -3,16 +3,15 @@
 //! offsets that keep a cursor visible.
 //!
 //! Everything here is pure. It reads no terminal and no model behaviour; the
-//! values it needs are passed in. The one exception is [`Focus`] and the
-//! responsive width constants, which live in [`crate::app`] because they are
-//! app state.
+//! values it needs are passed in, including [`Focus`] and the responsive width
+//! constants it shares with the shell from [`crate::render::metrics`].
 
 use base::{AlignedRow, DiffRowKind, FileDiff};
 use ratatui::layout::{Constraint, Layout, Rect};
 
-use crate::app::{Focus, SIDE_BY_SIDE_MIN_WIDTH};
-use crate::highlight::{self, Run, StyledLine};
-use crate::theme::Theme;
+use crate::render::highlight::{self, Run, StyledLine};
+use crate::render::metrics::{Focus, SIDE_BY_SIDE_MIN_WIDTH};
+use crate::render::theme::Theme;
 
 // Splits a terminal of `width` × `height` into header, content, and status.
 // Pure, so `update` and `view` agree on where the content body sits.

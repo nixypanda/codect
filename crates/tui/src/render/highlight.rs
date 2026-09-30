@@ -23,7 +23,7 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 use unicode_width::UnicodeWidthChar;
 
-use crate::theme::{Capability, Flavor, Rgb, Theme};
+use crate::render::theme::{Capability, Flavor, Rgb, Theme};
 
 // Columns a tab expands to, matching the projection renderer.
 const TAB_WIDTH: usize = 4;

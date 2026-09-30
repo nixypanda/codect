@@ -30,17 +30,13 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 mod action;
+mod api;
 mod app;
-mod cache;
-mod components;
-mod content;
-mod fuzzy;
-mod highlight;
-mod icons;
-mod input;
-mod layout;
-mod text;
-mod theme;
+mod component;
+mod page;
+mod render;
+mod route;
+mod util;
 mod view;
 
 #[cfg(feature = "bench")]
@@ -49,10 +45,10 @@ pub mod bench;
 
 use app::{App, Cmd, DiffRequest, Msg, ShowRequest, coalesce_commit_loads, settle, update};
 pub use app::{DiffView, LoadRequest};
-pub use icons::IconStyle;
-use icons::Icons;
-use input::{Key, Mouse, MouseKind};
-use theme::Theme;
+pub use render::icons::IconStyle;
+use render::icons::Icons;
+use render::theme::Theme;
+use util::input::{Key, Mouse, MouseKind};
 use view::view;
 
 // How long the driver waits for input before emitting a tick, which drives the

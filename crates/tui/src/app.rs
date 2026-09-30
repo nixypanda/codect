@@ -1,40 +1,36 @@
-//! The app shell and composer: the one place that owns shared state, routes
-//! input to the component that owns it, and folds the component `OutMsg`s back
-//! into shared state and effects.
+//! The app shell: the one place that owns shared state (the terminal size, the
+//! tree, the chrome, the overlay, the diagnostic), routes input to the page or
+//! component that owns it, and folds their `OutMsg`s back into shared state and
+//! effects.
 //!
-//! Nothing here performs I/O. `update` turns a message and the current model
-//! into a replacement model plus a list of effects to run. Engine calls only
-//! ever leave this module as a [`Cmd`]. The pure `view` lives in [`crate::view`].
+//! A page owns its own model and `update`; the shell routes to it and never
+//! reaches into its logic. Nothing here performs I/O: `update` turns a message
+//! and the current model into a replacement model plus a list of effects to
+//! run. Engine calls only ever leave this module as a [`Cmd`]. The pure `view`
+//! lives in [`crate::view`].
 
 use std::sync::Arc;
 
 use base::{AreaSet, FileDiff, ProjectedFile, ProjectionMode, RepoPath, Selection};
-use engine::{CommitStep, EngineError};
+use engine::EngineError;
 use ratatui::layout::{Position, Rect};
 
 use crate::action::{Action, CommitsAction, GlobalAction, RangeAction, ShowAction};
-use crate::components::commit_picker::{self, CommitPicker};
-use crate::components::overlay::{self, Overlay};
-use crate::components::text_input::{Edit, TextInput};
-use crate::components::tree::{self, RowKind, Tree};
-use crate::content::{
-    self, Commits, CommitsFocus, Diff, DiffBody, DiffHighlight, DiffPrompt, DiffSide,
-    DiffViewState, Loaded, Paging, Range, RangeFocus, Scope, SearchMatch, SearchSide, Show,
-    ShowBody, ShowFocus,
+pub use crate::api::{Cmd, HistoryPayload};
+use crate::component::commit_picker;
+use crate::component::overlay::{self, Overlay};
+use crate::component::tree::{self, RowKind, Tree};
+use crate::page::{
+    Commits, Ctx, Diff, DiffSide, DiffViewState, Loaded, OutMsg, Paging, Range, Scope, Show,
+    ShowBody, ShowFocus, diff as diff_page, show as show_page,
 };
-use crate::icons::Icons;
-use crate::input::{Key, Mouse, MouseKind};
-use crate::layout::{
-    Edge, PaneSlot, VisualRow, body_layout, commit_offset, frame_areas, gutter_width, layout_diff,
-    split_with_dividers, window_offset,
-};
-use crate::theme::Theme;
-use crate::view::block::pane_block;
-
-/// Below this width, or below [`MIN_HEIGHT`] rows, the terminal is too small.
-pub(crate) const SINGLE_PANE_MIN_WIDTH: u16 = 40;
-pub(crate) const MIN_HEIGHT: u16 = 8;
-pub(crate) const SIDE_BY_SIDE_MIN_WIDTH: u16 = content::SIDE_BY_SIDE_MIN_WIDTH;
+use crate::render::block::pane_block;
+use crate::render::icons::Icons;
+use crate::render::layout::{PaneSlot, body_layout, commit_offset, frame_areas, window_offset};
+use crate::render::metrics::{Focus, MIN_HEIGHT, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH};
+use crate::render::theme::Theme;
+pub use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
+use crate::util::input::{Key, Mouse, MouseKind};
 
 /// The file-tree pane width, as a percentage of the terminal, and its bounds.
 const TREE_DEFAULT_PERCENT: u16 = 30;
@@ -85,59 +81,6 @@ impl Diagnostic {
     }
 }
 
-/// Which body pane has focus, normalized for layout.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Focus {
-    Commits,
-    Tree,
-    Content,
-}
-
-/// The projection to open with. A session's kind is fixed by this request.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LoadRequest {
-    Show {
-        revision: String,
-        mode: ProjectionMode,
-        selection: Selection,
-    },
-    Diff {
-        base: String,
-        target: String,
-        mode: ProjectionMode,
-        selection: Selection,
-        view: DiffView,
-    },
-}
-
-/// Which diff view to open or reload.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DiffView {
-    Range,
-    Commits,
-}
-
-/// A concrete `show` effect request.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ShowRequest {
-    pub revision: String,
-    pub mode: ProjectionMode,
-    pub selection: Selection,
-}
-
-/// A concrete `diff` effect request.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DiffRequest {
-    pub base: String,
-    pub target: String,
-    pub mode: ProjectionMode,
-    pub selection: Selection,
-    pub view: DiffView,
-}
-
-/// A commits-view effect payload: the steps and the first step's diff.
-pub type HistoryPayload = (Arc<[CommitStep]>, Arc<[FileDiff]>);
-
 /// Every input the core accepts.
 #[derive(Debug)]
 pub enum Msg {
@@ -173,39 +116,6 @@ pub enum Msg {
     AreasLoaded(Result<AreaSet, Box<EngineError>>),
 }
 
-/// An effect the runtime must interpret. I/O is data, never a side effect of
-/// `update`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Cmd {
-    Show(ShowRequest),
-    Diff(DiffRequest),
-    Step {
-        request: DiffRequest,
-        index: usize,
-        step: CommitStep,
-    },
-    LoadAreas,
-}
-
-/// The inputs a cached diff layout depends on.
-#[derive(Clone, PartialEq, Eq)]
-struct DerivedKey {
-    generation: u64,
-    width: u16,
-    height: u16,
-    selected: Option<RepoPath>,
-    tree_percent: u16,
-}
-
-/// Expensive rendering state derived from the model, cached so a frame or a
-/// scroll key does not recompute it. Held behind an `Arc`, so cloning a `Model`
-/// never clones the layout.
-#[derive(Clone, Default)]
-struct Derived {
-    key: Option<DerivedKey>,
-    diff_rows: Vec<VisualRow>,
-}
-
 /// The entire UI state. It is replaced wholesale by `update`, never edited in
 /// place by anything else.
 #[derive(Clone)]
@@ -217,9 +127,6 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub loaded: Loaded,
     pub diagnostic: Option<Diagnostic>,
-    /// Bumped whenever the loaded content is replaced, invalidating [`Derived`].
-    generation: u64,
-    derived: Arc<Derived>,
 }
 
 impl App {
@@ -264,24 +171,19 @@ impl App {
                 mode,
                 selection,
                 view,
-            } => Loaded::Diff(Diff {
+            } => Loaded::Diff(Diff::new(
                 base,
                 target,
                 mode,
-                scope: Scope {
+                Scope {
                     selection,
                     label: scope_label,
                 },
-                visible: Arc::from(Vec::new()),
-                selected: None,
-                search: None,
-                paging: Paging::Loading,
-                prompt: None,
-                view: match view {
+                match view {
                     DiffView::Range => DiffViewState::Range(Range::empty()),
                     DiffView::Commits => DiffViewState::Commits(Commits::empty()),
                 },
-            }),
+            )),
         };
         Self {
             root,
@@ -297,8 +199,6 @@ impl App {
             overlay: None,
             loaded,
             diagnostic: None,
-            generation: 0,
-            derived: Arc::new(Derived::default()),
         }
     }
 
@@ -307,8 +207,22 @@ impl App {
         self.loaded.is_loading()
     }
 
-    pub(crate) fn diff_rows(&self) -> &[VisualRow] {
-        self.derived.diff_rows.as_slice()
+    pub(crate) fn diff_rows(&self) -> &[crate::render::layout::VisualRow] {
+        self.loaded.diff_rows()
+    }
+
+    /// The wrapped rows of the active diff, recomputed without the cache.
+    #[cfg(feature = "bench")]
+    pub(crate) fn compute_diff_rows(&self) -> Vec<crate::render::layout::VisualRow> {
+        match &self.loaded {
+            Loaded::Diff(diff) => diff.compute_rows(
+                self.size.width,
+                self.size.height,
+                self.chrome.tree_percent,
+                &self.chrome.theme,
+            ),
+            Loaded::Show(_) => Vec::new(),
+        }
     }
 
     pub(crate) fn scope_label(&self) -> &str {
@@ -324,13 +238,14 @@ impl App {
 pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
     let mut next = app.clone();
     let mut cmds = Vec::new();
+    let ctx = ctx(&next);
 
     match msg {
         Msg::Key(key) => handle_key(&mut next, key, &mut cmds),
         Msg::Mouse(event) => mouse(&mut next, event, &mut cmds),
         Msg::Resize { width, height } => {
             next.size = Size { width, height };
-            clamp_view(&mut next);
+            next.loaded.clamp_scroll();
         }
         Msg::Tick => {
             next.chrome.spinner = next.chrome.spinner.wrapping_add(1);
@@ -341,12 +256,55 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
                 }
             }
         }
-        Msg::ShowLoaded { request, result } => show_loaded(&mut next, request, result),
-        Msg::DiffLoaded { request, result } => diff_loaded(&mut next, request, result),
-        Msg::HistoryLoaded { request, result } => {
-            history_loaded(&mut next, request, result, &mut cmds)
+        Msg::ShowLoaded { request, result } => {
+            let installed = result.is_ok();
+            let outs = route_show(&mut next, show_page::Msg::Loaded(request, result), ctx);
+            fold(&mut next, outs, &mut cmds);
+            if installed {
+                install_show_selection(&mut next);
+                next.diagnostic = None;
+            }
         }
-        Msg::StepLoaded { index, result } => step_loaded(&mut next, index, result),
+        Msg::DiffLoaded { request, result } => {
+            let installed = result.is_ok();
+            let outs = route_diff(&mut next, diff_page::Msg::Loaded(request, result), ctx);
+            fold(&mut next, outs, &mut cmds);
+            if installed {
+                install_diff_selection(&mut next);
+                next.diagnostic = None;
+            }
+        }
+        Msg::HistoryLoaded { request, result } => {
+            let installed = result.is_ok();
+            let outs = route_diff(
+                &mut next,
+                diff_page::Msg::HistoryLoaded(request, result),
+                ctx,
+            );
+            fold(&mut next, outs, &mut cmds);
+            if installed {
+                install_diff_selection(&mut next);
+                next.diagnostic = None;
+            }
+        }
+        Msg::StepLoaded { index, result } => {
+            let inner_height = commits_inner(&next).map_or(0, |rect| rect.height as usize);
+            let installed = result.is_ok() && step_in_range(&next, index);
+            let outs = route_diff(
+                &mut next,
+                diff_page::Msg::StepLoaded {
+                    index,
+                    inner_height,
+                    result,
+                },
+                ctx,
+            );
+            fold(&mut next, outs, &mut cmds);
+            if installed {
+                install_diff_selection(&mut next);
+                next.diagnostic = None;
+            }
+        }
         Msg::AreasLoaded(result) => {
             let outs = overlay_update(&mut next, overlay::Msg::AreasLoaded(result));
             for out in outs {
@@ -358,170 +316,107 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
     (next, cmds)
 }
 
-fn show_loaded(
-    app: &mut App,
-    request: ShowRequest,
-    result: Result<Arc<[ProjectedFile]>, Box<EngineError>>,
-) {
-    let Loaded::Show(show) = &mut app.loaded else {
-        return;
-    };
-    match result {
-        Ok(files) => {
-            show.paging = Paging::Ready;
-            show.revision = request.revision;
-            show.mode = request.mode;
-            show.scope = Scope::new(request.selection);
-            show.files = files;
-            show.visible = Arc::from(content::show_visible(&show.files));
-            show.highlight.clear();
-            show.prompt = None;
-            app.generation = app.generation.wrapping_add(1);
-            install_show_selection(app);
-            app.diagnostic = None;
-        }
-        Err(error) => {
-            show.paging = Paging::Ready;
-            app.diagnostic = Some(Diagnostic::new(error.to_string()));
+fn ctx(app: &App) -> Ctx {
+    Ctx {
+        height: app.size.height,
+    }
+}
+
+/// Folds a page's requests into shared state and the command list.
+fn fold(app: &mut App, outs: Vec<OutMsg>, cmds: &mut Vec<Cmd>) {
+    for out in outs {
+        match out {
+            OutMsg::Effect(cmd) => cmds.push(cmd),
+            OutMsg::Diagnose(text) => app.diagnostic = Some(Diagnostic::new(text)),
         }
     }
 }
 
-fn diff_loaded(
-    app: &mut App,
-    request: DiffRequest,
-    result: Result<Arc<[FileDiff]>, Box<EngineError>>,
-) {
-    let Loaded::Diff(diff) = &mut app.loaded else {
-        return;
-    };
-    match result {
-        Ok(diffs) => {
-            diff.paging = Paging::Ready;
-            diff.base = request.base;
-            diff.target = request.target;
-            diff.mode = request.mode;
-            diff.scope = Scope::new(request.selection);
-            diff.prompt = None;
-            if !matches!(diff.view, DiffViewState::Range(_)) {
-                diff.view = DiffViewState::Range(Range::empty());
-            }
-            if let DiffViewState::Range(range) = &mut diff.view {
-                range.diffs = diffs;
-                range.highlight.clear();
-            }
-            diff.visible = Arc::from(content::diff_visible(diff.diffs()));
-            app.generation = app.generation.wrapping_add(1);
-            install_diff_selection(app);
-            app.diagnostic = None;
+fn route_show(app: &mut App, msg: show_page::Msg, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(msg, show, &ctx),
+        Loaded::Diff(_) => Vec::new(),
+    }
+}
+
+fn route_diff(app: &mut App, msg: diff_page::Msg, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Diff(diff) => diff_page::update(msg, diff, &ctx),
+        Loaded::Show(_) => Vec::new(),
+    }
+}
+
+fn route_page_key(app: &mut App, key: Key, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::Key(key), show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::Key(key), diff, &ctx),
+    }
+}
+
+fn route_page_action(app: &mut App, action: GlobalAction, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::Action(action), show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::Action(action), diff, &ctx),
+    }
+}
+
+fn route_cycle_focus(app: &mut App, forward: bool, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::CycleFocus(forward), show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::CycleFocus(forward), diff, &ctx),
+    }
+}
+
+fn route_step_search(app: &mut App, forward: bool, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::StepSearch(forward), show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::StepSearch(forward), diff, &ctx),
+    }
+}
+
+fn route_scroll_current(app: &mut App, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::ScrollToCurrent, show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::ScrollToCurrent, diff, &ctx),
+    }
+}
+
+fn route_set_search(app: &mut App, needle: &str, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => {
+            show_page::update(show_page::Msg::SetSearch(needle.to_owned()), show, &ctx)
         }
-        Err(error) => {
-            diff.paging = Paging::Ready;
-            app.diagnostic = Some(Diagnostic::new(error.to_string()));
+        Loaded::Diff(diff) => {
+            diff_page::update(diff_page::Msg::SetSearch(needle.to_owned()), diff, &ctx)
         }
     }
 }
 
-fn history_loaded(
-    app: &mut App,
-    request: DiffRequest,
-    result: Result<HistoryPayload, Box<EngineError>>,
-    cmds: &mut Vec<Cmd>,
-) {
-    let Loaded::Diff(diff) = &mut app.loaded else {
-        return;
-    };
-    match result {
-        Ok((steps, diffs)) => {
-            diff.paging = Paging::Ready;
-            diff.base = request.base;
-            diff.target = request.target;
-            diff.mode = request.mode;
-            diff.scope = Scope::new(request.selection);
-            diff.prompt = None;
-            let preferred = match &diff.view {
-                DiffViewState::Commits(commits) => commits
-                    .picker
-                    .steps_slice()
-                    .get(commits.picker.cursor())
-                    .map(|step| step.commit_id.clone()),
-                DiffViewState::Range(_) => None,
-            };
-            diff.view = DiffViewState::Commits(Commits {
-                focus: CommitsFocus::Commits,
-                picker: CommitPicker::steps(steps),
-                body: DiffBody { scroll: 0 },
-                diffs,
-                highlight: Default::default(),
-            });
-            diff.visible = Arc::from(content::diff_visible(diff.diffs()));
-            app.generation = app.generation.wrapping_add(1);
-            install_diff_selection(app);
-            app.diagnostic = None;
-
-            // Restore the same commit as before, if it is still in range.
-            if let Loaded::Diff(diff) = &mut app.loaded
-                && let DiffViewState::Commits(commits) = &mut diff.view
-                && let Some(index) = preferred.and_then(|id| {
-                    commits
-                        .picker
-                        .steps_slice()
-                        .iter()
-                        .position(|step| step.commit_id == id)
-                })
-                && index > 0
-                && let Some(step) = commits.picker.steps_slice().get(index).cloned()
-            {
-                diff.paging = Paging::Loading;
-                cmds.push(Cmd::Step {
-                    request: diff_request(diff),
-                    index,
-                    step,
-                });
-            }
-        }
-        Err(error) => {
-            diff.paging = Paging::Ready;
-            app.diagnostic = Some(Diagnostic::new(error.to_string()));
-        }
+fn route_clear_search(app: &mut App, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::ClearSearch, show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::ClearSearch, diff, &ctx),
     }
 }
 
-fn step_loaded(app: &mut App, index: usize, result: Result<Arc<[FileDiff]>, Box<EngineError>>) {
-    let inner = commits_inner(app);
-    let Loaded::Diff(diff) = &mut app.loaded else {
-        return;
-    };
-    let DiffViewState::Commits(commits) = &mut diff.view else {
-        return;
-    };
-    match result {
-        Ok(diffs) if index < commits.picker.steps_slice().len() => {
-            diff.paging = Paging::Ready;
-            commits.diffs = diffs;
-            commits.highlight.clear();
-            commits.picker.update(commit_picker::Msg::Loaded(index));
-            if let Some(inner) = inner {
-                commits.picker.set_scroll(commit_offset(
-                    commits.picker.cursor(),
-                    commits.picker.scroll(),
-                    commits.picker.steps_slice().len(),
-                    inner.height as usize,
-                ));
-            }
-            diff.visible = Arc::from(content::diff_visible(commits.diffs.as_ref()));
-            app.generation = app.generation.wrapping_add(1);
-            install_diff_selection(app);
-            app.diagnostic = None;
-        }
-        Ok(_) => {
-            commits.picker.update(commit_picker::Msg::Failed);
-        }
-        Err(error) => {
-            diff.paging = Paging::Ready;
-            commits.picker.update(commit_picker::Msg::Failed);
-            app.diagnostic = Some(Diagnostic::new(error.to_string()));
-        }
+fn route_reload_scope(app: &mut App, selection: Selection, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::ReloadScope(selection), show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::ReloadScope(selection), diff, &ctx),
+    }
+}
+
+fn route_switch_mode(app: &mut App, mode: ProjectionMode, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::SwitchMode(mode), show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::SwitchMode(mode), diff, &ctx),
+    }
+}
+
+fn route_prompt(app: &mut App, key: Key, ctx: Ctx) -> Vec<OutMsg> {
+    match &mut app.loaded {
+        Loaded::Show(show) => show_page::update(show_page::Msg::Prompt(key), show, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::Prompt(key), diff, &ctx),
     }
 }
 
@@ -597,27 +492,6 @@ fn nearest_visible(tree: &Tree, hint: usize) -> Option<RepoPath> {
     Some(tree.rows[chosen].kind.path().clone())
 }
 
-fn diff_request(diff: &Diff) -> DiffRequest {
-    DiffRequest {
-        base: diff.base.clone(),
-        target: diff.target.clone(),
-        mode: diff.mode,
-        selection: diff.scope.selection.clone(),
-        view: match diff.view {
-            DiffViewState::Range(_) => DiffView::Range,
-            DiffViewState::Commits(_) => DiffView::Commits,
-        },
-    }
-}
-
-fn show_request(show: &Show) -> ShowRequest {
-    ShowRequest {
-        revision: show.revision.clone(),
-        mode: show.mode,
-        selection: show.scope.selection.clone(),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Key routing
 // ---------------------------------------------------------------------------
@@ -627,7 +501,8 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         app.chrome.quit = true;
         return;
     }
-    let capturing = app.overlay.as_ref().is_some_and(Overlay::captures_text) || prompt_active(app);
+    let capturing =
+        app.overlay.as_ref().is_some_and(Overlay::captures_text) || app.loaded.prompt_active();
     if key == Key::Char('q') && !capturing {
         app.chrome.quit = true;
         return;
@@ -639,8 +514,10 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         }
         return;
     }
-    if prompt_active(app) {
-        prompt_key(app, key, cmds);
+    if app.loaded.prompt_active() {
+        let ctx = ctx(app);
+        let outs = route_prompt(app, key, ctx);
+        fold(app, outs, cmds);
         return;
     }
     if let Some(action) = command_for(key, app) {
@@ -650,7 +527,9 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     match key {
         Key::Esc => {
             app.diagnostic = None;
-            clear_search(app);
+            let ctx = ctx(app);
+            let outs = route_clear_search(app, ctx);
+            fold(app, outs, cmds);
         }
         _ => focus_key(app, key, cmds),
     }
@@ -693,58 +572,35 @@ fn command_for(key: Key, app: &App) -> Option<Action> {
 }
 
 fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>) {
+    let ctx = ctx(app);
     match action {
         Action::Global(action) => apply_global(app, action, cmds),
         Action::Show(ShowAction::EditRevision) => {
-            if let Loaded::Show(show) = &mut app.loaded {
-                show.prompt = Some(TextInput::new(show.revision.clone()));
-            }
+            let outs = route_show(app, show_page::Msg::EditRevision, ctx);
+            fold(app, outs, cmds);
         }
-        Action::Range(action) => {
-            let Loaded::Diff(diff) = &mut app.loaded else {
-                return;
-            };
-            if !matches!(diff.view, DiffViewState::Range(_)) {
-                return;
-            }
-            match action {
-                RangeAction::EditBase => {
-                    diff.prompt = Some(DiffPrompt {
-                        side: DiffSide::Base,
-                        input: TextInput::new(diff.base.clone()),
-                    });
-                }
-                RangeAction::EditTarget => {
-                    diff.prompt = Some(DiffPrompt {
-                        side: DiffSide::Target,
-                        input: TextInput::new(diff.target.clone()),
-                    });
-                }
-                RangeAction::SwitchToCommits => {
-                    diff.paging = Paging::Loading;
-                    let mut request = diff_request(diff);
-                    request.view = DiffView::Commits;
-                    cmds.push(Cmd::Diff(request));
-                }
-            }
+        Action::Range(RangeAction::EditBase) => {
+            let outs = route_diff(app, diff_page::Msg::EditSide(DiffSide::Base), ctx);
+            fold(app, outs, cmds);
+        }
+        Action::Range(RangeAction::EditTarget) => {
+            let outs = route_diff(app, diff_page::Msg::EditSide(DiffSide::Target), ctx);
+            fold(app, outs, cmds);
+        }
+        Action::Range(RangeAction::SwitchToCommits) => {
+            let outs = route_diff(app, diff_page::Msg::SwitchView(DiffView::Commits), ctx);
+            fold(app, outs, cmds);
         }
         Action::Commits(CommitsAction::SwitchToRange) => {
-            let Loaded::Diff(diff) = &mut app.loaded else {
-                return;
-            };
-            if !matches!(diff.view, DiffViewState::Commits(_)) {
-                return;
-            }
-            diff.paging = Paging::Loading;
-            let mut request = diff_request(diff);
-            request.view = DiffView::Range;
-            cmds.push(Cmd::Diff(request));
+            let outs = route_diff(app, diff_page::Msg::SwitchView(DiffView::Range), ctx);
+            fold(app, outs, cmds);
         }
     }
 }
 
 fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
     use GlobalAction::*;
+    let ctx = ctx(app);
     match action {
         Quit => app.chrome.quit = true,
         Help => app.overlay = Some(Overlay::help()),
@@ -785,51 +641,51 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
                 .max(TREE_MIN_PERCENT);
         }
         TreeReset => app.chrome.tree_percent = TREE_DEFAULT_PERCENT,
-        NextPane => cycle_focus(app, true),
-        PreviousPane => cycle_focus(app, false),
+        NextPane => {
+            let outs = route_cycle_focus(app, true, ctx);
+            fold(app, outs, cmds);
+        }
+        PreviousPane => {
+            let outs = route_cycle_focus(app, false, ctx);
+            fold(app, outs, cmds);
+        }
         Top | Bottom | PageUp | PageDown => focus_command(app, action, cmds),
-        NextMatch => step_search(app, true),
-        PreviousMatch => step_search(app, false),
+        NextMatch => {
+            let outs = route_step_search(app, true, ctx);
+            fold(app, outs, cmds);
+        }
+        PreviousMatch => {
+            let outs = route_step_search(app, false, ctx);
+            fold(app, outs, cmds);
+        }
     }
 }
 
 fn focus_command(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
-    let _ = cmds;
-    let step = page_step(app);
-    let max = max_scroll(app);
-    let nav = command_intent(app, action, step, max);
-    apply_intent(app, nav);
+    if app.loaded.focus() == Focus::Tree {
+        let step = page_step(app.size.height);
+        tree_apply(app, page_tree_msg(action, step));
+        return;
+    }
+    let ctx = ctx(app);
+    let outs = route_page_action(app, action, ctx);
+    fold(app, outs, cmds);
 }
 
-fn command_intent(app: &App, action: GlobalAction, step: u16, max: u16) -> Option<Intent> {
-    match &app.loaded {
-        Loaded::Show(show) => match show.focus {
-            ShowFocus::Tree => Some(Intent::Tree(page_tree_msg(action, step))),
-            ShowFocus::Body => Some(Intent::ShowBody(ShowBody {
-                scroll: page_scroll(action, show.body.scroll, step, max),
-                ..show.body
-            })),
-        },
-        Loaded::Diff(diff) => match diff_focus(diff) {
-            Focus::Commits => Some(Intent::Commit(commit_move_msg(action, step))),
-            Focus::Tree => Some(Intent::Tree(page_tree_msg(action, step))),
-            Focus::Content => Some(Intent::DiffScroll(page_scroll(
-                action,
-                diff.body_scroll(),
-                step,
-                max,
-            ))),
-        },
+fn focus_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
+    if app.loaded.focus() == Focus::Tree {
+        if let Some(msg) = tree_key(key) {
+            tree_apply(app, msg);
+        }
+        return;
     }
+    let ctx = ctx(app);
+    let outs = route_page_key(app, key, ctx);
+    fold(app, outs, cmds);
 }
 
-fn page_scroll(action: GlobalAction, current: u16, step: u16, max: u16) -> u16 {
-    match action {
-        GlobalAction::Top => 0,
-        GlobalAction::Bottom => max,
-        GlobalAction::PageUp => current.saturating_sub(step),
-        _ => current.saturating_add(step).min(max),
-    }
+fn page_step(height: u16) -> u16 {
+    (height.saturating_sub(3) / 2).max(1)
 }
 
 fn page_tree_msg(action: GlobalAction, step: u16) -> tree::Msg {
@@ -838,96 +694,6 @@ fn page_tree_msg(action: GlobalAction, step: u16) -> tree::Msg {
         GlobalAction::Bottom => tree::Msg::ToBottom,
         GlobalAction::PageUp => tree::Msg::Page(-i32::from(step)),
         _ => tree::Msg::Page(i32::from(step)),
-    }
-}
-
-fn commit_move_msg(action: GlobalAction, step: u16) -> commit_picker::Msg {
-    match action {
-        GlobalAction::Top => commit_picker::Msg::ToTop,
-        GlobalAction::Bottom => commit_picker::Msg::ToBottom,
-        GlobalAction::PageUp => commit_picker::Msg::Page(-i32::from(step)),
-        _ => commit_picker::Msg::Page(i32::from(step)),
-    }
-}
-
-fn focus_key(app: &mut App, key: Key, _cmds: &mut Vec<Cmd>) {
-    let max = max_scroll(app);
-    let max_h = max_hscroll(app);
-    let nav = nav_intent(app, key, max, max_h);
-    apply_intent(app, nav);
-}
-
-fn nav_intent(app: &App, key: Key, max: u16, max_h: u16) -> Option<Intent> {
-    match &app.loaded {
-        Loaded::Show(show) => match show.focus {
-            ShowFocus::Tree => tree_key(key).map(Intent::Tree),
-            ShowFocus::Body => body_key(key, show.body, max, max_h).map(Intent::ShowBody),
-        },
-        Loaded::Diff(diff) => match diff_focus(diff) {
-            Focus::Commits => commit_key(key).map(Intent::Commit),
-            Focus::Tree => tree_key(key).map(Intent::Tree),
-            Focus::Content => {
-                let scroll = body_scroll_key(key, diff.body_scroll(), max);
-                (scroll != diff.body_scroll()).then_some(Intent::DiffScroll(scroll))
-            }
-        },
-    }
-}
-
-/// A navigation intent resolved from the current focus, applied after the
-/// borrow of the loaded projection ends.
-enum Intent {
-    Tree(tree::Msg),
-    Commit(commit_picker::Msg),
-    ShowBody(ShowBody),
-    DiffScroll(u16),
-}
-
-fn apply_intent(app: &mut App, intent: Option<Intent>) {
-    match intent {
-        Some(Intent::Tree(msg)) => tree_apply(app, msg),
-        Some(Intent::Commit(msg)) => commit_apply(app, msg),
-        Some(Intent::ShowBody(body)) => {
-            if let Loaded::Show(show) = &mut app.loaded {
-                show.body = body;
-            }
-        }
-        Some(Intent::DiffScroll(scroll)) => {
-            if let Loaded::Diff(diff) = &mut app.loaded {
-                diff.set_body_scroll(scroll);
-            }
-        }
-        None => {}
-    }
-}
-
-fn body_scroll_key(key: Key, scroll: u16, max: u16) -> u16 {
-    match key {
-        Key::Down | Key::Char('j') => scroll.saturating_add(1).min(max),
-        Key::Up | Key::Char('k') => scroll.saturating_sub(1),
-        _ => scroll,
-    }
-}
-
-fn body_key(key: Key, body: ShowBody, max: u16, max_h: u16) -> Option<ShowBody> {
-    match key {
-        Key::Down | Key::Char('j') => Some(ShowBody {
-            scroll: body.scroll.saturating_add(1).min(max),
-            ..body
-        }),
-        Key::Up | Key::Char('k') => Some(ShowBody {
-            scroll: body.scroll.saturating_sub(1),
-            ..body
-        }),
-        Key::Right | Key::Char('l') => Some(ShowBody {
-            hscroll: body.hscroll.saturating_add(1).min(max_h),
-            ..body
-        }),
-        Key::Left | Key::Char('h') => Some(ShowBody {
-            hscroll: body.hscroll.saturating_sub(1),
-            ..body
-        }),
-        _ => None,
     }
 }
 
@@ -942,14 +708,6 @@ fn tree_key(key: Key) -> Option<tree::Msg> {
     }
 }
 
-fn commit_key(key: Key) -> Option<commit_picker::Msg> {
-    match key {
-        Key::Down | Key::Char('j') => Some(commit_picker::Msg::Move(1)),
-        Key::Up | Key::Char('k') => Some(commit_picker::Msg::Move(-1)),
-        _ => None,
-    }
-}
-
 fn tree_apply(app: &mut App, msg: tree::Msg) {
     let selected = app.tree.update(msg, app.loaded.visible());
     if let Some(tree::OutMsg::Selected(path)) = selected {
@@ -957,44 +715,10 @@ fn tree_apply(app: &mut App, msg: tree::Msg) {
     }
 }
 
-fn commit_apply(app: &mut App, msg: commit_picker::Msg) {
-    if let Loaded::Diff(diff) = &mut app.loaded
-        && let DiffViewState::Commits(commits) = &mut diff.view
-    {
-        commits.picker.update(msg);
-    }
-}
-
 fn select_path(app: &mut App, path: RepoPath) {
     app.loaded.set_selected(Some(path.clone()));
     app.tree.reveal(&path);
-    reset_body_scroll(app);
-}
-
-fn reset_body_scroll(app: &mut App) {
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            show.body = ShowBody {
-                scroll: 0,
-                hscroll: 0,
-            }
-        }
-        Loaded::Diff(diff) => diff.set_body_scroll(0),
-    }
-}
-
-fn clear_search(app: &mut App) {
-    match &mut app.loaded {
-        Loaded::Show(show) => show.search = None,
-        Loaded::Diff(diff) => diff.search = None,
-    }
-}
-
-fn set_search(app: &mut App, needle: &str) {
-    match &mut app.loaded {
-        Loaded::Show(show) => show.set_search(needle),
-        Loaded::Diff(diff) => diff.set_search(needle),
-    }
+    app.loaded.reset_body_scroll();
 }
 
 // ---------------------------------------------------------------------------
@@ -1019,203 +743,27 @@ fn overlay_update(app: &mut App, msg: overlay::Msg) -> Vec<overlay::OutMsg> {
 }
 
 fn apply_overlay_out(app: &mut App, out: overlay::OutMsg, cmds: &mut Vec<Cmd>) {
+    let ctx = ctx(app);
     match out {
         overlay::OutMsg::Close => app.overlay = None,
-        overlay::OutMsg::Selection(selection) => reload_scope(app, selection, cmds),
-        overlay::OutMsg::Mode(mode) => reload_mode(app, mode, cmds),
+        overlay::OutMsg::Selection(selection) => {
+            let outs = route_reload_scope(app, selection, ctx);
+            fold(app, outs, cmds);
+        }
+        overlay::OutMsg::Mode(mode) => {
+            let outs = route_switch_mode(app, mode, ctx);
+            fold(app, outs, cmds);
+        }
         overlay::OutMsg::Action(action) => apply_action(app, action, cmds),
         overlay::OutMsg::File(path) => select_path(app, path),
-        overlay::OutMsg::Search(needle) => set_search(app, &needle),
-        overlay::OutMsg::SearchCommit => focus_current_match(app),
-    }
-}
-
-fn reload_scope(app: &mut App, selection: Selection, cmds: &mut Vec<Cmd>) {
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            show.paging = Paging::Loading;
-            let mut request = show_request(show);
-            request.selection = selection;
-            cmds.push(Cmd::Show(request));
+        overlay::OutMsg::Search(needle) => {
+            let outs = route_set_search(app, &needle, ctx);
+            fold(app, outs, cmds);
         }
-        Loaded::Diff(diff) => {
-            diff.paging = Paging::Loading;
-            let mut request = diff_request(diff);
-            request.selection = selection;
-            cmds.push(Cmd::Diff(request));
+        overlay::OutMsg::SearchCommit => {
+            let outs = route_scroll_current(app, ctx);
+            fold(app, outs, cmds);
         }
-    }
-}
-
-fn reload_mode(app: &mut App, mode: ProjectionMode, cmds: &mut Vec<Cmd>) {
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            show.paging = Paging::Loading;
-            let mut request = show_request(show);
-            request.mode = mode;
-            cmds.push(Cmd::Show(request));
-        }
-        Loaded::Diff(diff) => {
-            diff.paging = Paging::Loading;
-            let mut request = diff_request(diff);
-            request.mode = mode;
-            cmds.push(Cmd::Diff(request));
-        }
-    }
-}
-
-fn prompt_active(app: &App) -> bool {
-    match &app.loaded {
-        Loaded::Show(show) => show.prompt.is_some(),
-        Loaded::Diff(diff) => diff.prompt.is_some(),
-    }
-}
-
-fn prompt_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            let Some(mut input) = show.prompt.take() else {
-                return;
-            };
-            let mut reopen = true;
-            match key {
-                Key::Esc => reopen = false,
-                Key::Enter => {
-                    reopen = false;
-                    let value = input.value();
-                    if !value.is_empty() {
-                        let request = ShowRequest {
-                            revision: value,
-                            mode: show.mode,
-                            selection: show.scope.selection.clone(),
-                        };
-                        show.paging = Paging::Loading;
-                        cmds.push(Cmd::Show(request));
-                    }
-                }
-                key => {
-                    if let Some(edit) = text_edit(key) {
-                        input.edit(edit);
-                    }
-                }
-            }
-            if reopen {
-                show.prompt = Some(input);
-            }
-        }
-        Loaded::Diff(diff) => {
-            let Some(mut prompt) = diff.prompt.take() else {
-                return;
-            };
-            let mut reopen = true;
-            match key {
-                Key::Esc => reopen = false,
-                Key::Enter => {
-                    reopen = false;
-                    let value = input_value(&prompt.input);
-                    if !value.is_empty() {
-                        let mut request = diff_request(diff);
-                        match prompt.side {
-                            DiffSide::Base => request.base = value,
-                            DiffSide::Target => request.target = value,
-                        }
-                        diff.paging = Paging::Loading;
-                        cmds.push(Cmd::Diff(request));
-                    }
-                }
-                key => {
-                    if let Some(edit) = text_edit(key) {
-                        prompt.input.edit(edit);
-                    }
-                }
-            }
-            if reopen {
-                diff.prompt = Some(prompt);
-            }
-        }
-    }
-}
-
-fn input_value(input: &TextInput) -> String {
-    input.value()
-}
-
-fn text_edit(key: Key) -> Option<Edit> {
-    match key {
-        Key::Char(character) => Some(Edit::Insert(character)),
-        Key::Backspace => Some(Edit::Backspace),
-        Key::Delete => Some(Edit::Delete),
-        Key::Left => Some(Edit::Left),
-        Key::Right => Some(Edit::Right),
-        Key::Home => Some(Edit::Home),
-        Key::End => Some(Edit::End),
-        _ => None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Focus
-// ---------------------------------------------------------------------------
-
-fn diff_focus(diff: &Diff) -> Focus {
-    match &diff.view {
-        DiffViewState::Range(range) => match range.focus {
-            RangeFocus::Tree => Focus::Tree,
-            RangeFocus::Diff => Focus::Content,
-        },
-        DiffViewState::Commits(commits) => match commits.focus {
-            CommitsFocus::Commits => Focus::Commits,
-            CommitsFocus::Tree => Focus::Tree,
-            CommitsFocus::Diff => Focus::Content,
-        },
-    }
-}
-
-pub(crate) fn layout_focus(app: &App) -> Focus {
-    match &app.loaded {
-        Loaded::Show(show) => match show.focus {
-            ShowFocus::Tree => Focus::Tree,
-            ShowFocus::Body => Focus::Content,
-        },
-        Loaded::Diff(diff) => diff_focus(diff),
-    }
-}
-
-fn cycle_focus(app: &mut App, forward: bool) {
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            show.focus = if forward {
-                ShowFocus::Body
-            } else {
-                ShowFocus::Tree
-            };
-        }
-        Loaded::Diff(diff) => match &mut diff.view {
-            DiffViewState::Range(range) => {
-                range.focus = match (range.focus, forward) {
-                    (RangeFocus::Tree, true) => RangeFocus::Diff,
-                    (RangeFocus::Tree, false) => RangeFocus::Diff,
-                    (RangeFocus::Diff, _) => RangeFocus::Tree,
-                };
-            }
-            DiffViewState::Commits(commits) => {
-                let order = [
-                    CommitsFocus::Commits,
-                    CommitsFocus::Tree,
-                    CommitsFocus::Diff,
-                ];
-                let index = order
-                    .iter()
-                    .position(|focus| *focus == commits.focus)
-                    .unwrap_or(0);
-                let next = if forward {
-                    (index + 1) % order.len()
-                } else {
-                    (index + order.len() - 1) % order.len()
-                };
-                commits.focus = order[next];
-            }
-        },
     }
 }
 
@@ -1240,7 +788,7 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
         app.chrome.tree_percent,
         is_diff,
         has_commits,
-        layout_focus(app),
+        app.loaded.focus(),
     );
     let point = Position {
         x: event.column,
@@ -1250,28 +798,28 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
         return;
     };
     let inner = pane_block("", false, &app.chrome.theme, slot.edge).inner(slot.outer);
+    let ctx = ctx(app);
 
     match slot.pane {
         PaneSlot::Commits => {
-            set_focus_commits(app);
-            match event.kind {
+            app.loaded.set_focus(Focus::Commits);
+            let msg = match event.kind {
                 MouseKind::Click => {
-                    if inner.contains(point)
-                        && let Some(index) = commit_click_index(app, inner, event.row)
-                    {
-                        commit_apply(app, commit_picker::Msg::Select(index));
+                    if !inner.contains(point) {
+                        return;
                     }
+                    commit_click_index(app, inner, event.row).map(commit_picker::Msg::Select)
                 }
-                MouseKind::ScrollUp => {
-                    commit_apply(app, commit_picker::Msg::Move(-MOUSE_SCROLL_STEP))
-                }
-                MouseKind::ScrollDown => {
-                    commit_apply(app, commit_picker::Msg::Move(MOUSE_SCROLL_STEP))
-                }
+                MouseKind::ScrollUp => Some(commit_picker::Msg::Move(-MOUSE_SCROLL_STEP)),
+                MouseKind::ScrollDown => Some(commit_picker::Msg::Move(MOUSE_SCROLL_STEP)),
+            };
+            if let Some(msg) = msg {
+                let outs = route_diff(app, diff_page::Msg::Commit(msg), ctx);
+                fold(app, outs, cmds);
             }
         }
         PaneSlot::Tree => {
-            set_focus_tree(app);
+            app.loaded.set_focus(Focus::Tree);
             match event.kind {
                 MouseKind::Click => {
                     let inner_height = inner.height as usize;
@@ -1286,15 +834,25 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
             }
         }
         PaneSlot::Show | PaneSlot::Old | PaneSlot::New => {
-            set_focus_content(app);
-            match event.kind {
-                MouseKind::Click => {}
-                MouseKind::ScrollUp => scroll_content(app, -MOUSE_SCROLL_STEP),
-                MouseKind::ScrollDown => scroll_content(app, MOUSE_SCROLL_STEP),
+            app.loaded.set_focus(Focus::Content);
+            let delta = match event.kind {
+                MouseKind::ScrollUp => -MOUSE_SCROLL_STEP,
+                MouseKind::ScrollDown => MOUSE_SCROLL_STEP,
+                MouseKind::Click => 0,
+            };
+            if delta != 0 {
+                let outs = match &mut app.loaded {
+                    Loaded::Show(show) => {
+                        show_page::update(show_page::Msg::Scroll(delta), show, &ctx)
+                    }
+                    Loaded::Diff(diff) => {
+                        diff_page::update(diff_page::Msg::Scroll(delta), diff, &ctx)
+                    }
+                };
+                fold(app, outs, cmds);
             }
         }
     }
-    let _ = cmds;
 }
 
 fn commits_inner(app: &App) -> Option<Rect> {
@@ -1324,271 +882,42 @@ fn commit_click_index(app: &App, inner: Rect, row: u16) -> Option<usize> {
     (index < commits.picker.steps_slice().len()).then_some(index)
 }
 
-fn set_focus_commits(app: &mut App) {
-    if let Loaded::Diff(diff) = &mut app.loaded
-        && let DiffViewState::Commits(commits) = &mut diff.view
-    {
-        commits.focus = CommitsFocus::Commits;
-    }
-}
-
-fn set_focus_tree(app: &mut App) {
-    match &mut app.loaded {
-        Loaded::Show(show) => show.focus = ShowFocus::Tree,
-        Loaded::Diff(diff) => match &mut diff.view {
-            DiffViewState::Range(range) => range.focus = RangeFocus::Tree,
-            DiffViewState::Commits(commits) => commits.focus = CommitsFocus::Tree,
-        },
-    }
-}
-
-fn set_focus_content(app: &mut App) {
-    match &mut app.loaded {
-        Loaded::Show(show) => show.focus = ShowFocus::Body,
-        Loaded::Diff(diff) => match &mut diff.view {
-            DiffViewState::Range(range) => range.focus = RangeFocus::Diff,
-            DiffViewState::Commits(commits) => commits.focus = CommitsFocus::Diff,
-        },
-    }
-}
-
-fn scroll_content(app: &mut App, delta: i32) {
-    let max = max_scroll(app);
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            let scroll = if delta < 0 {
-                show.body.scroll.saturating_sub(delta.unsigned_abs() as u16)
-            } else {
-                show.body.scroll.saturating_add(delta as u16).min(max)
-            };
-            show.body.scroll = scroll;
-        }
-        Loaded::Diff(diff) => {
-            let scroll = diff.body_scroll();
-            let next = if delta < 0 {
-                scroll.saturating_sub(delta.unsigned_abs() as u16)
-            } else {
-                scroll.saturating_add(delta as u16).min(max)
-            };
-            diff.set_body_scroll(next);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
-
-fn step_search(app: &mut App, forward: bool) {
-    let matched = {
-        let Some(search) = app.loaded.search() else {
-            return;
-        };
-        if search.matches.is_empty() {
-            return;
-        }
-        let len = search.matches.len();
-        let cursor = if forward {
-            (search.cursor + 1) % len
-        } else {
-            (search.cursor + len - 1) % len
-        };
-        (cursor, search.matches[cursor].clone())
-    };
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            if let Some(search) = &mut show.search {
-                search.cursor = matched.0;
-            }
-        }
-        Loaded::Diff(diff) => {
-            if let Some(search) = &mut diff.search {
-                search.cursor = matched.0;
-            }
-        }
-    }
-    scroll_to_match(app, &matched.1);
-}
-
-fn focus_current_match(app: &mut App) {
-    let Some(matched) = app
-        .loaded
-        .search()
-        .and_then(|search| search.matches.get(search.cursor).cloned())
-    else {
-        return;
-    };
-    scroll_to_match(app, &matched);
-}
-
-fn scroll_to_match(app: &mut App, matched: &SearchMatch) {
-    let height = app.size.height.saturating_sub(4) as usize;
-    let index = match &app.loaded {
-        Loaded::Show(_) => matched.line.saturating_sub(1),
-        Loaded::Diff(_) => {
-            let side = matched.side;
-            app.diff_rows()
-                .iter()
-                .position(|row| match side {
-                    SearchSide::Old => row.old_number == Some(matched.line),
-                    SearchSide::New => row.new_number == Some(matched.line),
-                    SearchSide::Show => false,
-                })
-                .unwrap_or(0)
-        }
-    };
-    let scroll = match &app.loaded {
-        Loaded::Show(show) => show.body.scroll as usize,
-        Loaded::Diff(diff) => diff.body_scroll() as usize,
-    };
-    let next = if index < scroll {
-        Some(index as u16)
-    } else if height > 0 && index >= scroll + height {
-        Some((index + 1 - height) as u16)
-    } else {
-        None
-    };
-    if let Some(next) = next {
-        match &mut app.loaded {
-            Loaded::Show(show) => show.body.scroll = next,
-            Loaded::Diff(diff) => diff.set_body_scroll(next),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Scrolling bounds
-// ---------------------------------------------------------------------------
-
-fn page_step(app: &App) -> u16 {
-    (app.size.height.saturating_sub(3) / 2).max(1)
-}
-
-fn max_scroll(app: &App) -> u16 {
-    let count = match &app.loaded {
-        Loaded::Show(show) => show.line_count(),
-        Loaded::Diff(_) => app.derived.diff_rows.len(),
-    };
-    count.saturating_sub(1) as u16
-}
-
-fn max_hscroll(app: &App) -> u16 {
+/// Whether a step index is within the current commit list.
+fn step_in_range(app: &App, index: usize) -> bool {
     match &app.loaded {
-        Loaded::Show(show) => show.max_line_width().saturating_sub(1) as u16,
-        Loaded::Diff(_) => 0,
-    }
-}
-
-fn clamp_view(app: &mut App) {
-    let scroll = max_scroll(app);
-    let hscroll = max_hscroll(app);
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            show.body.scroll = show.body.scroll.min(scroll);
-            show.body.hscroll = show.body.hscroll.min(hscroll);
-        }
-        Loaded::Diff(diff) => {
-            let current = diff.body_scroll();
-            diff.set_body_scroll(current.min(scroll));
-        }
+        Loaded::Diff(diff) => match &diff.view {
+            DiffViewState::Commits(commits) => index < commits.picker.steps_slice().len(),
+            DiffViewState::Range(_) => false,
+        },
+        Loaded::Show(_) => false,
     }
 }
 
 // ---------------------------------------------------------------------------
-// Derived layout
+// Derived state
 // ---------------------------------------------------------------------------
 
 fn body_is_visible(app: &App) -> bool {
     if app.size.width < SINGLE_PANE_MIN_WIDTH || app.size.height < MIN_HEIGHT {
         return false;
     }
-    app.size.width >= SIDE_BY_SIDE_MIN_WIDTH || layout_focus(app) != Focus::Tree
+    app.size.width >= SIDE_BY_SIDE_MIN_WIDTH || app.loaded.focus() != Focus::Tree
+}
+
+/// The focus, normalized for layout.
+pub(crate) fn layout_focus(app: &App) -> Focus {
+    app.loaded.focus()
 }
 
 /// Runs the selection-dependent work a frame needs, once per input batch.
 pub(crate) fn settle(mut app: App) -> App {
-    let theme = app.chrome.theme;
     let visible_body = body_is_visible(&app);
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            if visible_body {
-                show.ensure_highlight(&theme);
-            }
-            show.resync_search();
-        }
-        Loaded::Diff(diff) => {
-            if visible_body {
-                diff.ensure_highlight(&theme);
-            }
-            diff.resync_search();
-        }
-    }
-    app.refresh_derived();
+    let width = app.size.width;
+    let height = app.size.height;
+    let tree_percent = app.chrome.tree_percent;
+    app.loaded
+        .settle(&app.chrome.theme, visible_body, width, height, tree_percent);
     app
-}
-
-impl App {
-    fn refresh_derived(&mut self) {
-        let key = DerivedKey {
-            generation: self.generation,
-            width: self.size.width,
-            height: self.size.height,
-            selected: self.loaded.selected().cloned(),
-            tree_percent: self.chrome.tree_percent,
-        };
-        if self.derived.key.as_ref() == Some(&key) {
-            return;
-        }
-        let diff_rows = self.compute_diff_rows();
-        self.derived = Arc::new(Derived {
-            key: Some(key),
-            diff_rows,
-        });
-    }
-
-    /// The wrapped visual rows of the active diff, recomputed without the cache.
-    pub(crate) fn compute_diff_rows(&self) -> Vec<VisualRow> {
-        let Loaded::Diff(diff) = &self.loaded else {
-            return Vec::new();
-        };
-        let Some(active) = diff.active_diff() else {
-            return Vec::new();
-        };
-        let (_, content, _) = frame_areas(self.size.width, self.size.height);
-        let (old_width, new_width) = self.diff_side_widths(content, active);
-        let empty = DiffHighlight::default();
-        let highlights = diff.active_highlight().unwrap_or(&empty);
-        layout_diff(
-            active,
-            old_width,
-            new_width,
-            &highlights.old,
-            &highlights.new,
-            &self.chrome.theme,
-        )
-    }
-
-    fn diff_side_widths(&self, content: Rect, diff: &FileDiff) -> (usize, usize) {
-        let gutter = gutter_width(diff);
-        if self.size.width >= SIDE_BY_SIDE_MIN_WIDTH {
-            let rest = 100 - self.chrome.tree_percent;
-            let side = rest / 2;
-            let (columns, _) =
-                split_with_dividers(content, &[self.chrome.tree_percent, side, rest - side]);
-            let old_inner =
-                pane_block("", false, &self.chrome.theme, Edge::Middle).inner(columns[1]);
-            let new_inner =
-                pane_block("", false, &self.chrome.theme, Edge::Right).inner(columns[2]);
-            (
-                (old_inner.width as usize).saturating_sub(gutter),
-                (new_inner.width as usize).saturating_sub(gutter),
-            )
-        } else {
-            let inner = pane_block("", false, &self.chrome.theme, Edge::Solo).inner(content);
-            let width = (inner.width as usize).saturating_sub(gutter);
-            (width, width)
-        }
-    }
 }
 
 /// Replaces all step projections in one input batch with its final target. A
@@ -1597,18 +926,29 @@ pub(crate) fn coalesce_commit_loads(app: &mut App, cmds: &mut Vec<Cmd>) {
     let Loaded::Diff(diff) = &mut app.loaded else {
         return;
     };
-    let DiffViewState::Commits(commits) = &mut diff.view else {
-        return;
-    };
-    if let Some(Cmd::Diff(_)) = cmds.iter().rev().find(|cmd| matches!(cmd, Cmd::Diff(_))) {
+    if !matches!(diff.view, DiffViewState::Commits(_)) {
         return;
     }
-    if let Some(index) = commits.picker.target()
-        && let Some(step) = commits.picker.steps_slice().get(index).cloned()
-    {
+    if cmds.iter().any(|cmd| matches!(cmd, Cmd::Diff(_))) {
+        return;
+    }
+    let pending = if let DiffViewState::Commits(commits) = &diff.view {
+        commits.picker.target().and_then(|index| {
+            commits
+                .picker
+                .steps_slice()
+                .get(index)
+                .cloned()
+                .map(|step| (index, step))
+        })
+    } else {
+        None
+    };
+    if let Some((index, step)) = pending {
+        let request = diff.request();
         diff.paging = Paging::Loading;
         cmds.push(Cmd::Step {
-            request: diff_request(diff),
+            request,
             index,
             step,
         });

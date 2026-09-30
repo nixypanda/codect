@@ -5,7 +5,7 @@
 
 use ratatui::text::{Line, Span};
 
-use crate::theme::Theme;
+use crate::render::theme::Theme;
 
 /// An edit to apply to a [`TextInput`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

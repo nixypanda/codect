@@ -2,14 +2,12 @@
 //
 // `view` composes a header, a body, and a footer, then draws overlays and
 // diagnostics on top. Every module here is presentation-only: it reads the
-// model and writes to the frame, and performs no I/O. Layout arithmetic lives
-// in [`crate::layout`] and text helpers in [`crate::text`]; the isolated panes
-// render themselves from [`crate::components`].
+// model and writes to the frame, and performs no I/O. Geometry lives in
+// [`crate::render::layout`], text helpers in [`crate::render::text`], and the
+// isolated panes render themselves from [`crate::component`].
 
-pub(crate) mod block;
 pub(crate) mod chrome;
 pub(crate) mod diff;
-pub(crate) mod empty;
 pub(crate) mod prompt;
 pub(crate) mod show;
 
@@ -17,12 +15,13 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::Block;
 
-use crate::app::{App, Focus, MIN_HEIGHT, SINGLE_PANE_MIN_WIDTH, layout_focus};
-use crate::components::{RenderCtx, commit_picker, overlay, tree};
-use crate::content::{CommitsFocus, DiffViewState, Loaded};
-use crate::layout::{PaneSlot, body_layout, frame_areas};
+use crate::app::{App, layout_focus};
+use crate::component::{RenderCtx, commit_picker, overlay, tree};
+use crate::page::{CommitsFocus, DiffViewState, Loaded};
+use crate::render::layout::{PaneSlot, body_layout, frame_areas};
+use crate::render::metrics::{Focus, MIN_HEIGHT, SINGLE_PANE_MIN_WIDTH};
 
-use block::render_divider;
+use crate::render::block::render_divider;
 use diff::Side;
 
 pub(crate) fn view(app: &App, frame: &mut Frame) {

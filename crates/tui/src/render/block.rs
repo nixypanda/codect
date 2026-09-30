@@ -1,6 +1,6 @@
 // Panel chrome shared by every pane: the bordered block and the shared divider.
 //
-// This is the presentation half of the geometry in [`crate::layout`]: the
+// This is the presentation half of the geometry in [`crate::render::layout`]: the
 // layout decides *where* each pane sits, and this decides how its frame is
 // styled and drawn.
 
@@ -10,8 +10,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
-use crate::layout::Edge;
-use crate::theme::Theme;
+use crate::render::layout::Edge;
+use crate::render::theme::Theme;
 
 fn borders_for(edge: Edge) -> Borders {
     match edge {

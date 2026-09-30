@@ -21,17 +21,17 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
 use crate::app::{App, DiffRequest, DiffView, LoadRequest, ShowRequest};
-use crate::content::{DiffViewState, Loaded};
-use crate::highlight::StyledLine;
-use crate::icons::{IconStyle, Icons};
-use crate::layout::VisualRow;
-use crate::theme::{Capability, Flavor, Theme};
+use crate::page::{DiffViewState, Loaded};
+use crate::render::highlight::StyledLine;
+use crate::render::icons::{IconStyle, Icons};
+use crate::render::layout::VisualRow;
+use crate::render::theme::{Capability, Flavor, Theme};
 use crate::view::view;
 
 pub use crate::app::App as Model;
 pub use crate::app::Msg;
 pub use crate::app::update;
-pub use crate::input::Key;
+pub use crate::util::input::Key;
 
 /// A `TestBackend` terminal of the given size.
 ///
@@ -63,7 +63,7 @@ pub fn buffer_diff(previous: &Buffer, current: &Buffer) -> usize {
 
 /// Highlights `text` with the production highlighter and a fixed dark theme.
 pub fn highlight(text: &str, language: Language) -> Vec<StyledLine> {
-    crate::highlight::highlight(text, language, &truecolor_dark())
+    crate::render::highlight::highlight(text, language, &truecolor_dark())
 }
 
 /// Recomputes the wrapped diff rows for the model, bypassing the cache.

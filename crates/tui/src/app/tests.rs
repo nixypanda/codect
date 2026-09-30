@@ -1,15 +1,16 @@
 use super::*;
-use crate::components::overlay::Overlay;
-use crate::content::{
-    DiffSide, DiffViewState, Loaded, Search, SearchSide, ShowFocus, ShowHighlights,
-};
-use crate::icons::IconStyle;
-use crate::theme::Theme;
+use crate::component::overlay::Overlay;
+use crate::component::text_input::TextInput;
+use crate::page::show::ShowHighlights;
+use crate::page::{DiffSide, DiffViewState, Loaded, Search, SearchMatch, SearchSide, ShowFocus};
+use crate::render::icons::IconStyle;
+use crate::render::theme::Theme;
 use crate::view::view;
 use base::{
     Area, AreaSet, ItemKind, ProjectedItem, RepoPath, Selection, SelectionGroup, SourceSpan,
     SupportedPath,
 };
+use engine::CommitStep;
 use ratatui::style::Color;
 
 fn item(text: &str) -> ProjectedItem {
@@ -171,7 +172,7 @@ fn diff_ref(app: &App) -> &Diff {
     }
 }
 
-fn commits_ref(app: &App) -> &crate::components::commit_picker::CommitPicker {
+fn commits_ref(app: &App) -> &crate::component::commit_picker::CommitPicker {
     match &app.loaded {
         Loaded::Diff(diff) => match &diff.view {
             DiffViewState::Commits(commits) => &commits.picker,
@@ -186,17 +187,11 @@ fn selected(app: &App) -> Option<String> {
 }
 
 fn diff_focus_of(app: &App) -> Focus {
-    diff_focus(diff_ref(app))
+    app.loaded.focus()
 }
 
 fn focus_content(app: &mut App) {
-    match &mut app.loaded {
-        Loaded::Show(show) => show.focus = ShowFocus::Body,
-        Loaded::Diff(diff) => match &mut diff.view {
-            DiffViewState::Range(range) => range.focus = RangeFocus::Diff,
-            DiffViewState::Commits(commits) => commits.focus = CommitsFocus::Diff,
-        },
-    }
+    app.loaded.set_focus(Focus::Content);
 }
 
 fn two_files() -> App {
@@ -582,13 +577,14 @@ fn settle_skips_highlighting_when_the_body_is_hidden() {
 
 #[test]
 fn the_highlight_cache_is_bounded() {
-    let mut cache: crate::cache::BoundedCache<usize> = crate::cache::BoundedCache::default();
-    for index in 0..(crate::cache::CAP + 10) {
+    let mut cache: crate::util::cache::BoundedCache<usize> =
+        crate::util::cache::BoundedCache::default();
+    for index in 0..(crate::util::cache::CAP + 10) {
         let path = RepoPath::new(format!("f{index}.rs")).expect("valid path");
         cache.insert(path, index);
     }
     assert!(!cache.contains_key(&RepoPath::new("f0.rs").expect("valid path")));
-    let newest = RepoPath::new(format!("f{}.rs", crate::cache::CAP + 9)).expect("valid path");
+    let newest = RepoPath::new(format!("f{}.rs", crate::util::cache::CAP + 9)).expect("valid path");
     assert!(cache.contains_key(&newest));
 }
 
@@ -1242,7 +1238,7 @@ fn a_wide_terminal_shows_the_tree_and_the_projection() {
 
 #[test]
 fn the_tree_keeps_a_quiet_selected_row_when_the_body_has_focus() {
-    use crate::theme::{Capability, Flavor};
+    use crate::render::theme::{Capability, Flavor};
 
     for flavor in [Flavor::Dark, Flavor::Light] {
         let mut app = two_files();
@@ -1399,7 +1395,7 @@ fn horizontal_scroll_shifts_the_visible_columns() {
 
 #[test]
 fn the_show_pane_carries_syntax_colors() {
-    if !crate::theme::colors_enabled() {
+    if !crate::render::theme::colors_enabled() {
         return;
     }
     let app = show_app(vec![projected("a.rs", "pub struct User;\n")]);
@@ -1453,7 +1449,7 @@ fn the_help_overlay_lists_the_keys() {
 
 #[test]
 fn a_changed_diff_row_gets_delta_backgrounds() {
-    if !crate::theme::colors_enabled() {
+    if !crate::render::theme::colors_enabled() {
         return;
     }
     let app = diff_app(vec![file_diff(
@@ -1486,7 +1482,7 @@ fn a_changed_diff_row_gets_delta_backgrounds() {
 
 #[test]
 fn the_canvas_is_opaque_in_every_flavor() {
-    use crate::theme::{Capability, Flavor};
+    use crate::render::theme::{Capability, Flavor};
 
     for flavor in [Flavor::Dark, Flavor::Light] {
         for overlay in [None, Some(Overlay::Help)] {
@@ -1510,7 +1506,7 @@ fn the_canvas_is_opaque_in_every_flavor() {
 
 #[test]
 fn the_canvas_takes_the_light_palette_background() {
-    use crate::theme::{Capability, Flavor};
+    use crate::render::theme::{Capability, Flavor};
 
     let mut app = two_files();
     let light = Theme::new(Flavor::Light, Capability::TrueColor);
@@ -1530,7 +1526,7 @@ fn the_canvas_takes_the_light_palette_background() {
 
 #[test]
 fn clip_line_slices_by_display_width() {
-    use crate::text::clip_line;
+    use crate::render::text::clip_line;
     assert_eq!(clip_line("abcdef", 2, 3), "cde");
     assert_eq!(clip_line("abcdef", 0, 0), "");
     assert_eq!(clip_line("abcdef", 10, 3), "");
@@ -1541,7 +1537,7 @@ fn clip_line_slices_by_display_width() {
 
 #[test]
 fn window_offset_keeps_the_cursor_visible() {
-    use crate::layout::window_offset;
+    use crate::render::layout::window_offset;
     assert_eq!(window_offset(0, 100, 10), 0);
     assert_eq!(window_offset(9, 100, 10), 0);
     assert_eq!(window_offset(10, 100, 10), 1);

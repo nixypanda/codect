@@ -7,14 +7,14 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
-use crate::content::{Loaded, SearchSide};
-use crate::highlight::{self, Run};
-use crate::layout::{Edge, VisualRow, VisualRowKind, gutter_width};
-use crate::text::truncate_ellipsis;
-use crate::theme::Theme;
-use crate::view::block::pane_block;
+use crate::page::{Loaded, SearchSide};
+use crate::render::block::pane_block;
+use crate::render::highlight::{self, Run};
+use crate::render::layout::{Edge, VisualRow, VisualRowKind, gutter_width};
+use crate::render::text::truncate_ellipsis;
+use crate::render::theme::Theme;
 
-use super::empty::render_empty;
+use crate::render::empty::render_empty;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Side {
@@ -225,7 +225,7 @@ fn line_background(kind: DiffRowKind, side: Side, theme: &Theme) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{Capability, Flavor};
+    use crate::render::theme::{Capability, Flavor};
 
     #[test]
     fn pane_titles_identify_sides_and_fit_narrow_borders() {
