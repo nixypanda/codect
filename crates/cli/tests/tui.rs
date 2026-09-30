@@ -1,8 +1,8 @@
-//! CLI tests for the `tui` command surface.
-//!
-//! The terminal frontend is not driven here — these tests cover the command
-//! boundary only: argument validation, and the non-terminal guard that keeps a
-//! redirected invocation from emitting control sequences or writing stdout.
+// CLI tests for the `tui` command surface.
+//
+// The terminal frontend is not driven here — these tests cover the command
+// boundary only: argument validation, and the non-terminal guard that keeps a
+// redirected invocation from emitting control sequences or writing stdout.
 
 mod support;
 
@@ -27,7 +27,6 @@ fn repo() -> TestRepo {
     repo
 }
 
-/// A repository whose `HEAD` differs from its parent.
 fn repo_with_change() -> TestRepo {
     let repo = repo();
     repo.write("src/lib.rs", "pub struct User {\n    pub id: u64,\n}\n");

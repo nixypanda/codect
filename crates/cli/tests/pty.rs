@@ -1,8 +1,8 @@
-//! PTY smoke tests for the real crossterm path.
-//!
-//! The rest of the frontend is covered with an injected driver and
-//! `TestBackend`; these are the only tests that drive an actual terminal. They
-//! are skipped on platforms without a PTY, which is why they are gated to Unix.
+// PTY smoke tests for the real crossterm path.
+//
+// The rest of the frontend is covered with an injected driver and
+// `TestBackend`; these are the only tests that drive an actual terminal. They
+// are skipped on platforms without a PTY, which is why they are gated to Unix.
 
 #![cfg(unix)]
 
@@ -26,7 +26,6 @@ pub struct User {
 }
 ";
 
-/// Runs `ownai <args>` in an 80×24 PTY, presses `q`, and returns its exit code.
 fn run_in_pty(repo: &TestRepo, args: &[&str]) -> u32 {
     let pty = native_pty_system();
     let pair = pty

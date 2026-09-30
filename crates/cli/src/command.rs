@@ -1,9 +1,9 @@
-//! The thin command layer.
-//!
-//! Everything Git-aware lives in `engine`; this module only builds a
-//! selection from `argv`, invokes the engine, and renders the result or a
-//! diagnostic. Keeping the shared pipeline in the engine is what lets the
-//! terminal frontend reuse it without duplicating behavior.
+// The thin command layer.
+//
+// Everything Git-aware lives in `engine`; this module only builds a
+// selection from `argv`, invokes the engine, and renders the result or a
+// diagnostic. Keeping the shared pipeline in the engine is what lets the
+// terminal frontend reuse it without duplicating behavior.
 
 use std::error::Error;
 use std::ffi::OsString;
@@ -29,19 +29,17 @@ use crate::json;
 use crate::output::{self, DocumentKind};
 use crate::pathspec::{self, PathArgError};
 
-/// A fatal CLI failure with structured context and an underlying cause.
-///
-/// The exit code is chosen by `main`; this type only carries information.
+// A fatal CLI failure with structured context and an underlying cause.
+//
+// The exit code is chosen by `main`; this type only carries information.
 pub struct CliError {
-    /// The user-facing summary line.
     message: String,
-    /// Structured context rendered as miette help (section 15).
     help: Option<String>,
     source: Box<dyn Error + Send + Sync + 'static>,
 }
 
 impl CliError {
-    /// A usage failure that exits `2`, matching `clap`'s own usage errors.
+    // A usage failure that exits `2`, matching `clap`'s own usage errors.
     fn usage(message: String) -> Self {
         Self {
             message,
@@ -50,15 +48,15 @@ impl CliError {
         }
     }
 
-    /// Whether this failure is a usage error (exit `2`) rather than a runtime
-    /// failure (exit `1`). Usage errors are recognized by their source type, so
-    /// every other constructor stays unchanged.
+    // Whether this failure is a usage error (exit `2`) rather than a runtime
+    // failure (exit `1`). Usage errors are recognized by their source type, so
+    // every other constructor stays unchanged.
     pub fn is_usage(&self) -> bool {
         self.source.downcast_ref::<UsageError>().is_some()
     }
 }
 
-/// The source for a [`CliError::usage`]; the detail is in the message.
+// The source for a [`CliError::usage`]; the detail is in the message.
 #[derive(Debug, thiserror::Error)]
 #[error("usage error")]
 struct UsageError;
@@ -92,7 +90,6 @@ impl miette::Diagnostic for CliError {
     }
 }
 
-/// Discovers the repository from the current directory and runs one command.
 pub fn run(cli: &Cli) -> Result<(), CliError> {
     let start = std::env::current_dir().map_err(|source| CliError {
         message: "could not determine the current directory".to_owned(),
@@ -184,13 +181,13 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
     }
 }
 
-/// Projects one editor-supplied source file, from stdin or the worktree.
-///
-/// Exactly one `--path` supplies the language and the repository-relative path
-/// used to build stable keys. The path is resolved with the same lexical
-/// containment rules as `--path` scoping. `--worktree` additionally refuses a
-/// symlinked target and checks the fully-resolved path, so a read can never
-/// leave the repository.
+// Projects one editor-supplied source file, from stdin or the worktree.
+//
+// Exactly one `--path` supplies the language and the repository-relative path
+// used to build stable keys. The path is resolved with the same lexical
+// containment rules as `--path` scoping. `--worktree` additionally refuses a
+// symlinked target and checks the fully-resolved path, so a read can never
+// leave the repository.
 fn run_source_show(
     format: Format,
     mode: ProjectionMode,
@@ -227,13 +224,13 @@ fn run_source_show(
     }
 }
 
-/// Resolves the single `--path` that supplies the stdin/worktree context.
-///
-/// `--path` is repeatable for revision scoping, but an editor buffer has
-/// exactly one language and path context, so more than one is a usage error.
-/// `--path` must name a single file: a directory scope (including `.`, which
-/// resolves to `PathSelection::All`) is a usage error rather than a runtime
-/// read failure.
+// Resolves the single `--path` that supplies the stdin/worktree context.
+//
+// `--path` is repeatable for revision scoping, but an editor buffer has
+// exactly one language and path context, so more than one is a usage error.
+// `--path` must name a single file: a directory scope (including `.`, which
+// resolves to `PathSelection::All`) is a usage error rather than a runtime
+// read failure.
 fn single_source_path(
     paths: &[OsString],
     cwd: &Path,
@@ -268,12 +265,12 @@ fn single_source_path(
     }
 }
 
-/// Whether `path`, resolved against the repository root, is an existing
-/// directory.
-///
-/// `symlink_metadata` describes the link itself, so a symlinked directory is
-/// classified as a link (and rejected as such by `--worktree`) rather than as
-/// the directory it points to.
+// Whether `path`, resolved against the repository root, is an existing
+// directory.
+//
+// `symlink_metadata` describes the link itself, so a symlinked directory is
+// classified as a link (and rejected as such by `--worktree`) rather than as
+// the directory it points to.
 fn is_directory(root: &Path, path: &RepoPath) -> bool {
     std::fs::symlink_metadata(worktree_path(root, path))
         .is_ok_and(|metadata| metadata.file_type().is_dir())
@@ -285,14 +282,14 @@ fn read_stdin() -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// A worktree file that cannot supply the editor's source bytes.
-///
-/// `--worktree` is the one path that reads a file the user points at on disk,
-/// so it is the one place where a symlink could redirect a repository-relative
-/// read outside the repository. The target is rejected when it is itself a
-/// symlink (mirroring `.ownai.toml`) and the fully-resolved path is checked to
-/// stay inside the repository, so a symlinked ancestor directory cannot escape
-/// either.
+// A worktree file that cannot supply the editor's source bytes.
+//
+// `--worktree` is the one path that reads a file the user points at on disk,
+// so it is the one place where a symlink could redirect a repository-relative
+// read outside the repository. The target is rejected when it is itself a
+// symlink (mirroring `.ownai.toml`) and the fully-resolved path is checked to
+// stay inside the repository, so a symlinked ancestor directory cannot escape
+// either.
 #[derive(Debug, thiserror::Error)]
 enum WorktreeError {
     #[error("`{path}` is a symlink, which is not followed")]
@@ -309,12 +306,12 @@ enum WorktreeError {
     },
 }
 
-/// Reads the worktree file for `path`.
-///
-/// Git paths are raw bytes, so on Unix the path is rebuilt from bytes rather
-/// than lossily converted. The path is already lexically contained in the
-/// repository; the symlink and resolution checks here close the remaining gap
-/// between a lexical path and the bytes actually read.
+// Reads the worktree file for `path`.
+//
+// Git paths are raw bytes, so on Unix the path is rebuilt from bytes rather
+// than lossily converted. The path is already lexically contained in the
+// repository; the symlink and resolution checks here close the remaining gap
+// between a lexical path and the bytes actually read.
 fn read_worktree(root: &Path, path: &RepoPath) -> Result<Vec<u8>, WorktreeError> {
     let full = worktree_path(root, path);
 
@@ -379,8 +376,8 @@ fn worktree_failure(error: WorktreeError) -> CliError {
     }
 }
 
-/// Splits engine diffs into the two projection slices the document renderer
-/// consumes. `diff_document` re-sorts by path, so only the path set matters.
+// Splits engine diffs into the two projection slices the document renderer
+// consumes. `diff_document` re-sorts by path, so only the path set matters.
 fn split_diff(diffs: Vec<FileDiff>) -> (Vec<ProjectedFile>, Vec<ProjectedFile>) {
     let mut old = Vec::new();
     let mut new = Vec::new();
@@ -400,7 +397,6 @@ fn split_diff(diffs: Vec<FileDiff>) -> (Vec<ProjectedFile>, Vec<ProjectedFile>) 
     (old, new)
 }
 
-/// Runs the terminal frontend for one `tui` subcommand.
 #[cfg(feature = "tui")]
 fn run_tui(
     engine: Engine,
@@ -454,8 +450,8 @@ fn run_tui(
     tui::run(engine, options).map_err(tui_failure)
 }
 
-/// Resolves the icon style: an explicit `--icons` wins, then `OWNAI_ICONS`,
-/// then no icons. Unknown environment values fall back to no icons.
+// Resolves the icon style: an explicit `--icons` wins, then `OWNAI_ICONS`,
+// then no icons. Unknown environment values fall back to no icons.
 #[cfg(feature = "tui")]
 fn resolve_icons(choice: Option<IconChoice>) -> tui::IconStyle {
     match choice {
@@ -468,7 +464,6 @@ fn resolve_icons(choice: Option<IconChoice>) -> tui::IconStyle {
     }
 }
 
-/// A short label for the initial scope, shown in the status bar.
 #[cfg(feature = "tui")]
 fn scope_label(selection: &Selection) -> String {
     if selection.groups().is_empty() {
@@ -482,13 +477,13 @@ fn scope_label(selection: &Selection) -> String {
         .join(", ")
 }
 
-/// Resolves a command's `--path`/`--area` arguments into the selection its
-/// projection will use.
-///
-/// Only an `--area` invocation may touch `.ownai.toml`, so a malformed config
-/// can never break `--path` or unscoped runs. Resolution records one group per
-/// literal path or named area in a single step, so an unknown or empty area is
-/// reported while the same call builds the scope.
+// Resolves a command's `--path`/`--area` arguments into the selection its
+// projection will use.
+//
+// Only an `--area` invocation may touch `.ownai.toml`, so a malformed config
+// can never break `--path` or unscoped runs. Resolution records one group per
+// literal path or named area in a single step, so an unknown or empty area is
+// reported while the same call builds the scope.
 fn selection_for(
     paths: &[OsString],
     areas: &[String],
@@ -510,10 +505,10 @@ fn selection_for(
         .map_err(|error| selection_failure(error, &area_set))
 }
 
-/// Converts an engine failure into the CLI's reportable error.
-///
-/// The underlying error is unwrapped rather than nested so the diagnostic's
-/// cause chain is identical to the one produced before the engine extraction.
+// Converts an engine failure into the CLI's reportable error.
+//
+// The underlying error is unwrapped rather than nested so the diagnostic's
+// cause chain is identical to the one produced before the engine extraction.
 fn engine_failure(error: EngineError) -> CliError {
     match error {
         EngineError::Git { source, revision } => git_failure_for(source, revision.as_deref()),
@@ -546,7 +541,6 @@ fn engine_failure(error: EngineError) -> CliError {
     }
 }
 
-/// The underlying error for an unsupported explicitly supplied path.
 #[derive(Debug, thiserror::Error)]
 #[error("no language adapter supports `{path}`")]
 struct UnsupportedPath {
@@ -565,8 +559,8 @@ where
     }
 }
 
-/// Formats a Git failure, filling in the user revision when the underlying
-/// error does not already name it (for example a blob read or tree traversal).
+// Formats a Git failure, filling in the user revision when the underlying
+// error does not already name it (for example a blob read or tree traversal).
 fn git_failure_for(error: GitError, revision: Option<&str>) -> CliError {
     let mut context = git_context(&error);
     if context.revision.is_none() {
@@ -596,11 +590,11 @@ fn path_arg_failure(error: PathArgError) -> CliError {
     }
 }
 
-/// Selected paths or areas that name nothing in the revision(s) being
-/// projected.
-///
-/// Reported together so one invocation lists every group that must be fixed,
-/// rather than making the user correct them one failure at a time.
+// Selected paths or areas that name nothing in the revision(s) being
+// projected.
+//
+// Reported together so one invocation lists every group that must be fixed,
+// rather than making the user correct them one failure at a time.
 #[derive(Debug, thiserror::Error)]
 #[error("a selected path or area does not exist in the projected revision")]
 struct MissingPaths {
@@ -608,8 +602,6 @@ struct MissingPaths {
 }
 
 impl MissingPaths {
-    /// The structured help body: the revision label followed by one
-    /// `path:`/`area:` line per missing group.
     fn help(&self, revisions: &str) -> String {
         let mut lines = Vec::with_capacity(self.missing.len() + 1);
         lines.push(format!("revision: {revisions}"));
@@ -637,10 +629,10 @@ fn config_failure(error: ConfigError) -> CliError {
     }
 }
 
-/// The area seam is reachable through `--area`; an unknown name lists the
-/// defined areas so a typo is correctable without opening the config file. An
-/// unknown area is now the only way resolution can fail, so the list is always
-/// the right help.
+// The area seam is reachable through `--area`; an unknown name lists the
+// defined areas so a typo is correctable without opening the config file. An
+// unknown area is now the only way resolution can fail, so the list is always
+// the right help.
 fn selection_failure(error: SelectionError, areas: &AreaSet) -> CliError {
     let names: Vec<&str> = areas.names().collect();
     let help = if names.is_empty() {
@@ -655,8 +647,8 @@ fn selection_failure(error: SelectionError, areas: &AreaSet) -> CliError {
     }
 }
 
-/// Extracts the structured fields a [`GitError`] knows about so diagnostics can
-/// show them as discrete context rather than buried in a message (section 15).
+// Extracts the structured fields a [`GitError`] knows about so diagnostics can
+// show them as discrete context rather than buried in a message (section 15).
 fn git_context(error: &GitError) -> DiagnosticContext {
     match error {
         GitError::RepositoryNotFound { start, .. } => DiagnosticContext {
@@ -702,7 +694,7 @@ fn git_context(error: &GitError) -> DiagnosticContext {
     }
 }
 
-/// A short summary per failure kind; the cause chain carries the detail.
+// A short summary per failure kind; the cause chain carries the detail.
 fn git_message(error: &GitError) -> &'static str {
     match error {
         GitError::RepositoryNotFound { .. } => "could not discover a Git repository",
@@ -722,7 +714,6 @@ fn git_message(error: &GitError) -> &'static str {
     }
 }
 
-/// Formats the non-empty context fields as help lines.
 fn context_help(context: &DiagnosticContext) -> Option<String> {
     let mut lines = Vec::new();
     if let Some(repository) = &context.repository {
@@ -742,7 +733,7 @@ fn context_help(context: &DiagnosticContext) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-/// Core spans are zero-based (section 5); users see one-based positions.
+// Core spans are zero-based (section 5); users see one-based positions.
 fn format_range(range: &SourceSpan) -> String {
     format!(
         "{}:{}-{}:{}",

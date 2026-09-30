@@ -1,18 +1,16 @@
-//! A small JSON Schema validator for the subset used by
-//! `docs/schema/ownai.show.v1.json`.
-//!
-//! The schema is validated with this in-crate checker rather than a third-party
-//! validator so the test suite adds no dependency to the build graph. The
-//! supported keywords are exactly the ones the schema uses: `$ref` into
-//! `$defs`, `type` (including a union of types), `required`, `properties`,
-//! `additionalProperties` (boolean), `items`, `enum`, `const`, and `minimum`.
-//! An unsupported keyword in the schema is ignored, so the schema is kept
-//! within this subset deliberately.
+// A small JSON Schema validator for the subset used by
+// `docs/schema/ownai.show.v1.json`.
+//
+// The schema is validated with this in-crate checker rather than a third-party
+// validator so the test suite adds no dependency to the build graph. The
+// supported keywords are exactly the ones the schema uses: `$ref` into
+// `$defs`, `type` (including a union of types), `required`, `properties`,
+// `additionalProperties` (boolean), `items`, `enum`, `const`, and `minimum`.
+// An unsupported keyword in the schema is ignored, so the schema is kept
+// within this subset deliberately.
 
 use serde_json::Value;
 
-/// Validates `instance` against `schema`, returning a human-readable path and
-/// reason on the first failure.
 pub fn validate(schema: &Value, instance: &Value) -> Result<(), String> {
     check(schema, schema, instance, "$")
 }
@@ -114,7 +112,6 @@ fn check(root: &Value, schema: &Value, instance: &Value, path: &str) -> Result<(
     Ok(())
 }
 
-/// Resolves a `#/$defs/name` reference against the schema root.
 fn resolve<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
     let name = reference.strip_prefix("#/$defs/")?;
     root.get("$defs")?.get(name)

@@ -1,18 +1,18 @@
-//! Trimmed fixture helpers for the `cli` end-to-end tests.
-//!
-//! # Why the `git` executable appears here
-//!
-//! `cli` and `git` are read-only and never invoke Git. The approved
-//! `gix` feature set (TECHNICAL_DESIGN.md section 4.1) cannot create commits or
-//! references, so the tests build real repositories with the `git` executable.
-//! Every invocation is test setup only and is isolated from host configuration
-//! and the network, exactly as `git`'s support module does:
-//!
-//! - `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` point at `/dev/null`.
-//! - `GIT_CONFIG_NOSYSTEM` disables the system configuration.
-//! - Author, committer, and date are fixed so commit ids are reproducible.
-//! - Prompting and signing are disabled so a test can never hang or fail on a
-//!   developer's Git configuration.
+// Trimmed fixture helpers for the `cli` end-to-end tests.
+//
+// # Why the `git` executable appears here
+//
+// `cli` and `git` are read-only and never invoke Git. The approved
+// `gix` feature set (TECHNICAL_DESIGN.md section 4.1) cannot create commits or
+// references, so the tests build real repositories with the `git` executable.
+// Every invocation is test setup only and is isolated from host configuration
+// and the network, exactly as `git`'s support module does:
+//
+// - `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` point at `/dev/null`.
+// - `GIT_CONFIG_NOSYSTEM` disables the system configuration.
+// - Author, committer, and date are fixed so commit ids are reproducible.
+// - Prompting and signing are disabled so a test can never hang or fail on a
+//   developer's Git configuration.
 
 #![allow(dead_code)]
 
@@ -21,7 +21,7 @@ use std::process::{Command, Output};
 
 use tempfile::TempDir;
 
-/// A fixed commit date so generated commit ids are reproducible.
+// A fixed commit date so generated commit ids are reproducible.
 const FIXED_DATE: &str = "2020-01-01T00:00:00+0000";
 
 pub struct TestRepo {
@@ -41,9 +41,9 @@ impl TestRepo {
         repo
     }
 
-    /// Creates a SHA-256 repository, or `None` when the environment's Git
-    /// cannot create one. Mirrors `git`'s support helper so the CLI is
-    /// covered end to end with the same runtime capability check.
+    // Creates a SHA-256 repository, or `None` when the environment's Git
+    // cannot create one. Mirrors `git`'s support helper so the CLI is
+    // covered end to end with the same runtime capability check.
     pub fn init_sha256() -> Option<Self> {
         let repo = Self::new();
         let output = repo.git(&["init", "-q", "--object-format=sha256"]);
@@ -90,8 +90,8 @@ impl TestRepo {
         self.git_ok(&["rev-parse", "HEAD"]).trim().to_owned()
     }
 
-    /// Clones this repository into a fresh bare repository. `gix` must be able
-    /// to discover and read the clone directly from its root.
+    // Clones this repository into a fresh bare repository. `gix` must be able
+    // to discover and read the clone directly from its root.
     pub fn clone_bare(&self) -> Self {
         let bare = Self::new();
         let source = self.path().to_string_lossy().into_owned();
@@ -104,8 +104,8 @@ impl TestRepo {
     }
 }
 
-/// Builds the `ownai` binary invocation with Git repository-override variables
-/// removed, so a developer's environment cannot redirect discovery.
+// Builds the `ownai` binary invocation with Git repository-override variables
+// removed, so a developer's environment cannot redirect discovery.
 pub fn ownai() -> assert_cmd::Command {
     let mut command = assert_cmd::Command::cargo_bin("ownai").expect("ownai binary is built");
     command
@@ -129,7 +129,6 @@ pub fn stderr(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8 in tests")
 }
 
-/// Reads an expected projection from the repository-level `fixtures/` tree.
 pub fn fixture(relative: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures")
@@ -138,7 +137,6 @@ pub fn fixture(relative: &str) -> String {
         .unwrap_or_else(|error| panic!("read fixture {}: {error}", path.display()))
 }
 
-/// Reads a committed document from the repository-level `docs/` tree.
 pub fn doc(relative: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs")

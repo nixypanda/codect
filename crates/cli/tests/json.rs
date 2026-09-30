@@ -1,12 +1,12 @@
-//! End-to-end tests for the `ownai.show.v1` JSON document
-//! (`ownai show --format json`).
-//!
-//! These cover both input paths: a committed revision and editor-supplied
-//! bytes (stdin and worktree). They assert the document contract — identical
-//! `stable_key` values and outline structure between the two input paths, the
-//! mode-independent outline, byte-order file ordering, usage errors, and the
-//! absence of ANSI — and validate the document against
-//! `docs/schema/ownai.show.v1.json`.
+// End-to-end tests for the `ownai.show.v1` JSON document
+// (`ownai show --format json`).
+//
+// These cover both input paths: a committed revision and editor-supplied
+// bytes (stdin and worktree). They assert the document contract — identical
+// `stable_key` values and outline structure between the two input paths, the
+// mode-independent outline, byte-order file ordering, usage errors, and the
+// absence of ANSI — and validate the document against
+// `docs/schema/ownai.show.v1.json`.
 
 mod support;
 
@@ -27,7 +27,6 @@ fn schema() -> Value {
     serde_json::from_str(&doc("schema/ownai.show.v1.json")).expect("the schema is valid JSON")
 }
 
-/// The outline's `stable_key` sequence, for comparing outlines across modes.
 fn outline_keys(outline: &Value) -> Vec<&str> {
     outline
         .as_array()
@@ -37,7 +36,6 @@ fn outline_keys(outline: &Value) -> Vec<&str> {
         .collect()
 }
 
-/// The one-based line number of the first line containing `needle`.
 fn line_number(source: &str, needle: &str) -> usize {
     source
         .lines()
@@ -46,7 +44,6 @@ fn line_number(source: &str, needle: &str) -> usize {
         + 1
 }
 
-/// The outline item with `stable_key`, or a panic naming the key.
 fn outline_item<'a>(file: &'a Value, key: &str) -> &'a Value {
     file["outline"]
         .as_array()
@@ -56,7 +53,6 @@ fn outline_item<'a>(file: &'a Value, key: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no outline item with stable_key {key}"))
 }
 
-/// The projection item with `stable_key`, if the requested mode keeps it.
 fn projection_item<'a>(file: &'a Value, key: &str) -> Option<&'a Value> {
     file["projection"]["items"]
         .as_array()
@@ -69,7 +65,6 @@ fn parse(output: &std::process::Output) -> Value {
     serde_json::from_str(&stdout(output)).expect("stdout is a valid JSON document")
 }
 
-/// Projects `source` through stdin with `path` as the language/path context.
 fn show_json_stdin(repo: &TestRepo, path: &str, mode: &str, source: &str) -> Value {
     let output = ownai_in(
         repo,
@@ -84,7 +79,6 @@ fn show_json_stdin(repo: &TestRepo, path: &str, mode: &str, source: &str) -> Val
     parse(&output)
 }
 
-/// Projects `path` from the worktree.
 fn show_json_worktree(repo: &TestRepo, path: &str, mode: &str) -> Value {
     let output = ownai_in(
         repo,
@@ -105,7 +99,6 @@ fn show_json_worktree(repo: &TestRepo, path: &str, mode: &str) -> Value {
     parse(&output)
 }
 
-/// Projects `path` from the committed `HEAD`.
 fn show_json_revision(repo: &TestRepo, path: &str, mode: &str) -> Value {
     let output = ownai_in(
         repo,
@@ -365,7 +358,6 @@ fn stdin_usage_errors_exit_two() {
     repo.write("src/lib.rs", RUST);
     repo.commit("base");
 
-    // `--stdin` without `--path`.
     ownai_in(
         &repo,
         &["show", "--format", "json", "--mode", "types", "--stdin"],
@@ -374,7 +366,6 @@ fn stdin_usage_errors_exit_two() {
     .assert()
     .code(2);
 
-    // `--stdin` with a revision.
     ownai_in(
         &repo,
         &[
@@ -393,7 +384,6 @@ fn stdin_usage_errors_exit_two() {
     .assert()
     .code(2);
 
-    // `--stdin` with `--area`.
     ownai_in(
         &repo,
         &[
@@ -443,7 +433,6 @@ fn source_path_that_names_a_directory_is_a_usage_error() {
     repo.write("src/lib.rs", RUST);
     repo.commit("base");
 
-    // A non-root existing directory.
     for args in [
         vec![
             "show", "--format", "json", "--mode", "types", "--stdin", "--path", "crates",
@@ -474,7 +463,6 @@ fn source_path_that_names_a_directory_is_a_usage_error() {
         );
     }
 
-    // The repository root, selected explicitly.
     let root = ownai_in(
         &repo,
         &[
@@ -564,7 +552,6 @@ fn source_failures_exit_one_with_empty_stdout() {
     repo.write("src/lib.rs", RUST);
     repo.commit("base");
 
-    // Unsupported extension.
     let unsupported = ownai_in(
         &repo,
         &[
@@ -584,7 +571,6 @@ fn source_failures_exit_one_with_empty_stdout() {
     assert_eq!(unsupported.status.code(), Some(1));
     assert!(unsupported.stdout.is_empty(), "stdout must stay empty");
 
-    // A path outside the repository.
     let outside = ownai_in(
         &repo,
         &[
@@ -604,7 +590,6 @@ fn source_failures_exit_one_with_empty_stdout() {
     assert_eq!(outside.status.code(), Some(1));
     assert!(outside.stdout.is_empty(), "stdout must stay empty");
 
-    // Non-UTF-8 source bytes.
     let invalid = ownai_in(
         &repo,
         &[

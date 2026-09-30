@@ -1,8 +1,8 @@
-//! Mixed-language project rendering and diff composition
-//! (TECHNICAL_DESIGN.md sections 7.1, 7.2, 10.1, 16.2).
-//!
-//! These live in the CLI crate because it depends on core and both language
-//! crates; placing them in core would introduce a dev-dependency cycle.
+// Mixed-language project rendering and diff composition
+// (TECHNICAL_DESIGN.md sections 7.1, 7.2, 10.1, 16.2).
+//
+// These live in the CLI crate because it depends on core and both language
+// crates; placing them in core would introduce a dev-dependency cycle.
 
 use std::fs;
 use std::path::PathBuf;
