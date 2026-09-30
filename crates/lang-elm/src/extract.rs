@@ -138,8 +138,8 @@ fn module_name(renderer: &Renderer<'_>, root: Node<'_>) -> Result<String, Projec
     }
 }
 
-/// Explicit annotations are indexed by declared name so that pairing does not
-/// depend on adjacency or on a fixed relative order (TECHNICAL_DESIGN.md 11.3).
+// Explicit annotations are indexed by declared name so that pairing does not
+// depend on adjacency or on a fixed relative order (TECHNICAL_DESIGN.md 11.3).
 fn collect_annotations(
     renderer: &Renderer<'_>,
     root: Node<'_>,
@@ -164,9 +164,9 @@ struct Builder {
 }
 
 impl Builder {
-    /// Returns the item's stable key so callers can mark nested members with
-    /// their owner. Collisions get a deterministic source-order ordinal and
-    /// never a byte offset (TECHNICAL_DESIGN.md 5.2).
+    // Returns the item's stable key so callers can mark nested members with
+    // their owner. Collisions get a deterministic source-order ordinal and
+    // never a byte offset (TECHNICAL_DESIGN.md 5.2).
     fn push(
         &mut self,
         kind: ItemKind,
