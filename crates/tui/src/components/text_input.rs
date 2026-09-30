@@ -3,6 +3,10 @@
 //! It owns exactly two fields and exposes editing as an [`Edit`] value, so a
 //! caller cannot reach into its internals.
 
+use ratatui::text::{Line, Span};
+
+use crate::theme::Theme;
+
 /// An edit to apply to a [`TextInput`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Edit {
@@ -77,6 +81,35 @@ impl TextInput {
     pub fn value(&self) -> String {
         self.text.trim().to_owned()
     }
+}
+
+/// Draws one editable line with a leading `prefix` and an inverted cursor cell.
+///
+/// Shared by the overlay inputs (palette, finder, search) and the revision
+/// prompt, so the cursor rendering has exactly one owner.
+pub(crate) fn input_line(prefix: &str, input: &TextInput, theme: &Theme) -> Line<'static> {
+    let before = &input.text[..input.cursor];
+    let after = &input.text[input.cursor..];
+    let cursor_style = theme.fg_bg(theme.ink(theme.palette.accent), theme.palette.accent);
+    let mut spans = vec![Span::styled(
+        prefix.to_owned(),
+        theme.fg(theme.palette.accent),
+    )];
+    spans.push(Span::styled(
+        before.to_owned(),
+        theme.fg(theme.palette.text),
+    ));
+    match after.chars().next() {
+        Some(character) => {
+            spans.push(Span::styled(character.to_string(), cursor_style));
+            spans.push(Span::styled(
+                after[character.len_utf8()..].to_owned(),
+                theme.fg(theme.palette.text),
+            ));
+        }
+        None => spans.push(Span::styled(" ", cursor_style)),
+    }
+    Line::from(spans)
 }
 
 #[cfg(test)]

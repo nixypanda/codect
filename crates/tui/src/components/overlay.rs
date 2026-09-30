@@ -8,12 +8,22 @@
 
 use base::{AreaSet, ProjectionMode, RepoPath, Selection, SelectionGroup};
 use engine::EngineError;
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::action::Action;
-use crate::content::available_modes;
+use crate::content::{available_modes, mode_label};
 use crate::fuzzy;
 use crate::input::Key;
-use crate::text_input::{Edit, TextInput};
+use crate::layout::{centered, window_offset};
+use crate::theme::Theme;
+use crate::view::block::{popup_block, scrim};
+
+use super::text_input::{Edit, TextInput, input_line};
 
 /// One ranked palette or finder result: an index into the source list, a fuzzy
 /// score, and the byte offsets that matched for highlighting.
@@ -455,4 +465,401 @@ impl FinderState {
         self.matches = matches;
         self.cursor = self.cursor.min(self.matches.len().saturating_sub(1));
     }
+}
+
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
+
+/// What the overlay renderer reads from the app, beyond its own state.
+pub(crate) struct RenderCtx<'a> {
+    pub theme: &'a Theme,
+    pub mode: ProjectionMode,
+    pub entries: &'a [(Action, &'static str, &'static str)],
+    pub visible: &'a [RepoPath],
+    /// The committed search's match count, for the search summary line.
+    pub matches: usize,
+}
+
+/// Draws the modal overlay. The revision prompts are *not* here: they belong to
+/// the loaded projection and are drawn by [`crate::view::prompt`].
+pub(crate) fn render(state: &Overlay, ctx: &RenderCtx, frame: &mut Frame, area: Rect) {
+    let theme = ctx.theme;
+    match state {
+        Overlay::Help => render_help(frame, area, theme),
+        Overlay::Scope(chooser) => render_scope(frame, area, chooser, theme),
+        Overlay::Mode { cursor } => render_mode(frame, area, *cursor, ctx.mode, theme),
+        Overlay::Palette(state) => render_palette(frame, area, state, ctx, theme),
+        Overlay::Finder(state) => render_finder(frame, area, state, ctx, theme),
+        Overlay::Search(state) => render_search(frame, area, state, ctx, theme),
+    }
+}
+
+fn render_mode(
+    frame: &mut Frame,
+    area: Rect,
+    cursor: usize,
+    current: ProjectionMode,
+    theme: &Theme,
+) {
+    let modes = available_modes();
+    let width = area.width.saturating_sub(4).min(40);
+    let height = (modes.len() + 3).min(area.height as usize) as u16;
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    scrim(frame, area);
+    frame.render_widget(Clear, popup);
+    let block = popup_block("mode", theme);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = Vec::new();
+    for (index, mode) in modes.iter().enumerate() {
+        let selected = index == cursor;
+        let style = if selected {
+            theme.fg_bg(theme.palette.selection_fg, theme.palette.selection_bg)
+        } else {
+            theme.fg(theme.palette.text)
+        };
+        let marker = if *mode == current { "•" } else { " " };
+        lines.push(Line::from(Span::styled(
+            format!(" {marker} {} ", mode_label(*mode)),
+            style,
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_scope(frame: &mut Frame, area: Rect, chooser: &ScopeChooser, theme: &Theme) {
+    let options = chooser.options();
+    let extra = 4 + usize::from(chooser.input.is_some()) * 2 + usize::from(chooser.error.is_some());
+    let width = area.width.saturating_sub(4).min(60);
+    let height = (options.len() + extra).min(area.height as usize) as u16;
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    scrim(frame, area);
+    frame.render_widget(Clear, popup);
+    let block = popup_block("scope", theme);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = Vec::new();
+    if chooser.areas.is_none() && chooser.error.is_none() {
+        lines.push(Line::from(Span::styled(
+            " loading areas…",
+            theme.fg(theme.palette.text_muted),
+        )));
+    }
+    for (index, option) in options.iter().enumerate() {
+        let selected = index == chooser.cursor && chooser.input.is_none();
+        let style = if selected {
+            theme.fg_bg(theme.palette.selection_fg, theme.palette.selection_bg)
+        } else {
+            theme.fg(theme.palette.text)
+        };
+        lines.push(Line::from(Span::styled(format!(" {option} "), style)));
+    }
+    if let Some(input) = &chooser.input {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" path: ", theme.fg(theme.palette.text_dim)),
+            Span::styled(input.text.clone(), theme.fg(theme.palette.text)),
+        ]));
+    }
+    if let Some(error) = &chooser.error {
+        lines.push(Line::from(Span::styled(
+            format!(" {error} "),
+            theme.fg(theme.palette.danger),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let popup = centered(area, 54, 23);
+    if popup.width == 0 || popup.height == 0 {
+        return;
+    }
+    scrim(frame, area);
+    frame.render_widget(Clear, popup);
+    let block = popup_block("help", theme);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let lines = vec![
+        Line::from(section("Move", theme)),
+        key_line("↑ ↓ / k j", "move in the tree or scroll", theme),
+        key_line("← → / h l", "fold the tree or pan sideways", theme),
+        key_line("g / G", "jump to the top or bottom", theme),
+        Line::from(""),
+        Line::from(section("Find", theme)),
+        key_line("Ctrl-P", "open the command palette", theme),
+        key_line("Ctrl-F", "find a file by name", theme),
+        key_line("/ then n / N", "search the view and step matches", theme),
+        Line::from(""),
+        Line::from(section("View", theme)),
+        key_line("Tab", "switch tree and content", theme),
+        key_line("m / s", "switch mode or change scope", theme),
+        key_line("r / b / t", "edit the revision, base, or target", theme),
+        key_line("[ / ] / \\", "resize or reset the tree", theme),
+        key_line("? / Esc", "toggle help or dismiss", theme),
+        key_line("q / Ctrl-C", "quit", theme),
+        Line::from(""),
+        Line::from(section("Mouse", theme)),
+        key_line("click", "open a file or fold a directory", theme),
+        key_line("wheel", "scroll the tree or the content", theme),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_palette(
+    frame: &mut Frame,
+    area: Rect,
+    state: &PaletteState,
+    ctx: &RenderCtx,
+    theme: &Theme,
+) {
+    let entries = ctx.entries;
+    let width = area.width.saturating_sub(4).min(72);
+    let list_height = state.matches.len().min(12);
+    let height = (list_height + 3).min(area.height as usize) as u16;
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 3,
+        width,
+        height,
+    };
+    scrim(frame, area);
+    frame.render_widget(Clear, popup);
+    let block = popup_block("commands", theme);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = vec![input_line("› ", &state.input, theme), Line::from("")];
+    let offset = window_offset(state.cursor, state.matches.len(), list_height);
+    for (row, ranked) in state
+        .matches
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(list_height)
+    {
+        let (label, hint) = entries
+            .get(ranked.index)
+            .map_or(("", ""), |(_, label, hint)| (*label, *hint));
+        lines.push(ranked_line(
+            label,
+            hint,
+            &ranked.positions,
+            row == state.cursor,
+            width as usize - 2,
+            theme,
+        ));
+    }
+    if state.matches.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "   no matching command",
+            theme.fg(theme.palette.text_muted),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_finder(
+    frame: &mut Frame,
+    area: Rect,
+    state: &FinderState,
+    ctx: &RenderCtx,
+    theme: &Theme,
+) {
+    let width = area.width.saturating_sub(4).min(80);
+    let list_height = state.matches.len().min(14);
+    let height = (list_height + 3).min(area.height as usize) as u16;
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 3,
+        width,
+        height,
+    };
+    scrim(frame, area);
+    frame.render_widget(Clear, popup);
+    let block = popup_block("find file", theme);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let visible = ctx.visible;
+    let mut lines = vec![input_line("⌕ ", &state.input, theme), Line::from("")];
+    let offset = window_offset(state.cursor, state.matches.len(), list_height);
+    for (row, ranked) in state
+        .matches
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(list_height)
+    {
+        let label = visible
+            .get(ranked.index)
+            .map_or(String::new(), ToString::to_string);
+        lines.push(ranked_line(
+            &label,
+            "",
+            &ranked.positions,
+            row == state.cursor,
+            width as usize - 2,
+            theme,
+        ));
+    }
+    if state.matches.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "   no matching file",
+            theme.fg(theme.palette.text_muted),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_search(
+    frame: &mut Frame,
+    area: Rect,
+    state: &SearchState,
+    ctx: &RenderCtx,
+    theme: &Theme,
+) {
+    let width = area.width.saturating_sub(4).min(80);
+    if width == 0 || area.height < 2 {
+        return;
+    }
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + area.height - 2,
+        width,
+        height: 1,
+    };
+    scrim(frame, area);
+    frame.render_widget(Clear, popup);
+
+    let mut spans = input_line("/ ", &state.input, theme).spans;
+    let count = ctx.matches;
+    let summary = if state.input.value().is_empty() {
+        "  type to search".to_owned()
+    } else if count == 0 {
+        "  no matches".to_owned()
+    } else {
+        format!("  {count} matches")
+    };
+    spans.push(Span::styled(summary, theme.fg(theme.palette.text_muted)));
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(theme.bg(theme.palette.surface)),
+        popup,
+    );
+}
+
+fn ranked_line(
+    label: &str,
+    hint: &str,
+    positions: &[usize],
+    selected: bool,
+    width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let base = if selected {
+        theme.fg_bg(theme.palette.selection_fg, theme.palette.selection_bg)
+    } else {
+        Style::default()
+    };
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let mut current_matched = false;
+    for (byte, character) in label.char_indices() {
+        let matched = positions.binary_search(&byte).is_ok();
+        if matched != current_matched && !current.is_empty() {
+            spans.push(Span::styled(
+                std::mem::take(&mut current),
+                matched_style(current_matched, selected, theme),
+            ));
+        }
+        current_matched = matched;
+        current.push(character);
+    }
+    if !current.is_empty() {
+        spans.push(Span::styled(
+            current,
+            matched_style(current_matched, selected, theme),
+        ));
+    }
+
+    let used: usize = spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum();
+    let hint_width = UnicodeWidthStr::width(hint);
+    if used + hint_width + 2 <= width {
+        spans.push(Span::styled(" ".repeat(width - used - hint_width), base));
+        spans.push(Span::styled(
+            hint.to_owned(),
+            theme.fg_bg(
+                theme.palette.text_muted,
+                if selected {
+                    theme.palette.selection_bg
+                } else {
+                    theme.palette.bg
+                },
+            ),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn matched_style(matched: bool, selected: bool, theme: &Theme) -> Style {
+    if !matched {
+        return if selected {
+            theme.fg_bg(theme.palette.selection_fg, theme.palette.selection_bg)
+        } else {
+            theme.fg(theme.palette.text)
+        };
+    }
+    if selected {
+        theme.fg_bg(
+            theme.ink(theme.palette.match_current_bg),
+            theme.palette.match_current_bg,
+        )
+    } else {
+        theme
+            .fg(theme.palette.match_fg)
+            .add_modifier(Modifier::BOLD)
+    }
+}
+
+fn section(title: &str, theme: &Theme) -> Span<'static> {
+    Span::styled(
+        format!(" {title}"),
+        theme.fg(theme.palette.accent).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn key_line(keys: &str, description: &str, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("   {keys:<12}"), theme.fg(theme.palette.text)),
+        Span::styled(description.to_owned(), theme.fg(theme.palette.text_dim)),
+    ])
 }

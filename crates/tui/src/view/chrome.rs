@@ -6,11 +6,11 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Focus, layout_focus};
+use crate::components::overlay::Overlay;
 use crate::content::{Loaded, mode_label};
-use crate::overlay::Overlay;
+use crate::layout::VisualRowKind;
+use crate::text::clip_line;
 use crate::theme::{Rgb, Theme};
-
-use super::text::clip_line;
 
 pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.chrome.theme;
@@ -218,15 +218,15 @@ pub(crate) fn diff_stats(app: &App) -> Option<(usize, usize)> {
             continue;
         }
         match row.kind {
-            crate::app::VisualRowKind::Diff(base::DiffRowKind::Add) => added += 1,
-            crate::app::VisualRowKind::Diff(base::DiffRowKind::Delete) => removed += 1,
-            crate::app::VisualRowKind::Diff(base::DiffRowKind::Change) => {
+            VisualRowKind::Diff(base::DiffRowKind::Add) => added += 1,
+            VisualRowKind::Diff(base::DiffRowKind::Delete) => removed += 1,
+            VisualRowKind::Diff(base::DiffRowKind::Change) => {
                 added += 1;
                 removed += 1;
             }
-            crate::app::VisualRowKind::Diff(base::DiffRowKind::Equal)
-            | crate::app::VisualRowKind::Hunk
-            | crate::app::VisualRowKind::Collapse(_) => {}
+            VisualRowKind::Diff(base::DiffRowKind::Equal)
+            | VisualRowKind::Hunk
+            | VisualRowKind::Collapse(_) => {}
         }
     }
     Some((added, removed))

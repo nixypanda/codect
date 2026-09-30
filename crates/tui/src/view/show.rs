@@ -6,11 +6,12 @@ use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarStat
 use crate::app::App;
 use crate::content::Loaded;
 use crate::highlight;
+use crate::layout::Edge;
+use crate::text::clip_line;
 use crate::theme::Theme;
+use crate::view::block::pane_block;
 
 use super::empty::render_empty;
-use super::geom::{Edge, pane_block};
-use super::text::clip_line;
 
 pub(crate) fn render_show_body(
     app: &App,

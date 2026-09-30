@@ -32,16 +32,15 @@ use ratatui::backend::CrosstermBackend;
 mod action;
 mod app;
 mod cache;
-mod commit_picker;
+mod components;
 mod content;
 mod fuzzy;
 mod highlight;
 mod icons;
 mod input;
-mod overlay;
-mod text_input;
+mod layout;
+mod text;
 mod theme;
-mod tree;
 mod view;
 
 #[cfg(feature = "bench")]

@@ -12,9 +12,9 @@ use base::{FileDiff, ProjectedFile, ProjectionMode, RepoPath, Selection};
 
 use crate::action::{Action, CommitsAction, GlobalAction, RangeAction, ShowAction};
 use crate::cache::BoundedCache;
-use crate::commit_picker::CommitPicker;
+use crate::components::commit_picker::CommitPicker;
+use crate::components::text_input::TextInput;
 use crate::highlight::{self, StyledLine};
-use crate::text_input::TextInput;
 use crate::theme::Theme;
 
 /// At or above this width the tree and content render side by side.

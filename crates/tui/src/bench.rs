@@ -20,10 +20,11 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
-use crate::app::{App, DiffRequest, DiffView, LoadRequest, ShowRequest, VisualRow};
+use crate::app::{App, DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::content::{DiffViewState, Loaded};
 use crate::highlight::StyledLine;
 use crate::icons::{IconStyle, Icons};
+use crate::layout::VisualRow;
 use crate::theme::{Capability, Flavor, Theme};
 use crate::view::view;
 

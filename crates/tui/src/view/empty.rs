@@ -3,11 +3,10 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::text::truncate_ellipsis;
 use crate::theme::Theme;
 
-use super::text::truncate_ellipsis;
-
-pub(super) fn render_empty(
+pub(crate) fn render_empty(
     frame: &mut Frame,
     area: Rect,
     title: &str,
