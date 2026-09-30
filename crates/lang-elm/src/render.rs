@@ -27,6 +27,13 @@ impl<'a> Renderer<'a> {
         Self { path, source }
     }
 
+    pub(crate) fn source_text(&self, node: Node<'_>) -> Result<&'a str, ProjectionError> {
+        match node.utf8_text(self.source.as_bytes()) {
+            Ok(value) => Ok(value),
+            Err(_) => self.invariant(node, "node text is not valid UTF-8"),
+        }
+    }
+
     fn invariant<T>(
         &self,
         node: Node<'_>,
@@ -46,13 +53,6 @@ impl<'a> Renderer<'a> {
                 node,
                 format!("`{}` is missing its `{field}` field", node.kind()),
             ),
-        }
-    }
-
-    pub(crate) fn source_text(&self, node: Node<'_>) -> Result<&'a str, ProjectionError> {
-        match node.utf8_text(self.source.as_bytes()) {
-            Ok(value) => Ok(value),
-            Err(_) => self.invariant(node, "node text is not valid UTF-8"),
         }
     }
 
@@ -181,7 +181,8 @@ impl<'a> Renderer<'a> {
         is_port: bool,
     ) -> Result<Doc, ProjectionError> {
         let name = self.field_name(node)?;
-        let annotation = self.type_expression(self.required_field(node, field::TYPE_EXPRESSION)?)?;
+        let annotation =
+            self.type_expression(self.required_field(node, field::TYPE_EXPRESSION)?)?;
         let prefix = if is_port { "port " } else { "" };
         Ok(Doc::Concat(vec![
             text(format!("{prefix}{name} : ")),
@@ -314,7 +315,8 @@ impl<'a> Renderer<'a> {
 
     pub(crate) fn field_type(&self, node: Node<'_>) -> Result<Doc, ProjectionError> {
         let name = self.field_name(node)?;
-        let field_type = self.type_expression(self.required_field(node, field::TYPE_EXPRESSION)?)?;
+        let field_type =
+            self.type_expression(self.required_field(node, field::TYPE_EXPRESSION)?)?;
         Ok(Doc::Concat(vec![text(format!("{name} : ")), field_type]))
     }
 
