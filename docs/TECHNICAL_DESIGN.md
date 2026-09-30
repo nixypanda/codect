@@ -102,19 +102,37 @@ crates/
     src/
       lib.rs
       app.rs
-      highlight.rs
-      theme.rs
-      fuzzy.rs
-      icons.rs
+      route.rs
+      api.rs
+      action.rs
+      render/
+        mod.rs
+        theme.rs
+        icons.rs
+        layout.rs
+        text.rs
+        highlight.rs
+        block.rs
+        empty.rs
+        metrics.rs
+      component/
+        mod.rs
+        overlay.rs
+        commit_picker.rs
+        tree.rs
+        text_input.rs
+      page/
+        mod.rs
+        show.rs
+        diff.rs
       view/
         mod.rs
         chrome.rs
-        tree.rs
-        show.rs
-        diff.rs
-        overlay.rs
-        geom.rs
-        text.rs
+      util/
+        mod.rs
+        cache.rs
+        fuzzy.rs
+        input.rs
   cli/
     src/
       main.rs
@@ -162,6 +180,24 @@ renders a document or reads command-line arguments.
 or `miette`, discover repositories, parse arguments, or read `.ownai.toml`; it
 receives an `Engine` and a fully-built `Selection` and talks to the terminal
 through `ratatui`/`crossterm` only.
+
+Inside `tui` the dependency direction is one-way, bottom-up:
+
+```text
+render, util  (no UI deps)
+  ↑
+component     (reusable panes and the overlay)
+  ↑
+page          (show / diff: model, update, view)
+  ↑
+view, app     (frame composition; the shell that routes and owns shared state)
+  ↑
+lib           (the run loop, terminal lifecycle, and effect interpreter)
+```
+
+`render` never reaches up for `Focus` or the width constants, and `component`
+never depends on `page`, `view`, or `app`; a page owns its own model, messages,
+`update`, and `view` and talks to the shell only through `OutMsg` values.
 
 ## 4. Dependencies
 
@@ -1245,12 +1281,12 @@ Initial performance rules:
 Add benchmarks for large synthetic trees and representative real repositories before adding threads, persistent caches, or broader `gix` features.
 
 The terminal frontend follows the same rules. It holds large, rarely-changed
-collections (`Content`, tree rows, visible paths) behind `Arc`, so cloning the
-TEA model per message is O(1) rather than proportional to repository size.
-Syntax highlighting is computed once per selected file and cached by path, and
-the wrapped diff layout is cached and invalidated by content generation, size,
-selection, and tree width. It keeps no persistent cache, and engine caches stay
-per-operation.
+collections (projection payloads, tree rows, visible paths) behind `Arc`, so
+cloning the TEA model per message is O(1) rather than proportional to
+repository size. Syntax highlighting is computed once per selected file and
+cached by path, and the wrapped diff layout is cached on the diff page and
+invalidated by content generation, size, selection, and tree width. It keeps no
+persistent cache, and engine caches stay per-operation.
 
 Frontend responsiveness work is deferred until it is measured. If input-to-redraw
 latency exceeds roughly 100 ms median or 200 ms p95 on the reference host, add a
@@ -1568,10 +1604,11 @@ ownai tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]
 
 ### 21.2 The Elm Architecture
 
-`tui` follows The Elm Architecture. `app.rs` holds the pure `Model`,
-`Msg`, `Cmd`, and `update`; the pure `view` lives in `view/`; `lib.rs` is the
-only imperative layer, owning the run loop, terminal lifecycle, and effect
-interpretation.
+`tui` follows The Elm Architecture. Each page (`page/show.rs`, `page/diff.rs`)
+owns its `Model`, `Msg`, `update`, and `view`; the shell in `app.rs` owns the
+shared state (size, chrome, tree, overlay, diagnostic) and routes to pages and
+components; `lib.rs` is the only imperative layer, owning the run loop, terminal
+lifecycle, and effect interpretation.
 
 - **Model** — one plain data structure holds the entire UI state. `update`
   replaces it wholesale rather than editing it in place.
@@ -1580,12 +1617,17 @@ interpretation.
 - **Action** — a semantic command. Keys translate to `Action`s and the command
   palette dispatches the same values, so a binding and its palette entry cannot
   drift apart.
-- **update** — a pure `(Msg, &Model) -> (Model, Vec<Cmd>)`. It performs no I/O.
+- **update** — the shell exposes the pure `(Msg, &Model) -> (Model, Vec<Cmd>)`
+  and routes each message to the page or component that owns it. A page's own
+  `update` is `(Msg, &mut Page, &Ctx) -> Vec<OutMsg>`: it mutates only its state
+  and returns requests (an effect, or a diagnostic) for the shell to fold.
 - **Cmd** — I/O is described as data. `Load` runs `Engine::show` or
   `Engine::diff`; commit history loads the metadata once and projects the
   selected step lazily. `LoadAreas` reads `.ownai.toml` through
   `Engine::load_areas`.
-- **view** — a pure `&Model -> widgets`.
+- **view** — a pure function of the model. The frame is composed in `view/`,
+  and each pane draws itself: `page::show::view`, `page::diff::view`,
+  `component::tree`, and `component::commit_picker`.
 - **settle** — a pure `Model -> Model` that runs the selection-dependent work:
   syntax highlighting, search re-sync, and the wrapped diff layout. The runtime
   calls it once per input batch, after folding every queued message, so a burst
@@ -1593,21 +1635,21 @@ interpretation.
 - Effects are transactional: a failed reload keeps the previous model and
   displays a self-expiring diagnostic.
 
-The view is split by surface (`view::chrome`, `tree`, `show`, `diff`,
-`overlay`, `geom`, `text`) so each widget stays readable. The split is
-presentation-only; state and behaviour remain in `app.rs`.
+The modules form a one-way graph (`render`/`util` → `component` → `page` →
+`view`/`app` → `lib`). A page talks to the shell only through `OutMsg` values,
+so it never names the app, the tree, the chrome, or an overlay.
 
 ### 21.3 State sharing and derived cache
 
-Large, wholesale-replaced collections (`Content` payloads, tree rows, visible
+Large, wholesale-replaced collections (projection payloads, tree rows, visible
 paths) are `Arc`-backed, so cloning a `Model` is O(1) rather than proportional
 to repository size. Syntax highlighting is cached per selected path in a bounded,
 insertion-ordered map (32 entries), so memory and the per-message clone stay flat
-however far the user scrolls. The wrapped diff layout is cached in `Derived`,
-invalidated by content generation, size, selection, and tree width.
-Highlighting, search re-sync, and layout are computed in `settle` once per input
-batch, not in `update`. Per-frame data stays in plain `Vec`. The frontend keeps
-no persistent cache.
+however far the user scrolls. The wrapped diff layout is cached on the diff page
+(`Diff::rows`), invalidated by content generation, size, selection, and tree
+width. Highlighting, search re-sync, and layout are computed in `settle` once per
+input batch, not in `update`. Per-frame data stays in plain `Vec`. The frontend
+keeps no persistent cache.
 
 ### 21.4 Layout and interaction
 
