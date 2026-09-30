@@ -1,5 +1,3 @@
-//! Adapter identity and boundary tests.
-
 use base::{
     ItemKind, LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
     SupportedPath,
