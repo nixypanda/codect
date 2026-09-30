@@ -1,9 +1,9 @@
-//! Engine-level integration tests over real temporary Git repositories.
-//!
-//! These exercise the shared pipeline directly: empty projections, selection
-//! validation and its error shapes, stable keys, and repository discovery. The
-//! ordering and focused-diff filtering rules are covered end to end by the CLI
-//! suite; the CLI and terminal frontends build on exactly these results.
+// Engine-level integration tests over real temporary Git repositories.
+//
+// These exercise the shared pipeline directly: empty projections, selection
+// validation and its error shapes, stable keys, and repository discovery. The
+// ordering and focused-diff filtering rules are covered end to end by the CLI
+// suite; the CLI and terminal frontends build on exactly these results.
 
 mod support;
 
@@ -217,7 +217,6 @@ fn identical_blobs_project_the_same_text_at_each_path() {
             .collect::<Vec<_>>(),
         vec!["one.rs", "two.rs"]
     );
-    // Identical blobs project identical text, and each file keeps its own path.
     assert_eq!(files[0].canonical_text(), files[1].canonical_text());
 }
 

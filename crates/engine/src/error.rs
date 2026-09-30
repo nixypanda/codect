@@ -67,8 +67,8 @@ pub enum EngineError {
 }
 
 impl EngineError {
-    /// Wraps a Git failure, recording the revision spec when the underlying
-    /// error does not already carry one.
+    // Wraps a Git failure, recording the revision spec when the underlying
+    // error does not already carry one.
     pub(crate) fn git(source: GitError, revision: Option<&str>) -> Self {
         Self::Git {
             revision: revision.map(str::to_owned),

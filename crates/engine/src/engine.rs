@@ -30,9 +30,9 @@ static HASKELL_PROJECTOR: HaskellProjector = HaskellProjector;
 static PYTHON_PROJECTOR: PythonProjector = PythonProjector;
 static RUST_PROJECTOR: RustProjector = RustProjector;
 
-/// The language adapters, in a fixed order so path selection is deterministic.
-///
-/// Every new language is added here once; the pipeline stays language-agnostic.
+// The language adapters, in a fixed order so path selection is deterministic.
+//
+// Every new language is added here once; the pipeline stays language-agnostic.
 const PROJECTORS: [&dyn LanguageProjector; 4] = [
     &ELM_PROJECTOR,
     &HASKELL_PROJECTOR,
@@ -65,7 +65,6 @@ enum SnapshotEntry {
     Worktree,
 }
 
-/// A resolved snapshot: its kind, its id, and its path-keyed entries.
 type SnapshotEntries = (&'static str, String, Vec<(RepoPath, SnapshotEntry)>);
 
 /// Projects explicit source bytes for `path`, returning the requested-mode
@@ -109,8 +108,6 @@ fn project_items(
         .to_vec())
 }
 
-/// A projection failure with no repository or revision context, as produced by
-/// [`project_source`].
 fn source_projection_failure(error: ProjectionError) -> EngineError {
     let context = DiagnosticContext {
         location: Some(Location {
@@ -600,9 +597,9 @@ impl Engine {
         project_source(path, &bytes, mode).map(Some)
     }
 
-    /// Fails when a selected group names nothing in `revision`, before any blob
-    /// is read, so a mistyped path or area cannot masquerade as an empty
-    /// projection. An area is satisfied by any one of its paths existing.
+    // Fails when a selected group names nothing in `revision`, before any blob
+    // is read, so a mistyped path or area cannot masquerade as an empty
+    // projection. An area is satisfied by any one of its paths existing.
     fn ensure_groups(
         &self,
         revision: &Revision,
@@ -626,9 +623,9 @@ impl Engine {
         }
     }
 
-    /// Fails when a selected group is absent from both revisions, before any
-    /// blob is read. A path deleted by the target still belongs to the diff, so
-    /// a group counts as present wherever either side names it.
+    // Fails when a selected group is absent from both revisions, before any
+    // blob is read. A path deleted by the target still belongs to the diff, so
+    // a group counts as present wherever either side names it.
     fn ensure_groups_in_diff(
         &self,
         base: &Revision,
@@ -676,10 +673,10 @@ impl Engine {
         Ok(false)
     }
 
-    /// Reads, decodes, and projects one entry, reusing the caches.
-    ///
-    /// Returns `None` for an unsupported path, which is an exclusion rather
-    /// than a failure.
+    // Reads, decodes, and projects one entry, reusing the caches.
+    //
+    // Returns `None` for an unsupported path, which is an exclusion rather
+    // than a failure.
     fn project_entry(
         &self,
         projectors: &[&dyn LanguageProjector],
@@ -700,16 +697,16 @@ impl Engine {
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))
     }
 
-    /// Projects one entry's items in `mode`, reading the blob once and reusing
-    /// the `(blob id, path, mode)` cache.
-    ///
-    /// The cache key includes the path because `stable_key` is path-namespaced
-    /// for several languages (Python, Haskell, Elm, and Rust `mod`): those keys
-    /// embed the repository path, so items projected for one path are not valid
-    /// for a different path that happens to share the same blob. Blob bytes are
-    /// still cached on the blob id alone, so an identical blob is read once. The
-    /// path carries its derived language, so the key also distinguishes
-    /// languages without a separate field.
+    // Projects one entry's items in `mode`, reading the blob once and reusing
+    // the `(blob id, path, mode)` cache.
+    //
+    // The cache key includes the path because `stable_key` is path-namespaced
+    // for several languages (Python, Haskell, Elm, and Rust `mod`): those keys
+    // embed the repository path, so items projected for one path are not valid
+    // for a different path that happens to share the same blob. Blob bytes are
+    // still cached on the blob id alone, so an identical blob is read once. The
+    // path carries its derived language, so the key also distinguishes
+    // languages without a separate field.
     fn project_items_cached(
         &self,
         projector: &dyn LanguageProjector,
@@ -744,15 +741,15 @@ impl Engine {
         Ok(items)
     }
 
-    /// Reads, decodes, and projects one entry in both the requested mode and the
-    /// Signatures superset, assembling the file's outline.
-    ///
-    /// Both projections go through the shared `(blob id, path, mode)` cache, so
-    /// a blob is read once and each mode is computed at most once per path and
-    /// operation.
-    ///
-    /// Returns `None` for an unsupported path, which is an exclusion rather
-    /// than a failure.
+    // Reads, decodes, and projects one entry in both the requested mode and the
+    // Signatures superset, assembling the file's outline.
+    //
+    // Both projections go through the shared `(blob id, path, mode)` cache, so
+    // a blob is read once and each mode is computed at most once per path and
+    // operation.
+    //
+    // Returns `None` for an unsupported path, which is an exclusion rather
+    // than a failure.
     fn project_entry_outline(
         &self,
         projectors: &[&dyn LanguageProjector],
@@ -806,7 +803,7 @@ impl Engine {
     }
 }
 
-/// Per-operation caches; never persisted.
+// Per-operation caches; never persisted.
 #[derive(Default)]
 struct Caches {
     blobs: HashMap<ObjectId, Arc<[u8]>>,
@@ -833,8 +830,8 @@ fn lookup_projection(
     })
 }
 
-/// Reads each blob at most once per operation, sharing it via `Arc` so callers
-/// can borrow the bytes while the cache stays mutable for later reads.
+// Reads each blob at most once per operation, sharing it via `Arc` so callers
+// can borrow the bytes while the cache stays mutable for later reads.
 fn read_blob(
     repository: &GitRepository,
     caches: &mut Caches,

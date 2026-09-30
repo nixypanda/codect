@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 
 use base::{Area, AreaError, AreaSet, RepoPath, RepoPathError};
 
-/// The largest config that will be read. Area definitions are tiny, so a larger
-/// file is far more likely a mistake or an attack than something worth parsing.
+// The largest config that will be read. Area definitions are tiny, so a larger
+// file is far more likely a mistake or an attack than something worth parsing.
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
-/// The fixed config filename at the repository root; there is deliberately no
-/// flag to point at another file.
+// The fixed config filename at the repository root; there is deliberately no
+// flag to point at another file.
 const FILE_NAME: &str = ".ownai.toml";
 
 /// The repository's areas, already validated and name-sorted.
@@ -71,8 +71,8 @@ impl Config {
     }
 }
 
-/// The on-disk shape. Unknown keys are rejected so a typo cannot silently drop
-/// the area it was meant to define.
+// The on-disk shape. Unknown keys are rejected so a typo cannot silently drop
+// the area it was meant to define.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
@@ -94,9 +94,9 @@ fn build_area(file: PathBuf, name: String, paths: Vec<String>) -> Result<Area, C
     Area::new(name, resolved).map_err(|source| ConfigError::from_area(&file, source))
 }
 
-/// Normalizes one area path leniently: the only hard failures are being
-/// absolute or escaping the repository, while stray empty and `.` components
-/// are behavior the user almost certainly did not intend to be fatal.
+// Normalizes one area path leniently: the only hard failures are being
+// absolute or escaping the repository, while stray empty and `.` components
+// are behavior the user almost certainly did not intend to be fatal.
 fn normalize_path(file: &Path, area: &str, value: &str) -> Result<RepoPath, ConfigError> {
     let invalid = |source| ConfigError::InvalidPath {
         file: file.to_path_buf(),
