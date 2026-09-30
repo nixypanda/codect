@@ -39,17 +39,17 @@ test-workspace:
 
 # Run the Neovim plugin's headless suite against the built binary.
 test-nvim:
-    cargo build -p ownai-cli
+    cargo build -p cli
     OWNAI_BIN="$PWD/target/debug/ownai" nvim --headless -u NONE -l editors/nvim/tests/run.lua
 
 # Benchmark one rendered frame and its per-part seams (criterion).
 bench-tui:
-    cargo bench -p ownai-tui --features bench --bench frame
+    cargo bench -p tui --features bench --bench frame
 
 # Lint the benchmark target, which `clippy --all-targets` skips without the
 # feature. Kept in `check-workspace` so the benchmark cannot bit-rot.
 check-bench-tui:
-    cargo clippy -p ownai-tui --features bench --all-targets -- -D warnings
+    cargo clippy -p tui --features bench --all-targets -- -D warnings
 
 # Format Rust sources.
 format-workspace:
@@ -66,13 +66,13 @@ check-workspace-clippy:
 
 # Audit the enabled gix feature set (TECHNICAL_DESIGN.md 4.1).
 check-workspace-features:
-    cargo tree -e features -p ownai-git
+    cargo tree -e features -p git
 
 # The terminal frontend is a default-on optional feature; building without
 # defaults must neither fail nor pull ratatui or crossterm into the graph.
 check-workspace-nodefault:
-    cargo build -p ownai-cli --no-default-features
-    @if cargo tree -p ownai-cli --no-default-features | grep -Eq '(ratatui|crossterm|terminal-colorsaurus)'; then \
+    cargo build -p cli --no-default-features
+    @if cargo tree -p cli --no-default-features | grep -Eq '(ratatui|crossterm|terminal-colorsaurus)'; then \
         echo "error: ratatui/crossterm/terminal-colorsaurus leaked into the no-default-features build" >&2; \
         exit 1; \
     fi

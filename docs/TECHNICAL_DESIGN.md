@@ -49,7 +49,7 @@ The workspace is organized as follows:
 Cargo.toml
 Cargo.lock
 crates/
-  ownai-core/
+  base/
     src/
       lib.rs
       diagnostic.rs
@@ -60,43 +60,43 @@ crates/
       path.rs
       render.rs
       selection.rs
-  ownai-git/
+  git/
     src/
       lib.rs
       repository.rs
       revision.rs
       tree.rs
-  ownai-language-elm/
+  language-elm/
     src/
       lib.rs
       extract.rs
       render.rs
       syntax.rs
-  ownai-language-haskell/
+  language-haskell/
     src/
       lib.rs
       extract.rs
       render.rs
       syntax.rs
-  ownai-language-python/
+  language-python/
     src/
       lib.rs
       extract.rs
       render.rs
       syntax.rs
-  ownai-language-rust/
+  language-rust/
     src/
       lib.rs
       extract.rs
       render.rs
       syntax.rs
-  ownai-engine/
+  engine/
     src/
       lib.rs
       engine.rs
       config.rs
       error.rs
-  ownai-tui/
+  tui/
     src/
       lib.rs
       app.rs
@@ -113,7 +113,7 @@ crates/
         overlay.rs
         geom.rs
         text.rs
-  ownai-cli/
+  cli/
     src/
       main.rs
       args.rs
@@ -132,31 +132,31 @@ directory for integration tests; expected projection output lives under
 Dependency direction is one-way:
 
 ```text
-ownai-cli
-  ├── ownai-core
-  ├── ownai-git
-  ├── ownai-engine
-  └── ownai-tui (optional, default-on)
+cli
+  ├── base
+  ├── git
+  ├── engine
+  └── tui (optional, default-on)
 
-ownai-tui           ──→ ownai-core
-                    └──→ ownai-engine
-ownai-engine        ──→ ownai-core, ownai-git
-                    └──→ ownai-language-elm, ownai-language-haskell,
-                         ownai-language-python, ownai-language-rust
-ownai-language-elm  ──→ ownai-core
-ownai-language-haskell ──→ ownai-core
-ownai-language-python  ──→ ownai-core
-ownai-language-rust ──→ ownai-core
-ownai-git           ──→ ownai-core
+tui              ──→ base
+                 └──→ engine
+engine           ──→ base, git
+                 └──→ language-elm, language-haskell,
+                      language-python, language-rust
+language-elm     ──→ base
+language-haskell ──→ base
+language-python  ──→ base
+language-rust    ──→ base
+git              ──→ base
 ```
 
-`ownai-core` must not depend on `gix`, Tree-sitter, either grammar, or `clap`. Language-specific Tree-sitter node names must never appear in `ownai-core`. `gix` types must never leave `ownai-git`.
+`base` must not depend on `gix`, Tree-sitter, either grammar, or `clap`. Language-specific Tree-sitter node names must never appear in `base`. `gix` types must never leave `git`.
 
-`ownai-engine` is the shared Git-aware application layer both frontends use. It
+`engine` is the shared Git-aware application layer both frontends use. It
 must not depend on `clap`, `miette`, `ratatui`, or `crossterm`, and it never
 renders a document or reads command-line arguments.
 
-`ownai-tui` is the terminal frontend (section 21). It must not depend on `clap`
+`tui` is the terminal frontend (section 21). It must not depend on `clap`
 or `miette`, discover repositories, parse arguments, or read `.ownai.toml`; it
 receives an `Engine` and a fully-built `Selection` and talks to the terminal
 through `ratatui`/`crossterm` only.
@@ -207,10 +207,10 @@ two-face = { version = "0.5", default-features = false, features = ["syntect-fan
 they are not a serialization dependency of `gix`, whose `serde` feature stays
 disabled (section 4.1).
 
-The terminal dependencies are used only by `ownai-tui`, behind the default-on
-`tui` feature of `ownai-cli`. With `--no-default-features`, none of `ratatui`,
+The terminal dependencies are used only by `tui`, behind the default-on
+`tui` feature of `cli`. With `--no-default-features`, none of `ratatui`,
 `crossterm`, `terminal-colorsaurus`, `unicode-width`, `syntect`, or `two-face`
-may appear in `ownai-cli`'s dependency tree; this is enforced by
+may appear in `cli`'s dependency tree; this is enforced by
 `just check-workspace-nodefault` (section 18.1). `syntect` uses the
 `fancy-regex` backend so the build needs no Oniguruma C toolchain.
 `terminal-colorsaurus` shares `libc` and `mio` with crossterm and adds only
@@ -236,7 +236,7 @@ Do not add an async runtime. All MVP work is local and synchronous.
 Keep `default-features = false`. Enable only:
 
 - `revision`: revision parsing, peeling, and merge-base support. This brings
-  `index` transitively; `ownai-git` reads stage-zero index blobs for JSON
+  `index` transitively; `git` reads stage-zero index blobs for JSON
   snapshot diffs.
 - `sha1`: normal Git object IDs.
 - `sha256`: SHA-256 repositories.
@@ -252,7 +252,7 @@ Do not enable these feature groups in the MVP:
 - `merge`, `blame`, `mailmap`, or `notes`.
 - `credentials` or any network client or transport.
 - `parallel`, `max-control`, or `max-performance` until profiling justifies them.
-- `serde`; no `gix` value is serialized outside `ownai-git`.
+- `serde`; no `gix` value is serialized outside `git`.
 - `revparse-regex`; the MVP does not promise regex commit-message revision searches.
 
 Review this list whenever `gix` is upgraded because it is pre-1.0 and feature relationships may change.
@@ -404,7 +404,7 @@ The variants make named areas and literal paths mutually exclusive by constructi
 
 ## 6. Language adapter interface
 
-Expose this conceptual interface from `ownai-core`:
+Expose this conceptual interface from `base`:
 
 ```rust
 pub struct ProjectionInput<'a> {
@@ -427,7 +427,7 @@ Parsing and projection must be deterministic and must not depend on the current 
 
 ## 7. End-to-end pipeline
 
-The pipeline is implemented once in `ownai-engine` and shared by the command
+The pipeline is implemented once in `engine` and shared by the command
 line and the terminal frontend (section 21). The two frontends differ only in
 how they build the initial selection and present the result.
 
@@ -476,7 +476,7 @@ symlinks. Mutable snapshot names are labels rather than content hashes.
 
 ## 8. Git layer using `gix`
 
-`ownai-git` is read-only. It owns repository discovery, revision resolution,
+`git` is read-only. It owns repository discovery, revision resolution,
 commit peeling, tree traversal, stage-zero index enumeration, and blob reads.
 
 Expose OwnAI-owned values:
@@ -553,7 +553,7 @@ Use object IDs to avoid reading or projecting unchanged blobs during diff.
 
 ### 8.4 Object caching
 
-Configure a bounded `gix` object cache suitable for repeated tree and blob access. Keep cache sizing in `ownai-git` and use a conservative constant initially. Do not expose tuning flags in the MVP. Add benchmarks before changing cache strategy or enabling broader `gix` performance features.
+Configure a bounded `gix` object cache suitable for repeated tree and blob access. Keep cache sizing in `git` and use a conservative constant initially. Do not expose tuning flags in the MVP. Add benchmarks before changing cache strategy or enabling broader `gix` performance features.
 
 OwnAI needs no persistent projection cache in the MVP.
 
@@ -581,7 +581,7 @@ Canonical rendering prevents formatting-only source edits from appearing in focu
 
 Rendering must be independent of original whitespace and comments. It must preserve semantic token order, declaration order, member order, visibility, generic parameters, constraints, and modifiers selected by the product rules.
 
-Line breaks are fixed by declaration shape and by a single compile-time width budget. Terminal width must never change output. A declaration may wrap only at `ownai_core::LINE_WIDTH` (80 display columns), so a focused diff stays readable side by side while remaining deterministic:
+Line breaks are fixed by declaration shape and by a single compile-time width budget. Terminal width must never change output. A declaration may wrap only at `base::LINE_WIDTH` (80 display columns), so a focused diff stays readable side by side while remaining deterministic:
 
 - One simple declaration or signature per line, unless the whole line would exceed the budget.
 - When a declaration line exceeds the budget, its primary bracketed list (a function's parameters, or a class's superclass list, else its type parameters) breaks one item per indented line, with the closing bracket returned to the declaration's indent. The fit is measured for the whole line, including the terminator or opening brace, so a long return type still breaks the parameter list. Any earlier list breaks only when it does not fit on its own.
@@ -847,11 +847,11 @@ Rules:
 - Write diagnostics to stderr.
 - Do not add progress output in the MVP.
 
-The Git-aware pipeline lives in `ownai-engine`, which composes `ownai-git`'s
-snapshot reads with `ownai-core`'s pure rendering and exposes `show` and `diff`
+The Git-aware pipeline lives in `engine`, which composes `git`'s
+snapshot reads with `base`'s pure rendering and exposes `show` and `diff`
 over a `Selection`. The CLI builds that selection from `argv`, invokes the
 engine, and renders the result or a diagnostic; `main.rs` stays a thin entry
-point. `ownai-core` stays Git-free (section 3). Business rules do not belong in
+point. `base` stays Git-free (section 3). Business rules do not belong in
 `main.rs`.
 
 ### 14.1 `.ownai.toml` and named areas
@@ -871,7 +871,7 @@ Rules:
 - The file is read lazily, only when `--area` is present. It is read at most once per command, and it never affects `--path` or unscoped runs.
 - The on-disk shape is a single `[areas]` table of `name = [paths]`. Unknown keys are rejected, so a typo cannot silently drop the area it was meant to define.
 - Area paths are repository-root-relative. Unlike `--path`, they do not depend on the current directory.
-- Parsing lives in `crates/ownai-engine/src/config.rs`. `ownai-core` stays free of file formats: the engine turns TOML into an `AreaSet` and passes it to core's `Selection::resolve` (section 5.4).
+- Parsing lives in `crates/engine/src/config.rs`. `base` stays free of file formats: the engine turns TOML into an `AreaSet` and passes it to core's `Selection::resolve` (section 5.4).
 - The config is untrusted input. It is size-bounded to 1 MiB, a symlinked config is rejected rather than followed, and an empty or whitespace-only area name or an empty path list is rejected.
 - A path that is absolute, contains `..`, or is otherwise unusable is rejected. `.`, repeated slashes, and a trailing slash are normalized leniently; normalization is lexical and never consults the filesystem.
 - `--area` and `--path` are mutually exclusive: the `PathSelection` variants make the two selections disjoint by construction, and `clap` rejects a command that passes both with a usage error (exit `2`).
@@ -984,16 +984,16 @@ Contract rules:
 
 Crate placement:
 
-- `ownai-core` stays Git-free and serialization-free. It owns the outline model
+- `base` stays Git-free and serialization-free. It owns the outline model
   (`OutlineItem`, `FileOutline`) and the pure `assemble_outline` derivation from
   the existing `ProjectedItem` model, alongside `FileDiff` and `FileOutlineDiff`.
-- `ownai-engine` owns the Git-aware outline operations: `Engine::show_outlines`
+- `engine` owns the Git-aware outline operations: `Engine::show_outlines`
   for a committed revision and the free `project_source(RepoPath, bytes, mode)`
   for editor-supplied bytes, which needs no repository. `CommitDiff` and
   `SnapshotDiff` stay here because they carry Git snapshot identities.
-- `ownai-cli` owns the JSON types (`src/json.rs`) and serialization. The schema
+- `cli` owns the JSON types (`src/json.rs`) and serialization. The schema
   and golden fixtures are referenced by the CLI test suite, never by
-  `ownai-core`.
+  `base`.
 
 ### 14.3 Focused snapshot diff document (`ownai.diff.v1`)
 
@@ -1175,7 +1175,7 @@ invoke the Git executable. Isolate every invocation from host configuration and
 the network by pointing `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` at
 `/dev/null`, setting `GIT_CONFIG_NOSYSTEM`, disabling commit and tag signing,
 and supplying fixed author, committer, and date values. After fixtures exist,
-exercise only `ownai-git`. SHA-256 cases must perform a runtime capability check
+exercise only `git`. SHA-256 cases must perform a runtime capability check
 and skip cleanly when the environment's Git cannot create a SHA-256 repository.
 
 ### 16.5 End-to-end CLI tests
@@ -1274,13 +1274,13 @@ persistent caches, or broader `gix` features were added to obtain these numbers.
 
 ### Frame rendering benchmark
 
-`ownai-tui` carries a criterion benchmark for a single rendered frame. It sits
+`tui` carries a criterion benchmark for a single rendered frame. It sits
 behind the `bench` feature, which exposes a `#[doc(hidden)]` façade, so
 `criterion` never enters a normal build or the `--no-default-features` CLI build:
 
 ```text
 just bench-tui
-# or: cargo bench -p ownai-tui --features bench --bench frame
+# or: cargo bench -p tui --features bench --bench frame
 ```
 
 It reports per-frame totals and the seams they are made of:
@@ -1402,11 +1402,11 @@ The repository must provide one documented command, task, or script that runs th
 ```text
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p ownai-tui --features bench --all-targets -- -D warnings
+cargo clippy -p tui --features bench --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
-cargo tree -e features -p ownai-git
-cargo build -p ownai-cli --no-default-features
+cargo tree -e features -p git
+cargo build -p cli --no-default-features
 ```
 
 Review the `cargo tree` command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features. The final build must succeed and link none of `ratatui`, `crossterm`, `terminal-colorsaurus`, `syntect`, or `two-face`; `just check-workspace-nodefault` additionally asserts their absence with `cargo tree`.
@@ -1423,7 +1423,7 @@ context, not a list of unimplemented work.
 - Define modes, languages, repository paths, spans, projected items/files, diagnostics, and projector trait.
 - Add formatting, linting, and unit-test commands.
 
-Acceptance gate: the workspace builds and `ownai-core` has no Git, parser, or CLI dependencies.
+Acceptance gate: the workspace builds and `base` has no Git, parser, or CLI dependencies.
 
 ### Phase 2: Git snapshots
 
@@ -1480,8 +1480,8 @@ Acceptance gate: a release build passes all tests and the dependency feature tre
 
 ### Phase 8: Engine extraction and the Show frontend
 
-- Extract the Git-aware pipeline into `ownai-engine` without changing CLI output.
-- Add `ownai-tui` with the TEA core and terminal runtime, behind the default-on `tui` feature.
+- Extract the Git-aware pipeline into `engine` without changing CLI output.
+- Add `tui` with the TEA core and terminal runtime, behind the default-on `tui` feature.
 - Implement `ownai tui show`: file tree, projection pane, mode switch, scrolling, help, and the terminal-safety contract.
 
 Acceptance gate: `ownai tui show` works in normal, bare, single-language, and mixed repositories; CLI output is byte-for-byte unchanged; the no-default-features build links no terminal dependency.
@@ -1502,7 +1502,7 @@ Acceptance gate: the documented keybindings work end to end, and every earlier f
 ### Phase 11: Haskell and Python support
 
 - Add the `tree-sitter-haskell` and `tree-sitter-python` grammars and the
-  `ownai-language-haskell` and `ownai-language-python` crates.
+  `language-haskell` and `language-python` crates.
 - Extend `Language`, `RepoPath` extension detection, and `ItemKind` in core.
 - Implement Haskell and Python extraction and canonical rendering (sections 23
   and 24) with syntax, fixture, projector, and invariance tests.
@@ -1535,13 +1535,13 @@ The original MVP gate required:
   exit path.
 - The frontend switches modes, changes scope and revisions, resizes the tree,
   and renders syntax-highlighted side-by-side diffs with hunk headers.
-- Building `ownai-cli --no-default-features` succeeds and links no terminal
+- Building `cli --no-default-features` succeeds and links no terminal
   dependency.
 
 ## 21. Terminal frontend
 
 `ownai tui` is an optional, default-on terminal frontend over the same
-projections. `ownai-tui` is the only crate that touches the terminal.
+projections. `tui` is the only crate that touches the terminal.
 
 ### 21.1 Command surface
 
@@ -1556,7 +1556,7 @@ ownai tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]
   requires the base on the target's first-parent chain and lists the steps
   after the base, newest first. Each selected step compares its first parent
   with the commit. Equal endpoints yield an empty list.
-- The feature is default-on: `default = ["tui"]`, `tui = ["dep:ownai-tui"]`.
+- The feature is default-on: `default = ["tui"]`, `tui = ["dep:tui"]`.
   Without it, `tui` is an unknown command (exit `2`) and no terminal dependency
   is linked.
 - The command line owns `argv` conversion and builds the initial `Selection`; it
@@ -1566,7 +1566,7 @@ ownai tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]
 
 ### 21.2 The Elm Architecture
 
-`ownai-tui` follows The Elm Architecture. `app.rs` holds the pure `Model`,
+`tui` follows The Elm Architecture. `app.rs` holds the pure `Model`,
 `Msg`, `Cmd`, and `update`; the pure `view` lives in `view/`; `lib.rs` is the
 only imperative layer, owning the run loop, terminal lifecycle, and effect
 interpretation.
@@ -1742,7 +1742,7 @@ Pin resolved versions in `Cargo.lock`. When upgrading `gix` or a grammar, read i
 
 ## 23. Haskell projection
 
-The Haskell adapter lives in `ownai-language-haskell`. It owns the Haskell
+The Haskell adapter lives in `language-haskell`. It owns the Haskell
 grammar and every Haskell node name through `syntax.rs`.
 
 ### 23.1 General rules
@@ -1817,7 +1817,7 @@ leaves both projections unchanged.
 
 ## 24. Python projection
 
-The Python adapter lives in `ownai-language-python`. It owns the Python grammar
+The Python adapter lives in `language-python`. It owns the Python grammar
 and every Python node name through `syntax.rs`.
 
 ### 24.1 General rules
