@@ -7,12 +7,19 @@
 
 use base::{
     ItemKind, KeyAllocator, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
-    ProjectionMode, SourceSpan,
+    ProjectionMode,
 };
 use tree_sitter::Node;
 
-use crate::render::{self, Doc};
-use crate::syntax::{self, field, node};
+use crate::render::{self, Doc, Renderer};
+use crate::syntax::{
+    self, ASSOCIATED_TYPE, ATTRIBUTE, ATTRIBUTE_ITEM, BLOCK, BLOCK_COMMENT, CONST_ITEM,
+    DECLARATION_LIST, ENUM_ITEM, ENUM_VARIANT, ENUM_VARIANT_LIST, EXTERN_MODIFIER, FIELD_BODY,
+    FIELD_DECLARATION, FIELD_DECLARATION_LIST, FIELD_NAME, FIELD_TRAIT, FIELD_TYPE,
+    FOREIGN_MOD_ITEM, FUNCTION_ITEM, FUNCTION_SIGNATURE_ITEM, IMPL_ITEM, INNER_ATTRIBUTE_ITEM,
+    LINE_COMMENT, MOD_ITEM, ORDERED_FIELD_DECLARATION_LIST, STATIC_ITEM, STRUCT_ITEM, TRAIT_ITEM,
+    TYPE_ITEM, UNION_ITEM, WHERE_CLAUSE,
+};
 
 /// The kind of container a declaration is nested in, which determines its
 /// `ItemKind` and which product rules include it.
@@ -40,7 +47,7 @@ struct Built {
 }
 
 struct Context<'a> {
-    source: &'a str,
+    renderer: &'a Renderer<'a>,
     mode: ProjectionMode,
     keys: KeyAllocator,
 }
@@ -51,35 +58,16 @@ impl Context<'_> {
     }
 }
 
-pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
-    let path = input.path;
-    let source = input.source;
-
-    let mut parser = syntax::parser().map_err(|_| ProjectionError::ParseFailed {
-        path: path.clone(),
-        range: whole_span(source),
-    })?;
-
-    let tree =
-        parser
-            .parse(source.as_bytes(), None)
-            .ok_or_else(|| ProjectionError::ParseFailed {
-                path: path.clone(),
-                range: whole_span(source),
-            })?;
-
+pub(crate) fn project_file(
+    input: ProjectionInput<'_>,
+) -> Result<ProjectedFile, ProjectionError> {
+    let tree = syntax::parse(input.source, input.path)?;
     let root = tree.root_node();
-    if root.has_error() {
-        let range = first_error_span(root).unwrap_or_else(|| whole_span(source));
-        return Err(ProjectionError::ErroneousSyntax {
-            path: path.clone(),
-            range,
-        });
-    }
+    let renderer = Renderer::new(input.path, input.source);
+    let file_key = renderer.path().to_string();
 
-    let file_key = path.to_string();
     let mut context = Context {
-        source,
+        renderer: &renderer,
         mode: input.mode,
         keys: KeyAllocator::new(),
     };
@@ -89,11 +77,11 @@ pub fn project(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionEr
         items.extend(built.items);
     }
 
-    ProjectedFile::try_new(path.clone(), items)
+    ProjectedFile::try_new(input.path.clone(), items)
 }
 
 fn is_comment(kind: &str) -> bool {
-    matches!(kind, node::LINE_COMMENT | node::BLOCK_COMMENT)
+    matches!(kind, LINE_COMMENT | BLOCK_COMMENT)
 }
 
 fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
@@ -101,17 +89,15 @@ fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
     node.children(&mut cursor).find(|child| child.is_named())
 }
 
-fn is_doc_attribute(item: Node<'_>, source: &str) -> bool {
-    let attribute = match render::child_of_kind(item, node::ATTRIBUTE) {
+fn is_doc_attribute(item: Node<'_>, renderer: &Renderer<'_>) -> bool {
+    let attribute = match renderer.child_of_kind(item, ATTRIBUTE) {
         Some(attribute) => attribute,
         None => return false,
     };
-    first_named_child(attribute)
-        .and_then(|path| source.get(path.byte_range()))
-        .is_some_and(|path| path == "doc")
+    first_named_child(attribute).is_some_and(|path| renderer.slice(path) == "doc")
 }
 
-fn collect_declarations<'t>(container: Node<'t>, source: &str) -> Vec<Declaration<'t>> {
+fn collect_declarations<'t>(container: Node<'t>, renderer: &Renderer<'_>) -> Vec<Declaration<'t>> {
     let mut declarations = Vec::new();
     let mut pending = Vec::new();
     let mut cursor = container.walk();
@@ -123,13 +109,13 @@ fn collect_declarations<'t>(container: Node<'t>, source: &str) -> Vec<Declaratio
         if is_comment(kind) {
             continue;
         }
-        if kind == node::ATTRIBUTE_ITEM {
-            if !is_doc_attribute(child, source) {
+        if kind == ATTRIBUTE_ITEM {
+            if !is_doc_attribute(child, renderer) {
                 pending.push(child);
             }
             continue;
         }
-        if kind == node::INNER_ATTRIBUTE_ITEM {
+        if kind == INNER_ATTRIBUTE_ITEM {
             continue;
         }
         declarations.push(Declaration {
@@ -149,7 +135,7 @@ fn build_members(
     context: &mut Context<'_>,
 ) -> Vec<Built> {
     let mut members = Vec::new();
-    for declaration in collect_declarations(container, context.source) {
+    for declaration in collect_declarations(container, context.renderer) {
         if let Some(built) = build_decl(&declaration, scope, container_key, nested, depth, context)
         {
             members.push(built);
@@ -167,28 +153,28 @@ fn build_decl(
     context: &mut Context<'_>,
 ) -> Option<Built> {
     match declaration.node.kind() {
-        node::STRUCT_ITEM => Some(build_struct(
+        STRUCT_ITEM => Some(build_struct(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        node::ENUM_ITEM => Some(build_enum(
+        ENUM_ITEM => Some(build_enum(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        node::UNION_ITEM => Some(build_union(
+        UNION_ITEM => Some(build_union(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        node::TYPE_ITEM => Some(build_type_item(
+        TYPE_ITEM => Some(build_type_item(
             declaration,
             scope,
             container_key,
@@ -196,25 +182,25 @@ fn build_decl(
             depth,
             context,
         )),
-        node::ASSOCIATED_TYPE => Some(build_associated_type(
+        ASSOCIATED_TYPE => Some(build_associated_type(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        node::TRAIT_ITEM => Some(build_trait(
+        TRAIT_ITEM => Some(build_trait(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        node::IMPL_ITEM => build_impl(declaration, container_key, nested, depth, context),
-        node::FUNCTION_ITEM | node::FUNCTION_SIGNATURE_ITEM => {
+        IMPL_ITEM => build_impl(declaration, container_key, nested, depth, context),
+        FUNCTION_ITEM | FUNCTION_SIGNATURE_ITEM => {
             build_signature(declaration, scope, container_key, nested, depth, context)
         }
-        node::CONST_ITEM => build_constant(
+        CONST_ITEM => build_constant(
             declaration,
             container_key,
             nested,
@@ -222,7 +208,7 @@ fn build_decl(
             context,
             ItemKind::Constant,
         ),
-        node::STATIC_ITEM => build_constant(
+        STATIC_ITEM => build_constant(
             declaration,
             container_key,
             nested,
@@ -230,16 +216,16 @@ fn build_decl(
             context,
             ItemKind::Static,
         ),
-        node::FOREIGN_MOD_ITEM => build_foreign(declaration, container_key, nested, depth, context),
-        node::MOD_ITEM => build_module(declaration, container_key, nested, depth, context),
-        node::FIELD_DECLARATION => Some(build_field(
+        FOREIGN_MOD_ITEM => build_foreign(declaration, container_key, nested, depth, context),
+        MOD_ITEM => build_module(declaration, container_key, nested, depth, context),
+        FIELD_DECLARATION => Some(build_field(
             declaration,
             container_key,
             nested,
             depth,
             context,
         )),
-        node::ENUM_VARIANT => Some(build_variant(
+        ENUM_VARIANT => Some(build_variant(
             declaration,
             container_key,
             nested,
@@ -250,11 +236,11 @@ fn build_decl(
     }
 }
 
-fn attribute_docs(declaration: &Declaration<'_>, context: &Context<'_>) -> Vec<Doc> {
+fn attribute_docs(declaration: &Declaration<'_>, renderer: &Renderer<'_>) -> Vec<Doc> {
     declaration
         .attributes
         .iter()
-        .map(|attribute| render::attribute_doc(*attribute, context.source))
+        .map(|attribute| renderer.attribute_doc(*attribute))
         .collect()
 }
 
@@ -291,7 +277,7 @@ fn make_built(
         parent_key,
         kind,
         name,
-        span: span_of(node),
+        span: syntax::node_span(node),
         canonical_text,
     };
     let mut items = vec![item];
@@ -299,10 +285,9 @@ fn make_built(
     Built { doc, items }
 }
 
-fn field_name(node: Node<'_>, source: &str) -> Option<String> {
-    node.child_by_field_name(field::NAME)
-        .and_then(|name| source.get(name.byte_range()))
-        .map(str::to_owned)
+fn field_name(node: Node<'_>, renderer: &Renderer<'_>) -> Option<String> {
+    node.child_by_field_name(FIELD_NAME)
+        .map(|name| renderer.slice(name).to_owned())
 }
 
 fn build_struct(
@@ -313,21 +298,20 @@ fn build_struct(
     context: &mut Context<'_>,
 ) -> Built {
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::type::{name}"));
-    let attributes = attribute_docs(declaration, context);
-    let header = render::header(
+    let attributes = attribute_docs(declaration, context.renderer);
+    let header = context.renderer.header(
         node,
-        context.source,
         &[
-            node::WHERE_CLAUSE,
-            node::FIELD_DECLARATION_LIST,
-            node::ORDERED_FIELD_DECLARATION_LIST,
+            WHERE_CLAUSE,
+            FIELD_DECLARATION_LIST,
+            ORDERED_FIELD_DECLARATION_LIST,
         ],
     );
-    let where_clause = render::where_clause_text(node, context.source);
+    let where_clause = context.renderer.where_clause_text(node);
 
-    match node.child_by_field_name(field::BODY) {
+    match node.child_by_field_name(FIELD_BODY) {
         None => {
             let doc = render::with_attributes(attributes, render::signature_doc(header, None));
             make_built(
@@ -341,8 +325,8 @@ fn build_struct(
                 Vec::new(),
             )
         }
-        Some(body) if body.kind() == node::ORDERED_FIELD_DECLARATION_LIST => {
-            let fields = render::render_node(body, context.source);
+        Some(body) if body.kind() == ORDERED_FIELD_DECLARATION_LIST => {
+            let fields = context.renderer.render_node(body);
             let header = Doc::Concat(vec![header, Doc::Text(fields)]);
             let doc =
                 render::with_attributes(attributes, render::signature_doc(header, where_clause));
@@ -386,17 +370,15 @@ fn build_union(
     context: &mut Context<'_>,
 ) -> Built {
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::type::{name}"));
-    let attributes = attribute_docs(declaration, context);
-    let header = render::header(
-        node,
-        context.source,
-        &[node::WHERE_CLAUSE, node::FIELD_DECLARATION_LIST],
-    );
-    let where_clause = render::where_clause_text(node, context.source);
+    let attributes = attribute_docs(declaration, context.renderer);
+    let header = context
+        .renderer
+        .header(node, &[WHERE_CLAUSE, FIELD_DECLARATION_LIST]);
+    let where_clause = context.renderer.where_clause_text(node);
     let members = node
-        .child_by_field_name(field::BODY)
+        .child_by_field_name(FIELD_BODY)
         .map(|body| build_members(body, Scope::Fields, &key, true, depth + 1, context))
         .unwrap_or_default();
     let doc = render::with_attributes(
@@ -424,17 +406,15 @@ fn build_enum(
     context: &mut Context<'_>,
 ) -> Built {
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::type::{name}"));
-    let attributes = attribute_docs(declaration, context);
-    let header = render::header(
-        node,
-        context.source,
-        &[node::WHERE_CLAUSE, node::ENUM_VARIANT_LIST],
-    );
-    let where_clause = render::where_clause_text(node, context.source);
+    let attributes = attribute_docs(declaration, context.renderer);
+    let header = context
+        .renderer
+        .header(node, &[WHERE_CLAUSE, ENUM_VARIANT_LIST]);
+    let where_clause = context.renderer.where_clause_text(node);
     let members = node
-        .child_by_field_name(field::BODY)
+        .child_by_field_name(FIELD_BODY)
         .map(|body| build_members(body, Scope::VariantFields, &key, true, depth + 1, context))
         .unwrap_or_default();
     let doc = render::with_attributes(
@@ -462,13 +442,13 @@ fn build_field(
     context: &mut Context<'_>,
 ) -> Built {
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::field::{name}"));
-    let attributes = attribute_docs(declaration, context);
+    let attributes = attribute_docs(declaration, context.renderer);
     let doc = render::with_attributes(
         attributes,
         Doc::Group(Box::new(Doc::Concat(vec![
-            render::field_doc(node, context.source),
+            context.renderer.field_doc(node),
             Doc::Text(",".to_owned()),
         ]))),
     );
@@ -492,13 +472,13 @@ fn build_variant(
     context: &mut Context<'_>,
 ) -> Built {
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::variant::{name}"));
-    let attributes = attribute_docs(declaration, context);
+    let attributes = attribute_docs(declaration, context.renderer);
     let doc = render::with_attributes(
         attributes,
         Doc::Group(Box::new(Doc::Concat(vec![
-            render::variant_doc(node, context.source),
+            context.renderer.variant_doc(node),
             Doc::Text(",".to_owned()),
         ]))),
     );
@@ -523,16 +503,16 @@ fn build_type_item(
     context: &mut Context<'_>,
 ) -> Built {
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let kind = match scope {
         Scope::Trait | Scope::Impl => ItemKind::AssociatedType,
         _ => ItemKind::TypeAlias,
     };
     let token = kind_token(kind);
     let key = context.unique(format!("{container_key}::{token}::{name}"));
-    let attributes = attribute_docs(declaration, context);
-    let header = render::type_alias_text(node, context.source);
-    let where_clause = render::where_clause_text(node, context.source);
+    let attributes = attribute_docs(declaration, context.renderer);
+    let header = context.renderer.type_alias_text(node);
+    let where_clause = context.renderer.where_clause_text(node);
     let doc = render::with_attributes(attributes, render::signature_doc(header, where_clause));
     make_built(
         node,
@@ -554,11 +534,11 @@ fn build_associated_type(
     context: &mut Context<'_>,
 ) -> Built {
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::assoc_type::{name}"));
-    let attributes = attribute_docs(declaration, context);
-    let header = render::associated_type_text(node, context.source);
-    let where_clause = render::where_clause_text(node, context.source);
+    let attributes = attribute_docs(declaration, context.renderer);
+    let header = context.renderer.associated_type_text(node);
+    let where_clause = context.renderer.where_clause_text(node);
     let doc = render::with_attributes(
         attributes,
         render::signature_doc(Doc::Text(header), where_clause),
@@ -583,16 +563,16 @@ fn build_trait(
     context: &mut Context<'_>,
 ) -> Built {
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::trait::{name}"));
-    let attributes = attribute_docs(declaration, context);
-    let header = render::header(
-        node,
-        context.source,
-        &[node::WHERE_CLAUSE, node::DECLARATION_LIST],
-    );
-    let where_clause = render::where_clause_text(node, context.source);
-    let members = render::child_of_kind(node, node::DECLARATION_LIST)
+    let attributes = attribute_docs(declaration, context.renderer);
+    let header = context
+        .renderer
+        .header(node, &[WHERE_CLAUSE, DECLARATION_LIST]);
+    let where_clause = context.renderer.where_clause_text(node);
+    let members = context
+        .renderer
+        .child_of_kind(node, DECLARATION_LIST)
         .map(|body| build_members(body, Scope::Trait, &key, true, depth + 1, context))
         .unwrap_or_default();
     let doc = render::with_attributes(
@@ -620,12 +600,12 @@ fn build_impl(
     context: &mut Context<'_>,
 ) -> Option<Built> {
     let node = declaration.node;
-    let trait_node = node.child_by_field_name(field::TRAIT);
-    let type_node = node.child_by_field_name(field::TYPE)?;
-    let type_name = render::render_node(type_node, context.source);
+    let trait_node = node.child_by_field_name(FIELD_TRAIT);
+    let type_node = node.child_by_field_name(FIELD_TYPE)?;
+    let type_name = context.renderer.render_node(type_node);
     let (key, name) = match trait_node {
         Some(trait_node) => {
-            let trait_name = render::render_node(trait_node, context.source);
+            let trait_name = context.renderer.render_node(trait_node);
             (
                 format!("impl {trait_name} for {type_name}"),
                 format!("{trait_name} for {type_name}"),
@@ -637,14 +617,14 @@ fn build_impl(
         }
     };
     let key = context.unique(key);
-    let attributes = attribute_docs(declaration, context);
-    let header = render::header(
-        node,
-        context.source,
-        &[node::WHERE_CLAUSE, node::DECLARATION_LIST],
-    );
-    let where_clause = render::where_clause_text(node, context.source);
-    let members = render::child_of_kind(node, node::DECLARATION_LIST)
+    let attributes = attribute_docs(declaration, context.renderer);
+    let header = context
+        .renderer
+        .header(node, &[WHERE_CLAUSE, DECLARATION_LIST]);
+    let where_clause = context.renderer.where_clause_text(node);
+    let members = context
+        .renderer
+        .child_of_kind(node, DECLARATION_LIST)
         .map(|body| build_members(body, Scope::Impl, &key, true, depth + 1, context))
         .unwrap_or_default();
 
@@ -684,15 +664,15 @@ fn build_signature(
         return None;
     }
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let kind = match scope {
         Scope::Trait | Scope::Impl => ItemKind::Method,
         _ => ItemKind::Function,
     };
     let key = context.unique(format!("{container_key}::{}::{name}", kind_token(kind)));
-    let attributes = attribute_docs(declaration, context);
-    let header = render::header(node, context.source, &[node::WHERE_CLAUSE, node::BLOCK]);
-    let where_clause = render::where_clause_text(node, context.source);
+    let attributes = attribute_docs(declaration, context.renderer);
+    let header = context.renderer.header(node, &[WHERE_CLAUSE, BLOCK]);
+    let where_clause = context.renderer.where_clause_text(node);
     let doc = render::with_attributes(attributes, render::signature_doc(header, where_clause));
     Some(make_built(
         node,
@@ -718,10 +698,10 @@ fn build_constant(
         return None;
     }
     let node = declaration.node;
-    let name = field_name(node, context.source).unwrap_or_default();
+    let name = field_name(node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::{}::{name}", kind_token(kind)));
-    let attributes = attribute_docs(declaration, context);
-    let text = render::constant_text(node, context.source);
+    let attributes = attribute_docs(declaration, context.renderer);
+    let text = context.renderer.constant_text(node);
     let doc = render::with_attributes(attributes, Doc::Text(format!("{text};")));
     Some(make_built(
         node,
@@ -746,17 +726,19 @@ fn build_foreign(
         return None;
     }
     let node = declaration.node;
-    let body = node.child_by_field_name(field::BODY)?;
-    let name = render::child_of_kind(node, node::EXTERN_MODIFIER)
-        .map(|modifier| render::render_node(modifier, context.source))
+    let body = node.child_by_field_name(FIELD_BODY)?;
+    let name = context
+        .renderer
+        .child_of_kind(node, EXTERN_MODIFIER)
+        .map(|modifier| context.renderer.render_node(modifier))
         .unwrap_or_else(|| "extern".to_owned());
     let key = context.unique(format!("{container_key}::extern::{name}"));
-    let attributes = attribute_docs(declaration, context);
+    let attributes = attribute_docs(declaration, context.renderer);
     let members = build_members(body, Scope::Foreign, &key, true, depth + 1, context);
     if members.is_empty() {
         return None;
     }
-    let header = render::header(node, context.source, &[node::DECLARATION_LIST]);
+    let header = context.renderer.header(node, &[DECLARATION_LIST]);
     let doc = render::with_attributes(
         attributes,
         render::container_doc(header, None, member_docs(&members)),
@@ -783,15 +765,15 @@ fn build_module(
 ) -> Option<Built> {
     // An out-of-line `mod name;` has no content here; the referenced file is
     // projected independently by its own path (section 12.1).
-    let body = declaration.node.child_by_field_name(field::BODY)?;
-    let name = field_name(declaration.node, context.source).unwrap_or_default();
+    let body = declaration.node.child_by_field_name(FIELD_BODY)?;
+    let name = field_name(declaration.node, context.renderer).unwrap_or_default();
     let key = context.unique(format!("{container_key}::mod::{name}"));
-    let attributes = attribute_docs(declaration, context);
+    let attributes = attribute_docs(declaration, context.renderer);
     let members = build_members(body, Scope::Module, &key, true, depth + 1, context);
     if members.is_empty() {
         return None;
     }
-    let header = render::header(declaration.node, context.source, &[node::DECLARATION_LIST]);
+    let header = context.renderer.header(declaration.node, &[DECLARATION_LIST]);
     let doc = render::with_attributes(
         attributes,
         render::container_doc(header, None, member_docs(&members)),
@@ -831,53 +813,4 @@ fn kind_token(kind: ItemKind) -> &'static str {
         ItemKind::Operator => "operator",
         ItemKind::ForeignBlock => "extern",
     }
-}
-
-fn span_of(node: Node<'_>) -> SourceSpan {
-    let start = node.start_position();
-    let end = node.end_position();
-    SourceSpan::new(
-        node.start_byte(),
-        node.end_byte(),
-        start.row,
-        start.column,
-        end.row,
-        end.column,
-    )
-}
-
-fn whole_span(source: &str) -> SourceSpan {
-    let bytes = source.as_bytes();
-    let mut line = 0;
-    let mut column = 0;
-    for &byte in bytes {
-        if byte == b'\n' {
-            line += 1;
-            column = 0;
-        } else {
-            column += 1;
-        }
-    }
-    SourceSpan::new(0, source.len(), 0, 0, line, column)
-}
-
-/// The first `ERROR` or missing node in source order, used for the diagnostic
-/// range. The traversal is iterative so deeply nested expressions cannot
-/// overflow the stack (section 18).
-fn first_error_span(root: Node<'_>) -> Option<SourceSpan> {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.is_error() || node.is_missing() {
-            return Some(span_of(node));
-        }
-        let mut children: Vec<Node<'_>> = Vec::new();
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            children.push(child);
-        }
-        for child in children.into_iter().rev() {
-            stack.push(child);
-        }
-    }
-    None
 }
