@@ -1,6 +1,3 @@
-//! Side-by-side diff rendering: aligned rows, hunk headers, line-number gutters,
-//! and delta-style backgrounds.
-
 use base::{AlignedRow, DiffRowKind, FileDiff};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -17,7 +14,7 @@ use super::empty::render_empty;
 use super::geom::{Edge, gutter_width, pane_block};
 use super::text::truncate_ellipsis;
 
-/// Context lines kept around each change, matching the core diff engine.
+// Context lines kept around each change, matching the core diff engine.
 const CONTEXT_RADIUS: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -213,7 +210,6 @@ fn diff_line(
     Line::from(spans)
 }
 
-/// The delta-style full-line background for a diff row.
 fn line_background(kind: DiffRowKind, side: Side, theme: &Theme) -> Style {
     if !theme.colors_enabled() {
         return Style::default();
@@ -227,12 +223,12 @@ fn line_background(kind: DiffRowKind, side: Side, theme: &Theme) -> Style {
     }
 }
 
-/// Wraps one logical aligned row into visual rows for both panes.
-///
-/// Each side wraps independently to its own content width; the row occupies the
-/// greater height and the shorter side is padded with blank rows so later rows
-/// stay aligned. Only the first visual row carries line numbers. Changed rows
-/// also get delta-style intra-line emphasis on the bytes that differ.
+// Wraps one logical aligned row into visual rows for both panes.
+//
+// Each side wraps independently to its own content width; the row occupies the
+// greater height and the shorter side is padded with blank rows so later rows
+// stay aligned. Only the first visual row carries line numbers. Changed rows
+// also get delta-style intra-line emphasis on the bytes that differ.
 pub(crate) fn layout_diff(
     diff: &FileDiff,
     old_width: usize,
@@ -318,7 +314,6 @@ pub(crate) fn layout_diff(
     visual
 }
 
-/// A dim row marking unchanged aligned rows hidden between two hunks.
 fn collapse_row(hidden: usize) -> VisualRow {
     let text = format!("⋯ {hidden} unchanged lines");
     let run = Run {
@@ -335,10 +330,10 @@ fn collapse_row(hidden: usize) -> VisualRow {
     }
 }
 
-/// The inclusive index ranges of aligned rows to display, one per hunk.
-///
-/// Each change pulls in [`CONTEXT_RADIUS`] rows of surrounding context; ranges
-/// that touch or overlap merge, and the gaps between them become hunk headers.
+// The inclusive index ranges of aligned rows to display, one per hunk.
+//
+// Each change pulls in [`CONTEXT_RADIUS`] rows of surrounding context; ranges
+// that touch or overlap merge, and the gaps between them become hunk headers.
 fn context_windows(rows: &[AlignedRow<'_>]) -> Vec<(usize, usize)> {
     let changes: Vec<usize> = rows
         .iter()
@@ -367,7 +362,6 @@ fn context_windows(rows: &[AlignedRow<'_>]) -> Vec<(usize, usize)> {
     windows
 }
 
-/// A synthetic header describing the line ranges covered by one hunk.
 fn hunk_header(rows: &[AlignedRow<'_>], start: usize, end: usize) -> VisualRow {
     let slice = &rows[start..=end];
     let old_numbers: Vec<usize> = slice
@@ -409,8 +403,6 @@ fn hunk_header(rows: &[AlignedRow<'_>], start: usize, end: usize) -> VisualRow {
     }
 }
 
-/// The highlighted runs for one aligned diff line, falling back to a single
-/// plain run when highlighting is unavailable.
 fn styled_line(highlight: &[StyledLine], number: usize, text: &str) -> StyledLine {
     match highlight.get(number.saturating_sub(1)) {
         Some(line) if !line.is_empty() => line.clone(),

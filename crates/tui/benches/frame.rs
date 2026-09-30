@@ -1,30 +1,30 @@
-//! Frame-rendering benchmarks for the terminal frontend.
-//!
-//! Run with `cargo bench -p tui --features bench --bench frame`, or
-//! `just bench-tui`. The `bench` feature exposes the `#[doc(hidden)]`
-//! `tui::bench` façade so this target can drive the crate's real
-//! `view`, highlighter, and diff layout without widening the public API.
-//!
-//! # What is measured
-//!
-//! A frame is not one cost. The run loop first handles a message (`update`),
-//! which recomputes syntax highlighting and the wrapped diff layout when the
-//! selection or size changed, and then draws (`view` through `Terminal::draw`),
-//! which builds widgets and lets ratatui diff the surface.
-//!
-//! - `frame/warm/*` reuses one terminal, so the ratatui buffer diff is small
-//!   (an idle or small-scroll frame).
-//! - `frame/cold/*` builds a fresh terminal per iteration, so the first draw
-//!   writes every cell (the frame after a load or a large jump).
-//! - `update/*` measures message handling, where highlighting and diff layout
-//!   live. `load_*` and `*_next_file` are the cold half of an interaction.
-//! - `parts/*` measures each seam in isolation: `highlight`, `layout_diff`, and
-//!   the ratatui surface diff.
-//!
-//! `frame/warm − parts/buffer_diff` approximates frame assembly, and
-//! `update/load_*` plus `parts/*` explains what a cold frame adds. The
-//! crossterm backend's escape-sequence writing is deliberately out of scope:
-//! `TestBackend` replaces it with an in-memory surface.
+// Frame-rendering benchmarks for the terminal frontend.
+//
+// Run with `cargo bench -p tui --features bench --bench frame`, or
+// `just bench-tui`. The `bench` feature exposes the `#[doc(hidden)]`
+// `tui::bench` façade so this target can drive the crate's real
+// `view`, highlighter, and diff layout without widening the public API.
+//
+// # What is measured
+//
+// A frame is not one cost. The run loop first handles a message (`update`),
+// which recomputes syntax highlighting and the wrapped diff layout when the
+// selection or size changed, and then draws (`view` through `Terminal::draw`),
+// which builds widgets and lets ratatui diff the surface.
+//
+// - `frame/warm/*` reuses one terminal, so the ratatui buffer diff is small
+//   (an idle or small-scroll frame).
+// - `frame/cold/*` builds a fresh terminal per iteration, so the first draw
+//   writes every cell (the frame after a load or a large jump).
+// - `update/*` measures message handling, where highlighting and diff layout
+//   live. `load_*` and `*_next_file` are the cold half of an interaction.
+// - `parts/*` measures each seam in isolation: `highlight`, `layout_diff`, and
+//   the ratatui surface diff.
+//
+// `frame/warm − parts/buffer_diff` approximates frame assembly, and
+// `update/load_*` plus `parts/*` explains what a cold frame adds. The
+// crossterm backend's escape-sequence writing is deliberately out of scope:
+// `TestBackend` replaces it with an in-memory surface.
 
 use std::fs;
 use std::hint::black_box;
@@ -38,13 +38,10 @@ use criterion::{
 };
 use tui::bench::{self, Key, Model, Msg};
 
-/// A wide terminal: tree and content side by side.
 const WIDE: (u16, u16) = (140, 40);
-/// The narrower end of the side-by-side range.
 const MEDIUM: (u16, u16) = (100, 30);
-/// Single-pane mode, below the side-by-side threshold.
 const NARROW: (u16, u16) = (60, 20);
-/// Below the minimum size, so the "terminal too small" view draws.
+// Below the minimum size, so the "terminal too small" view draws.
 const TINY: (u16, u16) = (30, 6);
 
 // ---------------------------------------------------------------------------
@@ -66,8 +63,8 @@ fn elm_source() -> String {
     fixture("elm/normal-module/input.elm")
 }
 
-/// Repeats the Rust fixture until it has at least `lines` lines, so a long file
-/// still highlights like real Rust rather than one repeated word.
+// Repeats the Rust fixture until it has at least `lines` lines, so a long file
+// still highlights like real Rust rather than one repeated word.
 fn long_rust(lines: usize) -> String {
     let base = rust_source();
     let base_lines = base.lines().count().max(1);
@@ -78,7 +75,6 @@ fn long_rust(lines: usize) -> String {
     text
 }
 
-/// A `show` projection of a small Elm and Rust file.
 fn show_two_files(width: u16, height: u16) -> Model {
     bench::show_model(
         vec![
@@ -90,7 +86,6 @@ fn show_two_files(width: u16, height: u16) -> Model {
     )
 }
 
-/// A `show` projection of one long Rust file.
 fn show_long_file(width: u16, height: u16) -> Model {
     bench::show_model(
         vec![bench::projected("src/lib.rs", &long_rust(4000))],
@@ -99,7 +94,6 @@ fn show_long_file(width: u16, height: u16) -> Model {
     )
 }
 
-/// A `show` projection with a large tree of many small files.
 fn show_large_tree(width: u16, height: u16) -> Model {
     many_files(300, width, height)
 }
@@ -114,7 +108,6 @@ fn many_files(count: usize, width: u16, height: u16) -> Model {
     bench::show_model(files, width, height)
 }
 
-/// A single focused diff with several scattered changes.
 fn diff_one_large(width: u16, height: u16) -> Model {
     bench::diff_model(vec![large_diff()], width, height)
 }
@@ -132,7 +125,7 @@ fn large_diff() -> FileDiff {
     bench::file_diff("src/lib.rs", Some(&old), Some(&new))
 }
 
-/// Many focused diffs, so moving the selection recomputes highlight and layout.
+// Many focused diffs, so moving the selection recomputes highlight and layout.
 fn many_diffs(count: usize) -> Vec<FileDiff> {
     (0..count)
         .map(|index| {
@@ -362,7 +355,6 @@ fn update_benchmarks(c: &mut Criterion) {
 // Tree scrolling
 // ---------------------------------------------------------------------------
 
-/// Rows to scroll through when measuring a burst of tree navigation.
 const SCROLL_SIZES: [usize; 4] = [1, 10, 100, 300];
 
 fn scroll_benchmarks(c: &mut Criterion) {
@@ -390,7 +382,6 @@ fn scroll_benchmarks(c: &mut Criterion) {
             );
         });
 
-        // The new runtime: every row is updated, then one settle and one draw.
         group.bench_with_input(BenchmarkId::new("batched", n), &n, |b, &n| {
             let mut terminal = bench::terminal(WIDE.0, WIDE.1);
             b.iter_batched(

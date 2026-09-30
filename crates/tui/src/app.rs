@@ -1,9 +1,9 @@
-//! The pure TEA core: `Model`, `Msg`, `Cmd`, and `update`.
-//!
-//! Nothing here performs I/O. `update` turns a message and the current model
-//! into a replacement model plus a list of effects to run. Engine calls only
-//! ever leave this module as a [`Cmd`], which the runtime interprets. The pure
-//! `view` lives in [`crate::view`].
+// The pure TEA core: `Model`, `Msg`, `Cmd`, and `update`.
+//
+// Nothing here performs I/O. `update` turns a message and the current model
+// into a replacement model plus a list of effects to run. Engine calls only
+// ever leave this module as a [`Cmd`], which the runtime interprets. The pure
+// `view` lives in [`crate::view`].
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -26,24 +26,21 @@ use crate::view::geom::{
     split_with_dividers, window_offset,
 };
 
-/// At or above this width the tree and content render side by side.
 pub(crate) const SIDE_BY_SIDE_MIN_WIDTH: u16 = 80;
 
-/// Below this width, or below [`MIN_HEIGHT`] rows, the terminal is too small.
 pub(crate) const SINGLE_PANE_MIN_WIDTH: u16 = 40;
 pub(crate) const MIN_HEIGHT: u16 = 8;
 
-/// The file-tree pane width, as a percentage of the terminal, and its bounds.
 const TREE_DEFAULT_PERCENT: u16 = 30;
 const TREE_MIN_PERCENT: u16 = 15;
 const TREE_MAX_PERCENT: u16 = 60;
 const TREE_STEP: u16 = 5;
 
-/// Which region currently has focus.
-///
-/// `Body` is the single projection pane of a `show`; `Diff` is both diff panes
-/// treated as one focus unit, so `Tab` only ever toggles between the tree and
-/// the content.
+// Which region currently has focus.
+//
+// `Body` is the single projection pane of a `show`; `Diff` is both diff panes
+// treated as one focus unit, so `Tab` only ever toggles between the tree and
+// the content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pane {
     Commits,
@@ -52,7 +49,7 @@ pub enum Pane {
     Diff,
 }
 
-/// A key the frontend understands, already translated from a terminal event.
+// A key the frontend understands, already translated from a terminal event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Key {
     Char(char),
@@ -77,19 +74,17 @@ pub enum Key {
     CtrlU,
 }
 
-/// A mouse event the frontend understands, already translated from a terminal
-/// event and normalized to a terminal cell.
+// A mouse event the frontend understands, already translated from a terminal
+// event and normalized to a terminal cell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Mouse {
-    /// Zero-based terminal column.
     pub column: u16,
-    /// Zero-based terminal row.
     pub row: u16,
     pub kind: MouseKind,
 }
 
-/// The mouse interactions the frontend acts on. Motion and drag are dropped
-/// during translation, so they never reach the core.
+// The mouse interactions the frontend acts on. Motion and drag are dropped
+// during translation, so they never reach the core.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MouseKind {
     Click,
@@ -97,11 +92,10 @@ pub enum MouseKind {
     ScrollDown,
 }
 
-/// A single-line editable field.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextInput {
     pub text: String,
-    /// A byte offset into `text`, always on a character boundary.
+    // A byte offset into `text`, always on a character boundary.
     pub cursor: usize,
 }
 
@@ -150,13 +144,11 @@ impl TextInput {
         self.cursor = self.text.len();
     }
 
-    /// The trimmed value to apply.
     pub fn value(&self) -> String {
         self.text.trim().to_owned()
     }
 }
 
-/// Which revision a revision prompt edits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RevisionField {
     Show,
@@ -164,8 +156,8 @@ pub enum RevisionField {
     Target,
 }
 
-/// A semantic command. Keys and the command palette both produce these, so a
-/// binding and its palette entry can never drift apart.
+// A semantic command. Keys and the command palette both produce these, so a
+// binding and its palette entry can never drift apart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Quit,
@@ -193,7 +185,7 @@ pub enum Action {
     PreviousMatch,
 }
 
-/// A modal interaction that captures keys until it closes.
+// A modal interaction that captures keys until it closes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Overlay {
     Help,
@@ -210,8 +202,6 @@ pub enum Overlay {
     Search(SearchState),
 }
 
-/// One ranked palette or finder result: an index into the source list, a fuzzy
-/// score, and the byte offsets that matched for highlighting.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ranked {
     pub index: usize,
@@ -219,7 +209,6 @@ pub struct Ranked {
     pub positions: Vec<usize>,
 }
 
-/// The command palette: a fuzzy list of actions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaletteState {
     pub input: TextInput,
@@ -227,7 +216,6 @@ pub struct PaletteState {
     pub cursor: usize,
 }
 
-/// The fuzzy file finder: a fuzzy list of visible paths.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FinderState {
     pub input: TextInput,
@@ -235,14 +223,13 @@ pub struct FinderState {
     pub cursor: usize,
 }
 
-/// The search input. Live matches are written straight to [`Model::search`] so
-/// the view previews them while the user types.
+// The search input. Live matches are written straight to [`Model::search`] so
+// the view previews them while the user types.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchState {
     pub input: TextInput,
 }
 
-/// Which projection a search match belongs to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchSide {
     Show,
@@ -250,18 +237,15 @@ pub enum SearchSide {
     New,
 }
 
-/// One occurrence of the search needle on a line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchMatch {
     pub side: SearchSide,
-    /// One-based line number.
     pub line: usize,
-    /// Byte range within the line.
     pub start: usize,
     pub end: usize,
 }
 
-/// A committed search: highlights persist after the input closes.
+// A committed search: highlights persist after the input closes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Search {
     pub needle: String,
@@ -269,15 +253,13 @@ pub struct Search {
     pub cursor: usize,
 }
 
-/// The scope chooser's state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScopeChooser {
-    /// `None` while areas are still loading.
+    // `None` while areas are still loading.
     pub areas: Option<AreaSet>,
     pub cursor: usize,
-    /// `Some` while the user is typing a literal path.
+    // `Some` while the user is typing a literal path.
     pub input: Option<TextInput>,
-    /// A chooser-local failure, such as a malformed config or bad path.
     pub error: Option<String>,
 }
 
@@ -291,7 +273,6 @@ impl ScopeChooser {
         }
     }
 
-    /// `all`, each area name, then the literal-path entry.
     pub(crate) fn options(&self) -> Vec<String> {
         let mut options = vec!["all".to_owned()];
         if let Some(areas) = &self.areas {
@@ -479,10 +460,10 @@ impl LoadRequest {
     }
 }
 
-/// The loaded projection, either a single revision or a two-revision diff.
-///
-/// The payloads sit behind an `Arc` so cloning a `Model` is O(1) regardless of
-/// how many files or bytes a projection holds.
+// The loaded projection, either a single revision or a two-revision diff.
+//
+// The payloads sit behind an `Arc` so cloning a `Model` is O(1) regardless of
+// how many files or bytes a projection holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Content {
     Show(Arc<[ProjectedFile]>),
@@ -502,8 +483,8 @@ impl From<Vec<FileDiff>> for Content {
 }
 
 impl Content {
-    /// Paths the tree shows. A show hides files whose projection is empty; a
-    /// diff already contains only paths whose projections differ.
+    // Paths the tree shows. A show hides files whose projection is empty; a
+    // diff already contains only paths whose projections differ.
     fn visible_paths(&self) -> Vec<RepoPath> {
         match self {
             Self::Show(files) => files
@@ -516,18 +497,17 @@ impl Content {
     }
 }
 
-/// Every input the core accepts.
 #[derive(Debug)]
 pub enum Msg {
-    /// A key was pressed.
     Key(Key),
-    /// A mouse click or wheel notch, in terminal cells.
     Mouse(Mouse),
-    /// The terminal changed size.
-    Resize { width: u16, height: u16 },
-    /// A periodic tick, used to animate the spinner and expire a diagnostic.
+    Resize {
+        width: u16,
+        height: u16,
+    },
+    // A periodic tick, used to animate the spinner and expire a diagnostic.
     Tick,
-    /// A projection effect finished. The request it ran for is echoed back.
+    // A projection effect finished. The request it ran for is echoed back.
     Loaded {
         request: LoadRequest,
         result: Result<Content, Box<EngineError>>,
@@ -541,12 +521,11 @@ pub enum Msg {
         index: usize,
         result: Result<Content, Box<EngineError>>,
     },
-    /// The area configuration finished loading for the scope chooser.
     AreasLoaded(Result<AreaSet, Box<EngineError>>),
 }
 
-/// An effect the runtime must interpret. I/O is data, never a side effect of
-/// `update`.
+// An effect the runtime must interpret. I/O is data, never a side effect of
+// `update`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Cmd {
     Load {
@@ -560,7 +539,6 @@ pub enum Cmd {
     LoadAreas,
 }
 
-/// A row in the visible file tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RowKind {
     Directory { path: RepoPath, expanded: bool },
@@ -582,17 +560,16 @@ pub struct TreeRow {
     pub kind: RowKind,
 }
 
-/// The kind of a rendered diff row: either an aligned diff row or a synthetic
-/// hunk header inserted where context was collapsed.
+// The kind of a rendered diff row: either an aligned diff row or a synthetic
+// hunk header inserted where context was collapsed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VisualRowKind {
     Diff(DiffRowKind),
     Hunk,
-    /// A gap between hunks: a count of unchanged rows that were collapsed.
+    // A gap between hunks: a count of unchanged rows that were collapsed.
     Collapse(usize),
 }
 
-/// How a file changed in a focused diff, for tree badges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ChangeKind {
     Added,
@@ -600,10 +577,10 @@ pub(crate) enum ChangeKind {
     Deleted,
 }
 
-/// One visual row of a wrapped side-by-side diff.
-///
-/// A logical aligned row with a wrapped side expands into several `VisualRow`s;
-/// only the first carries line numbers and the rest are continuation rows.
+// One visual row of a wrapped side-by-side diff.
+//
+// A logical aligned row with a wrapped side expands into several `VisualRow`s;
+// only the first carries line numbers and the rest are continuation rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VisualRow {
     pub kind: VisualRowKind,
@@ -614,35 +591,33 @@ pub struct VisualRow {
     pub continuation: bool,
 }
 
-/// Syntax-highlighted lines for the selected diff, one side at a time.
 #[derive(Clone, Default)]
 pub struct DiffHighlight {
     pub old: Vec<StyledLine>,
     pub new: Vec<StyledLine>,
 }
 
-/// Highlighted lines for the selected file, keyed by path.
-///
-/// Highlighting is pure but not free, so it is computed once per file when the
-/// selection first reaches it and reused while the user stays on that file.
-///
-/// Both maps are bounded: browsing a large tree touches many files, and an
-/// unbounded cache would grow without limit and make every `Model` clone
-/// proportional to how far the user has scrolled.
+// Highlighted lines for the selected file, keyed by path.
+//
+// Highlighting is pure but not free, so it is computed once per file when the
+// selection first reaches it and reused while the user stays on that file.
+//
+// Both maps are bounded: browsing a large tree touches many files, and an
+// unbounded cache would grow without limit and make every `Model` clone
+// proportional to how far the user has scrolled.
 #[derive(Clone, Default)]
 struct HighlightCache {
     show: BoundedCache<Arc<Vec<StyledLine>>>,
     diff: BoundedCache<Arc<DiffHighlight>>,
 }
 
-/// How many highlighted files are retained before the oldest is dropped.
 const HIGHLIGHT_CACHE_CAP: usize = 32;
 
-/// A small insertion-ordered map that evicts its oldest entry past a cap.
-///
-/// Eviction is by insertion order rather than true recency: entries are read
-/// without `&mut self` from `view`, and for navigation the insertion order is
-/// the access order.
+// A small insertion-ordered map that evicts its oldest entry past a cap.
+//
+// Eviction is by insertion order rather than true recency: entries are read
+// without `&mut self` from `view`, and for navigation the insertion order is
+// the access order.
 #[derive(Clone)]
 struct BoundedCache<V> {
     entries: BTreeMap<RepoPath, V>,
@@ -679,7 +654,6 @@ impl<V> BoundedCache<V> {
     }
 }
 
-/// The inputs a cached diff layout depends on.
 #[derive(Clone, PartialEq, Eq)]
 struct DerivedKey {
     generation: u64,
@@ -689,37 +663,37 @@ struct DerivedKey {
     tree_percent: u16,
 }
 
-/// Expensive rendering state derived from the model, cached so a frame or a
-/// scroll key does not recompute it. Held behind an `Arc`, so cloning a `Model`
-/// never clones the layout.
+// Expensive rendering state derived from the model, cached so a frame or a
+// scroll key does not recompute it. Held behind an `Arc`, so cloning a `Model`
+// never clones the layout.
 #[derive(Clone, Default)]
 struct Derived {
     key: Option<DerivedKey>,
     diff_rows: Vec<VisualRow>,
 }
 
-/// The entire UI state. It is replaced wholesale by `update`, never edited in
-/// place by anything else.
-///
-/// Every large collection sits behind an `Arc`, so a clone is O(1); the only
-/// deep data is small (fold state, highlight-cache entries).
+// The entire UI state. It is replaced wholesale by `update`, never edited in
+// place by anything else.
+//
+// Every large collection sits behind an `Arc`, so a clone is O(1); the only
+// deep data is small (fold state, highlight-cache entries).
 #[derive(Clone)]
 pub struct Model {
     pub root: String,
-    /// The request that produced `content`; retained so `m` can re-project.
+    // The request that produced `content`; retained so `m` can re-project.
     pub request: LoadRequest,
     pub mode: ProjectionMode,
     pub scope_label: String,
     pub content: Content,
     pub commits: Arc<[CommitStep]>,
-    /// Navigation target while input is being batched; the displayed diff still
-    /// belongs to `commit_cursor` until its projection succeeds.
+    // Navigation target while input is being batched; the displayed diff still
+    // belongs to `commit_cursor` until its projection succeeds.
     pub commit_target: Option<usize>,
     pub commit_cursor: usize,
     pub commit_scroll: usize,
-    /// Paths the tree shows, in raw path-byte order.
+    // Paths the tree shows, in raw path-byte order.
     pub visible: Arc<[RepoPath]>,
-    /// Directories the user folded. Everything is expanded by default.
+    // Directories the user folded. Everything is expanded by default.
     pub collapsed: BTreeSet<RepoPath>,
     pub rows: Arc<[TreeRow]>,
     pub cursor: usize,
@@ -727,29 +701,26 @@ pub struct Model {
     pub focus: Pane,
     pub body_scroll: u16,
     pub body_hscroll: u16,
-    /// The file-tree pane width as a percentage of the terminal.
     pub tree_percent: u16,
-    /// The active modal overlay, if any. It captures keys until it closes.
+    // The active modal overlay, if any. It captures keys until it closes.
     pub overlay: Option<Overlay>,
-    /// A committed in-pane search whose highlights persist.
+    // A committed in-pane search whose highlights persist.
     pub search: Option<Search>,
     pub diagnostic: Option<String>,
-    /// Lazily computed syntax highlighting for the selected file.
     highlights: HighlightCache,
-    /// Bumped whenever `content` is replaced, invalidating [`Derived`].
+    // Bumped whenever `content` is replaced, invalidating [`Derived`].
     generation: u64,
     derived: Arc<Derived>,
     pub width: u16,
     pub height: u16,
-    /// The resolved design tokens; view code never names a raw color.
+    // The resolved design tokens; view code never names a raw color.
     pub theme: Theme,
-    /// The resolved tree glyph set; icons are opt-in.
+    // The resolved tree glyph set; icons are opt-in.
     pub icons: Icons,
-    /// A load in flight, so the view can show a spinner.
+    // A load in flight, so the view can show a spinner.
     pub pending: Option<LoadRequest>,
-    /// The spinner animation frame, advanced by [`Msg::Tick`].
+    // The spinner animation frame, advanced by [`Msg::Tick`].
     pub spinner: u8,
-    /// Ticks remaining before the diagnostic expires.
     pub diagnostic_ttl: u8,
     pub quit: bool,
 }
@@ -759,7 +730,6 @@ impl Model {
         self.commit_target.unwrap_or(self.commit_cursor)
     }
 
-    /// The revisions currently compared by the visible diff.
     pub fn diff_revisions(&self) -> Option<(String, String)> {
         let LoadRequest::Diff {
             base, target, view, ..
@@ -780,7 +750,6 @@ impl Model {
         Some((base.clone(), target.clone()))
     }
 
-    /// A model with no projection loaded yet.
     pub fn new(
         root: String,
         request: LoadRequest,
@@ -827,7 +796,6 @@ impl Model {
         }
     }
 
-    /// The projection currently shown by a `show` body, if any.
     pub fn active_file(&self) -> Option<&ProjectedFile> {
         let path = self.selected.as_ref()?;
         match &self.content {
@@ -840,7 +808,6 @@ impl Model {
         self.active_file().map(ProjectedFile::canonical_text)
     }
 
-    /// The diff currently shown by the old and new panes, if any.
     pub fn active_diff(&self) -> Option<&FileDiff> {
         let path = self.selected.as_ref()?;
         match &self.content {
@@ -849,24 +816,20 @@ impl Model {
         }
     }
 
-    /// The syntax-highlighted lines of the selected `show` file, if computed.
     pub(crate) fn active_show_lines(&self) -> Option<&[StyledLine]> {
         let path = self.selected.as_ref()?;
         self.highlights.show.get(path).map(|lines| lines.as_slice())
     }
 
-    /// The syntax-highlighted lines of the selected diff, if computed.
     pub(crate) fn active_diff_highlight(&self) -> Option<&DiffHighlight> {
         let path = self.selected.as_ref()?;
         self.highlights.diff.get(path).map(|lines| lines.as_ref())
     }
 
-    /// The wrapped visual rows of the active diff.
     pub(crate) fn diff_rows(&self) -> &[VisualRow] {
         self.derived.diff_rows.as_slice()
     }
 
-    /// The change kind of a path in the active diff, for tree badges.
     pub(crate) fn change_kind(&self, path: &RepoPath) -> Option<ChangeKind> {
         let Content::Diff(diffs) = &self.content else {
             return None;
@@ -879,7 +842,6 @@ impl Model {
         })
     }
 
-    /// The search ranges on one line, each tagged as the current match or not.
     pub(crate) fn search_ranges(&self, side: SearchSide, line: usize) -> Vec<(usize, usize, bool)> {
         let Some(search) = &self.search else {
             return Vec::new();
@@ -893,8 +855,8 @@ impl Model {
             .collect()
     }
 
-    /// Recomputes a committed search for the current selection, so switching
-    /// files never leaves highlights pointing at the previous file's lines.
+    // Recomputes a committed search for the current selection, so switching
+    // files never leaves highlights pointing at the previous file's lines.
     fn resync_search(&mut self) {
         let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
             return;
@@ -906,7 +868,6 @@ impl Model {
         }
     }
 
-    /// Computes and caches highlighting for the selected file when missing.
     fn ensure_highlight(&mut self) {
         let Some(path) = self.selected.clone() else {
             return;
@@ -964,7 +925,6 @@ impl Model {
         self.rows.get(self.cursor)
     }
 
-    /// Recomputes the cached diff layout when its inputs changed.
     fn refresh_derived(&mut self) {
         let key = DerivedKey {
             generation: self.generation,
@@ -983,7 +943,6 @@ impl Model {
         });
     }
 
-    /// The wrapped visual rows of the active diff, recomputed without the cache.
     pub(crate) fn compute_diff_rows(&self) -> Vec<VisualRow> {
         let Some(diff) = self.active_diff() else {
             return Vec::new();
@@ -1022,8 +981,8 @@ impl Model {
         }
     }
 
-    /// Installs a freshly loaded projection, preserving the selected path when
-    /// it is still visible and choosing the nearest visible file otherwise.
+    // Installs a freshly loaded projection, preserving the selected path when
+    // it is still visible and choosing the nearest visible file otherwise.
     fn install(&mut self, content: Content, keep_selection: bool) {
         let previous = self.selected.clone();
         let hint = self.cursor;
@@ -1100,7 +1059,6 @@ impl Model {
     }
 }
 
-/// The panes `Tab` cycles through, for the current content.
 fn focus_order(model: &Model) -> &'static [Pane] {
     if model.request.diff_view() == Some(DiffView::Commits) {
         return &[Pane::Commits, Pane::Tree, Pane::Diff];
@@ -1111,10 +1069,9 @@ fn focus_order(model: &Model) -> &'static [Pane] {
     }
 }
 
-/// How many ticks a diagnostic stays visible before it fades out.
 const DIAGNOSTIC_TICKS: u8 = 40;
 
-/// The pure update function. It performs no I/O and reads no external state.
+// The pure update function. It performs no I/O and reads no external state.
 pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
     let mut next = model.clone();
     let mut cmds = Vec::new();
@@ -1261,8 +1218,8 @@ pub fn update(msg: Msg, model: &Model) -> (Model, Vec<Cmd>) {
     (next, cmds)
 }
 
-/// Replaces all step projections in one input batch with its final target.
-/// A full reload wins when mode, scope, endpoints, or view also changed.
+// Replaces all step projections in one input batch with its final target.
+// A full reload wins when mode, scope, endpoints, or view also changed.
 pub(crate) fn coalesce_commit_loads(model: &mut Model, cmds: &mut Vec<Cmd>) {
     let had_step = cmds.iter().any(|cmd| matches!(cmd, Cmd::LoadStep { .. }));
     if !had_step {
@@ -1290,14 +1247,14 @@ pub(crate) fn coalesce_commit_loads(model: &mut Model, cmds: &mut Vec<Cmd>) {
     }
 }
 
-/// Runs the selection-dependent work a frame needs, once per input batch.
-///
-/// Highlighting, search re-sync, and the wrapped diff layout are pure but not
-/// free, and they depend only on the *final* selection of a batch. Running them
-/// here rather than inside `update` means a burst of tree navigation pays for
-/// one file instead of every row the cursor passed over.
-///
-/// The runtime calls this after folding a batch of messages and before drawing.
+// Runs the selection-dependent work a frame needs, once per input batch.
+//
+// Highlighting, search re-sync, and the wrapped diff layout are pure but not
+// free, and they depend only on the *final* selection of a batch. Running them
+// here rather than inside `update` means a burst of tree navigation pays for
+// one file instead of every row the cursor passed over.
+//
+// The runtime calls this after folding a batch of messages and before drawing.
 pub(crate) fn settle(mut model: Model) -> Model {
     if body_is_visible(&model) {
         model.ensure_highlight();
@@ -1307,10 +1264,10 @@ pub(crate) fn settle(mut model: Model) -> Model {
     model
 }
 
-/// Whether the current layout draws the content pane at all.
-///
-/// In a narrow terminal with the tree focused, the body is not drawn, so
-/// highlighting the selection would be wasted work.
+// Whether the current layout draws the content pane at all.
+//
+// In a narrow terminal with the tree focused, the body is not drawn, so
+// highlighting the selection would be wasted work.
 fn body_is_visible(model: &Model) -> bool {
     if model.width < SINGLE_PANE_MIN_WIDTH || model.height < MIN_HEIGHT {
         return false;
@@ -1351,8 +1308,8 @@ fn handle_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
     }
 }
 
-/// The semantic command a key produces outside an overlay, if any. Navigation
-/// keys are handled separately so they stay context sensitive.
+// The semantic command a key produces outside an overlay, if any. Navigation
+// keys are handled separately so they stay context sensitive.
 fn command_for(key: Key, model: &Model) -> Option<Action> {
     let show = matches!(model.content, Content::Show(_));
     let diff = matches!(model.content, Content::Diff(_));
@@ -1381,7 +1338,7 @@ fn command_for(key: Key, model: &Model) -> Option<Action> {
     }
 }
 
-/// Performs a semantic command. Shared by keys and the command palette.
+// Performs a semantic command. Shared by keys and the command palette.
 fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
     match action {
         Action::Quit => model.quit = true,
@@ -1504,7 +1461,6 @@ fn apply_action(action: Action, model: &mut Model, cmds: &mut Vec<Cmd>) {
     }
 }
 
-/// A half-page scroll step.
 fn page_step(model: &Model) -> u16 {
     (model.height.saturating_sub(3) / 2).max(1)
 }
@@ -1521,7 +1477,6 @@ fn move_cursor_to(model: &mut Model, index: usize) {
 // Palette, finder, and search
 // ---------------------------------------------------------------------------
 
-/// The palette's actions, in display order, with a key hint.
 pub(crate) fn palette_entries(model: &Model) -> Vec<(Action, &'static str, &'static str)> {
     let mut entries = vec![
         (Action::Mode, "Switch Types / Signatures", "m"),
@@ -1630,7 +1585,6 @@ impl SearchState {
     }
 }
 
-/// Recomputes the committed search from the input text.
 fn refresh_search(model: &mut Model, needle: &str) {
     if needle.is_empty() {
         model.search = None;
@@ -1727,7 +1681,6 @@ fn collect_matches(text: &str, needle_lower: &str, side: SearchSide, out: &mut V
     }
 }
 
-/// Scrolls to the currently selected match without changing it.
 fn focus_current_match(model: &mut Model) {
     if let Some(search) = &model.search
         && let Some(matched) = search.matches.get(search.cursor)
@@ -1737,7 +1690,6 @@ fn focus_current_match(model: &mut Model) {
     }
 }
 
-/// Moves to the next or previous match and scrolls it into view.
 fn step_search(model: &mut Model, forward: bool) {
     let matched = match &model.search {
         Some(search) if !search.matches.is_empty() => {
@@ -1757,7 +1709,6 @@ fn step_search(model: &mut Model, forward: bool) {
     scroll_to_match(model, &matched.1);
 }
 
-/// Scrolls the body so a search match is visible.
 fn scroll_to_match(model: &mut Model, matched: &SearchMatch) {
     let height = model.height.saturating_sub(4) as usize;
     let index = match model.content {
@@ -1783,8 +1734,8 @@ fn scroll_to_match(model: &mut Model, matched: &SearchMatch) {
     }
 }
 
-/// Routes a key to the active overlay. The overlay is taken and reinserted so
-/// its owned editor state can be mutated.
+// Routes a key to the active overlay. The overlay is taken and reinserted so
+// its owned editor state can be mutated.
 fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
     let Some(overlay) = model.overlay.take() else {
         return;
@@ -2042,7 +1993,6 @@ fn overlay_key(key: Key, model: &mut Model, cmds: &mut Vec<Cmd>) {
     }
 }
 
-/// The projection modes the frontend can select.
 pub(crate) fn available_modes() -> [ProjectionMode; 2] {
     [ProjectionMode::Types, ProjectionMode::Signatures]
 }
@@ -2054,7 +2004,6 @@ pub(crate) fn mode_label(mode: ProjectionMode) -> &'static str {
     }
 }
 
-/// Closes the active overlay and requests a reload with a new scope.
 fn apply_selection(model: &mut Model, cmds: &mut Vec<Cmd>, selection: Selection) {
     model.overlay = None;
     cmds.push(Cmd::Load {
@@ -2211,14 +2160,13 @@ fn body_key(key: Key, model: &mut Model) {
     }
 }
 
-/// How many rows one wheel notch moves.
 const MOUSE_SCROLL_STEP: i32 = 3;
 
-/// Routes a mouse event to the pane under the pointer.
-///
-/// The pane under the pointer takes focus, so a click or wheel acts on exactly
-/// what the user points at. Mouse input is ignored while a modal overlay is
-/// open and when the terminal is too small to draw the browser.
+// Routes a mouse event to the pane under the pointer.
+//
+// The pane under the pointer takes focus, so a click or wheel acts on exactly
+// what the user points at. Mouse input is ignored while a modal overlay is
+// open and when the terminal is too small to draw the browser.
 fn handle_mouse(event: Mouse, model: &mut Model, cmds: &mut Vec<Cmd>) {
     if model.overlay.is_some() || model.width < SINGLE_PANE_MIN_WIDTH || model.height < MIN_HEIGHT {
         return;
@@ -2303,7 +2251,6 @@ fn handle_mouse(event: Mouse, model: &mut Model, cmds: &mut Vec<Cmd>) {
     }
 }
 
-/// Selects or folds the tree row a click landed on, if it landed on one.
 fn tree_click(model: &mut Model, inner: Rect, row: u16) {
     if row < inner.y || row >= inner.y.saturating_add(inner.height) {
         return;
@@ -2357,7 +2304,6 @@ fn directory_at_cursor(model: &Model) -> Option<(RepoPath, bool)> {
     }
 }
 
-/// Folds or unfolds `path`, then keeps the cursor on that directory row.
 fn set_collapsed(model: &mut Model, path: RepoPath, collapsed: bool) {
     if collapsed {
         model.collapsed.insert(path.clone());
@@ -2368,8 +2314,6 @@ fn set_collapsed(model: &mut Model, path: RepoPath, collapsed: bool) {
     model.cursor = model.row_of_directory(&path).unwrap_or(0);
 }
 
-/// Moves the cursor to the directory row that contains `path`, if one is
-/// visible.
 fn move_to_parent(model: &mut Model, path: &RepoPath) {
     let Some(separator) = path.as_bytes().iter().rposition(|&byte| byte == b'/') else {
         return;
@@ -2397,12 +2341,12 @@ fn clamp_view(model: &mut Model) {
     model.body_hscroll = model.body_hscroll.min(max_hscroll(model));
 }
 
-/// Derives the visible tree rows from the visible files.
-///
-/// Files arrive in raw path-byte order, so a directory's descendants form a
-/// contiguous block and each directory row is emitted exactly once, at the
-/// position of its first descendant. A collapsed directory emits only its own
-/// row and skips its entire subtree.
+// Derives the visible tree rows from the visible files.
+//
+// Files arrive in raw path-byte order, so a directory's descendants form a
+// contiguous block and each directory row is emitted exactly once, at the
+// position of its first descendant. A collapsed directory emits only its own
+// row and skips its entire subtree.
 fn build_rows(visible: &[RepoPath], collapsed: &BTreeSet<RepoPath>) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     let mut stack: Vec<Vec<u8>> = Vec::new();
@@ -2776,7 +2720,7 @@ mod tests {
         settle(model)
     }
 
-    /// A show model with the selection work *not* settled, for deferral tests.
+    // A show model with the selection work *not* settled, for deferral tests.
     fn unsettled_show(files: Vec<ProjectedFile>) -> Model {
         let mut model = Model::new(
             "/repo".to_owned(),
@@ -2854,8 +2798,6 @@ mod tests {
         assert!(cmds.is_empty());
         assert!(matches!(opened.overlay, Some(Overlay::Mode { .. })));
 
-        // The cursor starts on the current mode (types, index 0); move to
-        // signatures and confirm.
         let (down, _) = update(Msg::Key(Key::Down), &opened);
         let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
 
@@ -3185,11 +3127,10 @@ mod tests {
         }
     }
 
-    /// The tree's inner origin for the 100×30 models below (one border and one
-    /// pad column on the left, one border row on top).
+    // The tree's inner origin for the 100×30 models below (one border and one
+    // pad column on the left, one border row on top).
     const TREE_X: u16 = 2;
     const TREE_Y: u16 = 2;
-    /// A column inside the content pane, past the tree and its divider.
     const CONTENT_X: u16 = 50;
 
     #[test]
@@ -3254,7 +3195,6 @@ mod tests {
         assert_eq!(scrolled.focus, Pane::Diff);
         assert!(scrolled.body_scroll > 0);
 
-        // Clicking a content pane focuses it without moving the selection.
         let (clicked, _) = update(Msg::Mouse(click(CONTENT_X, 5)), &model);
         assert_eq!(clicked.focus, Pane::Diff);
         assert_eq!(clicked.body_scroll, 0);
@@ -3673,7 +3613,6 @@ mod tests {
         let (opened, _) = update(Msg::Key(Key::Char('s')), &model);
         let (loaded, _) = update(Msg::AreasLoaded(Ok(area_set())), &opened);
 
-        // all(0), core(1), web(2), path…(3)
         let mut state = loaded;
         for _ in 0..3 {
             let (next, _) = update(Msg::Key(Key::Down), &state);
@@ -3739,8 +3678,6 @@ mod tests {
             .filter(|row| row.kind != VisualRowKind::Hunk)
             .collect();
 
-        // The long old line wraps into 3 segments, so that logical row is 3
-        // visual rows; the second logical row adds one more.
         assert_eq!(rows.len(), 4, "3 for the wrapped row + 1 for the rest");
         assert!(!rows[0].continuation);
         assert!(rows[1].continuation && rows[2].continuation);
@@ -4142,8 +4079,8 @@ mod tests {
         assert!(count > 0, "expected the light background somewhere");
     }
 
-    /// Renders the file tree with Nerd Font icons. Run with
-    /// `--ignored --nocapture`.
+    // Renders the file tree with Nerd Font icons. Run with
+    // `--ignored --nocapture`.
     #[test]
     #[ignore = "prints a colored preview"]
     fn preview_nerd_icons() {
@@ -4157,8 +4094,8 @@ mod tests {
         print!("{}", ansi_preview(&buffer));
     }
 
-    /// Renders a diff and prints it with ANSI color, plus writes an HTML preview
-    /// to the system temporary directory. Run with `--ignored --nocapture`.
+    // Renders a diff and prints it with ANSI color, plus writes an HTML preview
+    // to the system temporary directory. Run with `--ignored --nocapture`.
     #[test]
     #[ignore = "prints a colored preview"]
     fn preview_delta_colors() {

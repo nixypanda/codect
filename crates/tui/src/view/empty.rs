@@ -1,5 +1,3 @@
-//! Compact, centered messages for panes with no content to display.
-
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};

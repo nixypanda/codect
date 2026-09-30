@@ -1,5 +1,3 @@
-//! Scrollable commit picker above the file tree.
-
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;

@@ -1,14 +1,14 @@
-//! Optional Nerd Font glyphs for the file tree.
-//!
-//! Nerd Fonts patch a terminal font with icon glyphs in the Private Use Area.
-//! They cannot be detected reliably from inside a program, so icons are opt-in:
-//! with the default [`IconStyle::None`] the tree draws no glyphs and never
-//! risks a missing-glyph box. The chosen codepoints come from the classic Font
-//! Awesome and Devicons/Seti ranges, which exist in Nerd Fonts v2 and are
-//! aliased in v3, so they are the most widely supported.
-//!
-//! Every glyph here is a single display column, which keeps the tree's
-//! display-width alignment intact.
+// Optional Nerd Font glyphs for the file tree.
+//
+// Nerd Fonts patch a terminal font with icon glyphs in the Private Use Area.
+// They cannot be detected reliably from inside a program, so icons are opt-in:
+// with the default [`IconStyle::None`] the tree draws no glyphs and never
+// risks a missing-glyph box. The chosen codepoints come from the classic Font
+// Awesome and Devicons/Seti ranges, which exist in Nerd Fonts v2 and are
+// aliased in v3, so they are the most widely supported.
+//
+// Every glyph here is a single display column, which keeps the tree's
+// display-width alignment intact.
 
 use base::{Language, RepoPath};
 
@@ -21,7 +21,7 @@ pub enum IconStyle {
     Nerd,
 }
 
-/// The resolved glyph set. Stored on the model so `view` stays pure.
+// The resolved glyph set. Stored on the model so `view` stays pure.
 #[derive(Clone, Copy, Debug)]
 pub struct Icons {
     style: IconStyle,
@@ -32,8 +32,8 @@ impl Icons {
         Self { style }
     }
 
-    /// The glyph drawn before a directory label. The `▾`/`▸` chevron still
-    /// carries the open/closed state, so this glyph is static.
+    // The glyph drawn before a directory label. The `▾`/`▸` chevron still
+    // carries the open/closed state, so this glyph is static.
     pub fn folder(&self) -> &'static str {
         match self.style {
             IconStyle::None => "",
@@ -41,7 +41,6 @@ impl Icons {
         }
     }
 
-    /// The glyph drawn before a file label, chosen by language.
     pub fn file(&self, path: &RepoPath) -> &'static str {
         match self.style {
             IconStyle::None => "",
@@ -56,7 +55,7 @@ impl Icons {
     }
 }
 
-/// Every Nerd glyph the tree can draw, for the width invariant test.
+// Every Nerd glyph the tree can draw, for the width invariant test.
 #[cfg(test)]
 const NERD_GLYPHS: [&str; 6] = [
     "\u{f07b}", "\u{e7a8}", "\u{e62c}", "\u{e777}", "\u{e73c}", "\u{f15b}",

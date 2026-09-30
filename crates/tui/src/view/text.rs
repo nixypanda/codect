@@ -1,9 +1,9 @@
-//! Display-width text helpers. Tabs expand to [`TAB_WIDTH`] columns and wide
-//! characters are never split, so the view stays aligned in any terminal.
+// Display-width text helpers. Tabs expand to [`TAB_WIDTH`] columns and wide
+// characters are never split, so the view stays aligned in any terminal.
 
 use unicode_width::UnicodeWidthChar;
 
-/// Columns a tab expands to, so display width stays deterministic.
+// Columns a tab expands to, so display width stays deterministic.
 pub(crate) const TAB_WIDTH: usize = 4;
 
 pub(crate) fn expand_tabs(line: &str) -> String {
@@ -14,10 +14,10 @@ pub(crate) fn expand_tabs(line: &str) -> String {
     }
 }
 
-/// A display-width slice of one line, expanded tabs included.
-///
-/// It never splits a code point: a wide character that straddles the cut is
-/// dropped whole. Combining marks are kept with the base character they follow.
+// A display-width slice of one line, expanded tabs included.
+//
+// It never splits a code point: a wide character that straddles the cut is
+// dropped whole. Combining marks are kept with the base character they follow.
 pub(crate) fn clip_line(line: &str, skip: usize, width: usize) -> String {
     if width == 0 {
         return String::new();
@@ -54,8 +54,6 @@ pub(crate) fn clip_line(line: &str, skip: usize, width: usize) -> String {
     out
 }
 
-/// Truncates `text` to `width` display columns, appending an ellipsis when it
-/// does not fit.
 pub(crate) fn truncate_ellipsis(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();

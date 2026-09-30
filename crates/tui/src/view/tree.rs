@@ -1,5 +1,3 @@
-//! The file tree: guides, selection, diff badges, and a scrollbar.
-
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -101,7 +99,6 @@ fn tree_line(
         spans.push(Span::styled(" ".to_owned(), base));
     }
 
-    // Guides: one three-column cell per ancestor level, then a connector.
     let rows = &model.rows;
     for level in 0..row.depth {
         let text = if level + 1 == row.depth {
@@ -132,7 +129,6 @@ fn tree_line(
         ));
     }
 
-    // An opt-in Nerd Font glyph sits between the marker and the label.
     let icon = match &row.kind {
         RowKind::Directory { .. } => model.icons.folder(),
         RowKind::File { path } => model.icons.file(path),
@@ -176,7 +172,6 @@ fn tree_line(
     Line::from(spans)
 }
 
-/// The diff badge for a file row, if any.
 fn badge(model: &Model, row: &TreeRow) -> Option<(&'static str, crate::theme::Rgb)> {
     let RowKind::File { path } = &row.kind else {
         return None;
@@ -189,7 +184,6 @@ fn badge(model: &Model, row: &TreeRow) -> Option<(&'static str, crate::theme::Rg
     }
 }
 
-/// Whether the row at `index` is the last visible sibling at `level`.
 fn is_last_child(rows: &[TreeRow], index: usize, level: usize) -> bool {
     for row in &rows[index + 1..] {
         if row.depth <= level {
