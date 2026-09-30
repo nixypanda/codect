@@ -64,7 +64,6 @@ impl Output {
         self.column = 0;
     }
 
-    /// The column the next written character would land in.
     fn column_now(&self) -> usize {
         if self.at_line_start {
             self.depth * 4
@@ -125,8 +124,8 @@ fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
     }
 }
 
-/// The display width of `doc` rendered flat, or `None` when it contains a hard
-/// [`Doc::Line`] and can therefore never be flat.
+// The display width of `doc` rendered flat, or `None` when it contains a hard
+// [`Doc::Line`] and can therefore never be flat.
 fn flat_width(doc: &Doc) -> Option<usize> {
     match doc {
         Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
@@ -148,7 +147,7 @@ fn flat_width(doc: &Doc) -> Option<usize> {
 mod tests {
     use super::{Doc, render};
 
-    /// A comma-separated bracketed list in the shape the adapters build.
+    // A comma-separated bracketed list in the shape the adapters build.
     fn list(items: &[String]) -> Doc {
         let mut inner = vec![Doc::SoftNil];
         for (index, item) in items.iter().enumerate() {

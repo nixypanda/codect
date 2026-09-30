@@ -149,7 +149,6 @@ pub fn diff_document(old: &[ProjectedFile], new: &[ProjectedFile]) -> String {
     document
 }
 
-/// The `---`/`+++` label for one side; `/dev/null` marks an absent side.
 fn side_label(present: bool, prefix: char, display: &str) -> String {
     if present {
         format!("{prefix}/{display}")

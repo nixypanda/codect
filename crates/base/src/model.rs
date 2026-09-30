@@ -226,7 +226,7 @@ impl ProjectedFile {
         Ok(Self::assemble(path, items))
     }
 
-    /// Assembles a file whose invariants are already established.
+    // Assembles a file whose invariants are already established.
     fn assemble(path: SupportedPath, items: Vec<ProjectedItem>) -> Self {
         let canonical_text = derive_canonical_text(&items);
         Self {

@@ -41,9 +41,9 @@ impl FileDiff {
     }
 }
 
-/// Context lines emitted around each change. Three is the conventional default
-/// and keeps focused diffs readable without depending on terminal width
-/// (TECHNICAL_DESIGN.md section 13).
+// Context lines emitted around each change. Three is the conventional default
+// and keeps focused diffs readable without depending on terminal width
+// (TECHNICAL_DESIGN.md section 13).
 const CONTEXT_RADIUS: usize = 3;
 
 /// How one aligned row relates the two sides.
@@ -313,7 +313,6 @@ mod tests {
             .collect();
         assert_eq!(headers, vec!["@@ -1,5 +1,5 @@", "@@ -9,7 +9,7 @@"]);
 
-        // Exactly three context lines surround each changed line.
         assert!(hunks.contains(" line 1\n-line 2\n+CHANGED 2\n line 3\n line 4\n line 5\n"));
         assert!(
             hunks.contains(
@@ -472,7 +471,6 @@ mod tests {
         }
     }
 
-    /// The one-based old/new line numbers `unified_hunks` marks as changed.
     fn unified_changed_lines(hunks: &str) -> (Vec<usize>, Vec<usize>) {
         let mut old_changed = Vec::new();
         let mut new_changed = Vec::new();
