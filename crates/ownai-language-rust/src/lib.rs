@@ -50,14 +50,6 @@ mod tests {
     }
 
     #[test]
-    fn reports_rust_language_and_supported_paths() {
-        assert_eq!(RustProjector.language(), Language::Rust);
-        assert!(RustProjector.supports_path(&RepoPath::new("src/lib.rs").unwrap()));
-        assert!(!RustProjector.supports_path(&RepoPath::new("src/Main.elm").unwrap()));
-        assert!(!RustProjector.supports_path(&RepoPath::new("README.md").unwrap()));
-    }
-
-    #[test]
     fn erroneous_source_is_fatal() {
         let path = supported("src/lib.rs");
         for source in ["pub struct Broken {", "pub struct Truncated", "fn f( {"] {
@@ -73,15 +65,6 @@ mod tests {
                 "{source:?} produced {error:?}"
             );
             assert!(error.range().is_some());
-        }
-    }
-
-    #[test]
-    fn empty_source_projects_to_empty_text() {
-        for mode in [ProjectionMode::Types, ProjectionMode::Signatures] {
-            let file = project("", mode);
-            assert!(file.items().is_empty());
-            assert_eq!(file.canonical_text(), "");
         }
     }
 

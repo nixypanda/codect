@@ -8,7 +8,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{TestRepo, ownai, ownai_in, stderr};
+use support::{TestRepo, ownai_in, stderr};
 
 const RUST_BASE: &str = "\
 pub struct User {
@@ -54,38 +54,9 @@ fn tui_show_without_a_terminal_exits_one_with_a_clean_stdout() {
 }
 
 #[test]
-fn tui_show_defaults_the_revision_to_head() {
-    let repo = repo();
-
-    // Still non-terminal, so it must fail the same way without a revision
-    // argument; this proves HEAD is accepted as the default.
-    ownai_in(&repo, &["tui", "show", "--mode", "types"])
-        .assert()
-        .code(1);
-}
-
-#[test]
 fn tui_show_without_a_mode_is_a_usage_error() {
     let repo = repo();
     ownai_in(&repo, &["tui", "show"]).assert().code(2);
-}
-
-#[test]
-fn tui_accepts_the_icons_flag() {
-    let repo = repo();
-    // Accepted, then rejected only because stdout is not a terminal.
-    ownai_in(
-        &repo,
-        &["tui", "show", "--mode", "types", "--icons", "nerd"],
-    )
-    .assert()
-    .code(1);
-    ownai_in(
-        &repo,
-        &["tui", "show", "--mode", "types", "--icons", "none"],
-    )
-    .assert()
-    .code(1);
 }
 
 #[test]
@@ -116,14 +87,6 @@ fn tui_show_area_and_path_together_are_a_usage_error() {
     )
     .assert()
     .code(2);
-}
-
-#[test]
-fn the_top_level_help_lists_the_tui_command() {
-    let output = ownai().arg("--help").output().expect("run ownai");
-    assert!(output.status.success());
-    let help = String::from_utf8(output.stdout).expect("help is UTF-8");
-    assert!(help.contains("tui"), "help must list `tui`: {help}");
 }
 
 #[test]

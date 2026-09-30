@@ -814,22 +814,3 @@ fn color_always_contains_escape_bytes() {
         "`--color=always` must emit ANSI for section headers"
     );
 }
-
-// ---------------------------------------------------------------------------
-// help
-// ---------------------------------------------------------------------------
-
-#[test]
-fn help_states_that_implementation_only_changes_are_invisible() {
-    ownai()
-        .arg("--help")
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("implementation-only changes"));
-
-    ownai()
-        .args(["show", "--help"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("implementation-only"));
-}

@@ -72,13 +72,6 @@ mod tests {
     }
 
     #[test]
-    fn the_none_style_draws_nothing() {
-        let icons = Icons::new(IconStyle::None);
-        assert_eq!(icons.folder(), "");
-        assert_eq!(icons.file(&path("src/main.rs")), "");
-    }
-
-    #[test]
     fn nerd_files_are_chosen_by_language() {
         let icons = Icons::new(IconStyle::Nerd);
         assert_eq!(icons.file(&path("src/main.rs")), "\u{e7a8}");

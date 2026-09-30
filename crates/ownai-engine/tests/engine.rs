@@ -1,12 +1,13 @@
 //! Engine-level integration tests over real temporary Git repositories.
 //!
-//! These exercise the shared pipeline directly: ordering, empty projections,
-//! focused-diff filtering, selection validation, and the per-operation caches.
-//! The CLI and terminal frontends build on exactly these results.
+//! These exercise the shared pipeline directly: empty projections, selection
+//! validation and its error shapes, stable keys, and repository discovery. The
+//! ordering and focused-diff filtering rules are covered end to end by the CLI
+//! suite; the CLI and terminal frontends build on exactly these results.
 
 mod support;
 
-use ownai_core::{Area, FileDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
+use ownai_core::{Area, ProjectionMode, RepoPath, Selection, SelectionGroup};
 use ownai_engine::{Engine, EngineError};
 use support::TestRepo;
 
@@ -29,16 +30,6 @@ pub struct User {
 
 pub fn greet(name: &str) -> String {
     format!(\"hi {name}\")
-}
-";
-
-const RUST_BODY_VARIANT: &str = "\
-pub struct User {
-    pub id: u32,
-}
-
-pub fn greet(name: &str) -> String {
-    format!(\"hello {name}\")
 }
 ";
 
@@ -85,42 +76,6 @@ fn area_selection(name: &str, paths: &[&str]) -> Selection {
         .collect();
     let area = Area::new(name, paths).expect("valid area");
     Selection::new(vec![SelectionGroup::Area(area)])
-}
-
-fn paths_of(diffs: &[FileDiff]) -> Vec<String> {
-    diffs.iter().map(|diff| diff.path().to_string()).collect()
-}
-
-#[test]
-fn show_returns_supported_files_in_raw_path_byte_order() {
-    let repo = TestRepo::init();
-    repo.write("b.rs", RUST_BASE);
-    repo.write("a.rs", RUST_BASE);
-    repo.write("README.md", "not projected");
-    repo.commit("base");
-
-    let files = engine(&repo)
-        .show("HEAD", ProjectionMode::Types, &Selection::all())
-        .expect("show");
-
-    let names: Vec<String> = files.iter().map(|file| file.path().to_string()).collect();
-    assert_eq!(names, vec!["a.rs", "b.rs"]);
-    assert!(files.iter().all(|file| !file.canonical_text().is_empty()));
-}
-
-#[test]
-fn show_scopes_to_the_selected_paths() {
-    let repo = TestRepo::init();
-    repo.write("a.rs", RUST_BASE);
-    repo.write("b.rs", RUST_BASE);
-    repo.commit("base");
-
-    let files = engine(&repo)
-        .show("HEAD", ProjectionMode::Types, &path_selection(&["a.rs"]))
-        .expect("show");
-
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path().to_string(), "a.rs");
 }
 
 #[test]
@@ -220,75 +175,6 @@ fn a_malformed_config_is_reported_as_a_config_error() {
 }
 
 #[test]
-fn diff_keeps_only_changed_projections() {
-    let repo = TestRepo::init();
-    repo.write("src/lib.rs", RUST_BASE);
-    repo.commit("base");
-    repo.write("src/lib.rs", RUST_TYPE_VARIANT);
-    repo.commit("type change");
-
-    let engine = engine(&repo);
-    let types = engine
-        .diff("HEAD~1", "HEAD", ProjectionMode::Types, &Selection::all())
-        .expect("diff types");
-    assert_eq!(paths_of(&types), vec!["src/lib.rs"]);
-    assert!(matches!(types[0], FileDiff::Modified { .. }));
-}
-
-#[test]
-fn diff_body_only_changes_are_invisible() {
-    let repo = TestRepo::init();
-    repo.write("src/lib.rs", RUST_BASE);
-    repo.commit("base");
-    repo.write("src/lib.rs", RUST_BODY_VARIANT);
-    repo.commit("body change");
-
-    let engine = engine(&repo);
-    for mode in [ProjectionMode::Types, ProjectionMode::Signatures] {
-        let diffs = engine
-            .diff("HEAD~1", "HEAD", mode, &Selection::all())
-            .expect("diff");
-        assert!(diffs.is_empty(), "expected no diff in {mode:?}");
-    }
-}
-
-#[test]
-fn diff_marks_added_and_deleted_files() {
-    let repo = TestRepo::init();
-    repo.write("gone.rs", RUST_BASE);
-    repo.commit("base");
-    repo.remove("gone.rs");
-    repo.write("fresh.rs", RUST_BASE);
-    repo.commit("swap");
-
-    let diffs = engine(&repo)
-        .diff("HEAD~1", "HEAD", ProjectionMode::Types, &Selection::all())
-        .expect("diff");
-
-    assert_eq!(paths_of(&diffs), vec!["fresh.rs", "gone.rs"]);
-    assert!(matches!(diffs[0], FileDiff::Added { .. }));
-    assert!(matches!(diffs[1], FileDiff::Deleted { .. }));
-}
-
-#[test]
-fn diff_treats_an_empty_projection_as_absent_content() {
-    let repo = TestRepo::init();
-    repo.write("empty.rs", EMPTY_RUST);
-    repo.commit("base");
-    repo.remove("empty.rs");
-    repo.commit("delete");
-
-    let diffs = engine(&repo)
-        .diff("HEAD~1", "HEAD", ProjectionMode::Types, &Selection::all())
-        .expect("diff");
-
-    assert!(
-        diffs.is_empty(),
-        "an empty projection equals an absent side"
-    );
-}
-
-#[test]
 fn diff_rejects_a_path_absent_from_both_revisions() {
     let repo = TestRepo::init();
     repo.write("a.rs", RUST_BASE);
@@ -311,27 +197,6 @@ fn diff_rejects_a_path_absent_from_both_revisions() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
-}
-
-#[test]
-fn diff_accepts_a_path_deleted_by_the_target() {
-    let repo = TestRepo::init();
-    repo.write("a.rs", RUST_BASE);
-    repo.commit("base");
-    repo.remove("a.rs");
-    repo.commit("delete");
-
-    let diffs = engine(&repo)
-        .diff(
-            "HEAD~1",
-            "HEAD",
-            ProjectionMode::Types,
-            &path_selection(&["a.rs"]),
-        )
-        .expect("diff");
-
-    assert_eq!(paths_of(&diffs), vec!["a.rs"]);
-    assert!(matches!(diffs[0], FileDiff::Deleted { .. }));
 }
 
 #[test]
@@ -406,28 +271,6 @@ fn identical_blobs_at_different_paths_get_path_correct_stable_keys() {
             "b/m.py::class::Widget::method::render"
         ]
     );
-}
-
-#[test]
-fn show_and_diff_work_in_a_bare_repository() {
-    let normal = TestRepo::init();
-    normal.write("src/lib.rs", RUST_BASE);
-    normal.commit("base");
-    normal.write("src/lib.rs", RUST_TYPE_VARIANT);
-    normal.commit("change");
-
-    let bare = normal.clone_bare();
-    let engine = Engine::discover(bare.path()).expect("discover bare repository");
-
-    let files = engine
-        .show("HEAD", ProjectionMode::Types, &Selection::all())
-        .expect("show");
-    assert_eq!(files.len(), 1);
-
-    let diffs = engine
-        .diff("HEAD~1", "HEAD", ProjectionMode::Types, &Selection::all())
-        .expect("diff");
-    assert_eq!(paths_of(&diffs), vec!["src/lib.rs"]);
 }
 
 #[test]

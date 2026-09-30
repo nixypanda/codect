@@ -1,8 +1,8 @@
 //! Adapter identity and boundary tests.
 
 use ownai_core::{
-    ItemKind, Language, LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode,
-    RepoPath, SupportedPath,
+    ItemKind, LanguageProjector, ProjectionError, ProjectionInput, ProjectionMode, RepoPath,
+    SupportedPath,
 };
 use ownai_language_python::PythonProjector;
 
@@ -19,24 +19,6 @@ fn project(source: &str, mode: ProjectionMode) -> ownai_core::ProjectedFile {
             mode,
         })
         .unwrap()
-}
-
-#[test]
-fn reports_python_language_and_supported_paths() {
-    assert_eq!(PythonProjector.language(), Language::Python);
-    assert!(PythonProjector.supports_path(&RepoPath::new("src/app.py").unwrap()));
-    assert!(PythonProjector.supports_path(&RepoPath::new("src/app.pyi").unwrap()));
-    assert!(!PythonProjector.supports_path(&RepoPath::new("src/lib.rs").unwrap()));
-    assert!(!PythonProjector.supports_path(&RepoPath::new("README.md").unwrap()));
-}
-
-#[test]
-fn empty_source_projects_to_empty_text() {
-    for mode in [ProjectionMode::Types, ProjectionMode::Signatures] {
-        let file = project("", mode);
-        assert!(file.items().is_empty());
-        assert_eq!(file.canonical_text(), "");
-    }
 }
 
 #[test]

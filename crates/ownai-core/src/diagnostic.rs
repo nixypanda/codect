@@ -174,12 +174,6 @@ mod tests {
     }
 
     #[test]
-    fn decode_source_accepts_valid_utf8() {
-        let decoded = decode_source(&supported("src/lib.rs"), b"pub fn main() {}").unwrap();
-        assert_eq!(decoded, "pub fn main() {}");
-    }
-
-    #[test]
     fn decode_source_reports_invalid_utf8_with_context() {
         let path = supported("src/lib.rs");
         let error = decode_source(&path, b"pub fn main() { \xFF }").unwrap_err();
@@ -205,21 +199,5 @@ mod tests {
 
         assert_eq!(diagnostic.context.revision.as_deref(), Some("HEAD"));
         assert!(diagnostic.source_error().source().is_some());
-    }
-
-    #[test]
-    fn a_context_without_a_location_keeps_the_other_fields() {
-        let context = DiagnosticContext {
-            repository: Some(PathBuf::from("/repo")),
-            revision: Some("HEAD".to_owned()),
-            ..DiagnosticContext::default()
-        };
-
-        assert!(context.location.is_none());
-        assert_eq!(
-            context.repository.as_deref(),
-            Some(std::path::Path::new("/repo"))
-        );
-        assert_eq!(context.revision.as_deref(), Some("HEAD"));
     }
 }

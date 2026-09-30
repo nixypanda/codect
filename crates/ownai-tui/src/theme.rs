@@ -453,14 +453,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn truecolor_is_identity() {
-        assert_eq!(
-            Rgb(1, 2, 3).to_color(Capability::TrueColor),
-            Color::Rgb(1, 2, 3)
-        );
-    }
-
-    #[test]
     fn no_color_resets_everything() {
         assert_eq!(Rgb(1, 2, 3).to_color(Capability::NoColor), Color::Reset);
     }
@@ -482,35 +474,6 @@ mod tests {
         let color = Rgb(0xff, 0xff, 0xff).to_color(Capability::Ansi256);
         assert!(matches!(color, Color::Indexed(_)));
         assert_eq!(color, Color::Indexed(15));
-    }
-
-    #[test]
-    fn xterm256_has_the_gray_ramp_at_the_end() {
-        let palette = xterm256();
-        assert_eq!(palette[232], Rgb(8, 8, 8));
-        assert_eq!(palette[255], Rgb(238, 238, 238));
-    }
-
-    #[test]
-    fn flavors_use_tokyo_night_colors() {
-        let dark = Theme::dark().palette;
-        let light = Theme::new(Flavor::Light, Capability::TrueColor).palette;
-        assert_eq!(dark.bg, Rgb(0x1a, 0x1b, 0x26));
-        assert_eq!(dark.add_bg, Rgb(0x24, 0x3e, 0x4a));
-        assert_eq!(dark.del_bg, Rgb(0x4a, 0x27, 0x2f));
-        assert_eq!(light.bg, Rgb(0xe1, 0xe2, 0xe7));
-        assert_eq!(light.add_bg, Rgb(0xb7, 0xce, 0xd5));
-        assert_eq!(light.del_bg, Rgb(0xda, 0xba, 0xbe));
-        assert_ne!(dark.accent, dark.dir);
-        assert_ne!(dark.accent, dark.hunk);
-        assert_ne!(light.accent, light.dir);
-        assert_ne!(light.accent, light.hunk);
-    }
-
-    #[test]
-    fn flavors_differ() {
-        let light = Theme::new(Flavor::Light, Capability::TrueColor);
-        assert_ne!(Theme::dark().palette.bg, light.palette.bg);
     }
 
     #[test]

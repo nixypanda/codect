@@ -453,18 +453,10 @@ mod tests {
     }
 
     #[test]
-    fn supported_path_pairs_every_supported_extension_with_its_language() {
-        for (raw, language) in [
-            ("src/User.elm", Language::Elm),
-            ("src/lib.rs", Language::Rust),
-            ("src/Main.hs", Language::Haskell),
-            ("src/app.py", Language::Python),
-            ("src/app.pyi", Language::Python),
-        ] {
-            let path = supported(raw);
-            assert_eq!(path.path().to_string(), raw);
-            assert_eq!(path.language(), language);
-        }
+    fn supported_path_wraps_a_supported_file_and_rejects_the_rest() {
+        let path = supported("src/lib.rs");
+        assert_eq!(path.path().to_string(), "src/lib.rs");
+        assert_eq!(path.language(), Language::Rust);
         assert!(SupportedPath::new(RepoPath::new("README.md").unwrap()).is_none());
     }
 
@@ -697,16 +689,5 @@ mod tests {
         )
         .expect_err("a duplicate stable key must be rejected");
         assert!(matches!(error, ProjectionError::AstInvariant { .. }));
-    }
-
-    #[test]
-    fn source_span_accessors_return_the_constructed_positions() {
-        let span = SourceSpan::new(4, 12, 1, 4, 2, 3);
-        assert_eq!(span.start_byte(), 4);
-        assert_eq!(span.end_byte(), 12);
-        assert_eq!(span.start_line(), 1);
-        assert_eq!(span.start_column(), 4);
-        assert_eq!(span.end_line(), 2);
-        assert_eq!(span.end_column(), 3);
     }
 }

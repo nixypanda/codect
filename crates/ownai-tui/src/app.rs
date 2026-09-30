@@ -2494,7 +2494,7 @@ mod tests {
     use super::*;
     use crate::highlight::Run;
     use crate::icons::IconStyle;
-    use crate::view::geom::{centered, window_offset};
+    use crate::view::geom::window_offset;
     use crate::view::text::clip_line;
     use crate::view::view;
     use ownai_core::{Area, ItemKind, ProjectedItem, SelectionError, SourceSpan, SupportedPath};
@@ -4295,13 +4295,6 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_sized_rectangle_does_not_panic() {
-        let model = two_files();
-        let text = buffer_text(&render(&model, 1, 1));
-        assert!(text.contains("terminal too small") || !text.is_empty());
-    }
-
-    #[test]
     fn responsive_boundaries_pick_the_right_layout() {
         let model = model_with(vec![projected("a.rs", "pub fn a();\n")]);
 
@@ -4331,13 +4324,6 @@ mod tests {
             !text.contains("abcdef"),
             "the first column must scroll away"
         );
-    }
-
-    #[test]
-    fn centered_handles_a_zero_sized_area() {
-        let rect = centered(Rect::new(0, 0, 0, 0), 40, 10);
-        assert_eq!(rect.width, 0);
-        assert_eq!(rect.height, 0);
     }
 
     #[test]

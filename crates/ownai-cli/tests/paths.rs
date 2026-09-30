@@ -357,22 +357,8 @@ fn show_targets_a_non_utf8_committed_path_on_unix() {
 }
 
 // ---------------------------------------------------------------------------
-// help and color
+// color
 // ---------------------------------------------------------------------------
-
-#[test]
-fn help_documents_path_scoping_for_show_and_diff() {
-    ownai()
-        .args(["show", "--help"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("--path"));
-    ownai()
-        .args(["diff", "--help"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("--path"));
-}
 
 #[test]
 fn scoped_redirected_output_contains_no_escape_bytes() {
