@@ -2,8 +2,9 @@
 //!
 //! This crate is the only layer that touches the terminal. It owns the run
 //! loop, the terminal lifecycle, and the interpretation of effects, and it
-//! follows The Elm Architecture: the pure `Model`, `Msg`, `Cmd`, `update`, and
-//! `view` live in [`app`], while this module is the only imperative part.
+//! follows The Elm Architecture: the pure `Model` (an [`app::App`]), `Msg`,
+//! `Cmd`, `update`, and `view` live in [`app`] and [`view`], while this module
+//! is the only imperative part.
 //!
 //! # Boundaries
 //!
@@ -15,7 +16,7 @@
 //!   ever run here, never inside `update` or `view`.
 
 use std::io::{IsTerminal, Stdout};
-use std::sync::Once;
+use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
 use crossterm::cursor;
@@ -28,22 +29,26 @@ use engine::{Engine, EngineError};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+mod action;
+mod api;
 mod app;
-mod fuzzy;
-mod highlight;
-mod icons;
-mod theme;
+mod component;
+mod page;
+mod render;
+mod route;
+mod util;
 mod view;
 
 #[cfg(feature = "bench")]
 #[doc(hidden)]
 pub mod bench;
 
-use app::{Cmd, Content, Key, Model, Mouse, MouseKind, Msg, coalesce_commit_loads, settle, update};
+use app::{App, Cmd, DiffRequest, Msg, ShowRequest, coalesce_commit_loads, settle, update};
 pub use app::{DiffView, LoadRequest};
-pub use icons::IconStyle;
-use icons::Icons;
-use theme::Theme;
+pub use render::icons::IconStyle;
+use render::icons::Icons;
+use render::theme::Theme;
+use util::input::{Key, Mouse, MouseKind};
 use view::view;
 
 // How long the driver waits for input before emitting a tick, which drives the
@@ -118,9 +123,10 @@ fn run_with<D: Driver>(
     session.setup()?;
 
     let (width, height) = session.driver().size()?;
-    let mut model = Model::new(
+    let request = options.request.clone();
+    let mut model = App::new(
         engine.root().display().to_string(),
-        options.request.clone(),
+        request.clone(),
         options.scope_label,
         width,
         height,
@@ -132,42 +138,21 @@ fn run_with<D: Driver>(
     // failure here is fatal: there is no previous screen to keep.
     // Draw the busy state first so the spinner is visible while it runs.
     session.driver().draw(&model)?;
-    let startup = interpret(
-        &engine,
-        Cmd::Load {
-            request: options.request,
-        },
-    );
-    let (initial, _) = match startup {
-        Msg::Loaded {
-            request,
-            result: Ok(content),
-        } => update(
-            Msg::Loaded {
-                request,
-                result: Ok(content),
-            },
-            &model,
-        ),
-        Msg::Loaded {
+    let startup = interpret(&engine, request_into_cmd(request));
+    match startup {
+        Msg::ShowLoaded {
+            result: Err(error), ..
+        }
+        | Msg::DiffLoaded {
+            result: Err(error), ..
+        }
+        | Msg::HistoryLoaded {
             result: Err(error), ..
         } => return Err(TuiError::Engine(*error)),
-        Msg::HistoryLoaded {
-            request,
-            result: Ok((steps, content)),
-        } => update(
-            Msg::HistoryLoaded {
-                request,
-                result: Ok((steps, content)),
-            },
-            &model,
-        ),
-        Msg::HistoryLoaded {
-            result: Err(error), ..
-        } => return Err(TuiError::Engine(*error)),
-        _ => unreachable!("the startup effect always produces Loaded"),
-    };
-    model = initial;
+        msg => {
+            model = update(msg, &model).0;
+        }
+    }
 
     // The frame is redrawn only when something changed or is animating.
     let mut dirty = true;
@@ -179,7 +164,7 @@ fn run_with<D: Driver>(
         }
         let msg = session.driver().read_msg()?;
         // An idle tick has nothing to animate, so it neither updates nor redraws.
-        if matches!(msg, Msg::Tick) && model.pending.is_none() && model.diagnostic.is_none() {
+        if matches!(msg, Msg::Tick) && !model.is_busy() && model.diagnostic.is_none() {
             dirty = false;
             continue;
         }
@@ -219,7 +204,7 @@ fn run_with<D: Driver>(
         }
         model = next;
         dirty = true;
-        if model.quit {
+        if model.chrome.quit {
             break;
         }
     }
@@ -228,55 +213,75 @@ fn run_with<D: Driver>(
     Ok(())
 }
 
+fn request_into_cmd(request: LoadRequest) -> Cmd {
+    match request {
+        LoadRequest::Show {
+            revision,
+            mode,
+            selection,
+        } => Cmd::Show(ShowRequest {
+            revision,
+            mode,
+            selection,
+        }),
+        LoadRequest::Diff {
+            base,
+            target,
+            mode,
+            selection,
+            view,
+        } => Cmd::Diff(DiffRequest {
+            base,
+            target,
+            mode,
+            selection,
+            view,
+        }),
+    }
+}
+
 fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
     match cmd {
-        Cmd::Load { request } => {
-            let result = match &request {
-                LoadRequest::Show {
-                    revision,
-                    mode,
-                    selection,
-                } => engine.show(revision, *mode, selection).map(Content::from),
-                LoadRequest::Diff {
-                    base,
-                    target,
-                    mode,
-                    selection,
-                    view: DiffView::Range,
-                } => engine
-                    .diff(base, target, *mode, selection)
-                    .map(Content::from),
-                LoadRequest::Diff {
-                    base,
-                    target,
-                    mode,
-                    selection,
-                    view: DiffView::Commits,
-                } => {
-                    let result = engine.first_parent_steps(base, target).and_then(|steps| {
-                        let content = match steps.first() {
-                            Some(step) => engine
-                                .diff(
-                                    &step.parent_id.to_string(),
-                                    &step.commit_id.to_string(),
-                                    *mode,
-                                    selection,
-                                )?
-                                .into(),
-                            None => Content::Diff(Vec::new().into()),
-                        };
-                        Ok((steps, content))
-                    });
-                    return Msg::HistoryLoaded {
-                        request,
-                        result: result.map_err(Box::new),
-                    };
-                }
-            }
-            .map_err(Box::new);
-            Msg::Loaded { request, result }
+        Cmd::Show(request) => {
+            let result = engine
+                .show(&request.revision, request.mode, &request.selection)
+                .map(Arc::from)
+                .map_err(Box::new);
+            Msg::ShowLoaded { request, result }
         }
-        Cmd::LoadStep {
+        Cmd::Diff(request) => match request.view {
+            DiffView::Range => {
+                let result = engine
+                    .diff(
+                        &request.base,
+                        &request.target,
+                        request.mode,
+                        &request.selection,
+                    )
+                    .map(Arc::from)
+                    .map_err(Box::new);
+                Msg::DiffLoaded { request, result }
+            }
+            DiffView::Commits => {
+                let result = engine
+                    .first_parent_steps(&request.base, &request.target)
+                    .and_then(|steps| {
+                        let diffs: Vec<_> = match steps.first() {
+                            Some(step) => engine.diff(
+                                &step.parent_id.to_string(),
+                                &step.commit_id.to_string(),
+                                request.mode,
+                                &request.selection,
+                            )?,
+                            None => Vec::new(),
+                        };
+                        Ok((Arc::from(steps), Arc::from(diffs)))
+                    })
+                    .map_err(Box::new);
+                Msg::HistoryLoaded { request, result }
+            }
+        },
+        Cmd::Step {
             request,
             index,
             step,
@@ -285,16 +290,12 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                 .diff(
                     &step.parent_id.to_string(),
                     &step.commit_id.to_string(),
-                    request.mode(),
-                    request.selection(),
+                    request.mode,
+                    &request.selection,
                 )
-                .map(Content::from)
+                .map(Arc::from)
                 .map_err(Box::new);
-            Msg::StepLoaded {
-                request,
-                index,
-                result,
-            }
+            Msg::StepLoaded { index, result }
         }
         Cmd::LoadAreas => Msg::AreasLoaded(engine.load_areas().map_err(Box::new)),
     }
@@ -307,7 +308,7 @@ trait Driver {
     // Undoes exactly the steps that succeeded, in reverse order. Best-effort.
     fn teardown(&mut self);
     fn size(&mut self) -> Result<(u16, u16), TuiError>;
-    fn draw(&mut self, model: &Model) -> Result<(), TuiError>;
+    fn draw(&mut self, model: &App) -> Result<(), TuiError>;
     fn read_msg(&mut self) -> Result<Msg, TuiError>;
     // A message for an event that is already available, or `None` when the
     // input queue is empty. Never blocks.
@@ -430,7 +431,7 @@ impl Driver for CrosstermDriver {
         crossterm::terminal::size().map_err(TuiError::Terminal)
     }
 
-    fn draw(&mut self, model: &Model) -> Result<(), TuiError> {
+    fn draw(&mut self, model: &App) -> Result<(), TuiError> {
         let terminal = self.terminal.as_mut().ok_or_else(not_a_terminal)?;
         terminal
             .draw(|frame| view(model, frame))
@@ -626,7 +627,7 @@ mod tests {
             Ok((100, 30))
         }
 
-        fn draw(&mut self, _model: &Model) -> Result<(), TuiError> {
+        fn draw(&mut self, _model: &App) -> Result<(), TuiError> {
             self.log.borrow_mut().draws += 1;
             Ok(())
         }

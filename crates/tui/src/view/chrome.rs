@@ -5,13 +5,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{Content, LoadRequest, Model, Overlay, Pane, mode_label};
-use crate::theme::{Rgb, Theme};
+use crate::app::{App, layout_focus};
+use crate::component::overlay::Overlay;
+use crate::page::{Loaded, mode_label};
+use crate::render::layout::VisualRowKind;
+use crate::render::metrics::Focus;
+use crate::render::text::clip_line;
+use crate::render::theme::{Rgb, Theme};
 
-use super::text::clip_line;
-
-pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
-    let theme = &model.theme;
+pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
+    let theme = &app.chrome.theme;
     let base = theme.bg(theme.palette.surface);
     let brand = Span::styled(
         " ◆ ownai ",
@@ -19,18 +22,18 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
             .fg_bg(theme.ink(theme.palette.accent), theme.palette.accent)
             .add_modifier(Modifier::BOLD),
     );
-    let revision = match &model.request {
-        LoadRequest::Show { revision, .. } => revision.clone(),
-        LoadRequest::Diff { .. } => {
-            let (base, target) = model.diff_revisions().expect("diff request has revisions");
-            format!("{base}..{target}")
+    let (mode, revision) = match &app.loaded {
+        Loaded::Show(show) => (show.mode, show.revision.clone()),
+        Loaded::Diff(diff) => {
+            let (base, target) = diff.revisions();
+            (diff.mode, format!("{base}..{target}"))
         }
     };
     let context = [
-        chip(mode_label(model.mode), theme.palette.accent, theme),
+        chip(mode_label(mode), theme.palette.accent, theme),
         chip(&revision, theme.palette.surface_alt, theme),
         chip(
-            &format!("scope: {}", model.scope_label),
+            &format!("scope: {}", app.scope_label()),
             theme.palette.surface_alt,
             theme,
         ),
@@ -56,7 +59,7 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
     let mut spans = vec![
         brand,
         Span::styled(
-            format!(" {} ", clip_tail(&model.root, root_width)),
+            format!(" {} ", clip_tail(&app.root, root_width)),
             theme.fg(theme.palette.text_dim),
         ),
     ];
@@ -73,14 +76,14 @@ pub(crate) fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(base), area);
 }
 
-pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
-    let theme = &model.theme;
+pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
+    let theme = &app.chrome.theme;
     let base = theme.bg(theme.palette.surface);
 
     let mut prefix: Vec<Span<'static>> = Vec::new();
-    if model.pending.is_some() {
+    if app.is_busy() {
         prefix.push(Span::styled(
-            format!("{} ", spinner_frame(model.spinner)),
+            format!("{} ", spinner_frame(app.chrome.spinner)),
             theme.fg(theme.palette.accent),
         ));
         prefix.push(Span::styled(
@@ -89,7 +92,7 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
         ));
     }
     let mut detail: Vec<Span<'static>> = Vec::new();
-    if let Some((added, removed)) = diff_stats(model) {
+    if let Some((added, removed)) = diff_stats(app) {
         detail.push(Span::styled(
             format!("+{added} "),
             theme.fg(theme.palette.add_fg),
@@ -98,14 +101,16 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
             format!("−{removed} "),
             theme.fg(theme.palette.del_fg),
         ));
-    } else if let Some(text) = model.active_text() {
+    } else if let Loaded::Show(show) = &app.loaded
+        && let Some(text) = show.active_text()
+    {
         detail.push(Span::styled(
             format!("{} lines ", text.lines().count()),
             theme.fg(theme.palette.text_muted),
         ));
     }
 
-    if let Some(search) = &model.search {
+    if let Some(search) = app.loaded.search() {
         let total = search.matches.len();
         let current = if total == 0 { 0 } else { search.cursor + 1 };
         detail.push(Span::styled(
@@ -114,7 +119,7 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
         ));
     }
 
-    let mut hints = hints(model);
+    let mut hints = hints(app);
     let hints_style = theme.fg(theme.palette.text_muted);
     let fixed_width: usize = prefix
         .iter()
@@ -123,21 +128,19 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
         .sum();
     let area_width = area.width as usize;
     if fixed_width + UnicodeWidthStr::width(hints.as_str()) + 10 > area_width {
-        hints = compact_hints(model).to_owned();
+        hints = compact_hints(app).to_owned();
     }
     if fixed_width + UnicodeWidthStr::width(hints.as_str()) + 4 > area_width {
         hints.clear();
     }
     let hints_width = UnicodeWidthStr::width(hints.as_str());
-    let path = model
-        .selected
-        .as_ref()
-        .map_or_else(|| "no selection".to_owned(), ToString::to_string);
+    let selected = app.loaded.selected();
+    let path = selected.map_or_else(|| "no selection".to_owned(), ToString::to_string);
     let path_width = area_width.saturating_sub(fixed_width + hints_width + 3);
     let mut spans = prefix;
     spans.push(Span::styled(
         format!(" {} ", clip_tail(&path, path_width)),
-        theme.fg(if model.selected.is_some() {
+        theme.fg(if selected.is_some() {
             theme.palette.text
         } else {
             theme.palette.text_muted
@@ -159,61 +162,69 @@ pub(crate) fn render_status(model: &Model, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(base), area);
 }
 
-fn compact_hints(model: &Model) -> &'static str {
-    if model.overlay.is_some() {
+fn compact_hints(app: &App) -> &'static str {
+    if app.overlay.is_some() || prompt_active(app) {
         "Esc close "
     } else {
         "? help "
     }
 }
 
-fn hints(model: &Model) -> String {
-    match &model.overlay {
-        Some(Overlay::Revision { .. }) => "Enter apply   Esc cancel ".to_owned(),
-        Some(Overlay::Scope(_)) => "↑↓ choose   Enter select   Esc close ".to_owned(),
-        Some(Overlay::Mode { .. }) => "↑↓ choose   Enter apply   Esc close ".to_owned(),
-        Some(Overlay::Palette(_)) | Some(Overlay::Finder(_)) => {
-            "type to filter   ↑↓ choose   Enter open   Esc close ".to_owned()
+fn prompt_active(app: &App) -> bool {
+    app.loaded.prompt_active()
+}
+
+fn hints(app: &App) -> String {
+    if let Some(overlay) = &app.overlay {
+        return match overlay {
+            Overlay::Scope(_) => "↑↓ choose   Enter select   Esc close ".to_owned(),
+            Overlay::Mode { .. } => "↑↓ choose   Enter apply   Esc close ".to_owned(),
+            Overlay::Palette(_) | Overlay::Finder(_) => {
+                "type to filter   ↑↓ choose   Enter open   Esc close ".to_owned()
+            }
+            Overlay::Search(_) => "type to search   Enter next   Esc cancel ".to_owned(),
+            Overlay::Help => "Esc close ".to_owned(),
+        };
+    }
+    if prompt_active(app) {
+        return "Enter apply   Esc cancel ".to_owned();
+    }
+    match layout_focus(app) {
+        Focus::Commits => "j/k choose commit   Tab files   Ctrl-P commands   ? help ".to_owned(),
+        Focus::Tree => {
+            "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ".to_owned()
         }
-        Some(Overlay::Search(_)) => "type to search   Enter next   Esc cancel ".to_owned(),
-        Some(Overlay::Help) => "Esc close ".to_owned(),
-        None => match (model.focus, &model.content) {
-            (Pane::Commits, _) => {
-                "j/k choose commit   Tab files   Ctrl-P commands   ? help ".to_owned()
-            }
-            (Pane::Tree, _) => {
-                "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ".to_owned()
-            }
-            (Pane::Body, _) => {
+        Focus::Content => match app.loaded {
+            Loaded::Show(_) => {
                 "wheel / j k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned()
             }
-            (Pane::Diff, _) => {
+            Loaded::Diff(_) => {
                 "wheel / j k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned()
             }
         },
     }
 }
 
-pub(crate) fn diff_stats(model: &Model) -> Option<(usize, usize)> {
-    if !matches!(model.content, Content::Diff(_)) {
+pub(crate) fn diff_stats(app: &App) -> Option<(usize, usize)> {
+    if !matches!(app.loaded, Loaded::Diff(_)) {
         return None;
     }
     let mut added = 0;
     let mut removed = 0;
-    for row in model.diff_rows() {
+    for row in app.diff_rows() {
         if row.continuation {
             continue;
         }
         match row.kind {
-            crate::app::VisualRowKind::Diff(base::DiffRowKind::Add) => added += 1,
-            crate::app::VisualRowKind::Diff(base::DiffRowKind::Delete) => removed += 1,
-            crate::app::VisualRowKind::Diff(base::DiffRowKind::Change) => {
+            VisualRowKind::Diff(base::DiffRowKind::Add) => added += 1,
+            VisualRowKind::Diff(base::DiffRowKind::Delete) => removed += 1,
+            VisualRowKind::Diff(base::DiffRowKind::Change) => {
                 added += 1;
                 removed += 1;
             }
-            crate::app::VisualRowKind::Diff(base::DiffRowKind::Equal)
-            | crate::app::VisualRowKind::Hunk
-            | crate::app::VisualRowKind::Collapse(_) => {}
+            VisualRowKind::Diff(base::DiffRowKind::Equal)
+            | VisualRowKind::Hunk
+            | VisualRowKind::Collapse(_) => {}
         }
     }
     Some((added, removed))
@@ -225,10 +236,11 @@ fn spinner_frame(frame: u8) -> &'static str {
     SPINNER[frame as usize % SPINNER.len()]
 }
 
-pub(crate) fn render_diagnostic(model: &Model, frame: &mut Frame, area: Rect) {
-    let Some(text) = &model.diagnostic else {
+pub(crate) fn render_diagnostic(app: &App, frame: &mut Frame, area: Rect) {
+    let Some(diagnostic) = &app.diagnostic else {
         return;
     };
+    let text = &diagnostic.text;
     let width = area.width.saturating_sub(4).min(90);
     if width == 0 || area.height < 2 {
         return;
@@ -239,7 +251,7 @@ pub(crate) fn render_diagnostic(model: &Model, frame: &mut Frame, area: Rect) {
         width,
         height: 1,
     };
-    let theme = &model.theme;
+    let theme = &app.chrome.theme;
     frame.render_widget(
         Paragraph::new(clip_line(text, 0, width as usize)).style(
             theme

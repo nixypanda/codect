@@ -3,11 +3,10 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::theme::Theme;
+use crate::render::text::truncate_ellipsis;
+use crate::render::theme::Theme;
 
-use super::text::truncate_ellipsis;
-
-pub(super) fn render_empty(
+pub(crate) fn render_empty(
     frame: &mut Frame,
     area: Rect,
     title: &str,
@@ -45,7 +44,7 @@ mod tests {
     use ratatui::style::Color;
 
     use super::*;
-    use crate::theme::{Capability, Flavor};
+    use crate::render::theme::{Capability, Flavor};
 
     fn draw(width: u16, height: u16, theme: Theme) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
