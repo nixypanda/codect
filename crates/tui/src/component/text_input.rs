@@ -112,6 +112,40 @@ pub(crate) fn input_line(prefix: &str, input: &TextInput, theme: &Theme) -> Line
     Line::from(spans)
 }
 
+// Draws a revision prompt popup: a titled, scrimmed box with one editable line.
+//
+// Shared by the `show` revision prompt and the diff base/target prompts, which
+// belong to the loaded page rather than an overlay.
+pub(crate) fn render_prompt(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    label: &str,
+    input: &TextInput,
+    theme: &Theme,
+) {
+    use ratatui::widgets::{Clear, Paragraph};
+
+    use crate::render::block::{popup_block, scrim};
+
+    let width = area.width.saturating_sub(4).min(70);
+    let height = 3.min(area.height);
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = ratatui::layout::Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + area.height.saturating_sub(height + 1),
+        width,
+        height,
+    };
+    scrim(frame, area);
+    frame.render_widget(Clear, popup);
+    let block = popup_block(label, theme);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    frame.render_widget(Paragraph::new(input_line("", input, theme)), inner);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

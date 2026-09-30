@@ -384,6 +384,14 @@ pub enum OutMsg {
     Diagnose(String),
 }
 
+/// The read-only context a page `view` reads: the design tokens and the shell
+/// flags that decide an empty or loading pane.
+pub struct ViewCtx<'a> {
+    pub theme: &'a Theme,
+    pub busy: bool,
+    pub tree_empty: bool,
+}
+
 /// How many rows one page key moves.
 pub(super) fn page_step(height: u16) -> u16 {
     (height.saturating_sub(3) / 2).max(1)

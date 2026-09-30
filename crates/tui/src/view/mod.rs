@@ -1,15 +1,12 @@
-// The pure view layer.
+// The pure frame layer.
 //
 // `view` composes a header, a body, and a footer, then draws overlays and
-// diagnostics on top. Every module here is presentation-only: it reads the
-// model and writes to the frame, and performs no I/O. Geometry lives in
-// [`crate::render::layout`], text helpers in [`crate::render::text`], and the
-// isolated panes render themselves from [`crate::component`].
+// diagnostics on top. The body is laid out here, but each pane draws itself:
+// the tree and commits picker from [`crate::component`], and the show and diff
+// bodies from their page. Every module here is presentation-only: it reads the
+// model and writes to the frame, and performs no I/O.
 
 pub(crate) mod chrome;
-pub(crate) mod diff;
-pub(crate) mod prompt;
-pub(crate) mod show;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -17,12 +14,13 @@ use ratatui::widgets::Block;
 
 use crate::app::{App, layout_focus};
 use crate::component::{RenderCtx, commit_picker, overlay, tree};
-use crate::page::{CommitsFocus, DiffViewState, Loaded};
+use crate::page::diff::Side;
+use crate::page::{
+    CommitsFocus, DiffViewState, Loaded, ViewCtx, diff as diff_page, show as show_page,
+};
+use crate::render::block::render_divider;
 use crate::render::layout::{PaneSlot, body_layout, frame_areas};
 use crate::render::metrics::{Focus, MIN_HEIGHT, SINGLE_PANE_MIN_WIDTH};
-
-use crate::render::block::render_divider;
-use diff::Side;
 
 pub(crate) fn view(app: &App, frame: &mut Frame) {
     let area = frame.area();
@@ -65,13 +63,17 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
         has_commits,
         focus,
     );
-    let rows = app.diff_rows();
     let diff_focused = matches!(&app.loaded, Loaded::Diff(diff) if diff.focus_is_diff());
     let ctx = RenderCtx {
         theme: &app.chrome.theme,
         icons: &app.chrome.icons,
         loaded: &app.loaded,
         busy: app.is_busy(),
+    };
+    let vctx = ViewCtx {
+        theme: &app.chrome.theme,
+        busy: app.is_busy(),
+        tree_empty: app.tree.rows.is_empty(),
     };
 
     for slot in &layout.slots {
@@ -100,26 +102,43 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
                 slot.edge,
             ),
             PaneSlot::Show => {
-                show::render_show_body(app, frame, slot.outer, focus == Focus::Content, slot.edge)
+                if let Loaded::Show(show) = &app.loaded {
+                    show_page::view(
+                        show,
+                        &vctx,
+                        frame,
+                        slot.outer,
+                        focus == Focus::Content,
+                        slot.edge,
+                    );
+                }
             }
-            PaneSlot::Old => diff::render_diff_pane(
-                app,
-                frame,
-                slot.outer,
-                Side::Old,
-                diff_focused,
-                rows,
-                slot.edge,
-            ),
-            PaneSlot::New => diff::render_diff_pane(
-                app,
-                frame,
-                slot.outer,
-                Side::New,
-                diff_focused,
-                rows,
-                slot.edge,
-            ),
+            PaneSlot::Old => {
+                if let Loaded::Diff(diff) = &app.loaded {
+                    diff_page::view(
+                        diff,
+                        &vctx,
+                        frame,
+                        slot.outer,
+                        Side::Old,
+                        diff_focused,
+                        slot.edge,
+                    );
+                }
+            }
+            PaneSlot::New => {
+                if let Loaded::Diff(diff) = &app.loaded {
+                    diff_page::view(
+                        diff,
+                        &vctx,
+                        frame,
+                        slot.outer,
+                        Side::New,
+                        diff_focused,
+                        slot.edge,
+                    );
+                }
+            }
         }
     }
 
@@ -130,7 +149,7 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
 
 // Draws the active overlay, or the loaded projection's revision prompt when no
 // overlay is open. The overlay state owns its keys; the prompt belongs to the
-// content, so the two are drawn from different places.
+// page, so the two are drawn from different places.
 fn render_overlay(app: &App, frame: &mut Frame, area: Rect) {
     match &app.overlay {
         Some(state) => {
@@ -144,6 +163,13 @@ fn render_overlay(app: &App, frame: &mut Frame, area: Rect) {
             };
             overlay::render(state, &ctx, frame, area);
         }
-        None => prompt::render(app, frame, area),
+        None => render_prompt(app, frame, area),
+    }
+}
+
+fn render_prompt(app: &App, frame: &mut Frame, area: Rect) {
+    match &app.loaded {
+        Loaded::Show(show) => show_page::prompt_view(show, &app.chrome.theme, frame, area),
+        Loaded::Diff(diff) => diff_page::prompt_view(diff, &app.chrome.theme, frame, area),
     }
 }
