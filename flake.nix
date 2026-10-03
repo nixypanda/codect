@@ -16,6 +16,11 @@
       rust-overlay,
     }:
     let
+      # Single source of truth for the package version. The release workflow
+      # checks the pushed tag against this line, so keep it in sync with
+      # `[workspace.package] version` in Cargo.toml.
+      version = "0.1.0";
+
       systems = [
         "x86_64-darwin"
         "aarch64-darwin"
@@ -52,7 +57,7 @@
         in
         rustPlatform.buildRustPackage {
           pname = "codect";
-          version = "0.1.0";
+          inherit version;
 
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
@@ -88,7 +93,7 @@
         pkgs:
         pkgs.vimUtils.buildVimPlugin {
           pname = "codect.nvim";
-          version = "0.1.0";
+          inherit version;
           src = ./editors/nvim;
           meta = {
             description = "Codect semantic fold viewer for Neovim";

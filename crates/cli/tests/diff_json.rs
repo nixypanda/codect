@@ -1,7 +1,7 @@
 mod support;
 
 use serde_json::{Value, json};
-use support::{TestRepo, doc, fixture, codect_in, stderr, stdout};
+use support::{TestRepo, codect_in, doc, fixture, stderr, stdout};
 
 fn run(repo: &TestRepo, mode: &str, base: &str, target: &str) -> Value {
     let output = codect_in(
