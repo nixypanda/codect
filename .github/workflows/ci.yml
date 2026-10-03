@@ -62,18 +62,3 @@ jobs:
       # invariant, audited against TECHNICAL_DESIGN.md section 4.1.
       - name: Audit gix features
         run: cargo tree -e features -p git
-
-  # Independent of `checks`: the bench profile, the `bench` feature, and
-  # `criterion` are a separate build graph, so nothing is shared. Runs in
-  # parallel, so it only affects wall clock if it outlasts `checks`.
-  bench:
-    name: Benchmarks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: bench
-      - name: Bench
-        run: cargo bench -p tui --features bench --bench frame

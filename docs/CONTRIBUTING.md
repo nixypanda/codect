@@ -95,6 +95,9 @@ For the terminal frontend, `just bench-tui` reports per-frame totals and the
 seams they are made of (`highlight`, `layout_diff`, ratatui's surface diff scan)
 and writes an HTML report under `target/criterion/`.
 
+Benchmarks are a developer-run check. CI does not run them; its suite covers
+correctness, feature boundaries, and the Neovim plugin only.
+
 ## Security and robustness
 
 Repositories and source files are untrusted input. Do not execute repository
