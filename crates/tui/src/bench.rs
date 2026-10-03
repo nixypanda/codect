@@ -1,8 +1,9 @@
-//! Benchmark-only façade for the terminal frontend.
+//! Benchmark and docs-showcase façade for the terminal frontend.
 //!
-//! This module exists so `benches/frame.rs` can reach the crate's internals
-//! (`App`, `view`, the syntax highlighter, and the diff-layout cache) without
-//! widening the frontend's real public API. It is compiled only with the `bench`
+//! This module exists so `benches/frame.rs` (and `examples/frames.rs`, which
+//! renders the docs/showcase images) can reach the crate's internals (`App`,
+//! `view`, the syntax highlighter, and the diff-layout cache) without widening
+//! the frontend's real public API. It is compiled only with the `bench`
 //! feature, `#[doc(hidden)]`, and is not part of any supported surface.
 //!
 //! Everything here is a thin wrapper: the model builders drive the same pure
@@ -16,6 +17,7 @@ use base::{
     FileDiff, ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath,
     Selection, SourceSpan, SupportedPath,
 };
+use engine::CommitStep;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -182,6 +184,30 @@ pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> App {
     ))
 }
 
+/// A commits-view model showing `steps` and the selected step's `diffs`,
+/// installed and settled the way the runtime installs `Msg::HistoryLoaded`.
+pub fn history_model(steps: Vec<CommitStep>, diffs: Vec<FileDiff>, width: u16, height: u16) -> App {
+    let request = commits_request();
+    let model = base(
+        LoadRequest::Diff {
+            base: request.base.clone(),
+            target: request.target.clone(),
+            mode: request.mode,
+            selection: request.selection.clone(),
+            view: request.view,
+        },
+        width,
+        height,
+    );
+    settle(apply(
+        model,
+        Msg::HistoryLoaded {
+            request,
+            result: Ok((steps.into(), diffs.into())),
+        },
+    ))
+}
+
 /// Applies a completed `show` projection, as the runtime does on
 /// `Msg::ShowLoaded`.
 pub fn load_show(files: Vec<ProjectedFile>, model: &App) -> App {
@@ -246,6 +272,16 @@ fn diff_request() -> DiffRequest {
         mode: ProjectionMode::Types,
         selection: Selection::all(),
         view: DiffView::Range,
+    }
+}
+
+fn commits_request() -> DiffRequest {
+    DiffRequest {
+        base: "HEAD~3".to_owned(),
+        target: "HEAD".to_owned(),
+        mode: ProjectionMode::Types,
+        selection: Selection::all(),
+        view: DiffView::Commits,
     }
 }
 

@@ -22,6 +22,11 @@ The CLI and terminal frontend implement **Types** and **Signatures**. The
 Neovim plugin also has a local `full` fold state that opens the source buffer;
 it is not the planned Full projection mode.
 
+![The same change shown as a Types diff and a Signatures diff](showcase/types-vs-signatures.png)
+
+*The same change in both implemented modes. Function and value bodies are hidden
+in both; Signatures adds every named signature.*
+
 ## Current product
 
 ### Language scope

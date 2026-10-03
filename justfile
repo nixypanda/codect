@@ -29,6 +29,13 @@ check: check-workspace
 # Run the coverage report.
 coverage: coverage-workspace
 
+# Regenerate the docs/showcase images (needs delta, python3, and macOS qlmanage).
+showcase:
+    cargo build -p cli --release
+    cargo run -q -p tui --features bench --example frames -- --out target/showcase-frames
+    python3 scripts/showcase.py
+    python3 scripts/showcase_tui.py
+
 # Build the workspace.
 build-workspace:
     cargo build --workspace --release
