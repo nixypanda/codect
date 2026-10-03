@@ -223,3 +223,11 @@ cargo build -p cli --no-default-features
 Wall-clock measurements for representative synthetic and real repositories are
 recorded in [docs/TECHNICAL_DESIGN.md](./docs/TECHNICAL_DESIGN.md) section 17.
 They are a baseline for comparison, not a target.
+
+## License
+
+Codect is free software licensed under the GNU Affero General Public License,
+version 3 or (at your option) any later version (AGPL-3.0-or-later). See
+[LICENSE](./LICENSE) for the full text. The Neovim plugin in
+[editors/nvim](./editors/nvim) is part of the same work and carries the same
+license.

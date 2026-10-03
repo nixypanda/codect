@@ -74,7 +74,7 @@
           meta = {
             description = "Selectable focused views and diffs of a codebase";
             homepage = "https://github.com/nixypanda/codect";
-            license = pkgs.lib.licenses.mit;
+            license = pkgs.lib.licenses.agpl3Plus;
             mainProgram = "codect";
             platforms = pkgs.lib.platforms.unix;
           };
@@ -93,7 +93,7 @@
           meta = {
             description = "Codect semantic fold viewer for Neovim";
             homepage = "https://github.com/nixypanda/codect";
-            license = pkgs.lib.licenses.mit;
+            license = pkgs.lib.licenses.agpl3Plus;
           };
         };
     in

@@ -229,3 +229,10 @@ CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=local \
 CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=root \
   CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
 ```
+
+## License
+
+This plugin is part of Codect and is licensed under the GNU Affero General
+Public License, version 3 or (at your option) any later version
+(AGPL-3.0-or-later). See the repository [LICENSE](../../LICENSE) for the full
+text.
