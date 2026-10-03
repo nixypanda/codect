@@ -1,9 +1,9 @@
 # Releasing
 
-Releases are cut from `main` by pushing a `vX.Y.Z` tag. The
-[release workflow](../.github/workflows/release.yml) verifies the tag, runs the
-required checks, builds the four supported targets, and publishes a GitHub
-Release.
+Releases are cut from `main` by pushing a `vX.Y.Z` tag. Continuous integration
+runs on pull requests and `main`; the
+[release workflow](../.github/workflows/release.yml) only verifies the tag,
+builds the four supported targets, and publishes a GitHub Release.
 
 ## Version source of truth
 
