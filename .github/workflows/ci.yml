@@ -23,7 +23,7 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  check:
+  checks:
     name: Checks
     runs-on: ubuntu-latest
     steps:
@@ -34,15 +34,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all --check
+      # `--features tui/bench` folds the benchmark lint into this one check pass
+      # instead of a second `cargo clippy -p tui --features bench` invocation.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      # `clippy --all-targets` skips the bench target without the feature, so
-      # lint it explicitly (TECHNICAL_DESIGN.md 18.1).
-      - name: Clippy (bench)
-        run: cargo clippy -p tui --features bench --all-targets -- -D warnings
-      # Runs after clippy so it reuses the dev-profile artifacts in `target/`.
+        run: cargo clippy --workspace --all-targets --features tui/bench -- -D warnings
+      # Builds `target/debug/codect` for the integration tests (via
+      # `CARGO_BIN_EXE_codect`), which the Neovim suite below then reuses.
       - name: Test
         run: cargo test --workspace
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: v0.12.5
+      - name: Neovim plugin suite
+        run: CODECT_BIN="$PWD/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/run.lua
+      # Last, because this replaces `target/debug/codect` with the no-TUI build.
       - name: Build without default features
         run: cargo build -p cli --no-default-features
       - name: Assert terminal dependencies are absent
@@ -56,19 +62,3 @@ jobs:
       # invariant, audited against TECHNICAL_DESIGN.md section 4.1.
       - name: Audit gix features
         run: cargo tree -e features -p git
-
-  nvim:
-    name: Neovim plugin
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: rhysd/action-setup-vim@v1
-        with:
-          neovim: true
-          version: v0.12.5
-      - name: Build CLI
-        run: cargo build -p cli
-      - name: Run the headless plugin suite
-        run: CODECT_BIN="$PWD/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/run.lua
