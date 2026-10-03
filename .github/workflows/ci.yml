@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only: CI never writes to the repository or the Actions cache beyond the
+# dependency caches the setup actions manage themselves.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # `clippy --all-targets` skips the bench target without the feature, so
+      # lint it explicitly (TECHNICAL_DESIGN.md 18.1).
+      - run: cargo clippy -p tui --features bench --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  build:
+    name: Release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --release
+
+  features:
+    name: Feature boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build without default features
+        run: cargo build -p cli --no-default-features
+      - name: Assert terminal dependencies are absent
+        run: |
+          set -euo pipefail
+          if cargo tree -p cli --no-default-features | grep -Eq '(ratatui|crossterm|terminal-colorsaurus|syntect|two-face)'; then
+            echo "error: terminal dependency leaked into the no-default-features build" >&2
+            exit 1
+          fi
+      # Printed for review: the enabled `gix` feature set is an architectural
+      # invariant, audited against TECHNICAL_DESIGN.md section 4.1.
+      - name: Audit gix features
+        run: cargo tree -e features -p git
+
+  nvim:
+    name: Neovim plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: v0.12.5
+      - name: Build CLI
+        run: cargo build -p cli
+      - name: Run the headless plugin suite
+        run: CODECT_BIN="$PWD/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/run.lua
+
+  nix:
+    name: Nix flake
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 2G
+      # `nix flake check` covers the Neovim plugin check declared in flake.nix;
+      # `nix build` covers the packaged binary that `nix profile install` uses.
+      - name: Flake check
+        run: nix flake check -L
+      - name: Build package
+        run: nix build -L .#codect

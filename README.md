@@ -1,5 +1,7 @@
 # Codect
 
+[![CI](https://github.com/nixypanda/codect/actions/workflows/ci.yml/badge.svg)](https://github.com/nixypanda/codect/actions/workflows/ci.yml)
+
 Selectable focused views and diffs of a codebase. Codect strips implementation
 bodies so a person or a tool can read the shape of the code — declarations,
 types, and signatures — without reading how it works. It supports Elm, Haskell,
@@ -27,4 +29,5 @@ nix develop                                    # or work from a checkout
 | [Product](docs/PRODUCT.md) | What Codect does, its modes, and its limits |
 | [Architecture](docs/ARCHITECTURE.md) | Crate map and end-to-end data flow |
 | [Contributing](docs/CONTRIBUTING.md) | Dev environment, checks, tests |
+| [Releasing](docs/RELEASING.md) | Version bumps, tagging, published artifacts |
 | [License](LICENSE) | AGPL-3.0-or-later |

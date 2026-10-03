@@ -9,7 +9,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{TestRepo, fixture, codect, codect_in, stderr, stdout};
+use support::{TestRepo, codect, codect_in, fixture, stderr, stdout};
 
 const RUST_BASE: &str = "\
 pub struct User {

@@ -103,6 +103,11 @@ formatters; do not follow repository symlinks; bound configurable caches; and
 report allocation or parser failures rather than panicking. Reserve `panic!`,
 `unwrap`, and `expect` for tests and statically guaranteed initialization.
 
+## Releasing
+
+Releases are tagged `vX.Y.Z` and published by the release workflow. See
+[RELEASING.md](RELEASING.md) for the version bump and tag process.
+
 ## Dependency policy
 
 - Declare shared versions under `[workspace.dependencies]` and commit

@@ -11,7 +11,7 @@
 mod support;
 
 use serde_json::Value;
-use support::{TestRepo, doc, fixture, codect_in, stderr, stdout};
+use support::{TestRepo, codect_in, doc, fixture, stderr, stdout};
 
 const RUST: &str = "\
 pub struct User {
