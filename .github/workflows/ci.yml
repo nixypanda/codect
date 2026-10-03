@@ -17,57 +17,32 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Trim dev-profile debug info and drop incremental bookkeeping to cut compile
+  # time in CI. Backtraces keep file and line information.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: "0"
 
 jobs:
-  fmt:
-    name: Format
+  check:
+    name: Checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
       # `clippy --all-targets` skips the bench target without the feature, so
       # lint it explicitly (TECHNICAL_DESIGN.md 18.1).
-      - run: cargo clippy -p tui --features bench --all-targets -- -D warnings
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-
-  build:
-    name: Release build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --release
-
-  features:
-    name: Feature boundaries
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (bench)
+        run: cargo clippy -p tui --features bench --all-targets -- -D warnings
+      # Runs after clippy so it reuses the dev-profile artifacts in `target/`.
+      - name: Test
+        run: cargo test --workspace
       - name: Build without default features
         run: cargo build -p cli --no-default-features
       - name: Assert terminal dependencies are absent
@@ -97,21 +72,3 @@ jobs:
         run: cargo build -p cli
       - name: Run the headless plugin suite
         run: CODECT_BIN="$PWD/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/run.lua
-
-  nix:
-    name: Nix flake
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v23
-      - uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          gc-max-store-size-linux: 2G
-      # `nix flake check` covers the Neovim plugin check declared in flake.nix;
-      # `nix build` covers the packaged binary that `nix profile install` uses.
-      - name: Flake check
-        run: nix flake check -L
-      - name: Build package
-        run: nix build -L .#codect

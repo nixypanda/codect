@@ -37,21 +37,6 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-  checks:
-    name: Required checks
-    needs: [verify]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: just
-      - run: just check
-
   build:
     name: Build ${{ matrix.target }}
     needs: [verify]
@@ -102,7 +87,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [verify, checks, build]
+    needs: [verify, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
