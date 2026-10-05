@@ -6,6 +6,7 @@
 pub mod repository;
 pub mod revision;
 pub mod tree;
+pub mod worktree;
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -110,6 +111,13 @@ pub enum GitError {
 
     #[error("the Git index in repository `{repository}` could not be read")]
     IndexRead {
+        repository: PathBuf,
+        #[source]
+        source: Box<dyn Error + Send + Sync + 'static>,
+    },
+
+    #[error("untracked files in repository `{repository}` could not be enumerated")]
+    UntrackedTraversal {
         repository: PathBuf,
         #[source]
         source: Box<dyn Error + Send + Sync + 'static>,

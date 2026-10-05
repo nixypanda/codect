@@ -21,8 +21,9 @@ codect diff --format json --mode signatures HEAD :worktree
 
 - `show` defaults `REVISION` to `HEAD`. `--mode` is required.
 - Text output is the canonical projection, byte-for-byte stable.
-- The JSON snapshots `:index`, `:worktree`, `:empty`, and the empty-tree object
-  ID are valid `diff` sides. Text diff is commit-only.
+- The snapshots `:index`, `:worktree`, `:empty`, and the empty-tree object ID
+  are valid `diff` sides in both `text` and `json`. `:worktree` includes
+  untracked, non-ignored files.
 - `--path` and `--area` are mutually exclusive. Both are repeatable and union.
 
 ## Rely on

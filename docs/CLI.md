@@ -19,9 +19,9 @@ codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --ar
   named function, method, and value signature. Function bodies are never shown.
 - `--format` defaults to `text`, the canonical projection. `--format json` emits
   the versioned documents described below.
-- `diff` takes two independent revisions (not a range). Text diff requires
-  commits; JSON diff also accepts the snapshots `:index`, `:worktree`, `:empty`,
-  and the canonical Git empty-tree object ID.
+- `diff` takes two independent revisions (not a range). Both text and JSON diff
+  also accept the snapshots `:index`, `:worktree`, `:empty`, and the canonical
+  Git empty-tree object ID.
 - `--color <auto|always|never>` defaults to `auto`; redirected output never
   contains escape bytes.
 
@@ -81,9 +81,9 @@ focused diff shows no change for that function. Files with equal projections are
 omitted, so an empty result means there are no focused changes.
 
 `:index` reads stage-zero blob bytes. `:worktree` reads tracked regular files on
-disk and does not follow symlinks; it does not include unsaved editor buffers or
-untracked files. Mutable snapshot names are labels, so refresh after staging or
-file writes.
+disk plus untracked, non-ignored files, and does not follow symlinks; it never
+includes unsaved editor buffers. Mutable snapshot names are labels, so refresh
+after staging or file writes.
 
 ## Text output
 
@@ -118,7 +118,8 @@ marker; pass `--width=<n>` above the content width to avoid it.
   projection plus a complete, mode-independent outline for building semantic
   folds. It pairs with the editor projection surface and the Neovim plugin.
 - `codect diff --format json` emits `codect.diff.v1` for commits and the
-  snapshots `:index`, `:worktree`, and `:empty`.
+  snapshots `:index`, `:worktree`, and `:empty`. The text format accepts the
+  same sides.
 
 Both are versioned by a `schema` field and documented at
 [`docs/schema/`](schema/). For the exact contract, see

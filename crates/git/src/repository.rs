@@ -98,7 +98,8 @@ pub struct SourceEntry {
     pub executable: bool,
 }
 
-/// Read-only access to committed snapshots of a repository.
+/// Read-only access to snapshots of a repository: committed trees, the index,
+/// and the tracked-and-untracked worktree.
 pub trait SnapshotRepository {
     /// Resolves `spec` to exactly one commit, peeling tags and other
     /// commit-ish objects.
@@ -122,6 +123,14 @@ pub trait SnapshotRepository {
 
     /// Reads the exact bytes of the blob `id`.
     fn read_blob(&self, id: &ObjectId) -> Result<Vec<u8>, GitError>;
+
+    /// Lists untracked, non-ignored regular files with a supported language,
+    /// sorted by raw repository path bytes.
+    ///
+    /// Untracked means absent from the index; ignored files, symlinks,
+    /// submodules, directories, and unsupported file types are excluded. A
+    /// repository with no worktree (a bare repository) has no untracked files.
+    fn untracked_paths(&self) -> Result<Vec<base::RepoPath>, GitError>;
 }
 
 /// The wrapped `gix::Repository` is private; callers only observe Codect-owned
@@ -228,5 +237,9 @@ impl SnapshotRepository for GitRepository {
 
     fn read_blob(&self, id: &ObjectId) -> Result<Vec<u8>, GitError> {
         crate::tree::read_blob(self, id)
+    }
+
+    fn untracked_paths(&self) -> Result<Vec<base::RepoPath>, GitError> {
+        crate::worktree::untracked_paths(self)
     }
 }

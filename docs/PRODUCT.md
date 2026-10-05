@@ -6,7 +6,7 @@ Codect provides selectable views of a codebase at different levels of detail. It
 
 Each focused view also has a corresponding diff view. A focused diff compares
 the selected projections of two Git snapshots rather than their complete
-source text. Snapshots may be commits, the index, the tracked worktree, or an
+source text. Snapshots may be commits, the index, the worktree, or an
 empty tree.
 
 ## Product modes
@@ -143,8 +143,8 @@ Haskell and Python do not use the Elm placeholder. They render declarations exac
 
 ### Focused diffs
 
-Both focused modes compare two selected Git snapshots. Text diffs compare
-commits; JSON diffs also accept `:index`, `:worktree`, `:empty`, and the
+Both focused modes compare two selected Git snapshots. Both text and JSON
+diffs compare commits and also accept `:index`, `:worktree`, `:empty`, and the
 canonical Git empty-tree object ID.
 
 - A Types diff shows only additions, removals, and changes to type declarations.
@@ -158,8 +158,8 @@ unchanged, the focused diff contains no change for that function. The JSON
 document `codect.diff.v1` contains only files with changed canonical
 projections and carries each side's projection and declaration outline.
 `:index` reads stage-zero blobs; `:worktree` reads tracked regular files on
-disk, not unsaved editor buffers. Mutable snapshot names must be refreshed
-after staging or file writes.
+disk plus untracked, non-ignored files, never unsaved editor buffers. Mutable
+snapshot names must be refreshed after staging or file writes.
 
 ### Path scoping
 
@@ -202,9 +202,11 @@ focused views.
 - `codect tui show` presents a file tree beside the canonical projection of the
   selected file.
 - `codect tui diff range` presents a changed-file tree beside a side-by-side
-  comparison of two revisions, with `@@` hunk headers.
+  comparison of two snapshots — commits, the index, the worktree, or the empty
+  tree — with `@@` hunk headers.
 - `codect tui diff commits` adds a scrollable commit list above the file tree.
-  It follows the target's first-parent chain after the base, newest first.
+  It follows the target's first-parent chain after the base, newest first, so it
+  needs commit endpoints.
   Selecting a commit compares that commit with its first parent; commits with
   no focused projection changes remain in the list.
 - Projections and diffs are syntax-highlighted, and diffs use full-line added and
@@ -221,11 +223,13 @@ focused views.
   styling.
 - The file tree is resizable, and the frontend adapts to the terminal size.
 - The command palette switches between range and commits views without leaving
-  the frontend. In commits view, focus cycles through commits, files, and diff.
+  the frontend; the commits view is offered only when the range endpoints are
+  commits. In commits view, focus cycles through commits, files, and diff.
 
 The terminal frontend is an additional way to read the same focused views. It
 does not change projection or diff semantics, and it is read-only: it reads
-committed blobs and never writes the repository, worktree, or index, and it
+committed blobs, the index, and the worktree (tracked files plus untracked,
+non-ignored files), never writes the repository, worktree, or index, and it
 never opens an editor.
 
 ### Editor projection surface
@@ -318,9 +322,10 @@ Later versions may also identify which public declarations could be affected by 
 
 ### Additional comparison targets
 
-The JSON diff already compares commits, Git references that resolve to commits,
-the index, the tracked worktree, and the empty tree. Future comparison inputs
-could include unsaved editor buffer bytes or untracked files.
+The focused diff already compares commits, Git references that resolve to
+commits, the index, the worktree (tracked files plus untracked, non-ignored
+files), and the empty tree. Future comparison inputs could include unsaved
+editor buffer bytes.
 
 ### Additional languages
 

@@ -38,6 +38,7 @@ tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 gix = { version = "0.87", default-features = false, features = [
     "auto-chain-error",
+    "dirwalk",
     "revision",
     "sha1",
     "sha256",

@@ -105,3 +105,28 @@ fn tui_diff_starts_and_quits_in_a_pty() {
         0
     );
 }
+
+#[test]
+fn tui_diff_range_snapshots_start_and_quit_in_a_pty() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST_BASE);
+    repo.commit("base");
+    // An unstaged worktree change; the range compares the index with it.
+    repo.write("src/lib.rs", RUST_TYPE_VARIANT);
+
+    assert_eq!(
+        run_in_pty(
+            &repo,
+            &[
+                "tui",
+                "diff",
+                "range",
+                "--mode",
+                "types",
+                ":index",
+                ":worktree"
+            ]
+        ),
+        0
+    );
+}

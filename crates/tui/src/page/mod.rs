@@ -294,11 +294,17 @@ impl Loaded {
                         "Edit target revision",
                         "t",
                     ));
-                    entries.push((
-                        Action::Range(RangeAction::SwitchToCommits),
-                        "Switch to commits view",
-                        "",
-                    ));
+                    // A snapshot endpoint has no first-parent history to walk,
+                    // so the commits view is not offered for it.
+                    if !engine::is_snapshot_spec(&diff.base)
+                        && !engine::is_snapshot_spec(&diff.target)
+                    {
+                        entries.push((
+                            Action::Range(RangeAction::SwitchToCommits),
+                            "Switch to commits view",
+                            "",
+                        ));
+                    }
                 }
                 DiffViewState::Commits(_) => entries.push((
                     Action::Commits(CommitsAction::SwitchToRange),

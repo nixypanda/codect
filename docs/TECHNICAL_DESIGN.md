@@ -274,18 +274,21 @@ Do not add an async runtime. All MVP work is local and synchronous.
 Keep `default-features = false`. Enable only:
 
 - `revision`: revision parsing, peeling, and merge-base support. This brings
-  `index` transitively; `git` reads stage-zero index blobs for JSON
-  snapshot diffs.
+  `index` transitively; `git` reads stage-zero index blobs for snapshot diffs.
+- `dirwalk`: the Git-style directory walk used to enumerate untracked worktree
+  files for the `:worktree` snapshot. It implies `attributes` and `excludes`,
+  which supply the ignore stack (`.gitignore`, `.git/info/exclude`, and global
+  excludes). Linking `gix-filter`/`gix-command` is accepted, but Codect never
+  invokes a filter, hook, or any other repository command.
 - `sha1`: normal Git object IDs.
 - `sha256`: SHA-256 repositories.
 - `auto-chain-error`: useful error sources for CLI diagnostics.
 - `pack-cache-lru-static`: efficient reads from packed object databases without enabling the larger performance bundle.
 
-Do not enable these feature groups in the MVP:
+Do not enable these feature groups:
 
 - `basic` or any default bundle.
 - `blob-diff`; Codect diffs projections, not Git blobs.
-- `attributes`, `excludes`, or `dirwalk`.
 - `status`, `worktree-stream`, `worktree-archive`, or `worktree-mutation`.
 - `merge`, `blame`, `mailmap`, or `notes`.
 - `credentials` or any network client or transport.
@@ -505,12 +508,13 @@ base revision + target revision + path selection
 
 A source blob change that produces the same projection produces no output. This is the defining invariant of focused diffing.
 
-For `diff --format json`, the engine resolves each side as a commit, `:index`,
-`:worktree`, or `:empty`. The canonical Git empty-tree object ID is an alias
-for the empty side. It projects supported paths in raw path-byte order and
-omits equal canonical projections. Index entries come from stage-zero blobs;
-worktree entries come from tracked regular files on disk without following
-symlinks. Mutable snapshot names are labels rather than content hashes.
+For `diff`, the engine resolves each side as a commit, `:index`, `:worktree`,
+or `:empty`, in both `text` and `json`. The canonical Git empty-tree object ID
+is an alias for the empty side. It projects supported paths in raw path-byte
+order and omits equal canonical projections. Index entries come from stage-zero
+blobs; worktree entries are tracked regular files on disk unioned with
+untracked, non-ignored files, without following symlinks. Mutable snapshot
+names are labels rather than content hashes.
 
 ## 8. Git layer using `gix`
 
@@ -547,6 +551,7 @@ pub trait SnapshotRepository {
     fn path_exists(&self, revision: &Revision, path: &RepoPath)
         -> Result<bool, GitError>;
     fn read_blob(&self, id: &ObjectId) -> Result<Vec<u8>, GitError>;
+    fn untracked_paths(&self) -> Result<Vec<RepoPath>, GitError>;
 }
 ```
 
@@ -584,7 +589,9 @@ Reject ranges such as `A..B` and `A...B` when passed as one argument. The `diff`
 - Ignore directories after descending into them.
 - Ignore symlinks, Git links/submodules, and unsupported file types.
 - Do not perform rename detection.
-- Do not read `.gitignore`; committed trees are authoritative.
+- Committed trees are authoritative and tree traversal does not read
+  `.gitignore`. Untracked worktree enumeration is the one exception (section
+  8.5).
 - Return entries sorted by raw repository path bytes.
 
 Use object IDs to avoid reading or projecting unchanged blobs during diff.
@@ -594,6 +601,19 @@ Use object IDs to avoid reading or projecting unchanged blobs during diff.
 Configure a bounded `gix` object cache suitable for repeated tree and blob access. Keep cache sizing in `git` and use a conservative constant initially. Do not expose tuning flags in the MVP. Add benchmarks before changing cache strategy or enabling broader `gix` performance features.
 
 Codect needs no persistent projection cache in the MVP.
+
+### 8.5 Untracked worktree enumeration
+
+`:worktree` is the whole working tree, not just its tracked portion. After the
+stage-zero index supplies the tracked paths, `git` adds untracked files that are
+regular, have a supported language, and are not ignored. The walk is `gix`'s
+Git-style directory walk: it prunes ignored directories and does not descend
+into nested repositories or submodules, and it skips symlinks, directories, and
+special files. Ignore rules come from `.gitignore` files, `.git/info/exclude`,
+and the configured global excludes. A bare repository has no worktree and
+therefore no untracked files. Results are sorted by raw path bytes so a diff is
+deterministic. This is the only place Codect reads ignore configuration;
+committed-tree traversal stays authoritative and gitignore-free.
 
 ## 9. Tree-sitter integration
 
@@ -866,8 +886,9 @@ Rules:
 - `show` accepts `--format <text|json>` (default `text`) and the
   `--stdin`/`--worktree` input forms; section 14.2 defines the JSON document.
 - `--mode` is required; do not introduce a default before product validation.
-- Both diff revisions are required. Text diff requires commits; JSON diff
-  additionally accepts `:index`, `:worktree`, and `:empty`.
+- Both diff sides are required. In both `text` and `json`, a side accepts a
+  commit, `:index`, `:worktree`, or `:empty` (or the canonical empty-tree
+  object ID).
 - `--path`/`-p` and `--area`/`-a` are mutually exclusive; passing both is a usage error that exits `2` through `clap`. Each is individually repeatable, and a repeated option forms a union of its selections.
 - `--path`/`-p` narrows the projection to the named files or directories; a directory includes every file beneath it. Matching is byte-exact and boundary-aware.
 - Paths resolve relative to the current directory. An absolute path must be inside the repository, `..` may climb but may not leave it, and in a bare repository relative paths resolve against the repository root. Resolution is lexical and never consults the filesystem.
@@ -1048,9 +1069,10 @@ Each changed file has an escaped repository `path`, `language`, `status`
 `equal: false`. An absent side is `null`; a present side contains its
 `snapshot_id`, canonical `projection`, and declaration `outline`. Files
 whose projected text is equal are omitted. The stage-zero index supplies
-`:index`; `:worktree` reads tracked regular files from disk and does not
-include unsaved editor buffers or untracked files. Text diff retains its
-commit-only behavior.
+`:index`; `:worktree` reads tracked regular files from disk plus untracked,
+non-ignored files, and never includes unsaved editor buffers. Text and JSON
+accept the same snapshot sides, so a `:worktree` side includes untracked files
+in both.
 
 The in-repository Neovim plugin uses this document for Diffview. Its adapter
 is guarded by hashes of a specific Diffview revision because it touches
@@ -1589,10 +1611,12 @@ codect tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>].
 codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
-- `show` defaults `REVISION` to `HEAD`; both diff revisions are required.
-  Bare `tui diff` is invalid. Range compares the endpoints directly. Commits
-  requires the base on the target's first-parent chain and lists the steps
-  after the base, newest first. Each selected step compares its first parent
+- `show` defaults `REVISION` to `HEAD`; both diff sides are required.
+  Bare `tui diff` is invalid. Range compares the endpoints directly; either
+  side may be a commit, `:index`, `:worktree`, or `:empty`, exactly like
+  `codect diff`. Commits requires the base on the target's first-parent chain
+  and lists the steps after the base, newest first, so it needs commit sides; a
+  snapshot side is a usage error. Each selected step compares its first parent
   with the commit. Equal endpoints yield an empty list.
 - The feature is default-on: `default = ["tui"]`, `tui = ["dep:tui"]`.
   Without it, `tui` is an unknown command (exit `2`) and no terminal dependency

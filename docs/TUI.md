@@ -13,11 +13,13 @@ codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>
 
 - `tui show` opens a file tree beside the canonical projection of the selected
   file.
-- `tui diff range` compares the two revisions directly.
+- `tui diff range` compares the two endpoint snapshots directly; either side
+  may be a commit, `:index`, `:worktree`, or `:empty`, as in `codect diff`.
 - `tui diff commits` lists the commits after `BASE` through `TARGET` on
   `TARGET`'s first-parent chain, newest first; selecting a commit compares it
   with its first parent. `BASE` must be on that chain. The commit picker sits
-  above the changed-file tree.
+  above the changed-file tree. It needs commit sides, so `:index`, `:worktree`,
+  and `:empty` are a usage error.
 - Both views show a side-by-side projection diff.
 
 ![codect tui show — a file tree beside the type projection](showcase/tui-show.png)

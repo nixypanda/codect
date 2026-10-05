@@ -18,6 +18,6 @@ pub mod config;
 pub mod engine;
 pub mod error;
 
-pub use engine::{CommitDiff, Engine, SnapshotDiff, project_source};
+pub use engine::{CommitDiff, Engine, SnapshotDiff, is_snapshot_spec, project_source};
 pub use error::EngineError;
 pub use git::CommitStep;

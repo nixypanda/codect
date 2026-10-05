@@ -532,6 +532,49 @@ fn palette_switches_between_range_and_commit_views() {
     assert_eq!(diff_ref(&next).revisions(), diff_ref(&app).revisions());
 }
 
+#[test]
+fn a_snapshot_range_cannot_switch_to_commits() {
+    let request = DiffRequest {
+        base: ":index".to_owned(),
+        target: ":worktree".to_owned(),
+        ..diff_request()
+    };
+    let app = base_app(LoadRequest::Diff {
+        base: request.base.clone(),
+        target: request.target.clone(),
+        mode: request.mode,
+        selection: request.selection.clone(),
+        view: DiffView::Range,
+    });
+    let (next, _) = update(
+        Msg::DiffLoaded {
+            request,
+            result: Ok(vec![file_diff("a.rs", None, Some("a\n"))].into()),
+        },
+        &app,
+    );
+    let app = settle(next);
+
+    // The commits view needs a first-parent chain, so it is neither offered nor
+    // performed for a snapshot range.
+    assert!(
+        !app.loaded
+            .palette_entries()
+            .iter()
+            .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
+    );
+
+    let mut next = app.clone();
+    let mut commands = Vec::new();
+    apply_action(
+        &mut next,
+        Action::Range(RangeAction::SwitchToCommits),
+        &mut commands,
+    );
+    assert!(commands.is_empty(), "no first-parent load may be issued");
+    assert!(next.diagnostic.is_some(), "the refusal is explained");
+}
+
 // -----------------------------------------------------------------------
 // Settle deferral
 // -----------------------------------------------------------------------

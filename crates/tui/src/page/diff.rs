@@ -776,6 +776,14 @@ fn switch_view(page: &mut Diff, view: DiffView) -> Vec<OutMsg> {
     if !matches {
         return Vec::new();
     }
+    // A first-parent walk needs commits; a snapshot endpoint cannot supply one.
+    if view == DiffView::Commits
+        && (engine::is_snapshot_spec(&page.base) || engine::is_snapshot_spec(&page.target))
+    {
+        return vec![OutMsg::Diagnose(
+            "The commits view needs commit revisions".to_owned(),
+        )];
+    }
     page.paging = Paging::Loading;
     let mut request = page.request();
     request.view = view;
