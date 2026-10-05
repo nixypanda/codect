@@ -245,3 +245,91 @@ fn sha256_root_commit_uses_empty_tree_snapshot() {
     assert_eq!(root["base"]["kind"], "empty");
     assert_eq!(root["files"][0]["status"], "added");
 }
+
+#[test]
+fn untracked_files_join_the_worktree_side_and_ignored_files_stay_out() {
+    let repo = TestRepo::init();
+    repo.write(".gitignore", "target/\n");
+    repo.write("src/lib.rs", "pub struct Base;\n");
+    repo.commit("base");
+
+    repo.write("src/new.rs", "pub struct New;\n");
+    repo.write("target/junk.rs", "pub struct Junk;\n");
+    repo.write("notes.txt", "unsupported\n");
+
+    let document = run(&repo, "types", ":index", ":worktree");
+    let paths: Vec<_> = document["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        ["src/new.rs"],
+        "an untracked supported file is added; ignored and unsupported files are omitted"
+    );
+    let file = &document["files"][0];
+    assert_eq!(file["status"], "added");
+    assert!(file["base"].is_null());
+    assert_eq!(file["target"]["snapshot_id"], ":worktree");
+    assert!(
+        file["target"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("New")
+    );
+
+    let schema: Value = serde_json::from_str(&doc("schema/codect.diff.v1.json")).unwrap();
+    support::schema::validate(&schema, &document).unwrap();
+}
+
+#[test]
+fn text_diff_accepts_snapshots_and_renders_untracked_files() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", "pub fn base() {}\n");
+    repo.commit("base");
+    repo.write("src/lib.rs", "pub fn staged() {}\n");
+    repo.git_ok(&["add", "src/lib.rs"]);
+    repo.write("src/lib.rs", "pub fn unstaged() {}\n");
+    repo.write("src/fresh.rs", "pub struct Fresh;\n");
+
+    let staged = codect_in(
+        &repo,
+        &[
+            "diff",
+            "--format",
+            "text",
+            "--mode",
+            "signatures",
+            "HEAD",
+            ":index",
+        ],
+    )
+    .output()
+    .expect("run codect");
+    assert!(staged.status.success(), "{}", stderr(&staged));
+    let staged = stdout(&staged);
+    assert!(staged.contains("src/lib.rs"));
+    assert!(staged.contains("+pub fn staged();"));
+
+    let unstaged = codect_in(
+        &repo,
+        &[
+            "diff",
+            "--format",
+            "text",
+            "--mode",
+            "signatures",
+            ":index",
+            ":worktree",
+        ],
+    )
+    .output()
+    .expect("run codect");
+    assert!(unstaged.status.success(), "{}", stderr(&unstaged));
+    let unstaged = stdout(&unstaged);
+    assert!(unstaged.contains("+pub fn unstaged();"));
+    assert!(unstaged.contains("diff --codect a/src/fresh.rs b/src/fresh.rs"));
+    assert!(unstaged.contains("+pub struct Fresh;"));
+}

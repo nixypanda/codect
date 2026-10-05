@@ -64,7 +64,9 @@ Guarded by: `editors/nvim/tests/test_schema.lua` and CLI golden documents under
   arguments, or read `.codect.toml`.
 - Building `cli --no-default-features` links none of `ratatui`, `crossterm`,
   `terminal-colorsaurus`, `syntect`, or `two-face`.
-- Only the approved `gix` features are enabled.
+- Only the approved `gix` features are enabled: `revision`, `dirwalk` (which
+  brings `attributes` and `excludes`), `sha1`, `sha256`, `auto-chain-error`,
+  and `pack-cache-lru-static`.
 
 Guarded by: `just check-workspace-nodefault` and the `cargo tree` audit in
 `just check`.
@@ -73,7 +75,9 @@ Guarded by: `just check-workspace-nodefault` and the `cargo tree` audit in
 
 - Repositories and source files are untrusted. Codect does not execute
   repository configuration, hooks, filters, attributes, macros, build scripts,
-  compilers, or formatters, and does not follow repository symlinks.
+  compilers, or formatters, and does not follow repository symlinks. Untracked
+  `:worktree` enumeration reads the repository's ignore stack but executes no
+  filter, hook, or other repository command.
 - Config files are size-bounded; caches are bounded.
 - Allocation and parser failures are reported, not panicked.
 - `panic!`, `unwrap`, and `expect` are reserved for tests and statically

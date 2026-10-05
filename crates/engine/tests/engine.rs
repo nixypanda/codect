@@ -7,7 +7,7 @@
 
 mod support;
 
-use base::{Area, ProjectionMode, RepoPath, Selection, SelectionGroup};
+use base::{Area, FileDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
 use engine::{Engine, EngineError};
 use support::TestRepo;
 
@@ -282,4 +282,64 @@ fn root_is_the_worktree_for_a_normal_repository() {
     // the root is checked by its trailing component.
     let root = engine(&repo).root().to_path_buf();
     assert!(root.ends_with(repo.path().file_name().unwrap()));
+}
+
+#[test]
+fn worktree_snapshot_unions_tracked_and_untracked_files() {
+    let repo = TestRepo::init();
+    repo.write(".gitignore", "target/\n");
+    repo.write("tracked.rs", RUST_BASE);
+    repo.commit("base");
+
+    // A tracked signature change, a new untracked file, and an ignored file.
+    repo.write("tracked.rs", RUST_TYPE_VARIANT);
+    repo.write("fresh.rs", "pub struct Fresh;\n");
+    repo.write("target/junk.rs", "pub struct Junk;\n");
+
+    let worktree = engine(&repo)
+        .diff_snapshot_outlines(
+            ":index",
+            ":worktree",
+            ProjectionMode::Types,
+            &Selection::all(),
+        )
+        .expect("worktree snapshot diff");
+    let paths: Vec<String> = worktree
+        .files
+        .iter()
+        .map(|file| file.path().to_string())
+        .collect();
+    assert_eq!(
+        paths,
+        ["fresh.rs", "tracked.rs"],
+        "the worktree side adds untracked files and omits ignored ones"
+    );
+
+    // The index snapshot still sees only staged content, so an untracked file
+    // is invisible in a HEAD-to-index comparison.
+    let staged = engine(&repo)
+        .diff_snapshot_outlines("HEAD", ":index", ProjectionMode::Types, &Selection::all())
+        .expect("staged snapshot diff");
+    assert!(staged.files.is_empty());
+
+    // The projections-only `diff` (the text and TUI range path) accepts the
+    // same snapshots and returns the same file set.
+    let projections = engine(&repo)
+        .diff(
+            ":index",
+            ":worktree",
+            ProjectionMode::Types,
+            &Selection::all(),
+        )
+        .expect("worktree projection diff");
+    let mut names: Vec<String> = projections
+        .iter()
+        .map(|diff| match diff {
+            FileDiff::Added { new } => new.path().to_string(),
+            FileDiff::Deleted { old } => old.path().to_string(),
+            FileDiff::Modified { old, .. } => old.path().to_string(),
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, ["fresh.rs", "tracked.rs"]);
 }

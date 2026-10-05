@@ -40,6 +40,23 @@ const PROJECTORS: [&dyn LanguageProjector; 4] = [
     &RUST_PROJECTOR,
 ];
 
+// The canonical Git empty-tree object ids accepted as `:empty`, for SHA-1 and
+// SHA-256 object formats.
+const EMPTY_TREE_IDS: [&str; 2] = [
+    "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+];
+
+/// Whether `spec` names a snapshot side rather than a commit.
+///
+/// The reserved `:index`, `:worktree`, and `:empty` specifiers and the
+/// canonical empty-tree object id are snapshots. Every reserved specifier
+/// starts with `:`, which a Git refname cannot contain, so a commit cannot be
+/// mistaken for one.
+pub fn is_snapshot_spec(spec: &str) -> bool {
+    matches!(spec, ":index" | ":worktree" | ":empty") || EMPTY_TREE_IDS.contains(&spec)
+}
+
 /// A commit-to-commit focused comparison with immutable snapshot identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitDiff {
@@ -66,6 +83,19 @@ enum SnapshotEntry {
 }
 
 type SnapshotEntries = (&'static str, String, Vec<(RepoPath, SnapshotEntry)>);
+
+/// The resolved sides of a snapshot diff, shared by the projection and outline
+/// comparison loops.
+struct SnapshotSides {
+    base_kind: &'static str,
+    target_kind: &'static str,
+    base_id: String,
+    target_id: String,
+    base_map: BTreeMap<RepoPath, SnapshotEntry>,
+    target_map: BTreeMap<RepoPath, SnapshotEntry>,
+    /// The union of both sides, in raw path-byte order.
+    paths: BTreeSet<RepoPath>,
+}
 
 /// Projects explicit source bytes for `path`, returning the requested-mode
 /// projection plus a mode-independent outline.
@@ -238,9 +268,10 @@ impl Engine {
 
     /// Compares the projections of `base_spec` and `target_spec`.
     ///
-    /// Only paths whose canonical old and new projections differ are returned,
-    /// in raw path-byte order. Implementation-only changes therefore do not
-    /// appear at all.
+    /// Either side may be a commit, `:index`, `:worktree`, or `:empty`. Only
+    /// paths whose canonical old and new projections differ are returned, in
+    /// raw path-byte order. Implementation-only changes therefore do not appear
+    /// at all.
     pub fn diff(
         &self,
         base_spec: &str,
@@ -248,64 +279,43 @@ impl Engine {
         mode: ProjectionMode,
         selection: &Selection,
     ) -> Result<Vec<FileDiff>, EngineError> {
-        let base = self.repository.resolve_commit(base_spec)?;
-        let target = self.repository.resolve_commit(target_spec)?;
-        self.ensure_groups_in_diff(&base, &target, base_spec, target_spec, selection.groups())?;
-        let base_entries = self
-            .repository
-            .source_entries(&base)
-            .map_err(|source| EngineError::git(source, Some(base_spec)))?;
-        let target_entries = self
-            .repository
-            .source_entries(&target)
-            .map_err(|source| EngineError::git(source, Some(target_spec)))?;
-
-        let base_map: BTreeMap<&RepoPath, &SourceEntry> = base_entries
-            .iter()
-            .map(|entry| (&entry.path, entry))
-            .collect();
-        let target_map: BTreeMap<&RepoPath, &SourceEntry> = target_entries
-            .iter()
-            .map(|entry| (&entry.path, entry))
-            .collect();
-
-        // A `BTreeSet` merges the two sides in raw path byte order, which is the
-        // order the result uses.
-        let mut paths: BTreeSet<&RepoPath> = base_map.keys().copied().collect();
-        paths.extend(target_map.keys().copied());
-
-        let projectors: &[&dyn LanguageProjector] = &PROJECTORS;
+        let sides = self.snapshot_sides(base_spec, target_spec, selection)?;
         let mut caches = Caches::default();
         let mut diffs = Vec::new();
 
-        for path in paths {
+        for path in &sides.paths {
             if !selection.scope().matches(path) {
                 continue;
             }
-            let old_entry = base_map.get(path).copied();
-            let new_entry = target_map.get(path).copied();
+            let base_entry = sides.base_map.get(path);
+            let target_entry = sides.target_map.get(path);
 
-            // Skip identical blobs before reading or projecting either side.
-            // This is the main performance rule and is also what makes an
-            // unchanged file invisible.
-            if let (Some(old), Some(new)) = (old_entry, new_entry)
+            // Skip identical index or commit blobs before reading or projecting
+            // either side. Worktree sides have no blob id and are compared by
+            // their projections.
+            if let (Some(SnapshotEntry::Blob(old)), Some(SnapshotEntry::Blob(new))) =
+                (base_entry, target_entry)
                 && old.blob_id == new.blob_id
             {
                 continue;
             }
 
-            let old = match old_entry {
-                Some(entry) => {
-                    self.project_entry(projectors, &mut caches, base_spec, entry, mode)?
-                }
-                None => None,
-            };
-            let new = match new_entry {
-                Some(entry) => {
-                    self.project_entry(projectors, &mut caches, target_spec, entry, mode)?
-                }
-                None => None,
-            };
+            let old = self.snapshot_projection(
+                base_entry,
+                path,
+                sides.base_kind,
+                base_spec,
+                mode,
+                &mut caches,
+            )?;
+            let new = self.snapshot_projection(
+                target_entry,
+                path,
+                sides.target_kind,
+                target_spec,
+                mode,
+                &mut caches,
+            )?;
 
             let old_text = old.as_ref().map_or("", |file| file.canonical_text());
             let new_text = new.as_ref().map_or("", |file| file.canonical_text());
@@ -413,6 +423,58 @@ impl Engine {
         mode: ProjectionMode,
         selection: &Selection,
     ) -> Result<SnapshotDiff, EngineError> {
+        let sides = self.snapshot_sides(base_spec, target_spec, selection)?;
+        let mut caches = Caches::default();
+        let mut files = Vec::new();
+        for path in &sides.paths {
+            if !selection.scope().matches(path) {
+                continue;
+            }
+            let old = self.snapshot_outline(
+                sides.base_map.get(path),
+                path,
+                sides.base_kind,
+                base_spec,
+                mode,
+                &mut caches,
+            )?;
+            let new = self.snapshot_outline(
+                sides.target_map.get(path),
+                path,
+                sides.target_kind,
+                target_spec,
+                mode,
+                &mut caches,
+            )?;
+            if old.as_ref().map_or("", |f| f.projection.canonical_text())
+                == new.as_ref().map_or("", |f| f.projection.canonical_text())
+            {
+                continue;
+            }
+            files.push(match (old, new) {
+                (None, Some(new)) => FileOutlineDiff::Added { new },
+                (Some(old), None) => FileOutlineDiff::Deleted { old },
+                (Some(old), Some(new)) => FileOutlineDiff::Modified { old, new },
+                (None, None) => continue, // unreachable after the entry checks
+            });
+        }
+        Ok(SnapshotDiff {
+            base_kind: sides.base_kind,
+            target_kind: sides.target_kind,
+            base_id: sides.base_id,
+            target_id: sides.target_id,
+            files,
+        })
+    }
+
+    /// Resolves both sides as snapshots and validates the selection before any
+    /// projection. Shared by the projection and outline comparison loops.
+    fn snapshot_sides(
+        &self,
+        base_spec: &str,
+        target_spec: &str,
+        selection: &Selection,
+    ) -> Result<SnapshotSides, EngineError> {
         let (base_kind, base_id, base_entries) = self.snapshot_entries(base_spec)?;
         let (target_kind, target_id, target_entries) = self.snapshot_entries(target_spec)?;
         let base_map: BTreeMap<RepoPath, SnapshotEntry> = base_entries.into_iter().collect();
@@ -437,85 +499,75 @@ impl Engine {
             });
         }
 
-        let mut caches = Caches::default();
-        let mut files = Vec::new();
-        for path in paths {
-            if !selection.scope().matches(&path) {
-                continue;
-            }
-            let old = self.snapshot_outline(
-                base_map.get(&path),
-                &path,
-                base_kind,
-                base_spec,
-                mode,
-                &mut caches,
-            )?;
-            let new = self.snapshot_outline(
-                target_map.get(&path),
-                &path,
-                target_kind,
-                target_spec,
-                mode,
-                &mut caches,
-            )?;
-            if old.as_ref().map_or("", |f| f.projection.canonical_text())
-                == new.as_ref().map_or("", |f| f.projection.canonical_text())
-            {
-                continue;
-            }
-            files.push(match (old, new) {
-                (None, Some(new)) => FileOutlineDiff::Added { new },
-                (Some(old), None) => FileOutlineDiff::Deleted { old },
-                (Some(old), Some(new)) => FileOutlineDiff::Modified { old, new },
-                (None, None) => continue, // unreachable after the entry checks
-            });
-        }
-        Ok(SnapshotDiff {
+        Ok(SnapshotSides {
             base_kind,
             target_kind,
             base_id,
             target_id,
-            files,
+            base_map,
+            target_map,
+            paths,
         })
     }
 
+    /// Projects one side of a snapshot: an index or commit blob, or the file on
+    /// disk for a worktree entry (present or absent).
+    fn snapshot_projection(
+        &self,
+        entry: Option<&SnapshotEntry>,
+        path: &RepoPath,
+        kind: &str,
+        spec: &str,
+        mode: ProjectionMode,
+        caches: &mut Caches,
+    ) -> Result<Option<ProjectedFile>, EngineError> {
+        match entry {
+            Some(SnapshotEntry::Blob(entry)) => {
+                self.project_entry(&PROJECTORS, caches, spec, entry, mode)
+            }
+            Some(SnapshotEntry::Worktree) => self
+                .project_worktree(path, mode)
+                .map(|outline| outline.map(|outline| outline.projection)),
+            None if kind == "worktree" => self
+                .project_worktree(path, mode)
+                .map(|outline| outline.map(|outline| outline.projection)),
+            None => Ok(None),
+        }
+    }
+
     fn snapshot_entries(&self, spec: &str) -> Result<SnapshotEntries, EngineError> {
-        if spec == ":empty"
-            || matches!(
-                spec,
-                "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-                    | "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
-            )
-        {
+        if spec == ":empty" || EMPTY_TREE_IDS.contains(&spec) {
             return Ok(("empty", spec.to_owned(), Vec::new()));
         }
-        if spec == ":index" || spec == ":worktree" {
+        if spec == ":index" {
             let entries = self
                 .repository
                 .index_source_entries()
-                .map_err(|e| EngineError::git(e, Some(spec)))?;
-            let entries = entries
+                .map_err(|e| EngineError::git(e, Some(spec)))?
                 .into_iter()
-                .map(|entry| {
-                    let path = entry.path.clone();
-                    let value = if spec == ":index" {
-                        SnapshotEntry::Blob(entry)
-                    } else {
-                        SnapshotEntry::Worktree
-                    };
-                    (path, value)
-                })
+                .map(|entry| (entry.path.clone(), SnapshotEntry::Blob(entry)))
                 .collect();
-            return Ok((
-                if spec == ":index" {
-                    "index"
-                } else {
-                    "worktree"
-                },
-                spec.to_owned(),
-                entries,
-            ));
+            return Ok(("index", spec.to_owned(), entries));
+        }
+        if spec == ":worktree" {
+            // The working tree is the tracked index paths (kept even when
+            // deleted from disk, so a deletion still projects to an absent
+            // side) unioned with the untracked, non-ignored files on disk.
+            let mut entries: BTreeMap<RepoPath, SnapshotEntry> = self
+                .repository
+                .index_source_entries()
+                .map_err(|e| EngineError::git(e, Some(spec)))?
+                .into_iter()
+                .map(|entry| (entry.path.clone(), SnapshotEntry::Worktree))
+                .collect();
+            for path in self
+                .repository
+                .untracked_paths()
+                .map_err(|e| EngineError::git(e, Some(spec)))?
+            {
+                entries.entry(path).or_insert(SnapshotEntry::Worktree);
+            }
+            return Ok(("worktree", spec.to_owned(), entries.into_iter().collect()));
         }
         let revision = self.repository.resolve_commit(spec)?;
         let id = revision.object_id.to_string();

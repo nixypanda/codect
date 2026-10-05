@@ -427,6 +427,15 @@ fn run_tui(
                 TuiDiffCommand::Range { args } => (tui::DiffView::Range, args),
                 TuiDiffCommand::Commits { args } => (tui::DiffView::Commits, args),
             };
+            if matches!(view, tui::DiffView::Commits)
+                && (engine::is_snapshot_spec(&args.base) || engine::is_snapshot_spec(&args.target))
+            {
+                return Err(CliError::usage(
+                    "the commits view walks commit history; `:index`, `:worktree`, and `:empty` \
+                     are only valid with `range`"
+                        .to_owned(),
+                ));
+            }
             let selection = selection_for(&args.paths, &args.areas, start, &engine)?;
             let label = scope_label(&selection);
             (
@@ -690,6 +699,10 @@ fn git_context(error: &GitError) -> DiagnosticContext {
             repository: Some(repository.clone()),
             ..DiagnosticContext::default()
         },
+        GitError::UntrackedTraversal { repository, .. } => DiagnosticContext {
+            repository: Some(repository.clone()),
+            ..DiagnosticContext::default()
+        },
         GitError::NotFirstParentAncestor { .. } => DiagnosticContext::default(),
     }
 }
@@ -711,6 +724,7 @@ fn git_message(error: &GitError) -> &'static str {
         GitError::InvalidRepoPath { .. } => "a committed entry has an unusable path",
         GitError::InvalidObjectId { .. } => "an object id is invalid",
         GitError::IndexRead { .. } => "the Git index could not be read",
+        GitError::UntrackedTraversal { .. } => "untracked files could not be enumerated",
     }
 }
 

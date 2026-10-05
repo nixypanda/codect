@@ -20,6 +20,7 @@ codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --ar
   byte-for-byte stable.
 - `--format json` on `diff` additionally accepts the snapshots `:index`,
   `:worktree`, `:empty`, and the canonical Git empty-tree object ID as a side.
+  The `text` format accepts the same sides.
 - `--path`/`-p` and `--area`/`-a` are mutually exclusive (usage error, exit `2`).
   Each is repeatable and forms a union. `--area` paths are repository-root
   relative; `--path` resolves relative to the current directory.
@@ -126,7 +127,8 @@ Root: `schema`, `mode`, `base`, `target`, `files`.
   `modified`), `base`/`target` sides, and `equal: false`. An absent side is
   `null`; a present side has `snapshot_id`, `projection`, and `outline`.
 - `:index` reads stage-zero index blobs. `:worktree` reads tracked regular files
-  on disk and does **not** include unsaved editor buffers or untracked files.
+  on disk plus untracked, non-ignored files, and does **not** include unsaved
+  editor buffers.
 
 ## Read-only guarantee
 

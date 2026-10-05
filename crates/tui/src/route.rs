@@ -28,7 +28,11 @@ pub enum LoadRequest {
 /// Which diff view to open or reload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiffView {
+    /// Compare two endpoint snapshots directly. Each side may be a commit,
+    /// `:index`, `:worktree`, or `:empty`.
     Range,
+    /// Walk the target's first-parent chain between two commits. This needs
+    /// commit sides; a snapshot endpoint is not part of a first-parent chain.
     Commits,
 }
 

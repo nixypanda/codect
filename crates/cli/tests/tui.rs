@@ -147,3 +147,43 @@ fn tui_diff_without_a_terminal_exits_one_with_a_clean_stdout() {
         "expected a terminal diagnostic, got: {diagnostic}"
     );
 }
+
+#[test]
+fn tui_diff_range_accepts_snapshot_sides() {
+    let repo = repo_with_change();
+    // A snapshot range reaches the terminal guard rather than failing revision
+    // resolution, which is what a commit-only range used to do.
+    let output = run(
+        &repo,
+        &[
+            "tui",
+            "diff",
+            "range",
+            "--mode",
+            "types",
+            ":index",
+            ":worktree",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("terminal"));
+}
+
+#[test]
+fn tui_diff_commits_rejects_snapshot_sides() {
+    let repo = repo_with_change();
+    let output = run(
+        &repo,
+        &[
+            "tui",
+            "diff",
+            "commits",
+            "--mode",
+            "types",
+            ":index",
+            ":worktree",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("commit history"));
+}
