@@ -7,7 +7,7 @@
 
 mod support;
 
-use base::{Area, FileDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
+use base::{Area, FileDiff, FileOutlineDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
 use engine::{Engine, EngineError};
 use support::TestRepo;
 
@@ -342,4 +342,64 @@ fn worktree_snapshot_unions_tracked_and_untracked_files() {
         .collect();
     names.sort();
     assert_eq!(names, ["fresh.rs", "tracked.rs"]);
+}
+
+// A worktree side is exactly its member set: a path the side does not name is
+// absent even when a file with that path sits on disk, so an ignored untracked
+// file cannot leak in through the other side's path.
+#[test]
+fn worktree_membership_excludes_an_ignored_file_named_by_the_other_side() {
+    let repo = TestRepo::init();
+    repo.write("bait.rs", RUST_BASE);
+    repo.write("keep.rs", RUST_BASE);
+    let committed = repo.commit("base");
+
+    // Drop the file from the index and ignore it, then put it back on disk so
+    // it is untracked, ignored, and still present.
+    repo.write(".gitignore", "bait.rs\n");
+    repo.remove("bait.rs");
+    repo.commit("drop and ignore bait");
+    repo.write("bait.rs", RUST_BASE);
+
+    let outlines = engine(&repo)
+        .diff_snapshot_outlines(
+            ":worktree",
+            &committed,
+            ProjectionMode::Types,
+            &Selection::all(),
+        )
+        .expect("snapshot diff");
+    let files: Vec<(String, &str)> = outlines
+        .files
+        .iter()
+        .map(|file| {
+            let status = match file {
+                FileOutlineDiff::Added { .. } => "added",
+                FileOutlineDiff::Deleted { .. } => "deleted",
+                FileOutlineDiff::Modified { .. } => "modified",
+            };
+            (file.path().to_string(), status)
+        })
+        .collect();
+    assert_eq!(
+        files,
+        [("bait.rs".to_owned(), "added")],
+        "an ignored untracked file is not a worktree member"
+    );
+
+    // The projection-only path (text and the TUI range view) shares the same
+    // membership rule.
+    let projections = engine(&repo)
+        .diff(
+            ":worktree",
+            &committed,
+            ProjectionMode::Types,
+            &Selection::all(),
+        )
+        .expect("projection diff");
+    let names: Vec<String> = projections
+        .iter()
+        .map(|diff| diff.path().to_string())
+        .collect();
+    assert_eq!(names, ["bait.rs"]);
 }
