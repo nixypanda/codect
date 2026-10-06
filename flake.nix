@@ -101,17 +101,62 @@
             license = pkgs.lib.licenses.agpl3Plus;
           };
         };
+
+      # The DeepSeek Harness (DSH) sidebar plugin. Builds the TypeScript sources
+      # into lib/ with esbuild and installs the package directory. Consumers add
+      # this to their DSH profile bundles as `@nixypanda/dsh-codect`.
+      codectDshPackage =
+        pkgs:
+        let
+          src = ./editors/dsh;
+          esbuildBin = pkgs.esbuild;
+        in
+        pkgs.runCommand "codect-dsh"
+          {
+            nativeBuildInputs = [
+              pkgs.nodejs
+              pkgs.esbuild
+            ];
+            inherit src;
+          }
+          ''
+            set -e
+
+            # The store source is read-only and build.mjs writes lib/ next to it,
+            # so build from a writable copy.
+            mkdir -p work
+            cp -r --no-preserve=mode,ownership "$src"/. work/
+            chmod -R u+w work
+            cd work
+
+            # Build the TypeScript sources using esbuild binary
+            export ESBUILD_BINARY=${esbuildBin}/bin/esbuild
+            node scripts/build.mjs
+
+            # Install the package tree and an npm-style tarball. Consumers pass
+            # the tarball to `dsh plugin add` so pnpm resolves the package's
+            # runtime dependencies (a bare store path installs as a link: and
+            # would skip them).
+            mkdir -p "$out/tarball/package"
+            cp -r package.json cordis.patch.yml README.md lib "$out"/
+            cp -r package.json cordis.patch.yml README.md lib "$out/tarball/package"/
+            tar -czf "$out/codect-dsh.tgz" -C "$out/tarball" package
+
+            echo "codect-dsh built successfully"
+          '';
     in
     {
       packages = forAllSystems (pkgs: {
         default = codectPackage pkgs;
         codect = codectPackage pkgs;
         codect-nvim = codectNvimPackage pkgs;
+        codect-dsh = codectDshPackage pkgs;
       });
 
       overlays.default = final: _prev: {
         codect = codectPackage final;
         codect-nvim = codectNvimPackage final;
+        codect-dsh = codectDshPackage final;
       };
 
       apps = forAllSystems (pkgs: {
