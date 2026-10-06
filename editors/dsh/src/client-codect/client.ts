@@ -229,18 +229,12 @@ function apply(ctx: any) {
   });
 
   // Register tab types.
-  ctx.effect(() => {
-    ctx.sidebarRightTabs.register(showDefinition(t));
-  }, "codect: show type");
+  ctx.effect(() => ctx.sidebarRightTabs.register(showDefinition(t)), "codect: show type");
 
-  ctx.effect(() => {
-    ctx.sidebarRightTabs.register(diffDefinition(t));
-  }, "codect: diff type");
+  ctx.effect(() => ctx.sidebarRightTabs.register(diffDefinition(t)), "codect: diff type");
 
   // Register dictionaries.
-  ctx.effect(() => {
-    ctx.locale.register(NS, { en: LOCALE_EN });
-  }, "codect: dictionaries");
+  ctx.effect(() => ctx.locale.register(NS, { en: LOCALE_EN }), "codect: dictionaries");
 
   // The bodies call the Remote namespace, so obtain it through an inject scope:
   // reading `remote.codect` from a context that did not inject it throws.
@@ -306,59 +300,67 @@ function apply(ctx: any) {
       });
     }
 
-    ctx.effect(() => {
-      ctx.slots.inject("sidebar.right.pane.tab", () => {
-        ctx.slots.register(
-          {
-            name: "sidebar.right.pane.tab",
-            key: `${CODECT_ID}-show`,
-            locale: NS,
-            children: {},
-          },
-          ShowBody
-        );
-      });
-    }, "codect: show tab body");
+    ctx.effect(
+      () =>
+        ctx.slots.inject("sidebar.right.pane.tab", () =>
+          ctx.slots.register(
+            {
+              name: "sidebar.right.pane.tab",
+              key: `${CODECT_ID}-show`,
+              locale: NS,
+              children: {},
+            },
+            ShowBody
+          )
+        ),
+      "codect: show tab body"
+    );
 
-    ctx.effect(() => {
-      ctx.slots.inject("sidebar.right.pane.tab", () => {
-        ctx.slots.register(
-          {
-            name: "sidebar.right.pane.tab",
-            key: `${CODECT_ID}-diff`,
-            locale: NS,
-            children: {},
-          },
-          DiffBody
-        );
-      });
-    }, "codect: diff tab body");
+    ctx.effect(
+      () =>
+        ctx.slots.inject("sidebar.right.pane.tab", () =>
+          ctx.slots.register(
+            {
+              name: "sidebar.right.pane.tab",
+              key: `${CODECT_ID}-diff`,
+              locale: NS,
+              children: {},
+            },
+            DiffBody
+          )
+        ),
+      "codect: diff tab body"
+    );
   });
 
   // Register tab titles.
-  ctx.effect(() => {
-    ctx.slots.inject("sidebar.right.pane.tab.title", () => {
-      ctx.slots.register(
-        {
-          name: "sidebar.right.pane.tab.title",
-          key: `${CODECT_ID}-show`,
-        },
-        () => React.createElement(CodectTitle, { kind: SHOW_KIND })
-      );
-    });
-  }, "codect: show tab title");
+  ctx.effect(
+    () =>
+      ctx.slots.inject("sidebar.right.pane.tab.title", () =>
+        ctx.slots.register(
+          {
+            name: "sidebar.right.pane.tab.title",
+            key: `${CODECT_ID}-show`,
+          },
+          () => React.createElement(CodectTitle, { kind: SHOW_KIND })
+        )
+      ),
+    "codect: show tab title"
+  );
 
-  ctx.effect(() => {
-    ctx.slots.inject("sidebar.right.pane.tab.title", () => {
-      ctx.slots.register(
-        {
-          name: "sidebar.right.pane.tab.title",
-          key: `${CODECT_ID}-diff`,
-        },
-        () => React.createElement(CodectTitle, { kind: DIFF_KIND })
-      );
-    });
-  }, "codect: diff tab title");
+  ctx.effect(
+    () =>
+      ctx.slots.inject("sidebar.right.pane.tab.title", () =>
+        ctx.slots.register(
+          {
+            name: "sidebar.right.pane.tab.title",
+            key: `${CODECT_ID}-diff`,
+          },
+          () => React.createElement(CodectTitle, { kind: DIFF_KIND })
+        )
+      ),
+    "codect: diff tab title"
+  );
 }
 
 // ModuleLoader registration is added by the build script (scripts/build.mjs)
