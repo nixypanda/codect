@@ -174,6 +174,7 @@
             pkgs.cargo-llvm-cov
             pkgs.just
             pkgs.neovim
+            pkgs.nodejs
             pkgs.git
           ];
 
@@ -213,6 +214,38 @@
               git commit -qm fixture
               export CODECT_BIN=${codectPackage pkgs}/bin/codect
               nvim --headless -u NONE -l editors/nvim/tests/run.lua > log.txt 2>&1 || {
+                cat log.txt
+                exit 1
+              }
+              cat log.txt
+              touch $out
+            '';
+        codect-dsh =
+          pkgs.runCommand "codect-dsh-check"
+            {
+              nativeBuildInputs = [
+                pkgs.nodejs
+                pkgs.git
+                (codectPackage pkgs)
+              ];
+            }
+            ''
+              export HOME=$TMPDIR
+              mkdir -p work/editors work/crates
+              cp -r ${./editors/dsh} work/editors/dsh
+              chmod -R u+w work/editors/dsh
+              # `codect show` resolves `crates/base/src/lib.rs` relative to the
+              # repository root, so the check's work dir needs a matching tree.
+              cp -r ${./crates/base} work/crates/base
+              chmod -R u+w work/crates/base
+              cd work
+              git init -q
+              git config user.email check@example.com
+              git config user.name check
+              git add -A
+              git commit -qm fixture
+              export CODECT_BIN=${codectPackage pkgs}/bin/codect
+              node --test editors/dsh/test/*.test.js > log.txt 2>&1 || {
                 cat log.txt
                 exit 1
               }

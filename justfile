@@ -24,7 +24,7 @@ bench: bench-tui
 format: format-workspace format-nix
 
 # Check the workspace.
-check: check-workspace
+check: check-workspace test-dsh
 
 # Run the coverage report.
 coverage: coverage-workspace
@@ -48,6 +48,11 @@ test-workspace:
 test-nvim:
     cargo build -p cli
     CODECT_BIN="$PWD/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/run.lua
+
+# Run the DSH plugin's Node suite against the built binary.
+test-dsh:
+    cargo build -p cli
+    CODECT_BIN="$PWD/target/debug/codect" npm --prefix editors/dsh test
 
 # Benchmark one rendered frame and its per-part seams (criterion).
 bench-tui:

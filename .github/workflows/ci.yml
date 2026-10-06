@@ -48,6 +48,17 @@ jobs:
           version: v0.12.5
       - name: Neovim plugin suite
         run: CODECT_BIN="$PWD/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/run.lua
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install DSH plugin dependencies
+        run: npm --prefix editors/dsh install
+      - name: Typecheck DSH plugin
+        run: npm --prefix editors/dsh run typecheck
+      - name: Build DSH plugin
+        run: npm --prefix editors/dsh run build
+      - name: DSH plugin suite
+        run: CODECT_BIN="$PWD/target/debug/codect" npm --prefix editors/dsh test
       # Last, because this replaces `target/debug/codect` with the no-TUI build.
       - name: Build without default features
         run: cargo build -p cli --no-default-features

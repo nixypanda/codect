@@ -19,7 +19,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // codect repo root: editors/dsh/test → ../../.. = codect root
 const codectRoot = join(__dirname, "../../..");
-const CODECT = process.env.CODECT_BIN || "codect";
+
+// Required so the suite always exercises the binary under test instead of
+// whatever `codect` happens to be on PATH.
+const CODECT = process.env.CODECT_BIN;
+if (!CODECT) {
+  throw new Error(
+    "CODECT_BIN must point at a built codect binary; " +
+      "run `just test-dsh` or set CODECT_BIN=<path>"
+  );
+}
 
 function runCodect(args, cwd) {
   const output = execFileSync(CODECT, args, {
@@ -92,6 +101,29 @@ function makeSnapshotRepo() {
 
 const snapshotFixture = makeSnapshotRepo();
 after(() => rmSync(snapshotFixture, { recursive: true, force: true }));
+
+/**
+ * Older codect binaries predate untracked-`:worktree` support. Probe the binary
+ * once (using the snapshot fixture) so the two worktree snapshot tests skip
+ * with a clear reason rather than failing on a stale PATH binary.
+ */
+let worktreeSupport;
+function worktreeUnsupportedReason() {
+  if (worktreeSupport === undefined) {
+    try {
+      const doc = runCodect(
+        ["diff", "--format", "json", "--mode", "types", "HEAD", ":worktree"],
+        snapshotFixture
+      );
+      worktreeSupport = doc.files.some((f) => f.path === "src/untracked.rs");
+    } catch {
+      worktreeSupport = false;
+    }
+  }
+  return worktreeSupport
+    ? false
+    : "codect binary lacks untracked-:worktree support; run `just test-dsh` or point CODECT_BIN at a current build";
+}
 
 /** Client-side outline comparison, mirrored from diff-view.tsx. */
 function diffChanges(file) {
@@ -213,24 +245,28 @@ test("codect show :worktree reads from worktree", () => {
   assert.equal(doc.schema, "codect.show.v1");
 });
 
-test("codect diff HEAD :worktree includes modified and untracked files", () => {
-  const doc = runCodect(
-    ["diff", "--format", "json", "--mode", "types", "HEAD", ":worktree"],
-    snapshotFixture
-  );
+test(
+  "codect diff HEAD :worktree includes modified and untracked files",
+  { skip: worktreeUnsupportedReason() },
+  () => {
+    const doc = runCodect(
+      ["diff", "--format", "json", "--mode", "types", "HEAD", ":worktree"],
+      snapshotFixture
+    );
 
-  assert.equal(doc.schema, "codect.diff.v1");
-  assert.equal(doc.base.kind, "commit");
-  assert.equal(doc.target.kind, "worktree");
-  assert.equal(doc.target.revision, ":worktree");
-  assert.ok(typeof doc.target.id === "string" && doc.target.id.length > 0);
+    assert.equal(doc.schema, "codect.diff.v1");
+    assert.equal(doc.base.kind, "commit");
+    assert.equal(doc.target.kind, "worktree");
+    assert.equal(doc.target.revision, ":worktree");
+    assert.ok(typeof doc.target.id === "string" && doc.target.id.length > 0);
 
-  const byPath = new Map(doc.files.map((f) => [f.path, f]));
-  assert.equal(byPath.get("src/tracked.rs")?.status, "modified");
-  assert.equal(byPath.get("src/untracked.rs")?.status, "added");
-  // `:worktree` honors the ignore stack: an ignored untracked file never leaks in.
-  assert.equal(byPath.has("src/ignored.rs"), false);
-});
+    const byPath = new Map(doc.files.map((f) => [f.path, f]));
+    assert.equal(byPath.get("src/tracked.rs")?.status, "modified");
+    assert.equal(byPath.get("src/untracked.rs")?.status, "added");
+    // `:worktree` honors the ignore stack: an ignored untracked file never leaks in.
+    assert.equal(byPath.has("src/ignored.rs"), false);
+  }
+);
 
 test("codect diff :index :worktree isolates unstaged changes", () => {
   const doc = runCodect(
@@ -248,15 +284,19 @@ test("codect diff :index :worktree isolates unstaged changes", () => {
   assert.ok(tracked.target.projection.text.includes("u64"));
 });
 
-test("codect diff :empty :worktree marks every file added", () => {
-  const doc = runCodect(
-    ["diff", "--format", "json", "--mode", "types", ":empty", ":worktree"],
-    snapshotFixture
-  );
+test(
+  "codect diff :empty :worktree marks every file added",
+  { skip: worktreeUnsupportedReason() },
+  () => {
+    const doc = runCodect(
+      ["diff", "--format", "json", "--mode", "types", ":empty", ":worktree"],
+      snapshotFixture
+    );
 
-  assert.equal(doc.base.kind, "empty");
-  assert.equal(doc.target.kind, "worktree");
-  assert.ok(doc.files.length > 0);
-  assert.ok(doc.files.every((f) => f.status === "added"));
-  assert.ok(doc.files.some((f) => f.path === "src/untracked.rs"));
-});
+    assert.equal(doc.base.kind, "empty");
+    assert.equal(doc.target.kind, "worktree");
+    assert.ok(doc.files.length > 0);
+    assert.ok(doc.files.every((f) => f.status === "added"));
+    assert.ok(doc.files.some((f) => f.path === "src/untracked.rs"));
+  }
+);
