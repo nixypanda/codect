@@ -8,7 +8,8 @@
  * enough, stacked when it is not.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDebounced } from "./use-debounced";
 import type { CodectMode, ShowDocument, ShowFile } from "../shared/schema";
 import type { CodeLabels } from "./labels";
 import { buildTreeRows } from "./tree";
@@ -91,17 +92,23 @@ export function ShowView({ root, codect, labels, t, onNavigate }: ShowViewProps)
     readBool(OUTLINE_OPEN_KEY, false)
   );
 
+  const debouncedRevision = useDebounced(revision);
+  const debouncedPathFilter = useDebounced(pathFilter);
+  const requestSeq = useRef(0);
+
   const loadProjection = useCallback(async () => {
     if (!root) return;
+    const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
     try {
       const doc = await codect.show({
         root,
-        revision: revision || undefined,
+        revision: debouncedRevision || undefined,
         mode,
-        paths: pathFilter ? [pathFilter] : undefined,
+        paths: debouncedPathFilter ? [debouncedPathFilter] : undefined,
       });
+      if (seq !== requestSeq.current) return;
       setDocument(doc);
       setSelectedPath((current) => {
         if (current !== null && doc.files.some((file) => file.path === current)) {
@@ -110,12 +117,13 @@ export function ShowView({ root, codect, labels, t, onNavigate }: ShowViewProps)
         return doc.files.length > 0 ? doc.files[0].path : null;
       });
     } catch (e) {
+      if (seq !== requestSeq.current) return;
       setError((e as Error).message);
       setDocument(null);
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
-  }, [root, revision, mode, pathFilter, codect]);
+  }, [root, debouncedRevision, mode, debouncedPathFilter, codect]);
 
   useEffect(() => {
     void loadProjection();

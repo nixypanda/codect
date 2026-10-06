@@ -7,7 +7,8 @@
  * Side by side when the pane is wide enough, stacked when it is not.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDebounced } from "./use-debounced";
 import type {
   CodectMode,
   DiffChange,
@@ -186,18 +187,25 @@ export function DiffView({ root, codect, labels, t, onNavigate, diffView }: Diff
     writeLayout(next);
   }, []);
 
+  const debouncedBase = useDebounced(base);
+  const debouncedTarget = useDebounced(target);
+  const debouncedPathFilter = useDebounced(pathFilter);
+  const requestSeq = useRef(0);
+
   const loadDiff = useCallback(async () => {
-    if (!root || !base || !target) return;
+    if (!root || !debouncedBase || !debouncedTarget) return;
+    const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
     try {
       const doc = await codect.diff({
         root,
-        base,
-        target,
+        base: debouncedBase,
+        target: debouncedTarget,
         mode,
-        paths: pathFilter ? [pathFilter] : undefined,
+        paths: debouncedPathFilter ? [debouncedPathFilter] : undefined,
       });
+      if (seq !== requestSeq.current) return;
       setDocument(doc);
       setSelectedPath((current) => {
         if (current !== null && doc.files.some((file) => file.path === current)) {
@@ -206,12 +214,13 @@ export function DiffView({ root, codect, labels, t, onNavigate, diffView }: Diff
         return doc.files.length > 0 ? doc.files[0].path : null;
       });
     } catch (e) {
+      if (seq !== requestSeq.current) return;
       setError((e as Error).message);
       setDocument(null);
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
-  }, [root, base, target, mode, pathFilter, codect]);
+  }, [root, debouncedBase, debouncedTarget, mode, debouncedPathFilter, codect]);
 
   useEffect(() => {
     void loadDiff();

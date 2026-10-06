@@ -20,6 +20,7 @@ declare module "@deepseek-ai/dsh-typert-protocol" {
     "codect/failed": {};
     "codect/invalid-json": {};
     "codect/schema-mismatch": {};
+    "codect/invalid-argument": {};
   }
 }
 
@@ -69,6 +70,32 @@ async function execCodect(
   });
 }
 
+/**
+ * Reject a positional revision value that begins with `-`. Without this an
+ * input such as `--format` (or any other flag) would be consumed by clap as an
+ * option rather than as a revision, letting user input alter the command.
+ */
+function assertRevision(flag: string, value: string): void {
+  if (value.startsWith("-")) {
+    throw new RemoteError(
+      "codect/invalid-argument",
+      `${flag} must not start with "-": ${value}`,
+      {}
+    );
+  }
+}
+
+/** `--path` and `--area` are mutually exclusive; reject both being present. */
+function assertNotBothSelectors(paths?: string[], areas?: string[]): void {
+  if (paths?.length && areas?.length) {
+    throw new RemoteError(
+      "codect/invalid-argument",
+      "--path and --area are mutually exclusive",
+      {}
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -94,13 +121,17 @@ class CodectService extends TypertRemoteService {
   }): Promise<ShowDocument> {
     const binary = this.config.binary;
     const args = ["show", "--format", "json", "--mode", params.mode];
+    assertNotBothSelectors(params.paths, params.areas);
     if (params.paths?.length) {
       for (const p of params.paths) args.push("--path", p);
     }
     if (params.areas?.length) {
       for (const a of params.areas) args.push("--area", a);
     }
-    if (params.revision) args.push(params.revision);
+    if (params.revision) {
+      assertRevision("revision", params.revision);
+      args.push("--", params.revision);
+    }
     return (await execCodect(binary, args, params.root, this.config.timeoutMs, "codect.show.v1")) as ShowDocument;
   }
 
@@ -115,13 +146,16 @@ class CodectService extends TypertRemoteService {
   }): Promise<DiffDocument> {
     const binary = this.config.binary;
     const args = ["diff", "--format", "json", "--mode", params.mode];
+    assertNotBothSelectors(params.paths, params.areas);
     if (params.paths?.length) {
       for (const p of params.paths) args.push("--path", p);
     }
     if (params.areas?.length) {
       for (const a of params.areas) args.push("--area", a);
     }
-    args.push(params.base, params.target);
+    assertRevision("base", params.base);
+    assertRevision("target", params.target);
+    args.push("--", params.base, params.target);
     return (await execCodect(binary, args, params.root, this.config.timeoutMs, "codect.diff.v1")) as DiffDocument;
   }
 }
