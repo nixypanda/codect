@@ -6,10 +6,18 @@
  *   window.__ModuleLoader__.load({ id: "...", factory: (require) => { ... } })
  */
 
-import { rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  existsSync,
+} from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
@@ -61,13 +69,91 @@ console.log("Building shared schema...");
 build(`${join(srcDir, "shared/schema.ts")} --bundle --format=esm --platform=browser --packages=external --outfile=${join(libDir, "types/types.js")}`);
 
 // 5. Type declarations
-console.log("Writing type declarations...");
-writeFileSync(join(libDir, "types/index.d.ts"), `export { CodectService } from "../../src/api-codect/index";
-export type { ShowDocument, DiffDocument, CodectMode } from "../../src/shared/schema";
-`);
-writeFileSync(join(libDir, "types/client/index.d.ts"), `export {};
-`);
-writeFileSync(join(libDir, "typert.host.d.ts"), `export const TYPERT: any;
-`);
+//
+// Emit declarations with `tsc` against the committed stubs in scripts/stubs
+// instead of hand-writing them. The published tarball ships only lib/, so the
+// declarations must be self-contained (no `../../src` specifiers). The
+// dedicated tsconfig.build.json maps the runtime packages to local stubs, so
+// this resolves with zero node_modules — required by the network-less nix
+// build. Only the host entry + shared schema are emitted; the browser client
+// is intentionally not declaration-emitted.
+console.log("Emitting type declarations...");
+execSync(`${process.env.TSC_BINARY || "tsc"} -p tsconfig.build.json`, {
+  stdio: "inherit",
+  cwd: root,
+});
+
+// The client is a browser bundle with no declaration emit; publish an empty
+// declaration so `exports["./client"].types` resolves.
+writeFileSync(join(libDir, "types/client/index.d.ts"), `export {}\n`);
+
+// 6. Packaging guard — fail the build on declaration/export regressions.
+guardPackaging();
+
+function guardPackaging() {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const exportsMap = pkg.exports || {};
+
+  // (a) Every declared `exports[<subpath>].types` must exist in the build.
+  for (const [subpath, entry] of Object.entries(exportsMap)) {
+    if (!entry || typeof entry !== "object" || !entry.types) continue;
+    const target = resolve(root, entry.types);
+    if (!isFile(target)) {
+      throw new Error(
+        `packaging guard: exports[${JSON.stringify(subpath)}].types points at ` +
+          `${entry.types}, which does not exist in the build output`
+      );
+    }
+  }
+
+  // (b) Every relative import/export in a lib/**/*.d.ts must resolve to a
+  // declaration/TS file inside lib/. Declarations must never reach out of the
+  // shipped tree (e.g. the old broken `../../src` re-exports).
+  const specifierRe = /(?:^|[^\w$])(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
+  for (const file of walk(libDir).filter((f) => f.endsWith(".d.ts"))) {
+    const contents = readFileSync(file, "utf8");
+    if (contents.includes("../../src") || contents.includes("../src/")) {
+      throw new Error(
+        `packaging guard: ${relative(root, file)} references src/ — ` +
+          `declarations must be self-contained under lib/`
+      );
+    }
+    for (const match of contents.matchAll(specifierRe)) {
+      const spec = match[1];
+      if (!spec.startsWith(".")) continue;
+      const base = resolve(dirname(file), spec);
+      const candidates = [];
+      if (/\.(d\.ts|ts)$/.test(spec)) candidates.push(base);
+      candidates.push(`${base}.d.ts`, `${base}.ts`, join(base, "index.d.ts"), join(base, "index.ts"));
+      const resolved = candidates.find(isFile);
+      if (!resolved) {
+        throw new Error(
+          `packaging guard: ${relative(root, file)} has unresolved relative ` +
+            `specifier ${JSON.stringify(spec)}`
+        );
+      }
+      if (relative(libDir, resolved).startsWith("..")) {
+        throw new Error(
+          `packaging guard: ${relative(root, file)} specifier ${JSON.stringify(spec)} ` +
+            `escapes lib/ to ${relative(root, resolved)}`
+        );
+      }
+    }
+  }
+}
+
+function isFile(path) {
+  return existsSync(path) && statSync(path).isFile();
+}
+
+function walk(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...walk(full));
+    else out.push(full);
+  }
+  return out;
+}
 
 console.log("Build complete → lib/");

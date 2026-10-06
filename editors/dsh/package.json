@@ -6,7 +6,7 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
+      "types": "./lib/types/api-codect/index.d.ts",
       "default": "./lib/index.js"
     },
     "./client": {
@@ -14,14 +14,13 @@
       "default": "./lib/client.js"
     },
     "./types": {
-      "types": "./lib/types/types.d.ts",
+      "types": "./lib/types/shared/schema.d.ts",
       "default": "./lib/types/types.js"
     },
     "./typert": {
-      "types": "./lib/typert.host.d.ts",
+      "types": "./lib/types/api-codect/typert.host.d.ts",
       "default": "./lib/typert.host.js"
     },
-    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -71,9 +70,6 @@
     "lib/**/*.js",
     "lib/**/*.d.ts",
     "cordis.patch.yml",
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "scripts/build.mjs",
     "README.md"
   ]
 }

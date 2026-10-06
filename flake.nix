@@ -116,6 +116,7 @@
             nativeBuildInputs = [
               pkgs.nodejs
               pkgs.esbuild
+              pkgs.typescript
             ];
             inherit src;
           }
