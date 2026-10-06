@@ -62,6 +62,7 @@ const LOCALE_EN: Record<string, string> = {
   "codect.loading.diff": "Loading focused diff…",
   "codect.empty.show": "No projected file content in this scope.",
   "codect.empty.diff": "No focused changes. Body-only edits are omitted.",
+  "codect.empty.noWorkspace": "No workspace is available for this session.",
   "codect.label.code": "Code",
   "codect.label.copy": "Copy",
   "codect.label.copied": "Copied",
@@ -139,14 +140,11 @@ const inject = [
 /**
  * The sidebar tab body receives a session-scoped props bag from the sidebar
  * service (see dsh-client-ui-sidebar-files). Derive the workspace root from the
- * session's cwd, falling back to "." when it is not yet known.
+ * session's cwd. The body of a `sidebar.right.pane.tab` slot is guaranteed the
+ * `useSessions` and `sessionId` props, so the hook is always called.
  */
-function useRoot(props: any): string {
-  const cwd =
-    props && typeof props.useSessions === "function" && props.sessionId !== undefined
-      ? props.useSessions((sessions: any) => sessions?.byId?.[props.sessionId]?.cwd)
-      : undefined;
-  return cwd || props?.root || ".";
+function useRoot(props: any): string | undefined {
+  return props.useSessions((sessions: any) => sessions?.byId?.[props.sessionId]?.cwd);
 }
 
 /**
@@ -275,14 +273,28 @@ function apply(ctx: any) {
 
     function ShowBody(props: any) {
       const root = useRoot(props);
-      const tabInfo = typeof props?.useTabInfo === "function" ? props.useTabInfo() : undefined;
+      const tabInfo = props.useTabInfo();
+      if (root === undefined) {
+        return React.createElement(
+          "div",
+          { className: "codect-empty" },
+          t("codect.empty.noWorkspace")
+        );
+      }
       const onNavigate = navigateFrom(props, tabInfo?.tab?.actions, root);
       return React.createElement(ShowView, { root, codect, labels, t, onNavigate });
     }
 
     function DiffBody(props: any) {
       const root = useRoot(props);
-      const tabInfo = typeof props?.useTabInfo === "function" ? props.useTabInfo() : undefined;
+      const tabInfo = props.useTabInfo();
+      if (root === undefined) {
+        return React.createElement(
+          "div",
+          { className: "codect-empty" },
+          t("codect.empty.noWorkspace")
+        );
+      }
       const onNavigate = navigateFrom(props, tabInfo?.tab?.actions, root);
       return React.createElement(DiffView, {
         root,
