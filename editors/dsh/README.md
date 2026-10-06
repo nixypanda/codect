@@ -57,14 +57,17 @@ editors/dsh/
 ├── package.json            # @nixypanda/dsh-codect — bundle + client config
 ├── cordis.patch.yml        # Bundle patch — inserts into cordis entry list
 ├── tsconfig.json
-├── scripts/build.mjs       # esbuild build → lib/
+├── tsconfig.build.json     # Declaration-only tsc build → lib/types
+├── scripts/
+│   ├── build.mjs           # esbuild build → lib/
+│   └── stubs/              # Local stub declarations for the host-side tsc build
 ├── src/
 │   ├── shared/
 │   │   └── schema.ts       # codect.show.v1 / codect.diff.v1 JSON types
 │   ├── api-codect/         # Host-side (Electron main process)
 │   │   ├── index.ts        # cordis Service + @Remote methods
-│   │   ├── typert.host.js  # Typert host protocol (generated/hand-written)
-│   │   └── typert.remote-client.js  # Typert remote client stub
+│   │   ├── typert.host.ts  # Typert host protocol (generated/hand-written)
+│   │   └── typert.remote-client.ts  # Typert remote client stub
 │   └── client-codect/      # Client-side (web GUI renderer)
 │       ├── client.ts       # ModuleLoader entry — window.__ModuleLoader__.load()
 │       ├── definition.ts   # Sidebar tab definitions (show + diff kinds)
@@ -77,6 +80,7 @@ editors/dsh/
 │       ├── labels.ts       # Localized label bundles for the output cards
 │       ├── primitives.ts   # Guarded seam to `dsh-client-ui-primitives`
 │       ├── styles.ts       # Runtime stylesheet (`--dsw-*` tokens)
+│       ├── use-debounced.ts # Debounce helper for the revision input
 │       └── components/     # TreeView, CodePane, OutlineView, DiffBody, ModeToggle, SplitPane
 ├── test/
 │   ├── contract.test.js    # Contract tests: codect JSON matches schema
@@ -100,8 +104,9 @@ and `dsh-client-ui-sidebar-files` packages:
 
 `api-codect/index.ts` registers a cordis `Service` named `"codect"` with
 `@Remote`-decorated methods `show` and `diff`. The `static inject` declares
-dependencies on the Typert service. `static Config` provides a zod-validated
-config with a `binary` field for the codect executable path.
+dependencies on the Typert service. `static Config` provides a
+schemastery-validated config with a `binary` field for the codect executable
+path.
 
 ### Frontend (client)
 
@@ -130,9 +135,20 @@ nix build .#codect-dsh
 
 ## Running tests
 
+The suite needs a built `codect` binary: the contract tests fail fast unless
+`CODECT_BIN` points at one. From the repository root, `just test-dsh` builds
+the binary and runs the suite against it:
+
 ```sh
+just test-dsh
+```
+
+Or build and run it by hand:
+
+```sh
+cargo build -p cli
 cd editors/dsh
-node --test test/
+CODECT_BIN="$PWD/../../target/debug/codect" node --test "test/*.test.js"
 ```
 
 Contract tests verify that `codect show/diff --format json` output matches
@@ -165,6 +181,7 @@ codect diff --format json --mode <types|signatures> [--path P]... BASE TARGET
 - Each `diff` side is a commit, `:index`, `:worktree`, `:empty`, or the
   canonical empty-tree object id. `:index` reads stage-zero blobs; `:worktree`
   reads tracked files plus untracked, non-ignored files on disk (never unsaved
-  editor buffers). `show` is commit-only — it has no snapshot sides.
+  editor buffers). `show` projects a committed revision, `--stdin`, or
+  `--worktree`; this plugin exposes only the committed-revision input.
 - Exit 0 = success, 1 = fatal (empty stdout, stderr diagnostic), 2 = usage.
 - Body-only changes produce an empty focused diff (intentional).

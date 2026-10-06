@@ -148,7 +148,7 @@ function diffChanges(file) {
 test("codect show returns a codect.show.v1 document", () => {
   const doc = runCodect(["show", "--format", "json", "--mode", "types", "HEAD"]);
   assert.equal(doc.schema, "codect.show.v1");
-  assert.ok(["revision", "worktree", "index", "empty"].includes(doc.input));
+  assert.ok(["revision", "stdin", "worktree"].includes(doc.input));
   assert.ok(typeof doc.revision === "string");
   assert.ok(["types", "signatures"].includes(doc.mode));
   assert.ok(Array.isArray(doc.files));
