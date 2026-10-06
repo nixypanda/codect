@@ -48,6 +48,7 @@ codect diff --format json --mode signatures HEAD :worktree
 | [Product](docs/PRODUCT.md) | Authoritative behavior and scope |
 | [Technical design](docs/TECHNICAL_DESIGN.md) | Full implementation contract |
 | [Schemas](docs/schema/) | `codect.show.v1.json`, `codect.diff.v1.json` |
+| [Editor plugins](docs/editors/) | Per-host integration findings and wiring lessons |
 | [Plans](docs/plans/) | Self-contained work items / task packets |
 
 ## Changing the code
