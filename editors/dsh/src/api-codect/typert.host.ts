@@ -36,7 +36,7 @@ const DiffParams = z.object({
 const ShowResult = z.object({
   schema: z.literal("codect.show.v1"),
   input: z.enum(["revision", "stdin", "worktree"]),
-  revision: z.string(),
+  revision: z.string().nullable(),
   mode: z.enum(["types", "signatures"]),
   files: z.array(z.object({
     path: z.string(),
@@ -207,6 +207,66 @@ export const TYPERT = {
               mode: "types" | "signatures";
               paths?: string[];
               areas?: string[];
+            }`,
+          },
+          {
+            name: "ShowResult",
+            declaration: `export interface ShowResult {
+              schema: "codect.show.v1";
+              input: "revision" | "stdin" | "worktree";
+              revision: string | null;
+              mode: "types" | "signatures";
+              files: {
+                path: string;
+                language: string;
+                projection: {
+                  text: string;
+                  items: {
+                    stable_key: string;
+                    parent_key: string | null;
+                    kind: string;
+                    name: string;
+                    span: { start_line: number; end_line: number; start_byte: number; end_byte: number };
+                    canonical_text: string;
+                  }[];
+                };
+                outline: {
+                  stable_key: string;
+                  parent_key: string | null;
+                  kind: string;
+                  name: string;
+                  span: { start_line: number; end_line: number; start_byte: number; end_byte: number };
+                  signature: string;
+                  retained_in_mode?: boolean;
+                }[];
+              }[];
+            }`,
+          },
+          {
+            name: "DiffResult",
+            declaration: `export interface DiffResult {
+              schema: "codect.diff.v1";
+              mode: "types" | "signatures";
+              base: DiffRevision;
+              target: DiffRevision;
+              files: {
+                path: string;
+                language: string;
+                status: "added" | "deleted" | "modified";
+                base: DiffSide | null;
+                target: DiffSide | null;
+                equal: false;
+              }[];
+            }
+            export interface DiffRevision {
+              kind: "commit" | "worktree" | "index" | "empty";
+              revision: string;
+              id: string;
+            }
+            export interface DiffSide {
+              snapshot_id: string;
+              projection: { text: string; items: unknown[] };
+              outline: unknown[];
             }`,
           },
         ],
