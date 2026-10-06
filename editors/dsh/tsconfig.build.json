@@ -10,7 +10,6 @@
     "rootDir": "src",
     "lib": ["ES2022"],
     "types": [],
-    "baseUrl": ".",
     "paths": {
       "@deepseek-ai/dsh-typert-protocol": ["./scripts/stubs/typert-protocol.d.ts"],
       "@deepseek-ai/schemastery": ["./scripts/stubs/schemastery.d.ts"],
