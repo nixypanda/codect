@@ -13,6 +13,7 @@ import {
   fileAddressFor,
   sessionFileAddress,
 } from "../src/client-codect/address.ts";
+import { classifyExecError } from "../src/api-codect/exec-error.ts";
 
 test("buildTreeRows splits paths into directory and file rows", () => {
   const rows = buildTreeRows(
@@ -215,4 +216,31 @@ test("diffChanges reports a container change with no descendant change", () => {
   assert.equal(changes.length, 1);
   assert.equal(changes[0].status, "changed");
   assert.equal(changes[0].item.stable_key, "Inner");
+});
+
+// ---------------------------------------------------------------------------
+// classifyExecError — distinguishes a missing binary from a timeout
+// ---------------------------------------------------------------------------
+
+test("classifyExecError reports ENOENT as a missing binary", () => {
+  assert.equal(classifyExecError({ code: "ENOENT" }), "binary-missing");
+});
+
+test("classifyExecError reports a killed child as a timeout", () => {
+  assert.equal(
+    classifyExecError({ killed: true, signal: "SIGTERM" }),
+    "timeout"
+  );
+});
+
+test("classifyExecError reports a signal without killed as a timeout", () => {
+  assert.equal(classifyExecError({ signal: "SIGTERM" }), "timeout");
+});
+
+test("classifyExecError reports a plain failure", () => {
+  assert.equal(classifyExecError({}), "failed");
+});
+
+test("classifyExecError reports a numeric exit code as a plain failure", () => {
+  assert.equal(classifyExecError({ code: 1 }), "failed");
 });

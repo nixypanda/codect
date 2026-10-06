@@ -5,7 +5,7 @@
  * native `<select>` otherwise.
  */
 
-import React from "react";
+import React, { useId } from "react";
 import type { CodectMode } from "../../shared/schema";
 import { SegmentedControl } from "../primitives";
 
@@ -24,6 +24,7 @@ export function ModeToggle({
   types = "Types",
   signatures = "Signatures",
 }: ModeToggleProps) {
+  const instanceId = `codect-mode-${useId().replace(/:/g, "")}`;
   const options = [
     { value: "types" as CodectMode, label: types },
     { value: "signatures" as CodectMode, label: signatures },
@@ -33,7 +34,7 @@ export function ModeToggle({
     return (
       <SegmentedControl
         className="codect-segmented"
-        id="codect-mode"
+        id={instanceId}
         value={value}
         options={options}
         onChange={(next: CodectMode) => onChange(next)}

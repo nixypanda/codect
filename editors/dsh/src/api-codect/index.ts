@@ -10,6 +10,7 @@ import { execFile } from "node:child_process";
 import { TypertRemoteService, Remote, RemoteError } from "@deepseek-ai/dsh-typert-protocol";
 import z from "@deepseek-ai/schemastery";
 import type { ShowDocument, DiffDocument, CodectMode } from "../shared/schema";
+import { classifyExecError } from "./exec-error";
 
 // Merge this owner's failure codes into the shared Remote failure vocabulary
 // (the documented pattern in `dsh-api-gateway`): without it `code` is not a
@@ -21,6 +22,8 @@ declare module "@deepseek-ai/dsh-typert-protocol" {
     "codect/invalid-json": {};
     "codect/schema-mismatch": {};
     "codect/invalid-argument": {};
+    "codect/binary-missing": {};
+    "codect/timeout": {};
   }
 }
 
@@ -51,8 +54,17 @@ async function execCodect(
   return new Promise((resolve, reject) => {
     execFile(binary, args, { cwd, timeout, maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
-        reject(new RemoteError("codect/failed", stderr?.trim() || `codect exited: ${error.message}`, {}));
-        return;
+        switch (classifyExecError(error)) {
+          case "binary-missing":
+            reject(new RemoteError("codect/binary-missing", `${binary} was not found (ENOENT)`, {}));
+            return;
+          case "timeout":
+            reject(new RemoteError("codect/timeout", `codect timed out after ${timeout} ms`, {}));
+            return;
+          default:
+            reject(new RemoteError("codect/failed", stderr?.trim() || `codect exited: ${error.message}`, {}));
+            return;
+        }
       }
       let doc: unknown;
       try {
