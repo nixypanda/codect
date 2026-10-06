@@ -9,15 +9,10 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDebounced } from "./use-debounced";
-import type {
-  CodectMode,
-  DiffChange,
-  DiffDocument,
-  DiffFile,
-  OutlineItem,
-} from "../shared/schema";
+import type { CodectMode, DiffChange, DiffDocument, DiffFile } from "../shared/schema";
 import type { CodeLabels } from "./labels";
 import { buildTreeRows } from "./tree";
+import { diffChanges } from "./declaration-diff";
 import { DiffBody, type DiffLayout } from "./components/diff-body";
 import { ModeToggle } from "./components/mode-toggle";
 import { TreeView, type FileStatus } from "./components/tree-view";
@@ -44,35 +39,6 @@ export interface DiffViewProps {
    * render side by side; when absent the layout control is hidden.
    */
   diffView?: any;
-}
-
-/** Compare the two sides of a file's outline into declaration-level changes. */
-export function diffChanges(file: DiffFile): DiffChange[] {
-  const baseItems = new Map<string, OutlineItem>(
-    (file.base?.outline ?? []).map((item) => [item.stable_key, item])
-  );
-  const targetItems = new Map<string, OutlineItem>(
-    (file.target?.outline ?? []).map((item) => [item.stable_key, item])
-  );
-
-  const changes: DiffChange[] = [];
-  for (const [key, item] of baseItems) {
-    if (!targetItems.has(key)) {
-      changes.push({ status: "deleted", item, base_text: item.signature, target_text: null });
-    }
-  }
-  for (const [key, item] of targetItems) {
-    if (!baseItems.has(key)) {
-      changes.push({ status: "added", item, base_text: null, target_text: item.signature });
-    }
-  }
-  for (const [key, item] of targetItems) {
-    const before = baseItems.get(key);
-    if (before !== undefined && before.signature !== item.signature) {
-      changes.push({ status: "changed", item, base_text: before.signature, target_text: item.signature });
-    }
-  }
-  return changes;
 }
 
 const MARKER: Record<DiffChange["status"], string> = {

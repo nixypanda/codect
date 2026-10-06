@@ -14,6 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { diffChanges } from "../src/client-codect/declaration-diff.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -123,26 +124,6 @@ function worktreeUnsupportedReason() {
   return worktreeSupport
     ? false
     : "codect binary lacks untracked-:worktree support; run `just test-dsh` or point CODECT_BIN at a current build";
-}
-
-/** Client-side outline comparison, mirrored from diff-view.tsx. */
-function diffChanges(file) {
-  const base = new Map((file.base?.outline ?? []).map((i) => [i.stable_key, i]));
-  const target = new Map((file.target?.outline ?? []).map((i) => [i.stable_key, i]));
-  const changes = [];
-  for (const [key, item] of base) {
-    if (!target.has(key)) changes.push({ status: "deleted", item });
-  }
-  for (const [key, item] of target) {
-    if (!base.has(key)) changes.push({ status: "added", item });
-  }
-  for (const [key, item] of target) {
-    const before = base.get(key);
-    if (before !== undefined && before.signature !== item.signature) {
-      changes.push({ status: "changed", item });
-    }
-  }
-  return changes;
 }
 
 test("codect show returns a codect.show.v1 document", () => {
