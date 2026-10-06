@@ -109,7 +109,7 @@ config with a `binary` field for the codect executable path.
 `apply(ctx)` function that:
 
 1. Registers two sidebar tab kinds: `"codect-show"` and `"codect-diff"`
-2. Registers locale strings (English + Chinese)
+2. Registers locale strings (English)
 3. Registers the tab body slots via `ctx.slots.inject("sidebar.right.pane.tab")`
 4. Registers the tab title slots via `ctx.slots.inject("sidebar.right.pane.tab.title")`
 5. Registers keyboard shortcuts (`Cmd+Shift+J` / `Ctrl+Shift+J`)

@@ -75,53 +75,6 @@ const LOCALE_EN: Record<string, string> = {
   "codect.shortcut.noSession": "No active session",
 };
 
-const LOCALE_ZH: Record<string, string> = {
-  "codect.title": "Codect",
-  "codect.diff.title": "差异",
-  "codect.guide.show.title": "显示投影",
-  "codect.guide.show.description": "浏览一个修订的类型和签名",
-  "codect.guide.diff.title": "聚焦差异",
-  "codect.guide.diff.description": "比较两个修订之间的声明",
-  "codect.label.revision": "修订",
-  "codect.label.mode": "投影模式",
-  "codect.label.pathFilter": "按路径过滤",
-  "codect.label.base": "基准修订",
-  "codect.label.target": "目标修订",
-  "codect.label.files": "个文件变更",
-  "codect.label.declarations": "个声明",
-  "codect.label.outline": "大纲",
-  "codect.label.toggleTree": "切换文件树",
-  "codect.label.diff": "差异",
-  "codect.label.diffView": "差异视图",
-  "codect.label.diffLayout": "差异布局",
-  "codect.label.unified": "统一",
-  "codect.label.sideBySide": "并排",
-  "codect.label.snapshots": "快照",
-  "codect.preset.worktree": "工作区",
-  "codect.preset.index": "索引",
-  "codect.preset.staged": "已暂存",
-  "codect.preset.empty": "全部文件",
-  "codect.placeholder.revision": "修订 (HEAD)",
-  "codect.placeholder.base": "基准 (HEAD~1)",
-  "codect.placeholder.target": "目标 (HEAD)",
-  "codect.placeholder.path": "按路径过滤",
-  "codect.loading.show": "正在加载投影…",
-  "codect.loading.diff": "正在加载聚焦差异…",
-  "codect.empty.show": "此范围内没有投影文件内容。",
-  "codect.empty.diff": "没有聚焦变更。仅函数体的修改会被省略。",
-  "codect.label.code": "代码",
-  "codect.label.copy": "复制",
-  "codect.label.copied": "已复制",
-  "codect.label.wrap": "自动换行",
-  "codect.label.unwrap": "取消换行",
-  "codect.label.window": "{shown} / {total} 行",
-  "codect.label.expand": "展开另外 {hidden} 行",
-  "codect.label.collapse": "折叠",
-  "codect.label.expandAria": "展开另外 {hidden} 行",
-  "codect.label.collapseAria": "折叠",
-  "codect.shortcut.noSession": "没有活动会话",
-};
-
 // ---------------------------------------------------------------------------
 // Codect face (Remote client)
 // ---------------------------------------------------------------------------
@@ -288,7 +241,7 @@ function apply(ctx: any) {
 
   // Register dictionaries.
   ctx.effect(() => {
-    ctx.locale.register(NS, { en: LOCALE_EN, zh: LOCALE_ZH });
+    ctx.locale.register(NS, { en: LOCALE_EN });
   }, "codect: dictionaries");
 
   // The bodies call the Remote namespace, so obtain it through an inject scope:
