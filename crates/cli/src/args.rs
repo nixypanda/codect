@@ -17,10 +17,10 @@ const FOCUSED_DIFF_HELP: &str = "Focused diffs are semantic: implementation-only
 #[command(
     name = "codect",
     version,
-    about = "Show and diff canonical Type and Signature projections of Git revisions",
+    about = "Show and diff canonical Type, Signature, and Test projections of Git revisions",
     long_about = "Codect projects committed Elm, Haskell, Python, and Rust source files \
-                  into canonical Type and Signature forms and diffs those projections \
-                  between two revisions.\n\nFocused diffs are semantic: implementation-only \
+                  into canonical Type, Signature, and Test forms and diffs those \
+                  projections between two revisions.\n\nFocused diffs are semantic: implementation-only \
                   changes such as function bodies, comments, and whitespace are \
                   invisible. Only changes that alter a projected declaration appear.",
     after_help = FOCUSED_DIFF_HELP,
@@ -211,6 +211,8 @@ pub enum Mode {
     Types,
     /// Types plus function, method, value, constant, and static signatures.
     Signatures,
+    /// Signatures restricted to test declarations, in Rust and Python.
+    Tests,
 }
 
 impl From<Mode> for ProjectionMode {
@@ -218,6 +220,7 @@ impl From<Mode> for ProjectionMode {
         match mode {
             Mode::Types => ProjectionMode::Types,
             Mode::Signatures => ProjectionMode::Signatures,
+            Mode::Tests => ProjectionMode::Tests,
         }
     }
 }

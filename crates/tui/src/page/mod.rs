@@ -28,14 +28,19 @@ pub(crate) use diff::{Commits, CommitsFocus, Diff, DiffSide, DiffViewState, Rang
 pub(crate) use show::{Show, ShowBody, ShowFocus};
 
 /// The projection modes the frontend can select.
-pub(crate) fn available_modes() -> [ProjectionMode; 2] {
-    [ProjectionMode::Types, ProjectionMode::Signatures]
+pub(crate) fn available_modes() -> [ProjectionMode; 3] {
+    [
+        ProjectionMode::Types,
+        ProjectionMode::Signatures,
+        ProjectionMode::Tests,
+    ]
 }
 
 pub(crate) fn mode_label(mode: ProjectionMode) -> &'static str {
     match mode {
         ProjectionMode::Types => "types",
         ProjectionMode::Signatures => "signatures",
+        ProjectionMode::Tests => "tests",
     }
 }
 

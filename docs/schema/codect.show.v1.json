@@ -20,8 +20,8 @@
       "type": ["string", "null"]
     },
     "mode": {
-      "description": "The projection mode requested on the command line.",
-      "enum": ["types", "signatures"]
+      "description": "The projection mode requested on the command line. `tests` is the Signatures projection restricted to test declarations, and is recognized for Rust and Python only; other languages retain nothing, so they project to an empty declaration list. Note that `tests` widens this enum's value set within `codect.show.v1` rather than adding a field: a consumer that validates `mode` against the enum will reject `tests` as an unknown value, which is the intended loud failure.",
+      "enum": ["types", "signatures", "tests"]
     },
     "files": {
       "description": "One or more files in raw repository-path byte order.",

@@ -1,0 +1,76 @@
+pub struct Registry {
+    entries: HashMap<String, u32>,
+}
+
+pub trait Lookup {
+    fn get(&self, key: &str) -> Option<u32>;
+}
+
+pub const LIMIT: u32;
+
+pub fn helper(value: u32) -> u32;
+
+#[test]
+fn plain_attribute_is_a_test();
+
+#[tokio::test]
+async fn qualified_attribute_is_a_test();
+
+#[rstest]
+#[case(1, 2)]
+fn rstest_is_a_test(input: u32, expected: u32);
+
+#[test]
+#[should_panic]
+fn companion_attributes_do_not_change_the_verdict();
+
+#[derive(Debug)]
+pub struct NotATest {
+    pub field: u32,
+}
+
+#[derive(Debug)]
+pub enum AlsoNotATest {
+    Variant,
+}
+
+#[allow(dead_code)]
+pub fn not_a_test();
+
+#[test]
+fn free_standing_test_has_no_module();
+
+pub mod empty {
+    pub fn no_tests_here();
+}
+
+#[cfg(test)]
+mod tests {
+    fn setup_helper() -> u32;
+    #[test]
+    fn inside_a_test_module();
+    #[tokio::test]
+    async fn async_inside_a_test_module();
+    pub fn not_a_test_helper();
+}
+
+pub mod nested {
+    pub mod deeper {
+        #[test]
+        fn deeply_nested_test();
+    }
+}
+
+#[cfg(test)]
+mod test_case_suite {
+    #[test_case(-2, -4; "both negative")]
+    #[test_case(2, 4; "both positive")]
+    fn multiplication_tests(x: i8, y: i8);
+    pub fn not_a_test();
+}
+
+#[cfg(test)]
+mod test_matrix_suite {
+    #[test_matrix([-2, 2], [-4, 4])]
+    fn cartesian(x: i8, y: i8);
+}

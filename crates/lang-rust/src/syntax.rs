@@ -68,6 +68,7 @@ pub mod node {
     pub const BLOCK: &str = "block";
 
     pub const IDENTIFIER: &str = "identifier";
+    pub const SCOPED_IDENTIFIER: &str = "scoped_identifier";
     pub const TYPE_IDENTIFIER: &str = "type_identifier";
     pub const FIELD_IDENTIFIER: &str = "field_identifier";
     pub const PRIMITIVE_TYPE: &str = "primitive_type";

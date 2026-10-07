@@ -10,12 +10,17 @@ short version a caller can depend on.
 ## Invocation
 
 ```text
-codect show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect show --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... [REVISION]
+codect diff --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 - `show` defaults `REVISION` to `HEAD`.
 - `--mode` is required; there is no default.
+- `tests` is the Signatures projection restricted to test declarations, and is
+  recognized for Rust and Python only. An Elm or Haskell file retains nothing,
+  including its module header, so it projects to an empty declaration list. An
+  empty projection therefore does not distinguish "detection unavailable" from
+  "no tests"; `PRODUCT.md` records that as a known gap.
 - `--format` defaults to `text`. `text` output is the canonical projection and is
   byte-for-byte stable.
 - `--format json` on `diff` additionally accepts the snapshots `:index`,
@@ -29,8 +34,8 @@ codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --ar
 ## Editor input forms
 
 ```text
-codect show --format json --mode <types|signatures> --stdin    --path <FILE>
-codect show --format json --mode <types|signatures> --worktree --path <FILE>
+codect show --format json --mode <types|signatures|tests> --stdin    --path <FILE>
+codect show --format json --mode <types|signatures|tests> --worktree --path <FILE>
 ```
 
 - Both require exactly one `--path` naming a **file** (a directory is exit `2`)

@@ -6,19 +6,25 @@ Codect emits. `PRODUCT.md` is authoritative; `TECHNICAL_DESIGN.md` sections
 
 ## Modes
 
-Codect has two implemented projection modes.
+Codect has three implemented projection modes.
 
 | Mode | Includes |
 | --- | --- |
 | `types` | Type declarations only: the shape of the code. |
 | `signatures` | Everything in `types`, plus every named function, method, and value signature. |
+| `tests` | The `signatures` projection restricted to test declarations. Rust and Python only. |
 
 Two more modes are planned but not implemented: `public` (public interface
 filtering) and `full` (complete source). The Neovim plugin has a local `full`
 fold state that opens the real buffer; that is not the planned `full` mode.
 
+`tests` is a filter over `signatures`, not a level of detail, so it does **not**
+include everything in `types`: type declarations are dropped. A `tests` projection
+is consequently not self-contained — it shows signatures whose referenced types it
+never declares.
+
 Function and value **bodies are never projected**. Implementation-only changes
-are intentionally invisible in both modes and in both diff directions.
+are intentionally invisible in all modes and in both diff directions.
 
 ## What every projection guarantees
 
@@ -80,6 +86,32 @@ are intentionally invisible in both modes and in both diff directions.
 - Bodies become the `...` placeholder; initializers are removed.
 - Decorators are preserved; imports, comments, and docstrings are omitted.
 
+### Tests mode
+
+`tests` mode is the `signatures` projection of a language's test declarations,
+each shown with its complete signature. A declaration is either a test and shown
+in full, or absent.
+
+Detection rules:
+
+- Rust: a function carrying a marker that works alone — `#[test]`,
+  `#[tokio::test]`, `#[rstest]`, `#[test_case]`, or `#[test_matrix]`. The
+  attribute's **final path segment** is compared, so a qualified path matches.
+  Companions (`#[should_panic]`, rstest's `#[case(...)]`) never mark a test on
+  their own. A `MOD_ITEM` is always retained as a possible `parent_key`; a
+  module retaining no test is dropped.
+- Python: a function named `test_*`. A class is retained only when one of its
+  methods is a test, covering pytest `Test*` classes and `unittest.TestCase`
+  alike. The check runs on the `definition` inside a `decorated_definition`.
+- Elm and Haskell: no detection; a file in either language retains nothing.
+
+The filter runs where members are collected, not after the item list is built: a
+nested item's text is already spliced into its ancestor's `canonical_text`, so
+filtering first lets each container compose its fragment from surviving members.
+
+Not detected: macro-generated cases, `#[bench]`, `#[test]` methods inside a
+`#[cfg(test)] impl` block, and Python fixtures.
+
 ## Stable keys
 
 A stable key identifies a declaration inside its file. It is not a global ID and
@@ -99,10 +131,21 @@ destabilize it. A collision appends a deterministic source-order ordinal.
 
 The editor surface (`codect.show.v1`) pairs the requested mode's projection with
 a **mode-independent outline** built from the Signatures projection, which is a
-superset of Types by `stable_key`. `retained_in_mode` tells a consumer whether
-the requested mode keeps each declaration. This is what lets one buffer fold at
-two depths: a retained declaration shows its mode-correct canonical fragment; a
-dropped declaration shows the outline signature.
+superset of every other mode by `stable_key`: Types because Signatures contains
+it, and Tests because a test declaration is a Signatures declaration.
+`retained_in_mode` tells a consumer whether the requested mode keeps each
+declaration. This is what lets one buffer fold at two depths: a retained
+declaration shows its mode-correct canonical fragment; a dropped declaration
+shows the outline signature.
+
+In `tests` mode most outlined declarations are not retained, so a consumer falls
+back to the outline signature for every non-test declaration in the file.
+`ProjectionMode::superset` is the single place that relation is stated.
+
+Which declarations a mode *keeps* is a separate question, answered by an
+exhaustive `match` where it is needed rather than by a predicate on the enum, so
+adding a mode is a compile error instead of a silently inherited default. See
+TECHNICAL_DESIGN.md section 5.
 
 ## See also
 

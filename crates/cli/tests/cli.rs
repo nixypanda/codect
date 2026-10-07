@@ -413,6 +413,42 @@ fn type_change_appears_in_both_modes() {
 }
 
 #[test]
+fn tests_mode_show_and_diff_use_the_canonical_text_projection() {
+    let repo = TestRepo::init();
+    repo.write(
+        "src/lib.rs",
+        "pub struct User {\n    pub id: u32,\n}\n\n\
+         #[cfg(test)]\nmod tests {\n    #[test]\n    fn it_works() {}\n\n    pub fn helper() {}\n}\n",
+    );
+    repo.write(
+        "src/app.py",
+        "class TestThing:\n    def test_it(self) -> None: ...\n",
+    );
+    repo.commit("base");
+
+    let shown = stdout(&run(&repo, &["show", "--mode", "tests", "--path", "src"]));
+    assert!(shown.contains("#[test]"), "{shown}");
+    assert!(shown.contains("fn it_works();"), "{shown}");
+    assert!(shown.contains("def test_it(self) -> None: ..."), "{shown}");
+    // Types and non-test declarations are absent. The Python class header survives
+    // because the retained method needs it as a `parent_key`.
+    assert!(!shown.contains("struct User"), "{shown}");
+    assert!(!shown.contains("helper"), "{shown}");
+    assert!(shown.contains("class TestThing:"), "{shown}");
+
+    // A test rename is a focused change in Tests mode.
+    repo.write(
+        "src/lib.rs",
+        "pub struct User {\n    pub id: u32,\n}\n\n\
+         #[cfg(test)]\nmod tests {\n    #[test]\n    fn it_still_works() {}\n\n    pub fn helper() {}\n}\n",
+    );
+    repo.commit("rename");
+    let diffed = stdout(&run(&repo, &["diff", "--mode", "tests", "HEAD~1", "HEAD"]));
+    assert!(diffed.contains("-    fn it_works();"), "{diffed}");
+    assert!(diffed.contains("+    fn it_still_works();"), "{diffed}");
+}
+
+#[test]
 fn diff_path_deleted_in_target_still_succeeds() {
     let repo = TestRepo::init();
     repo.write("src/gone.rs", RUST_BASE);

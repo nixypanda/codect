@@ -32,6 +32,17 @@ struct Builder<'a> {
 pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, ProjectionError> {
     let tree = syntax::parse(input.source, input.path)?;
     let root = tree.root_node();
+
+    // Test detection is not implemented for Haskell: a test's name is a string
+    // literal inside a body, which is never projected. Retaining nothing keeps
+    // an empty projection meaning "no tests retained", as in Rust and Python.
+    match input.mode {
+        ProjectionMode::Types | ProjectionMode::Signatures => {}
+        ProjectionMode::Tests => {
+            return ProjectedFile::try_new(input.path.clone(), Vec::new());
+        }
+    }
+
     let renderer = Renderer::new(input.path, input.source);
     let mut builder = Builder {
         renderer: &renderer,

@@ -86,6 +86,51 @@ fn is_doc_attribute(item: Node<'_>, renderer: &Renderer<'_>) -> bool {
     first_named_child(attribute).is_some_and(|path| renderer.slice(path) == "doc")
 }
 
+/// The final segment of an attribute's path: `test` in both `#[test]` and
+/// `#[tokio::test]`. `None` when the attribute has no path.
+fn attribute_path_segment<'a>(item: Node<'_>, renderer: &'a Renderer<'a>) -> Option<&'a str> {
+    let attribute = renderer.child_of_kind(item, node::ATTRIBUTE)?;
+    let path = first_named_child(attribute)?;
+    if path.kind() == node::IDENTIFIER {
+        return Some(renderer.slice(path));
+    }
+    // A qualified path such as `tokio::test` ends in its `name` field.
+    path.child_by_field_name(field::NAME)
+        .map(|name| renderer.slice(name))
+}
+
+/// Path segments that mark a test on their own, with no companion attribute.
+/// Companions like `#[case]` and `#[should_panic]` are excluded: they only ever
+/// accompany one of these.
+const TEST_ATTRIBUTES: &[&str] = &["test", "rstest", "test_case", "test_matrix"];
+
+fn is_test(declaration: &Declaration<'_>, renderer: &Renderer<'_>) -> bool {
+    declaration.attributes.iter().any(|attribute| {
+        attribute_path_segment(*attribute, renderer)
+            .is_some_and(|segment| TEST_ATTRIBUTES.contains(&segment))
+    })
+}
+
+/// Filtering runs here, before a container composes its fragment from
+/// `member_docs`, because a nested item's text is spliced into its ancestor.
+/// A module survives only as a `parent_key`; `build_module` drops one that
+/// retains no member. The mode match is exhaustive so a new mode decides
+/// whether it filters.
+fn keeps_declaration(declaration: &Declaration<'_>, context: &Context<'_>) -> bool {
+    match context.mode {
+        ProjectionMode::Types | ProjectionMode::Signatures => true,
+        ProjectionMode::Tests => is_test_declaration(declaration, context.renderer),
+    }
+}
+
+fn is_test_declaration(declaration: &Declaration<'_>, renderer: &Renderer<'_>) -> bool {
+    match declaration.node.kind() {
+        node::MOD_ITEM => true,
+        node::FUNCTION_ITEM | node::FUNCTION_SIGNATURE_ITEM => is_test(declaration, renderer),
+        _ => false,
+    }
+}
+
 fn collect_declarations<'t>(container: Node<'t>, renderer: &Renderer<'_>) -> Vec<Declaration<'t>> {
     let mut declarations = Vec::new();
     let mut pending = Vec::new();
@@ -125,6 +170,9 @@ fn build_members(
 ) -> Vec<Built> {
     let mut members = Vec::new();
     for declaration in collect_declarations(container, context.renderer) {
+        if !keeps_declaration(&declaration, context) {
+            continue;
+        }
         if let Some(built) = build_decl(&declaration, scope, container_key, nested, depth, context)
         {
             members.push(built);
@@ -649,8 +697,9 @@ fn build_signature(
     depth: usize,
     context: &mut Context<'_>,
 ) -> Option<Built> {
-    if context.mode != ProjectionMode::Signatures {
-        return None;
+    match context.mode {
+        ProjectionMode::Types => return None,
+        ProjectionMode::Signatures | ProjectionMode::Tests => {}
     }
     let node = declaration.node;
     let name = field_name(node, context.renderer).unwrap_or_default();
@@ -685,8 +734,9 @@ fn build_constant(
     context: &mut Context<'_>,
     kind: ItemKind,
 ) -> Option<Built> {
-    if context.mode != ProjectionMode::Signatures {
-        return None;
+    match context.mode {
+        ProjectionMode::Types => return None,
+        ProjectionMode::Signatures | ProjectionMode::Tests => {}
     }
     let node = declaration.node;
     let name = field_name(node, context.renderer).unwrap_or_default();
@@ -713,8 +763,9 @@ fn build_foreign(
     depth: usize,
     context: &mut Context<'_>,
 ) -> Option<Built> {
-    if context.mode != ProjectionMode::Signatures {
-        return None;
+    match context.mode {
+        ProjectionMode::Types => return None,
+        ProjectionMode::Signatures | ProjectionMode::Tests => {}
     }
     let node = declaration.node;
     let body = node.child_by_field_name(field::BODY)?;

@@ -172,9 +172,11 @@ The `cordis.patch.yml` handles step 4 automatically when the bundle is loaded.
 The plugin speaks the codect JSON contract:
 
 ```
-codect show --format json --mode <types|signatures> [--path P]... [REVISION]
-codect diff --format json --mode <types|signatures> [--path P]... BASE TARGET
+codect show --format json --mode <types|signatures|tests> [--path P]... [REVISION]
+codect diff --format json --mode <types|signatures|tests> [--path P]... BASE TARGET
 ```
+
+The plugin requests `types` and `signatures`; it does not request `tests`.
 
 - Text output is the canonical projection, byte-for-byte stable.
 - JSON is versioned: `codect.show.v1`, `codect.diff.v1`.

@@ -25,11 +25,126 @@ fn both(source: &str) -> (String, String) {
     )
 }
 
+fn tests(source: &str) -> String {
+    project(source, ProjectionMode::Tests)
+}
+
 #[test]
 fn changing_only_a_function_body_leaves_both_projections_unchanged() {
     let base = "pub fn compute(a: u32) -> u32 { a }\n";
     let changed = "pub fn compute(a: u32) -> u32 {\n    let b = a * 2;\n    b + 1\n}\n";
     assert_eq!(both(base), both(changed));
+}
+
+#[test]
+fn changing_only_a_test_body_leaves_the_tests_projection_unchanged() {
+    let base = "#[test]\nfn it_works() {\n    assert!(true);\n}\n";
+    let changed =
+        "#[test]\nfn it_works() {\n    let a = 1;\n    let b = 2;\n    assert_eq!(a + b, 3);\n}\n";
+    assert_eq!(tests(base), tests(changed));
+}
+
+#[test]
+fn a_parametrized_test_attribute_is_detected_on_its_own() {
+    // `test-case`'s `#[test_case]` and `#[test_matrix]` are primary markers,
+    // used without `#[test]`. An entire module built from them must not vanish.
+    let source =
+        "#[test_case(-2, -4; \"both negative\")]\nfn multiplication_tests(x: i8, y: i8) {}\n";
+    assert!(
+        tests(source).contains("fn multiplication_tests(x: i8, y: i8);"),
+        "{}",
+        tests(source)
+    );
+
+    let matrix = "#[test_matrix([-2, 2], [-4, 4])]\nfn cartesian(x: i8, y: i8) {}\n";
+    assert!(
+        tests(matrix).contains("fn cartesian(x: i8, y: i8);"),
+        "{}",
+        tests(matrix)
+    );
+
+    // rstest's `#[case]` is the companion of `#[rstest]` and must not promote a
+    // function on its own.
+    let companion_only = "#[case(1, 2)]\nfn ordinary(a: u32, b: u32) -> u32 { a + b }\n";
+    assert_eq!(tests(companion_only), "");
+
+    let should_panic_only = "#[should_panic]\nfn ordinary() {}\n";
+    assert_eq!(tests(should_panic_only), "");
+}
+
+#[test]
+fn changing_a_test_attribute_changes_the_tests_projection() {
+    // Non-doc attributes are preserved, so a test's own attribute is part of its
+    // projected signature.
+    let base = "#[rstest]\n#[case(1, 2)]\nfn adds(a: u32, b: u32) -> u32 { a + b }\n";
+    let changed = "#[rstest]\n#[case(1, 3)]\nfn adds(a: u32, b: u32) -> u32 { a + b }\n";
+    assert_ne!(tests(base), tests(changed));
+    assert!(tests(base).contains("#[case(1, 2)]"), "{}", tests(base));
+
+    // Adding a companion attribute to a test is likewise visible.
+    let plain = "#[test]\nfn panics() {}\n";
+    let with_companion = "#[test]\n#[should_panic]\nfn panics() {}\n";
+    assert_ne!(tests(plain), tests(with_companion));
+    assert!(tests(with_companion).contains("#[should_panic]"));
+}
+
+#[test]
+fn adding_a_non_test_function_leaves_the_tests_projection_unchanged() {
+    let base = "#[test]\nfn it_works() {}\n";
+    let changed = "#[test]\nfn it_works() {}\n\npub fn helper() {}\n";
+    assert_eq!(tests(base), tests(changed));
+    assert_ne!(
+        project(base, ProjectionMode::Signatures),
+        project(changed, ProjectionMode::Signatures)
+    );
+}
+
+#[test]
+fn renaming_a_test_changes_the_tests_projection() {
+    let base = "#[test]\nfn it_works() {}\n";
+    let changed = "#[test]\nfn it_also_works() {}\n";
+    assert_ne!(tests(base), tests(changed));
+    assert!(tests(changed).contains("fn it_also_works();"));
+}
+
+#[test]
+fn changing_a_tests_mode_declaration_type_is_invisible_because_types_are_dropped() {
+    let base = "pub struct S {\n    pub a: u32,\n}\n\n#[test]\nfn it_works() {}\n";
+    let changed = "pub struct S {\n    pub a: u64,\n}\n\n#[test]\nfn it_works() {}\n";
+    // A tests projection declares no types, so a type change is invisible.
+    assert_eq!(tests(base), tests(changed));
+    assert_ne!(
+        project(base, ProjectionMode::Types),
+        project(changed, ProjectionMode::Types)
+    );
+}
+
+#[test]
+fn every_tests_mode_key_is_present_in_the_signatures_superset() {
+    let source = "pub struct S;\n\npub fn helper() {}\n\n#[test]\nfn it_works() {}\n\n\
+                  #[cfg(test)]\nmod tests {\n    #[test]\n    fn nested() {}\n}\n";
+    let path = supported("src/lib.rs");
+    let projected = RustProjector
+        .project(ProjectionInput {
+            path: &path,
+            source,
+            mode: ProjectionMode::Tests,
+        })
+        .expect("projection");
+    let signatures = RustProjector
+        .project(ProjectionInput {
+            path: &path,
+            source,
+            mode: ProjectionMode::Signatures,
+        })
+        .expect("projection");
+
+    assert!(projected.items().iter().all(|item| {
+        signatures
+            .items()
+            .iter()
+            .any(|other| other.stable_key == item.stable_key)
+    }));
 }
 
 #[test]

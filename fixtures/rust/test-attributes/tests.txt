@@ -1,0 +1,44 @@
+#[test]
+fn plain_attribute_is_a_test();
+
+#[tokio::test]
+async fn qualified_attribute_is_a_test();
+
+#[rstest]
+#[case(1, 2)]
+fn rstest_is_a_test(input: u32, expected: u32);
+
+#[test]
+#[should_panic]
+fn companion_attributes_do_not_change_the_verdict();
+
+#[test]
+fn free_standing_test_has_no_module();
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn inside_a_test_module();
+    #[tokio::test]
+    async fn async_inside_a_test_module();
+}
+
+pub mod nested {
+    pub mod deeper {
+        #[test]
+        fn deeply_nested_test();
+    }
+}
+
+#[cfg(test)]
+mod test_case_suite {
+    #[test_case(-2, -4; "both negative")]
+    #[test_case(2, 4; "both positive")]
+    fn multiplication_tests(x: i8, y: i8);
+}
+
+#[cfg(test)]
+mod test_matrix_suite {
+    #[test_matrix([-2, 2], [-4, 4])]
+    fn cartesian(x: i8, y: i8);
+}

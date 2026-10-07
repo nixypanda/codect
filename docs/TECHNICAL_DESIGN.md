@@ -11,7 +11,9 @@ sequence as historical context.
 The current implementation supports:
 
 - Elm, Haskell, Python, and Rust source files.
-- Types and Signatures projection modes.
+- Types, Signatures, and Tests projection modes. Tests mode recognizes tests in
+  Rust and Python only; Elm and Haskell retain nothing, including their module
+  headers, so they project to an empty declaration list.
 - Showing a projection for a Git commit.
 - Diffing projections from two Git commits in text or JSON; JSON also compares
   the index, tracked worktree, and empty tree.
@@ -315,7 +317,43 @@ The shared model describes a projection, not a universal programming-language AS
 pub enum ProjectionMode {
     Types,
     Signatures,
+    Tests,
 }
+```
+
+`Tests` is the Signatures projection restricted to test declarations. It is a
+peer variant rather than a flag on `--mode`, so an unrecognized mode is a loud
+schema mismatch instead of a silent re-reading of a filtered projection as the
+full superset.
+
+This widens the `mode` enum's value set within `codect.show.v1` and
+`codect.diff.v1` rather than adding a field. Fields may be added additively
+within a version; widening an enum is a compatibility change, and a consumer
+validating `mode` against the enum rejects `tests` as an unknown value. That is
+the intended failure here, and both schemas and `docs/agents/INVARIANTS.md` say
+so, but review it as a compatibility change.
+
+`ProjectionMode::superset` is the only mode question answered by a method: the
+other two are a yes or no, decided by an exhaustive `match` where needed.
+
+| Question | Decided by |
+| --- | --- |
+| Does this mode project a function, method, value, constant, static, or `extern` declaration? | An inline `match` in each `build_*` function that projects one |
+| Does this mode restrict declarations to tests? | `keeps_declaration` in `lang-rust/src/extract.rs` and `lang_python::Builder::keeps_member` |
+
+A shared predicate would collapse the enum to a `bool` at its definition site,
+so a new variant would keep compiling and silently inherit whichever answer the
+predicate produced — the wrong default for `Public`, which includes signatures
+but filters them by visibility. It would also weld the gates together, making a
+mode that projects functions but not `extern` blocks inexpressible.
+
+The two test filters are the exception, and deliberately so. They return a claim
+about a *declaration* rather than about the mode, so the mode is only the
+selector that decides whether the question is asked; the detection rule itself
+(`is_test_declaration`) stays written once per language.
+
+Tests mode is a filter, not a level of detail, so it does **not** include
+Types: type declarations are dropped. Its projection is not self-contained.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Language {
@@ -844,6 +882,44 @@ impl Display for User {
 }
 ```
 
+### 12.4 Tests mode
+
+Tests mode retains a `MOD_ITEM` and a function whose collected attributes carry
+a primary test marker, dropping everything else. The filter runs in
+`build_members`, before a container composes its fragment from `member_docs`,
+because a nested item's text is spliced into its ancestor. A module must be
+retained as a `parent_key`, which `ProjectedFile::try_new` rejects as dangling,
+and the existing empty-members check drops one retaining no test.
+
+A test is determined by the **final segment** of an attribute path. Only
+primary markers count, meaning an attribute that marks a test alone:
+
+| Segment | Crate | Note |
+| --- | --- | --- |
+| `test` | built-in, `tokio` | `#[test]` and `#[tokio::test]` |
+| `rstest` | rstest | Pairs with `#[case(...)]` |
+| `test_case` | test-case | A suite can be built from it with no `#[test]` present |
+| `test_matrix` | test-case | Cartesian product; also used alone |
+
+Companions are excluded: `#[should_panic]` and rstest's `#[case(...)]` only ever
+accompany a primary marker, so matching them would promote a function that merely
+asserts a panic.
+
+Everything else is dropped — impls, structs, enums, unions, traits, aliases,
+constants, statics, `extern` blocks — so the Types-mode exemption for trait
+implementations needs no tests-mode case.
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_rejects_empty_input();
+}
+```
+
+Not detected: macro-generated cases, since macros are never expanded;
+`#[bench]`; and a `#[test]` method inside a `#[cfg(test)] impl` block.
+
 ## 13. Diff engine
 
 Use `similar` over canonical projected text. Configure its patience algorithm and line-based comparison. Use three context lines initially.
@@ -876,8 +952,8 @@ The binary name is `codect`.
 Commands:
 
 ```text
-codect show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect show --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... [REVISION]
+codect diff --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 Rules:
@@ -886,6 +962,9 @@ Rules:
 - `show` accepts `--format <text|json>` (default `text`) and the
   `--stdin`/`--worktree` input forms; section 14.2 defines the JSON document.
 - `--mode` is required; do not introduce a default before product validation.
+- `--mode tests` is the Signatures projection restricted to test declarations;
+  see section 5. Test detection covers Rust and Python; an Elm or Haskell file
+  retains nothing, including its module header.
 - Both diff sides are required. In both `text` and `json`, a side accepts a
   commit, `:index`, `:worktree`, or `:empty` (or the canonical empty-tree
   object ID).
@@ -1010,6 +1089,9 @@ Contract rules:
   `retained_in_mode` is set by `stable_key` membership. Types can drop an entire
   `impl` block, so projected items alone cannot locate folds. A corpus test
   proves the Signatures projection is a superset of Types by `stable_key`.
+- Signatures is the superset for **every** mode, Tests included: a test
+  declaration is a Signatures declaration. `ProjectionMode::superset` is the one
+  place this relation is stated.
 - The closed-fold text of a declaration depends on `retained_in_mode`. When the
   requested mode **retains** the `stable_key`, the mode-correct text is the
   matching `projection.items[].canonical_text`. When it does not, use
@@ -1164,6 +1246,10 @@ Required Rust cases:
 - Closures and local items that must be excluded.
 - Macro definitions and invocations that must be excluded.
 - Comments and formatting variations.
+- Tests mode: `#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case]`, and
+  `#[test_matrix]`; a companion attribute that must not promote a function; a
+  test module alongside a non-test function, a non-test helper, and a module with
+  no tests; and a deeply nested test module.
 
 Required Haskell cases:
 
@@ -1191,6 +1277,10 @@ Required Python cases:
 - Nested functions, lambdas, and local classes that must be excluded.
 - Imports and docstrings that must be excluded.
 - Comments and formatting variations.
+- Tests mode: free, `async`, and decorated test functions; a `test_`-prefixed
+  fixture that must be excluded; a `Test*` class that retains its tests and drops
+  its helper and attributes; a class with no test members that must be dropped
+  entirely; and a `unittest.TestCase` class.
 
 Fixture and test file location:
 
@@ -1212,6 +1302,17 @@ For every language, prove:
 - Changing a function signature changes only Signatures output.
 - Adding a private function changes Signatures output.
 - Reordering declarations changes projected order.
+
+For Rust and Python, additionally prove, of the Tests projection:
+
+- Changing a test body, its attributes, or its decorators leaves it unchanged.
+- Adding a non-test function leaves it unchanged.
+- Renaming a test, or changing its signature, changes it.
+- Changing a type leaves it unchanged, since the projection declares no types.
+- Every retained `stable_key` is present in the Signatures projection.
+
+A `tests.txt` must be non-empty, since a broken detector also yields an empty
+projection.
 
 ### 16.4 Git tests
 

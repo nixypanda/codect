@@ -10,12 +10,30 @@ use bstr::{BString, ByteSlice};
 
 use crate::diagnostic::{ProjectionError, RepoPathError};
 
-/// The MVP supports only [`ProjectionMode::Types`] and
-/// [`ProjectionMode::Signatures`]; `Public` and `Full` are later product modes.
+/// The MVP supports [`ProjectionMode::Types`], [`ProjectionMode::Signatures`],
+/// and [`ProjectionMode::Tests`]; `Public` and `Full` are later product modes.
+///
+/// `Tests` is the Signatures projection restricted to test declarations. It is a
+/// peer variant rather than a filter flag so an unrecognized mode fails loudly
+/// on the `mode` value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProjectionMode {
     Types,
     Signatures,
+    Tests,
+}
+
+impl ProjectionMode {
+    /// The mode-independent superset the outline is derived from. The only mode
+    /// question answered by a method: the others are a yes or no, and are
+    /// decided by exhaustive `match` where needed so a new variant is a compile
+    /// error.
+    pub fn superset(self) -> Self {
+        match self {
+            Self::Types | Self::Signatures => Self::Signatures,
+            Self::Tests => Self::Signatures,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

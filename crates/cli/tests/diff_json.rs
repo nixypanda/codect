@@ -95,6 +95,86 @@ fn body_only_changes_and_empty_projections_are_filtered() {
 }
 
 #[test]
+fn tests_mode_diff_reports_test_changes_and_ignores_the_rest() {
+    let repo = TestRepo::init();
+    repo.write(
+        "src/lib.rs",
+        "#[test]\nfn it_works() {\n    assert!(true);\n}\n\npub fn helper() {}\n",
+    );
+    let base = repo.commit("base");
+    // Neither the test body nor the untouched helper is a focused change.
+    repo.write(
+        "src/lib.rs",
+        "#[test]\nfn it_works() {\n    assert!(false);\n}\n\npub fn helper() {}\n",
+    );
+    let body_only = repo.commit("body only");
+    assert_eq!(run(&repo, "tests", &base, &body_only)["files"], json!([]));
+
+    // Renaming the test is a focused change.
+    repo.write(
+        "src/lib.rs",
+        "#[test]\nfn it_also_works() {\n    assert!(false);\n}\n\npub fn helper() {}\n",
+    );
+    let renamed = repo.commit("rename");
+    let document = run(&repo, "tests", &body_only, &renamed);
+    let file = &document["files"][0];
+    assert_eq!(file["path"], "src/lib.rs");
+    assert_eq!(file["status"], "modified");
+    assert_eq!(file["base"]["snapshot_id"], body_only);
+    assert!(
+        file["base"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("fn it_works();")
+    );
+    assert!(
+        file["target"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("fn it_also_works();")
+    );
+    // The unchanged helper is absent from both focused projections but is still
+    // located in the mode-independent outline.
+    assert!(
+        !file["target"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("helper")
+    );
+    assert!(
+        file["target"]["outline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |item| item["stable_key"].as_str().unwrap().contains("helper")
+                    && item["retained_in_mode"] == json!(false)
+            )
+    );
+
+    let schema: Value = serde_json::from_str(&doc("schema/codect.diff.v1.json")).unwrap();
+    support::schema::validate(&schema, &document).expect("valid diff schema");
+}
+
+#[test]
+fn tests_mode_reports_a_changed_type_as_invisible() {
+    // A type-only change is invisible to Tests, visible to Types.
+    let repo = TestRepo::init();
+    repo.write(
+        "src/lib.rs",
+        "pub struct S {\n    pub a: u32,\n}\n\n#[test]\nfn it_works() {}\n",
+    );
+    let base = repo.commit("base");
+    repo.write(
+        "src/lib.rs",
+        "pub struct S {\n    pub a: u64,\n}\n\n#[test]\nfn it_works() {}\n",
+    );
+    let target = repo.commit("type change");
+    assert_eq!(run(&repo, "tests", &base, &target)["files"], json!([]));
+    assert_ne!(run(&repo, "types", &base, &target)["files"], json!([]));
+}
+
+#[test]
 fn deletion_has_absent_target_and_preserved_base_projection() {
     let repo = TestRepo::init();
     repo.write("src/old.rs", "pub struct Gone;\n");
