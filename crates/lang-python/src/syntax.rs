@@ -45,6 +45,18 @@ pub mod node {
     pub const DOTTED_NAME: &str = "dotted_name";
     pub const ARGUMENT_LIST: &str = "argument_list";
     pub const ELIPSIS: &str = "ellipsis";
+    // Bracketed expression forms, reachable from a decorator argument or a
+    // parameter default.
+    pub const LIST: &str = "list";
+    pub const SET: &str = "set";
+    pub const DICTIONARY: &str = "dictionary";
+    pub const TUPLE: &str = "tuple";
+    pub const SUBSCRIPT: &str = "subscript";
+    pub const SLICE: &str = "slice";
+    pub const PARENTHESIZED_EXPRESSION: &str = "parenthesized_expression";
+    pub const PAIR: &str = "pair";
+    pub const LIST_SPLAT: &str = "list_splat";
+    pub const DICTIONARY_SPLAT: &str = "dictionary_splat";
 }
 
 /// Named fields accessed through `Node::child_by_field_name`.
@@ -60,6 +72,9 @@ pub mod field {
     pub const RIGHT: &str = "right";
     pub const TYPE: &str = "type";
     pub const VALUE: &str = "value";
+    pub const KEY: &str = "key";
+    pub const ARGUMENTS: &str = "arguments";
+    pub const FUNCTION: &str = "function";
 }
 
 // Parses one Python source file and rejects any tree containing `ERROR` or

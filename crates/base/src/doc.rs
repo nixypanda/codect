@@ -26,6 +26,12 @@ pub enum Doc {
     /// Text emitted only when the enclosing group is broken, used for the
     /// trailing comma that keeps an appended list item on a single diff line.
     Broken(&'static str),
+    /// Columns charged to the fit decisions of the groups that follow, emitted
+    /// as nothing.
+    ///
+    /// A broken list's trailing comma lands on its last item's line, a column
+    /// that item's own group cannot see.
+    Reserve(usize),
     Indent(Box<Doc>),
     Group(Box<Doc>),
     Concat(Vec<Doc>),
@@ -43,6 +49,8 @@ struct Output {
     depth: usize,
     at_line_start: bool,
     column: usize,
+    // Columns a later [`Doc::Broken`] will write on this line.
+    reserved: usize,
 }
 
 impl Output {
@@ -62,6 +70,8 @@ impl Output {
         self.text.push('\n');
         self.at_line_start = true;
         self.column = 0;
+        // A reserved column belongs to the line it was charged on.
+        self.reserved = 0;
     }
 
     fn column_now(&self) -> usize {
@@ -80,6 +90,7 @@ pub fn render(doc: &Doc, depth: usize) -> String {
         depth,
         at_line_start: true,
         column: 0,
+        reserved: 0,
     };
     render_into(doc, &mut output, false);
     output.text
@@ -106,6 +117,11 @@ fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
                 output.write(value);
             }
         }
+        Doc::Reserve(columns) => {
+            if !flat {
+                output.reserved += columns;
+            }
+        }
         Doc::Indent(inner) => {
             output.depth += 1;
             render_into(inner, output, flat);
@@ -113,7 +129,9 @@ fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
         }
         Doc::Group(inner) => {
             let flat_here = flat
-                || flat_width(inner).is_some_and(|width| output.column_now() + width <= LINE_WIDTH);
+                || flat_width(inner).is_some_and(|width| {
+                    output.column_now() + width + output.reserved <= LINE_WIDTH
+                });
             render_into(inner, output, flat_here);
         }
         Doc::Concat(parts) => {
@@ -131,7 +149,7 @@ fn flat_width(doc: &Doc) -> Option<usize> {
         Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
         Doc::Line => None,
         Doc::SoftLine => Some(1),
-        Doc::SoftNil | Doc::Broken(_) => Some(0),
+        Doc::SoftNil | Doc::Broken(_) | Doc::Reserve(_) => Some(0),
         Doc::Indent(inner) | Doc::Group(inner) => flat_width(inner),
         Doc::Concat(parts) => {
             let mut total = 0;
@@ -146,6 +164,7 @@ fn flat_width(doc: &Doc) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{Doc, render};
+    use crate::render::LINE_WIDTH;
 
     // A comma-separated bracketed list in the shape the adapters build.
     fn list(items: &[String]) -> Doc {
@@ -210,5 +229,26 @@ mod tests {
     fn document_method_renders_at_depth_zero() {
         let doc = list(&["a".to_owned()]);
         assert_eq!(doc.render(), render(&doc, 0));
+    }
+
+    #[test]
+    fn reserve_emits_nothing() {
+        let doc = Doc::Concat(vec![
+            Doc::Text("a".to_owned()),
+            Doc::Reserve(3),
+            Doc::Text("b".to_owned()),
+        ]);
+        assert_eq!(render(&doc, 0), "ab");
+    }
+
+    #[test]
+    fn reserve_charges_the_following_group_the_columns_it_reserves() {
+        // Exactly `LINE_WIDTH` flat, so only the reserved column pushes it over.
+        let item = "x".repeat(LINE_WIDTH - 2);
+        let doc = Doc::Concat(vec![Doc::Reserve(1), list(&[item])]);
+        assert_eq!(
+            render(&doc, 0),
+            format!("(\n    {},\n)", "x".repeat(LINE_WIDTH - 2))
+        );
     }
 }

@@ -13,3 +13,34 @@ class Service:
         status_code=200,
     )
     def create(self, request: Request) -> Response: ...
+    @cache(
+        **{
+            "key_one": "value_one",
+            "key_two": "value_two",
+            "key_three": "value",
+        },
+    )
+    def read_through(self, key: str) -> bytes: ...
+    @outer(
+        inner(
+            "aaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbb",
+            "cccccccccccccccccccc",
+        ),
+    )
+    def wrapped(self) -> None: ...
+
+@pytest.mark.parametrize(
+    ("readings", "expected", "why"),
+    [
+        ([], WIDE, "no completed runs"),
+        ([3], WIDE, "one narrow sample is not a streak"),
+        ([3, 2], DEEP, "two narrow samples in a row"),
+        ([4, 4], DEEP, "the threshold itself counts as narrow"),
+        ([5, 2], WIDE, "a later wide sample returns to the standard view"),
+        ([2, 5], WIDE, "the streak must be the two most recent"),
+        ([2, 1, 9], DEEP, "only the two most recent are read"),
+        ([None, 2], WIDE, "a run without a width never counts as narrow"),
+    ],
+)
+def test_two_most_recent_widths_pick_deep(readings, expected, why): ...

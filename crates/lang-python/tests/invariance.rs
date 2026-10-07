@@ -166,6 +166,19 @@ fn changing_whitespace_leaves_both_projections_unchanged() {
     assert_eq!(both(base), both(changed));
 }
 
+// A dangling trailing comma is formatting, not structure, so adding or removing
+// one inside a decorator argument must not change the projection.
+#[test]
+fn changing_a_trailing_comma_leaves_both_projections_unchanged() {
+    let base = "@cache([1, 2])\ndef f() -> None: ...\n";
+    let changed = "@cache(\n    [\n        1,\n        2,\n    ],\n)\ndef f() -> None: ...\n";
+    let (base_types, base_signatures) = both(base);
+    let (changed_types, changed_signatures) = both(changed);
+    assert_eq!(base_types, changed_types);
+    assert_eq!(base_signatures, changed_signatures);
+    assert_eq!(base_signatures, "@cache([1, 2])\ndef f() -> None: ...\n");
+}
+
 #[test]
 fn changing_a_type_changes_both_projections() {
     let base = "class Box:\n    value: int\n";
