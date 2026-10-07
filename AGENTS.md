@@ -11,12 +11,13 @@ documents hold the detail.
 ## Invoke it
 
 ```sh
-codect show --mode <types|signatures> [--path PATH | --area AREA]... [REVISION]
-codect diff --mode <types|signatures> [--path PATH | --area AREA]... BASE TARGET
+codect show --mode <types|signatures|tests> [--path PATH | --area AREA]... [REVISION]
+codect diff --mode <types|signatures|tests> [--path PATH | --area AREA]... BASE TARGET
 
 codect show --format json --mode types               # machine-readable projection
 codect show --format json --mode types --stdin --path src/lib.rs
 codect diff --format json --mode signatures HEAD :worktree
+codect show --mode tests --path tests                # Rust and Python only
 ```
 
 - `show` defaults `REVISION` to `HEAD`. `--mode` is required.
@@ -35,8 +36,11 @@ codect diff --format json --mode signatures HEAD :worktree
 - JSON is versioned. Tolerate unknown fields; treat any other `schema` value as
   a fatal version mismatch.
 - A body-only change produces an empty focused diff. That is intentional.
-- `types`/`signatures` never include function bodies; never fall back to raw
-  source.
+- `types`/`signatures`/`tests` never include function bodies; never fall back to
+  raw source.
+- `tests` is a filter over `signatures`, not a level of detail: it declares no
+  types, so it is not self-contained and a type change is invisible to it. It
+  detects tests in Rust and Python only.
 
 ## Read next
 

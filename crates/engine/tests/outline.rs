@@ -10,7 +10,7 @@ mod support;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use base::{ProjectionMode, RepoPath};
+use base::{Language, ProjectionMode, RepoPath};
 use engine::project_source;
 
 fn fixture_root() -> PathBuf {
@@ -141,5 +141,116 @@ fn signatures_projection_is_a_superset_of_types_over_the_fixture_corpus() {
     assert!(
         saw_dropped,
         "the fixture corpus must contain a declaration Types mode drops"
+    );
+}
+
+#[test]
+fn tests_mode_outline_is_the_signatures_superset_and_retains_only_tests() {
+    let mut files = Vec::new();
+    input_files(&fixture_root(), &mut files);
+    files.sort();
+    assert!(!files.is_empty(), "expected at least one fixture input");
+
+    // The corpus must contain both a retained test and a dropped declaration, or
+    // both halves below pass vacuously.
+    let mut saw_test = false;
+    let mut saw_empty = false;
+
+    for path in files {
+        let display = path.to_string_lossy().into_owned();
+        let language = repo_path_of(&path).language();
+
+        // Elm and Haskell retain nothing, module header included, so an empty
+        // projection means the same thing in every language.
+        if !matches!(language, Some(Language::Rust) | Some(Language::Python)) {
+            let tests = project_source(
+                &repo_path_of(&path),
+                &std::fs::read(&path).unwrap(),
+                ProjectionMode::Tests,
+            )
+            .unwrap_or_else(|error| panic!("Tests projection of {display}: {error}"));
+            assert!(
+                tests.projection.items().is_empty(),
+                "{display}: {} does not implement test detection, so its Tests \\
+                 projection must retain nothing, including its module header",
+                match language {
+                    Some(Language::Elm) => "elm",
+                    Some(Language::Haskell) => "haskell",
+                    _ => "unsupported",
+                }
+            );
+            continue;
+        }
+
+        let source = std::fs::read(&path).unwrap_or_else(|error| panic!("read {display}: {error}"));
+        let repo_path = repo_path_of(&path);
+
+        let tests = project_source(&repo_path, &source, ProjectionMode::Tests)
+            .unwrap_or_else(|error| panic!("Tests projection of {display}: {error}"));
+        let signatures = project_source(&repo_path, &source, ProjectionMode::Signatures)
+            .unwrap_or_else(|error| panic!("Signatures projection of {display}: {error}"));
+
+        let signature_keys: BTreeSet<&str> = signatures
+            .projection
+            .items()
+            .iter()
+            .map(|item| item.stable_key.as_str())
+            .collect();
+
+        // Every Tests declaration survives into Signatures, making it a valid superset.
+        for item in tests.projection.items() {
+            assert!(
+                signature_keys.contains(item.stable_key.as_str()),
+                "{display}: Tests item `{}` is missing from Signatures; \
+                 the outline superset assumption is violated",
+                item.stable_key
+            );
+        }
+
+        // The outline enumerates the Signatures superset, unchanged by the mode.
+        assert_eq!(
+            tests
+                .outline
+                .iter()
+                .map(|item| item.item.stable_key.clone())
+                .collect::<Vec<_>>(),
+            keys(signatures.projection.items()),
+            "{display}: the Tests-mode outline must enumerate the Signatures superset"
+        );
+
+        let tests_keys: BTreeSet<&str> = tests
+            .projection
+            .items()
+            .iter()
+            .map(|item| item.stable_key.as_str())
+            .collect();
+        for item in &tests.outline {
+            assert_eq!(
+                tests.retained_in_mode(item),
+                tests_keys.contains(item.item.stable_key.as_str()),
+                "{display}: retained_in_mode disagrees with the Tests projection for `{}`",
+                item.item.stable_key
+            );
+        }
+
+        if tests
+            .outline
+            .iter()
+            .any(|item| !tests.retained_in_mode(item))
+        {
+            saw_empty = true;
+        }
+        if !tests.projection.items().is_empty() {
+            saw_test = true;
+        }
+    }
+
+    assert!(
+        saw_test,
+        "the fixture corpus must contain a test declaration"
+    );
+    assert!(
+        saw_empty,
+        "the fixture corpus must contain a declaration Tests mode drops"
     );
 }

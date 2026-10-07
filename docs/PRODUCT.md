@@ -11,16 +11,24 @@ empty tree.
 
 ## Product modes
 
-Codect has two implemented modes and two planned modes:
+Codect has three implemented modes and two planned modes:
 
 1. **Types** — show type declarations only.
 2. **Public** — show type declarations and public interfaces.
 3. **Signatures** — show type declarations and all named function, method, and value signatures.
-4. **Full** — show the complete source code.
+4. **Tests** — show the Signatures projection restricted to test declarations.
+5. **Full** — show the complete source code.
 
-The CLI and terminal frontend implement **Types** and **Signatures**. The
-Neovim plugin also has a local `full` fold state that opens the source buffer;
-it is not the planned Full projection mode.
+Types, Public, Signatures, and Full are rungs on one ladder, ordered by how much
+of each declaration they show. **Tests is not a rung** but a filter over
+Signatures, orthogonal to the ladder. It is still selected as a mode so a
+consumer that does not recognize it fails loudly rather than reading a filtered
+projection as the full superset.
+
+The CLI and terminal frontend implement **Types**, **Signatures**, and **Tests**.
+The Neovim plugin implements **Types** and **Signatures**; it also has a local
+`full` fold state that opens the source buffer, which is not the planned Full
+projection mode.
 
 ![The same change shown as a Types diff and a Signatures diff](showcase/types-vs-signatures.png)
 
@@ -133,6 +141,43 @@ For Python, Signatures mode adds:
 
 “All functions” does not include anonymous functions, closures, or functions declared locally inside another function body.
 
+### Tests mode
+
+Tests mode is the Signatures projection restricted to test declarations, each
+shown with its complete signature and with bodies hidden as in every other mode.
+It is implemented for **Rust and Python only**; in Elm and Haskell it retains
+nothing at all, not even the module header, so those files project to an empty
+declaration list. See “Test detection” below.
+
+Tests mode shows every test function or method, plus the enclosing declarations a
+retained test needs to stay well-formed: a Rust module holding `#[test]`
+functions, or a Python class holding test methods. A container that retains no
+test is itself dropped. It shows no type declarations and no non-test signatures.
+
+For Rust, a function is a test when it carries a marker that works alone:
+`#[test]`, `#[tokio::test]`, `#[rstest]`, `#[test_case]`, or `#[test_matrix]`.
+Companions such as `#[should_panic]` and rstest's `#[case(...)]` never make a
+function a test by themselves.
+
+For Python, a function is a test when its name begins with `test_`. A class is
+retained only when one of its methods is a test, which covers both the pytest
+`Test*` convention and `unittest.TestCase` classes.
+
+Tests mode is **not self-contained**. Every other mode declares the types its
+signatures mention; Tests mode declares none, so it can show
+`fn parse_empty() -> Result<Err, ParseErr>;` without declaring `Result` or
+`ParseErr`. A Tests diff reports test additions, removals, renames, and signature
+changes, and not type changes to the code under test.
+
+Not recognized as tests:
+
+- Cases generated inside a macro body, such as `proptest!` or rstest's generated
+  functions. Codect never expands macros or reads a body.
+- `#[bench]` functions and any other benchmark.
+- A `#[test]` method inside a `#[cfg(test)] impl` block, since Tests mode does
+  not descend into implementation blocks.
+- Python fixtures and helpers, in a test file or not.
+
 ### Missing type annotations
 
 Codect does not infer types for unannotated Elm functions or values.
@@ -149,6 +194,7 @@ canonical Git empty-tree object ID.
 
 - A Types diff shows only additions, removals, and changes to type declarations.
 - A Signatures diff shows only additions, removals, and changes to type declarations and displayed signatures.
+- A Tests diff shows only additions, removals, and changes to test declarations. Because a Tests projection contains no type declarations, a type change is invisible to it.
 - Module context is retained in diff output.
 - The same source projection rules apply independently to both commits before they are compared.
 
@@ -309,6 +355,24 @@ Private function and value signatures remain hidden. A Public diff shows only ch
 Full mode shows the complete source code without projection. Its diff view is the ordinary Git source diff.
 
 Full mode provides the escape hatch from every focused view when implementation details are needed.
+
+### Test detection for Elm and Haskell
+
+Tests mode recognizes tests in Rust and Python only. In Elm and Haskell it
+retains nothing, so those files project to an empty declaration list — the same
+as a Rust or Python file with no tests. Codect does not distinguish "detection
+unavailable" from "no tests" on the wire.
+
+The obstacle is structural. In both languages a test's name is a string literal
+inside a body — `test "parses empty input" : ...`,
+`testProperty "roundtrip" :: Property` — and Codect never projects a body, so
+there is no declaration name to display. Anchoring on the enclosing binding
+would report `spec_Parser` rather than `"parses empty input"`, and detection
+would have to be conventional (`*Spec.hs`, `prop_*`, `Property` in a signature)
+rather than syntactic.
+
+A later version may add Elm and Haskell detection and report per-file
+capability. Until then, read an empty Tests projection as "not detected".
 
 ### Inferred signatures
 

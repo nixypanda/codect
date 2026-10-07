@@ -1,0 +1,10 @@
+class NotATest:
+    value: int
+
+class TestThing:
+    attribute: int
+    value: int
+
+class TestOther(unittest.TestCase): ...
+
+class TestEmpty: ...

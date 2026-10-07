@@ -1,0 +1,15 @@
+pub struct Registry {
+    entries: HashMap<String, u32>,
+}
+
+pub trait Lookup {}
+
+#[derive(Debug)]
+pub struct NotATest {
+    pub field: u32,
+}
+
+#[derive(Debug)]
+pub enum AlsoNotATest {
+    Variant,
+}

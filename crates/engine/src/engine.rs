@@ -173,11 +173,11 @@ pub fn project_source(
     let source = decode_source(&path, bytes).map_err(source_projection_failure)?;
     let projection =
         project_items(projector, &path, source, mode).map_err(source_projection_failure)?;
-    let superset = if mode == ProjectionMode::Signatures {
+    let superset_mode = mode.superset();
+    let superset = if superset_mode == mode {
         projection.clone()
     } else {
-        project_items(projector, &path, source, ProjectionMode::Signatures)
-            .map_err(source_projection_failure)?
+        project_items(projector, &path, source, superset_mode).map_err(source_projection_failure)?
     };
     assemble_outline(&path, projection, superset).map_err(source_projection_failure)
 }
@@ -859,7 +859,8 @@ impl Engine {
 
         let projection =
             self.project_items_cached(projector, caches, revision_spec, entry, &path, mode)?;
-        let superset = if mode == ProjectionMode::Signatures {
+        let superset_mode = mode.superset();
+        let superset = if superset_mode == mode {
             projection.clone()
         } else {
             self.project_items_cached(
@@ -868,7 +869,7 @@ impl Engine {
                 revision_spec,
                 entry,
                 &path,
-                ProjectionMode::Signatures,
+                superset_mode,
             )?
         };
         assemble_outline(&path, projection, superset)

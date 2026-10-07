@@ -31,6 +31,9 @@ Conversely:
 - adding a private function changes Signatures output;
 - reordering declarations changes projected order.
 
+The Tests projection is additionally invariant to non-test declarations: adding a
+non-test function, or changing a type, leaves it byte-for-byte unchanged.
+
 Guarded by: `crates/lang-*/tests/invariance.rs` against `fixtures/*/`.
 
 ## Diff invariant
@@ -46,10 +49,14 @@ Guarded by: `crates/engine/tests/engine.rs` and CLI diff tests.
 - `codect.show.v1` and `codect.diff.v1` are versioned by `schema`.
 - A consumer tolerates unknown fields; a `schema` value other than the expected
   one is a fatal, explicit version mismatch.
-- Fields may be added additively within a version.
+- Fields may be added additively within a version. Widening an enumerated value
+  set is a compatibility change, not an additive field: `mode` gained `tests`,
+  so a consumer validating `mode` against the enum rejects it. That is intended —
+  a Tests projection must not be read as full Signatures.
 - `projection.text` is exactly what text mode emits, so the JSON and text views
   cannot drift.
-- The Signatures projection is a superset of Types by `stable_key`.
+- The Signatures projection is a superset of Types and of Tests by `stable_key`,
+  so Signatures is the outline superset for every mode.
 
 Guarded by: `editors/nvim/tests/test_schema.lua` and CLI golden documents under
 `fixtures/schema/`, compared against the committed schemas.

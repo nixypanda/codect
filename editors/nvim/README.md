@@ -68,6 +68,12 @@ there is nothing for the plugin to open or close.
 `default_mode` must be `types` or `signatures`. `setup` warns and falls back to
 `signatures` otherwise.
 
+The plugin's mode vocabulary is its own, independent of the binary's `--mode`. The
+binary also has a `tests` mode (Signatures restricted to test declarations,
+recognized for Rust and Python only) which this plugin does not expose: adding it
+means deciding where it sits in the `types -> signatures -> full` cycle and how a
+buffer folds when most declarations are not retained.
+
 ## Commands
 
 | Command | Behavior |

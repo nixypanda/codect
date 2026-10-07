@@ -292,6 +292,7 @@ fn mode_name(mode: ProjectionMode) -> &'static str {
     match mode {
         ProjectionMode::Types => "types",
         ProjectionMode::Signatures => "signatures",
+        ProjectionMode::Tests => "tests",
     }
 }
 

@@ -657,6 +657,7 @@ fn golden_documents_match_and_validate_against_the_schema() {
     for (mode, golden) in [
         ("types", "schema/show-types.json"),
         ("signatures", "schema/show-signatures.json"),
+        ("tests", "schema/show-tests.json"),
     ] {
         let output = codect_in(
             &repo,

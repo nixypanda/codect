@@ -75,36 +75,44 @@ impl Builder<'_> {
                 let definition = node
                     .child_by_field_name(field::DEFINITION)
                     .ok_or_else(|| self.missing(node, "decorated definition has no definition"))?;
+                // Unwrapped first so a decorated test is judged on the function it
+                // decorates, not on the `decorated_definition` node.
+                if !self.keeps_member(definition) {
+                    return Ok(None);
+                }
                 match definition.kind() {
-                    node::CLASS_DEFINITION => Ok(Some(self.class_decl(
-                        definition,
-                        decorators,
-                        container_key,
-                        scope,
-                        depth,
-                    )?)),
+                    node::CLASS_DEFINITION => {
+                        self.class_decl(definition, decorators, container_key, scope, depth)
+                    }
                     node::FUNCTION_DEFINITION => {
                         self.function_decl(definition, decorators, container_key, scope, depth)
                     }
                     _ => self.invariant(node, "unsupported decorated definition"),
                 }
             }
-            node::CLASS_DEFINITION => Ok(Some(self.class_decl(
-                node,
-                Vec::new(),
-                container_key,
-                scope,
-                depth,
-            )?)),
+            node::CLASS_DEFINITION => {
+                self.class_decl(node, Vec::new(), container_key, scope, depth)
+            }
             node::FUNCTION_DEFINITION => {
+                if !self.keeps_member(node) {
+                    return Ok(None);
+                }
                 self.function_decl(node, Vec::new(), container_key, scope, depth)
             }
-            node::TYPE_ALIAS_STATEMENT => {
-                Ok(Some(self.type_alias(node, container_key, scope, depth)?))
-            }
-            node::EXPRESSION_STATEMENT => {
-                self.expression_statement(node, container_key, scope, depth)
-            }
+            // Type aliases, assignments, and enum members are not tests, so the
+            // filter drops them before they reach their builders.
+            node::TYPE_ALIAS_STATEMENT => match self.mode {
+                ProjectionMode::Types | ProjectionMode::Signatures => {
+                    Ok(Some(self.type_alias(node, container_key, scope, depth)?))
+                }
+                ProjectionMode::Tests => Ok(None),
+            },
+            node::EXPRESSION_STATEMENT => match self.mode {
+                ProjectionMode::Types | ProjectionMode::Signatures => {
+                    self.expression_statement(node, container_key, scope, depth)
+                }
+                ProjectionMode::Tests => Ok(None),
+            },
             _ => Ok(None),
         }
     }
@@ -143,7 +151,7 @@ impl Builder<'_> {
         container_key: &str,
         outer: Scope,
         depth: usize,
-    ) -> Result<Built, ProjectionError> {
+    ) -> Result<Option<Built>, ProjectionError> {
         let name = self
             .renderer
             .field_text(node, field::NAME)
@@ -174,10 +182,18 @@ impl Builder<'_> {
             Some(body) => self.members(body, &key, Scope::Class { enum_like }, depth + 1)?,
             None => Vec::new(),
         };
+        // Dropped because `container_doc` would otherwise render `class Foo: ...`
+        // for every class in the file.
+        if members.is_empty() {
+            match self.mode {
+                ProjectionMode::Types | ProjectionMode::Signatures => {}
+                ProjectionMode::Tests => return Ok(None),
+            }
+        }
         let doc = container_doc(decorators, header, member_docs(&members));
         let parent = nested_parent(container_key, outer);
         let items = member_items(members);
-        Ok(make_built(
+        Ok(Some(make_built(
             node,
             key,
             parent,
@@ -186,7 +202,29 @@ impl Builder<'_> {
             doc,
             depth,
             items,
-        ))
+        )))
+    }
+
+    /// A class passes because whether it is a test container is decided by its
+    /// members; `class_decl` drops one that retains none. The `test_` prefix
+    /// covers both pytest and unittest convention. The mode match is exhaustive
+    /// so a new mode decides whether it filters.
+    fn keeps_member(&self, node: Node<'_>) -> bool {
+        match self.mode {
+            ProjectionMode::Types | ProjectionMode::Signatures => true,
+            ProjectionMode::Tests => self.is_test_declaration(node),
+        }
+    }
+
+    fn is_test_declaration(&self, node: Node<'_>) -> bool {
+        match node.kind() {
+            node::CLASS_DEFINITION => true,
+            node::FUNCTION_DEFINITION => self
+                .renderer
+                .field_text(node, field::NAME)
+                .is_some_and(|name| name.starts_with("test_")),
+            _ => false,
+        }
     }
 
     fn function_decl(
@@ -197,8 +235,9 @@ impl Builder<'_> {
         scope: Scope,
         depth: usize,
     ) -> Result<Option<Built>, ProjectionError> {
-        if self.mode != ProjectionMode::Signatures {
-            return Ok(None);
+        match self.mode {
+            ProjectionMode::Types => return Ok(None),
+            ProjectionMode::Signatures | ProjectionMode::Tests => {}
         }
         let name = self
             .renderer
@@ -349,8 +388,11 @@ impl Builder<'_> {
             };
             // A module-level value with a declared type is a signature, not a
             // type declaration.
-            if !in_class && self.mode == ProjectionMode::Types {
-                return Ok(None);
+            if !in_class {
+                match self.mode {
+                    ProjectionMode::Types => return Ok(None),
+                    ProjectionMode::Signatures | ProjectionMode::Tests => {}
+                }
             }
             let key = self.unique(format!("{container_key}::{tag}::{left_text}"));
             return Ok(Some(make_built(
@@ -384,8 +426,11 @@ impl Builder<'_> {
         // type's shape and appears in both modes; any other value is a
         // signature and appears only in Signatures mode.
         let enum_member = matches!(scope, Scope::Class { enum_like: true });
-        if !enum_member && self.mode == ProjectionMode::Types {
-            return Ok(None);
+        if !enum_member {
+            match self.mode {
+                ProjectionMode::Types => return Ok(None),
+                ProjectionMode::Signatures | ProjectionMode::Tests => {}
+            }
         }
         let (kind, tag) = if enum_member {
             (ItemKind::Variant, "variant")

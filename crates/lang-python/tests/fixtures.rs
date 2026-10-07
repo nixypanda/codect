@@ -48,10 +48,18 @@ fn python_fixtures_match_expected_projections() {
         let path = SupportedPath::new(RepoPath::new(relative.as_bytes()).expect("fixture path"))
             .expect("fixture path has a supported extension");
 
-        for (mode, expected_file) in [
+        let mut expectations = vec![
             (ProjectionMode::Types, "types.txt"),
             (ProjectionMode::Signatures, "signatures.txt"),
-        ] {
+        ];
+        // A case commits to Tests mode by shipping a `tests.txt`, and that file must be
+        // non-empty: a broken detector also yields an empty string.
+        let tests_expected = case.join("tests.txt");
+        if tests_expected.exists() {
+            expectations.push((ProjectionMode::Tests, "tests.txt"));
+        }
+
+        for (mode, expected_file) in expectations {
             let expected_path = case.join(expected_file);
             let expected = fs::read_to_string(&expected_path)
                 .unwrap_or_else(|error| panic!("read {}: {error}", expected_path.display()));

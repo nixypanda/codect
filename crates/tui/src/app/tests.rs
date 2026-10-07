@@ -683,6 +683,35 @@ fn the_mode_picker_lists_the_modes() {
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("types"), "{text}");
     assert!(text.contains("signatures"), "{text}");
+    assert!(text.contains("tests"), "{text}");
+}
+
+#[test]
+fn the_mode_picker_reaches_tests_and_clamps_at_the_last_mode() {
+    let app = two_files();
+    let (opened, _) = update(Msg::Key(Key::Char('m')), &app);
+    let (down, _) = update(Msg::Key(Key::Down), &opened);
+    let (down_again, _) = update(Msg::Key(Key::Down), &down);
+    // The mode applies on load, so the selection is observed as a command.
+    let (_, cmds) = update(Msg::Key(Key::Enter), &down_again);
+    assert_eq!(
+        cmds,
+        vec![Cmd::Show(ShowRequest {
+            mode: ProjectionMode::Tests,
+            ..show_request()
+        })]
+    );
+
+    // A further Down must stay on the last mode rather than wrap or panic.
+    let (clamped, _) = update(Msg::Key(Key::Down), &down_again);
+    let (_, cmds) = update(Msg::Key(Key::Enter), &clamped);
+    assert_eq!(
+        cmds,
+        vec![Cmd::Show(ShowRequest {
+            mode: ProjectionMode::Tests,
+            ..show_request()
+        })]
+    );
 }
 
 #[test]
