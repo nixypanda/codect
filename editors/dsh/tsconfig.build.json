@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "outDir": "lib/types",
+    "rootDir": "src",
+    "lib": ["ES2022"],
+    "types": [],
+    "paths": {
+      "@deepseek-ai/dsh-typert-protocol": ["./scripts/stubs/typert-protocol.d.ts"],
+      "@deepseek-ai/schemastery": ["./scripts/stubs/schemastery.d.ts"],
+      "zod": ["./scripts/stubs/zod.d.ts"]
+    }
+  },
+  "include": ["src/types-stubs.d.ts", "src/api-codect/index.ts", "src/api-codect/typert.host.ts"]
+}

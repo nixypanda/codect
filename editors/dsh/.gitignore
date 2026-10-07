@@ -1,0 +1,12 @@
+# Development-only type stubs for standalone type-checking
+# These resolve to real types when the plugin is built inside the DSH monorepo
+node_modules/
+
+# Build output
+lib/
+
+# Temporary build files
+.build-*.js
+
+# Editor
+*.tsbuildinfo

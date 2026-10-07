@@ -1,0 +1,6 @@
+# Bundle patch for @nixypanda/dsh-codect.
+# Inserted into the profile's cordis entry list by the DSH bundle loader.
+
+- insert:
+    - id: codect
+      name: "@nixypanda/dsh-codect"

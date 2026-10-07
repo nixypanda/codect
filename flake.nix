@@ -101,17 +101,63 @@
             license = pkgs.lib.licenses.agpl3Plus;
           };
         };
+
+      # The DeepSeek Harness (DSH) sidebar plugin. Builds the TypeScript sources
+      # into lib/ with esbuild and installs the package directory. Consumers add
+      # this to their DSH profile bundles as `@nixypanda/dsh-codect`.
+      codectDshPackage =
+        pkgs:
+        let
+          src = ./editors/dsh;
+          esbuildBin = pkgs.esbuild;
+        in
+        pkgs.runCommand "codect-dsh"
+          {
+            nativeBuildInputs = [
+              pkgs.nodejs
+              pkgs.esbuild
+              pkgs.typescript
+            ];
+            inherit src;
+          }
+          ''
+            set -e
+
+            # The store source is read-only and build.mjs writes lib/ next to it,
+            # so build from a writable copy.
+            mkdir -p work
+            cp -r --no-preserve=mode,ownership "$src"/. work/
+            chmod -R u+w work
+            cd work
+
+            # Build the TypeScript sources using esbuild binary
+            export ESBUILD_BINARY=${esbuildBin}/bin/esbuild
+            node scripts/build.mjs
+
+            # Install the package tree and an npm-style tarball. Consumers pass
+            # the tarball to `dsh plugin add` so pnpm resolves the package's
+            # runtime dependencies (a bare store path installs as a link: and
+            # would skip them).
+            mkdir -p "$out/tarball/package"
+            cp -r package.json cordis.patch.yml README.md lib "$out"/
+            cp -r package.json cordis.patch.yml README.md lib "$out/tarball/package"/
+            tar -czf "$out/codect-dsh.tgz" -C "$out/tarball" package
+
+            echo "codect-dsh built successfully"
+          '';
     in
     {
       packages = forAllSystems (pkgs: {
         default = codectPackage pkgs;
         codect = codectPackage pkgs;
         codect-nvim = codectNvimPackage pkgs;
+        codect-dsh = codectDshPackage pkgs;
       });
 
       overlays.default = final: _prev: {
         codect = codectPackage final;
         codect-nvim = codectNvimPackage final;
+        codect-dsh = codectDshPackage final;
       };
 
       apps = forAllSystems (pkgs: {
@@ -129,6 +175,7 @@
             pkgs.cargo-llvm-cov
             pkgs.just
             pkgs.neovim
+            pkgs.nodejs
             pkgs.git
           ];
 
@@ -168,6 +215,38 @@
               git commit -qm fixture
               export CODECT_BIN=${codectPackage pkgs}/bin/codect
               nvim --headless -u NONE -l editors/nvim/tests/run.lua > log.txt 2>&1 || {
+                cat log.txt
+                exit 1
+              }
+              cat log.txt
+              touch $out
+            '';
+        codect-dsh =
+          pkgs.runCommand "codect-dsh-check"
+            {
+              nativeBuildInputs = [
+                pkgs.nodejs
+                pkgs.git
+                (codectPackage pkgs)
+              ];
+            }
+            ''
+              export HOME=$TMPDIR
+              mkdir -p work/editors work/crates
+              cp -r ${./editors/dsh} work/editors/dsh
+              chmod -R u+w work/editors/dsh
+              # `codect show` resolves `crates/base/src/lib.rs` relative to the
+              # repository root, so the check's work dir needs a matching tree.
+              cp -r ${./crates/base} work/crates/base
+              chmod -R u+w work/crates/base
+              cd work
+              git init -q
+              git config user.email check@example.com
+              git config user.name check
+              git add -A
+              git commit -qm fixture
+              export CODECT_BIN=${codectPackage pkgs}/bin/codect
+              node --test editors/dsh/test/*.test.js > log.txt 2>&1 || {
                 cat log.txt
                 exit 1
               }
