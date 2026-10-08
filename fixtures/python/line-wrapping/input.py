@@ -9,3 +9,8 @@ class Service:
 
 
 def short(a: int, b: int) -> int: ...
+
+
+def routed(
+    routes: dict = {"primary": "/a/very/long/path", "fallback": "/another/long/path"},
+) -> None: ...

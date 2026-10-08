@@ -685,6 +685,7 @@ Line breaks are fixed by declaration shape and by a single compile-time width bu
 - An Elm or Haskell type signature whose arrow chain (`->`, and a leading `=>`) does not fit breaks before each arrow, one per indented line.
 - A bracketed construct nested inside a type breaks one item per indented line when its own flat form does not fit, and re-decides at its own column after an enclosing list breaks: a Python subscript or `|` union, a Rust generic argument list, tuple, reference, or `Fn(...)`, a Haskell `parens`/`tuple`/`list`/`apply`, or an Elm record or tuple.
 - A multi-argument Rust attribute (`#[command(...)]`, `#[arg(...)]`) or Python decorator (`@app.get(...)`) whose argument list does not fit breaks one argument per indented line.
+- A decorator argument or parameter default that is itself a bracketed value (a Python list, dictionary, tuple, call, subscript, or splat) breaks one element per indented line when its own flat form does not fit at its column. A nested type list or value collection re-decides at its own column after an enclosing list breaks; the column the enclosing list's trailing comma will occupy is charged to the item it lands on, so a line never overflows the budget by that comma.
 - A Haskell `type` synonym whose right-hand side does not fit breaks after `=` and then before each type operator, one operator-led item per indented line.
 - Atomic tokens are never split: a line dominated by one long string literal, identifier, or macro attribute body may still exceed the budget, exactly as a conventional formatter leaves it.
 - A broken Python or Rust bracketed list emits a trailing comma; an inline list does not.
@@ -695,7 +696,7 @@ Line breaks are fixed by declaration shape and by a single compile-time width bu
 - Four spaces per nesting level.
 - Exactly one trailing newline per projected file.
 
-Build a small internal document representation such as `Text`, `Line`, `Indent`, and `Concat`, plus a width-aware `Group` with soft line breaks for the two shapes above, or equivalent direct rendering helpers. This grammar-agnostic layout document lives in `base` as `base::Doc` (module `doc.rs`), shared by every adapter; `base` stays free of Tree-sitter, and each adapter lowers its own parsed tree into `Doc`. Do not add a complete source formatter.
+Build a small internal document representation such as `Text`, `Line`, `Indent`, and `Concat`, plus a width-aware `Group` with soft line breaks for the two shapes above, or equivalent direct rendering helpers. A `Reserve` construct charges the columns a later conditional fragment (a broken list's trailing comma) will occupy, so the groups in between measure against the full line. This grammar-agnostic layout document lives in `base` as `base::Doc` (module `doc.rs`), shared by every adapter; `base` stays free of Tree-sitter, and each adapter lowers its own parsed tree into `Doc`. Do not add a complete source formatter.
 
 For type expressions and signature fragments, walk leaf tokens while excluding comments. Normalize spacing with language-specific rules. At minimum:
 

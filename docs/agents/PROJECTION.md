@@ -84,7 +84,11 @@ are intentionally invisible in all modes and in both diff directions.
   defaults, return types, decorators, and type parameters; module- and
   class-level values with declared types.
 - Bodies become the `...` placeholder; initializers are removed.
-- Decorators are preserved; imports, comments, and docstrings are omitted.
+- Decorators are preserved; imports, comments, and docstrings are omitted. A
+  decorator or parameter default whose argument is itself a bracketed value
+  breaks one element per indented line once its own flat form does not fit.
+  Canonical rendering normalizes a dangling trailing comma inside any bracketed
+  list, so adding or removing one is a formatting-only edit.
 
 ### Tests mode
 
