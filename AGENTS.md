@@ -12,7 +12,7 @@ documents hold the detail.
 
 ```sh
 codect show --mode <types|signatures|tests> [--path PATH | --area AREA]... [REVISION]
-codect diff --mode <types|signatures|tests> [--path PATH | --area AREA]... BASE TARGET
+codect diff --mode <types|signatures|tests> [--merge-base] [--path PATH | --area AREA]... BASE TARGET
 
 codect show --format json --mode types               # machine-readable projection
 codect show --format json --mode types --stdin --path src/lib.rs

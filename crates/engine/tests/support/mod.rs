@@ -67,7 +67,7 @@ impl TestRepo {
         bare
     }
 
-    fn git_ok(&self, args: &[&str]) -> String {
+    pub fn git_ok(&self, args: &[&str]) -> String {
         let output = git(self.path(), args);
         assert!(
             output.status.success(),

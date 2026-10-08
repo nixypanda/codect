@@ -11,7 +11,7 @@ short version a caller can depend on.
 
 ```text
 codect show --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... [REVISION]
-codect diff --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect diff --format <text|json> --mode <types|signatures|tests> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 - `show` defaults `REVISION` to `HEAD`.
@@ -30,6 +30,11 @@ codect diff --format <text|json> --mode <types|signatures|tests> [--path <PATH> 
   Each is repeatable and forms a union. `--area` paths are repository-root
   relative; `--path` resolves relative to the current directory.
 - `--color <auto|always|never>` defaults to `auto`. JSON is always raw.
+- On `diff`, `--merge-base` replaces `<BASE>` with the merge base of `<BASE>`
+  and `<TARGET>` (the equivalent of `git diff BASE...TARGET`), excluding
+  commits that only landed on `<BASE>` after the branches diverged. Both sides
+  must be commits: a snapshot side is a usage error (exit `2`), and two commits
+  with no common ancestor exit `1`.
 
 ## Editor input forms
 
@@ -128,6 +133,9 @@ Root: `schema`, `mode`, `base`, `target`, `files`.
   requested `revision`, and an `id`.
 - A `commit` ID is resolved and stable. `:index` and `:worktree` IDs are
   **mutable labels**, not content hashes: refresh after staging or disk writes.
+- Under `--merge-base`, the base snapshot carries `merge_base: true`; its
+  `revision` stays the requested base and its `id` is the resolved merge base.
+  The field is additive and omitted otherwise.
 - Each changed file has `path`, `language`, `status` (`added` | `deleted` |
   `modified`), `base`/`target` sides, and `equal: false`. An absent side is
   `null`; a present side has `snapshot_id`, `projection`, and `outline`.

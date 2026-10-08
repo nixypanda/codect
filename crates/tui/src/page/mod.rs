@@ -300,9 +300,11 @@ impl Loaded {
                         "t",
                     ));
                     // A snapshot endpoint has no first-parent history to walk,
-                    // so the commits view is not offered for it.
+                    // and a merge-base base need not lie on the target's
+                    // first-parent chain, so the commits view is not offered.
                     if !engine::is_snapshot_spec(&diff.base)
                         && !engine::is_snapshot_spec(&diff.target)
+                        && !diff.merge_base
                     {
                         entries.push((
                             Action::Range(RangeAction::SwitchToCommits),

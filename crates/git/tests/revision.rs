@@ -185,6 +185,52 @@ fn reports_an_ambiguous_abbreviated_revision() {
 }
 
 #[test]
+fn merge_base_finds_the_fork_point_of_diverged_branches() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", "pub fn base() {}\n");
+    let fork = repo.commit("fork point");
+
+    // Advance `main` after the fork.
+    repo.write("src/lib.rs", "pub fn base() {}\npub fn main_only() {}\n");
+    repo.commit("main advances");
+
+    // Branch `feature` from the fork point and advance it independently.
+    repo.git_ok(&["checkout", "-q", "-b", "feature", &fork]);
+    repo.write("src/lib.rs", "pub fn base() {}\npub fn feature_only() {}\n");
+    repo.commit("feature advances");
+
+    let discovered = GitRepository::discover(repo.path()).expect("discover");
+    let main = discovered.resolve_commit("main").expect("main");
+    let feature = discovered.resolve_commit("feature").expect("feature");
+    let base = discovered.merge_base(&main, &feature).expect("merge base");
+    assert_eq!(base.object_id, object_id(&fork));
+}
+
+#[test]
+fn merge_base_reports_unrelated_histories() {
+    let repo = TestRepo::init();
+    repo.write("a.rs", "pub fn a() {}\n");
+    repo.commit("main root");
+
+    // An orphan branch with its own independent root commit.
+    repo.git_ok(&["checkout", "-q", "--orphan", "orphan"]);
+    repo.git_ok(&["rm", "-q", "-rf", "."]);
+    repo.write("b.rs", "pub fn b() {}\n");
+    repo.commit("orphan root");
+
+    let discovered = GitRepository::discover(repo.path()).expect("discover");
+    let main = discovered.resolve_commit("main").expect("main");
+    let orphan = discovered.resolve_commit("orphan").expect("orphan");
+    let error = discovered
+        .merge_base(&main, &orphan)
+        .expect_err("no common ancestor");
+    assert!(
+        matches!(error, GitError::NoMergeBase { .. }),
+        "unexpected: {error:?}"
+    );
+}
+
+#[test]
 fn reports_an_unborn_head() {
     let repo = TestRepo::init();
 

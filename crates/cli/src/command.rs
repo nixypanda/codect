@@ -17,7 +17,7 @@ use base::{
     show_document,
 };
 use engine::config::ConfigError;
-use engine::{Engine, EngineError};
+use engine::{DiffBase, Engine, EngineError};
 use git::GitError;
 
 #[cfg(feature = "tui")]
@@ -150,14 +150,16 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             format,
             base,
             target,
+            merge_base,
             paths,
             areas,
         } => {
+            let base_mode = merge_base_mode(base, target, *merge_base)?;
             let selection = selection_for(paths, areas, &start, &engine)?;
             match format {
                 Format::Text => {
                     let diffs = engine
-                        .diff(base, target, (*mode).into(), &selection)
+                        .diff(base, target, (*mode).into(), &selection, base_mode)
                         .map_err(engine_failure)?;
                     let (old, new) = split_diff(diffs);
                     output::write_document(
@@ -169,10 +171,16 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
                 }
                 Format::Json => {
                     let diff = engine
-                        .diff_snapshot_outlines(base, target, (*mode).into(), &selection)
+                        .diff_snapshot_outlines(base, target, (*mode).into(), &selection, base_mode)
                         .map_err(engine_failure)?;
-                    output::write_json(&json::diff_document(base, target, (*mode).into(), &diff))
-                        .map_err(output_failure)
+                    output::write_json(&json::diff_document(
+                        base,
+                        target,
+                        (*mode).into(),
+                        &diff,
+                        *merge_base,
+                    ))
+                    .map_err(output_failure)
                 }
             }
         }
@@ -397,6 +405,21 @@ fn split_diff(diffs: Vec<FileDiff>) -> (Vec<ProjectedFile>, Vec<ProjectedFile>) 
     (old, new)
 }
 
+// Resolves the base-side mode for `diff`. `--merge-base` needs two commits:
+// the index, worktree, and empty snapshots have no merge base, so a snapshot
+// side is a usage error rather than a runtime revision failure.
+fn merge_base_mode(base: &str, target: &str, merge_base: bool) -> Result<DiffBase, CliError> {
+    if !merge_base {
+        return Ok(DiffBase::Given);
+    }
+    if engine::is_snapshot_spec(base) || engine::is_snapshot_spec(target) {
+        return Err(CliError::usage(
+            "`--merge-base` requires two commit revisions".to_owned(),
+        ));
+    }
+    Ok(DiffBase::MergeBase)
+}
+
 #[cfg(feature = "tui")]
 fn run_tui(
     engine: Engine,
@@ -436,6 +459,20 @@ fn run_tui(
                         .to_owned(),
                 ));
             }
+            if args.merge_base && matches!(view, tui::DiffView::Commits) {
+                return Err(CliError::usage(
+                    "`--merge-base` is only valid with the range view; the commits view walks \
+                     first-parent history"
+                        .to_owned(),
+                ));
+            }
+            if args.merge_base
+                && (engine::is_snapshot_spec(&args.base) || engine::is_snapshot_spec(&args.target))
+            {
+                return Err(CliError::usage(
+                    "`--merge-base` requires two commit revisions".to_owned(),
+                ));
+            }
             let selection = selection_for(&args.paths, &args.areas, start, &engine)?;
             let label = scope_label(&selection);
             (
@@ -445,6 +482,7 @@ fn run_tui(
                     mode: args.mode.into(),
                     selection,
                     view,
+                    merge_base: args.merge_base,
                 },
                 label,
             )
@@ -691,7 +729,9 @@ fn git_context(error: &GitError) -> DiagnosticContext {
         | GitError::CommitDecode { repository, .. }
         | GitError::TreeTraversal { repository, .. }
         | GitError::InvalidRepoPath { repository, .. }
-        | GitError::InvalidObjectId { repository, .. } => DiagnosticContext {
+        | GitError::InvalidObjectId { repository, .. }
+        | GitError::NoMergeBase { repository, .. }
+        | GitError::MergeBase { repository, .. } => DiagnosticContext {
             repository: Some(repository.clone()),
             ..DiagnosticContext::default()
         },
@@ -723,6 +763,8 @@ fn git_message(error: &GitError) -> &'static str {
         GitError::TreeTraversal { .. } => "a commit tree could not be traversed",
         GitError::InvalidRepoPath { .. } => "a committed entry has an unusable path",
         GitError::InvalidObjectId { .. } => "an object id is invalid",
+        GitError::NoMergeBase { .. } => "the two commits have no merge base",
+        GitError::MergeBase { .. } => "a merge base could not be computed",
         GitError::IndexRead { .. } => "the Git index could not be read",
         GitError::UntrackedTraversal { .. } => "untracked files could not be enumerated",
     }

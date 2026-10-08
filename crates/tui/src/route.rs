@@ -22,6 +22,9 @@ pub enum LoadRequest {
         mode: ProjectionMode,
         selection: Selection,
         view: DiffView,
+        /// Compare the merge base of `base` and `target` against `target`.
+        /// Only meaningful for the range view.
+        merge_base: bool,
     },
 }
 
@@ -52,4 +55,5 @@ pub struct DiffRequest {
     pub mode: ProjectionMode,
     pub selection: Selection,
     pub view: DiffView,
+    pub merge_base: bool,
 }

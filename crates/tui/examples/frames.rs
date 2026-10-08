@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use base::{ProjectionMode, Selection};
-use engine::Engine;
+use engine::{DiffBase, Engine};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 use tui::bench::{
@@ -72,7 +72,13 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let (palette, _) = update(Msg::Key(Key::CtrlP), &show);
     render("tui-overlay", &settle(palette), &args.out, width, height)?;
 
-    let diffs = engine.diff(RANGE_BASE, RANGE_TARGET, ProjectionMode::Types, &selection)?;
+    let diffs = engine.diff(
+        RANGE_BASE,
+        RANGE_TARGET,
+        ProjectionMode::Types,
+        &selection,
+        DiffBase::Given,
+    )?;
     let mut range = diff_model(diffs, width, height);
     range.root = root.clone();
     render("tui-diff-range", &range, &args.out, width, height)?;
@@ -84,6 +90,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             &step.commit_id.to_string(),
             ProjectionMode::Types,
             &selection,
+            DiffBase::Given,
         )?,
         None => Vec::new(),
     };
