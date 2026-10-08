@@ -101,6 +101,20 @@ pub enum GitError {
         target_id: ObjectId,
     },
 
+    #[error("commits {first} and {second} have no merge base in repository `{repository}`")]
+    NoMergeBase {
+        repository: PathBuf,
+        first: ObjectId,
+        second: ObjectId,
+    },
+
+    #[error("a merge base in repository `{repository}` could not be computed")]
+    MergeBase {
+        repository: PathBuf,
+        #[source]
+        source: Box<dyn Error + Send + Sync + 'static>,
+    },
+
     #[error("commit {object_id} in repository `{repository}` could not be decoded")]
     CommitDecode {
         repository: PathBuf,

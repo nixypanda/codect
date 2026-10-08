@@ -171,6 +171,7 @@ impl App {
                 mode,
                 selection,
                 view,
+                merge_base,
             } => Loaded::Diff(Diff::new(
                 base,
                 target,
@@ -183,6 +184,7 @@ impl App {
                     DiffView::Range => DiffViewState::Range(Range::empty()),
                     DiffView::Commits => DiffViewState::Commits(Commits::empty()),
                 },
+                merge_base,
             )),
         };
         Self {

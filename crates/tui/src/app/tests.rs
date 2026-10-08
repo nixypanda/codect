@@ -48,6 +48,7 @@ fn diff_request() -> DiffRequest {
         mode: ProjectionMode::Types,
         selection: Selection::all(),
         view: DiffView::Range,
+        merge_base: false,
     }
 }
 
@@ -109,6 +110,7 @@ fn diff_app(diffs: Vec<FileDiff>) -> App {
         mode: ProjectionMode::Types,
         selection: Selection::all(),
         view: DiffView::Range,
+        merge_base: false,
     });
     let (next, _) = update(
         Msg::DiffLoaded {
@@ -144,6 +146,7 @@ fn commits_app(count: usize) -> App {
         mode: ProjectionMode::Types,
         selection: Selection::all(),
         view: DiffView::Commits,
+        merge_base: false,
     });
     let (next, _) = update(
         Msg::HistoryLoaded {
@@ -376,6 +379,7 @@ fn empty_commit_history_installs_a_diff_and_focuses_commits() {
         mode: ProjectionMode::Types,
         selection: Selection::all(),
         view: DiffView::Commits,
+        merge_base: false,
     });
     let (next, commands) = update(
         Msg::HistoryLoaded {
@@ -545,6 +549,7 @@ fn a_snapshot_range_cannot_switch_to_commits() {
         mode: request.mode,
         selection: request.selection.clone(),
         view: DiffView::Range,
+        merge_base: request.merge_base,
     });
     let (next, _) = update(
         Msg::DiffLoaded {
@@ -564,6 +569,53 @@ fn a_snapshot_range_cannot_switch_to_commits() {
             .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
     );
 
+    let mut next = app.clone();
+    let mut commands = Vec::new();
+    apply_action(
+        &mut next,
+        Action::Range(RangeAction::SwitchToCommits),
+        &mut commands,
+    );
+    assert!(commands.is_empty(), "no first-parent load may be issued");
+    assert!(next.diagnostic.is_some(), "the refusal is explained");
+}
+
+#[test]
+fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
+    let request = DiffRequest {
+        base: "main".to_owned(),
+        target: "feature".to_owned(),
+        merge_base: true,
+        ..diff_request()
+    };
+    let app = base_app(LoadRequest::Diff {
+        base: request.base.clone(),
+        target: request.target.clone(),
+        mode: request.mode,
+        selection: request.selection.clone(),
+        view: DiffView::Range,
+        merge_base: request.merge_base,
+    });
+    let (next, _) = update(
+        Msg::DiffLoaded {
+            request,
+            result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
+        },
+        &app,
+    );
+    let app = settle(next);
+
+    // The mode survives the load and a request built from the page.
+    assert!(diff_ref(&app).merge_base);
+    assert!(diff_ref(&app).request().merge_base);
+
+    // As with a snapshot range, the commits view is not offered.
+    assert!(
+        !app.loaded
+            .palette_entries()
+            .iter()
+            .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
+    );
     let mut next = app.clone();
     let mut commands = Vec::new();
     apply_action(

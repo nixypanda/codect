@@ -413,3 +413,112 @@ fn text_diff_accepts_snapshots_and_renders_untracked_files() {
     assert!(unstaged.contains("diff --codect a/src/fresh.rs b/src/fresh.rs"));
     assert!(unstaged.contains("+pub struct Fresh;"));
 }
+
+#[test]
+fn merge_base_diff_omits_base_branch_commits_and_marks_the_snapshot() {
+    let repo = TestRepo::init();
+    repo.write("a.rs", "pub struct Base;\n");
+    let fork = repo.commit("fork point");
+    repo.git_ok(&["branch", "feature"]);
+
+    // Advance `main` after the fork, then advance `feature` independently.
+    repo.write("a.rs", "pub struct Base;\npub struct MainOnly;\n");
+    repo.commit("main only");
+    repo.git_ok(&["checkout", "-q", "feature"]);
+    repo.write("a.rs", "pub struct Base;\npub struct FeatureOnly;\n");
+    repo.commit("feature only");
+
+    let output = codect_in(
+        &repo,
+        &[
+            "diff",
+            "--format",
+            "json",
+            "--mode",
+            "types",
+            "--merge-base",
+            "main",
+            "feature",
+        ],
+    )
+    .output()
+    .expect("run codect");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let document: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+
+    // The base echoes the requested revision, resolves to the fork point, and
+    // is marked so a consumer can tell it is not the tip of `main`.
+    assert_eq!(document["base"]["revision"], "main");
+    assert_eq!(document["base"]["merge_base"], true);
+    assert_eq!(document["base"]["id"], fork);
+    assert_eq!(document["base"]["kind"], "commit");
+    assert!(document["target"].get("merge_base").is_none());
+
+    let file = &document["files"][0];
+    assert_eq!(file["path"], "a.rs");
+    assert!(
+        !file["base"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("MainOnly"),
+        "the merge-base base omits main's declaration"
+    );
+    assert!(
+        file["target"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("FeatureOnly")
+    );
+
+    let schema: Value = serde_json::from_str(&doc("schema/codect.diff.v1.json")).unwrap();
+    support::schema::validate(&schema, &document).expect("valid diff schema");
+
+    // Without the flag the tip-to-tip diff still shows main's declaration, and
+    // no marker is emitted.
+    let tip = run(&repo, "types", "main", "feature");
+    assert!(tip["base"].get("merge_base").is_none());
+    assert!(
+        tip["files"][0]["base"]["projection"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("MainOnly")
+    );
+
+    // Text mode produces the same file set with no base-branch noise.
+    let text = codect_in(
+        &repo,
+        &[
+            "diff",
+            "--format",
+            "text",
+            "--mode",
+            "types",
+            "--merge-base",
+            "main",
+            "feature",
+        ],
+    )
+    .output()
+    .expect("run codect");
+    assert!(text.status.success(), "{}", stderr(&text));
+    let text = stdout(&text);
+    assert!(text.contains("FeatureOnly"));
+    assert!(!text.contains("MainOnly"));
+}
+
+#[test]
+fn merge_base_rejects_a_snapshot_side_as_a_usage_error() {
+    let repo = TestRepo::init();
+    repo.write("a.rs", "pub struct A;\n");
+    repo.commit("base");
+
+    let output = codect_in(
+        &repo,
+        &["diff", "--mode", "types", "--merge-base", "HEAD", ":index"],
+    )
+    .output()
+    .expect("run codect");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(stderr(&output).contains("--merge-base"));
+    assert!(stdout(&output).is_empty());
+}

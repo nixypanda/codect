@@ -8,7 +8,7 @@
 mod support;
 
 use base::{Area, FileDiff, FileOutlineDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
-use engine::{Engine, EngineError};
+use engine::{DiffBase, Engine, EngineError};
 use support::TestRepo;
 
 #[test]
@@ -188,6 +188,7 @@ fn diff_rejects_a_path_absent_from_both_revisions() {
             "HEAD",
             ProjectionMode::Types,
             &path_selection(&["missing.rs"]),
+            DiffBase::Given,
         )
         .expect_err("unsatisfied selection");
 
@@ -302,6 +303,7 @@ fn worktree_snapshot_unions_tracked_and_untracked_files() {
             ":worktree",
             ProjectionMode::Types,
             &Selection::all(),
+            DiffBase::Given,
         )
         .expect("worktree snapshot diff");
     let paths: Vec<String> = worktree
@@ -318,7 +320,13 @@ fn worktree_snapshot_unions_tracked_and_untracked_files() {
     // The index snapshot still sees only staged content, so an untracked file
     // is invisible in a HEAD-to-index comparison.
     let staged = engine(&repo)
-        .diff_snapshot_outlines("HEAD", ":index", ProjectionMode::Types, &Selection::all())
+        .diff_snapshot_outlines(
+            "HEAD",
+            ":index",
+            ProjectionMode::Types,
+            &Selection::all(),
+            DiffBase::Given,
+        )
         .expect("staged snapshot diff");
     assert!(staged.files.is_empty());
 
@@ -330,6 +338,7 @@ fn worktree_snapshot_unions_tracked_and_untracked_files() {
             ":worktree",
             ProjectionMode::Types,
             &Selection::all(),
+            DiffBase::Given,
         )
         .expect("worktree projection diff");
     let mut names: Vec<String> = projections
@@ -367,6 +376,7 @@ fn worktree_membership_excludes_an_ignored_file_named_by_the_other_side() {
             &committed,
             ProjectionMode::Types,
             &Selection::all(),
+            DiffBase::Given,
         )
         .expect("snapshot diff");
     let files: Vec<(String, &str)> = outlines
@@ -395,6 +405,7 @@ fn worktree_membership_excludes_an_ignored_file_named_by_the_other_side() {
             &committed,
             ProjectionMode::Types,
             &Selection::all(),
+            DiffBase::Given,
         )
         .expect("projection diff");
     let names: Vec<String> = projections
@@ -402,4 +413,68 @@ fn worktree_membership_excludes_an_ignored_file_named_by_the_other_side() {
         .map(|diff| diff.path().to_string())
         .collect();
     assert_eq!(names, ["bait.rs"]);
+}
+
+#[test]
+fn merge_base_excludes_commits_that_only_landed_on_the_base_branch() {
+    let repo = TestRepo::init();
+    repo.write("a.rs", "pub struct Base;\n");
+    let fork = repo.commit("fork point");
+    repo.git_ok(&["branch", "feature"]);
+
+    // Advance `main` after the fork.
+    repo.write("a.rs", "pub struct Base;\npub struct MainOnly;\n");
+    let main = repo.commit("main only");
+
+    // Advance `feature` independently of main.
+    repo.git_ok(&["checkout", "-q", "feature"]);
+    repo.write("a.rs", "pub struct Base;\npub struct FeatureOnly;\n");
+    let feature = repo.commit("feature only");
+
+    let engine = engine(&repo);
+
+    // Tip-to-tip: main's declaration appears as a change that is not the
+    // feature's work.
+    let tip = engine
+        .diff_snapshot_outlines(
+            "main",
+            "feature",
+            ProjectionMode::Types,
+            &Selection::all(),
+            DiffBase::Given,
+        )
+        .expect("tip diff");
+    assert_eq!(tip.base_id.to_string(), main);
+    assert_eq!(tip.target_id.to_string(), feature);
+    match tip.files.first() {
+        Some(FileOutlineDiff::Modified { old, .. }) => assert!(
+            old.projection.canonical_text().contains("MainOnly"),
+            "the tip base still carries main's declaration"
+        ),
+        other => panic!("expected a modified file, got {other:?}"),
+    }
+
+    // Merge base: the base is the fork point, so only the feature's own
+    // declaration remains.
+    let merged = engine
+        .diff_snapshot_outlines(
+            "main",
+            "feature",
+            ProjectionMode::Types,
+            &Selection::all(),
+            DiffBase::MergeBase,
+        )
+        .expect("merge-base diff");
+    assert_eq!(merged.base_id.to_string(), fork);
+    assert_eq!(merged.target_id.to_string(), feature);
+    match merged.files.first() {
+        Some(FileOutlineDiff::Modified { old, new }) => {
+            assert!(
+                !old.projection.canonical_text().contains("MainOnly"),
+                "the merge-base base omits main's declaration"
+            );
+            assert!(new.projection.canonical_text().contains("FeatureOnly"));
+        }
+        other => panic!("expected a modified file, got {other:?}"),
+    }
 }

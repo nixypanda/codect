@@ -57,6 +57,34 @@ pub(crate) fn first_parent_steps(
     Ok(steps)
 }
 
+// Returns the best merge base of two already-resolved commits. `gix` reports
+// an absent common ancestor as `NotFound`, which is a legitimate outcome and
+// maps to a typed error; every other failure is a read error.
+pub(crate) fn merge_base(
+    repo: &GitRepository,
+    one: &Revision,
+    two: &Revision,
+) -> Result<Revision, GitError> {
+    let repository = repo.location();
+    let one_id = one.object_id.to_gix(&repository)?;
+    let two_id = two.object_id.to_gix(&repository)?;
+
+    match repo.gix().merge_base(one_id, two_id) {
+        Ok(id) => Ok(Revision {
+            object_id: ObjectId::from_gix(&id.detach()),
+        }),
+        Err(gix::repository::merge_base::Error::NotFound { .. }) => Err(GitError::NoMergeBase {
+            repository,
+            first: one.object_id.clone(),
+            second: two.object_id.clone(),
+        }),
+        Err(source) => Err(GitError::MergeBase {
+            repository,
+            source: Box::new(source),
+        }),
+    }
+}
+
 pub(crate) fn resolve_commit(repo: &GitRepository, spec: &str) -> Result<Revision, GitError> {
     let repository = repo.location();
     let parsed = repo

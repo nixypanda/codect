@@ -110,6 +110,12 @@ pub enum Command {
         #[arg(value_name = "TARGET")]
         target: String,
 
+        /// Compare the merge base of BASE and TARGET against TARGET, so commits
+        /// that only landed on BASE after the two branches diverged do not
+        /// appear. Both sides must be commits.
+        #[arg(long)]
+        merge_base: bool,
+
         /// Limit the projection to these paths. Repeatable. A directory includes
         /// everything beneath it, and paths are relative to the current directory.
         #[arg(long = "path", short = 'p', value_name = "PATH", action = clap::ArgAction::Append)]
@@ -192,6 +198,12 @@ pub struct TuiDiffArgs {
     /// Target revision.
     #[arg(value_name = "TARGET")]
     pub target: String,
+
+    /// Compare the merge base of BASE and TARGET against TARGET. Only the
+    /// range view accepts this; the commits view walks first-parent history and
+    /// has no merge base. Both sides must be commits.
+    #[arg(long)]
+    pub merge_base: bool,
 
     /// Limit the projection to these paths. Repeatable. A directory includes
     /// everything beneath it, and paths are relative to the current directory.
