@@ -11,7 +11,7 @@ and scope.
 codect show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
 codect show --format json --mode <types|signatures> --stdin    --path <FILE>
 codect show --format json --mode <types|signatures> --worktree --path <FILE>
-codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect diff --format <text|json> --mode <types|signatures> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 - `show` defaults `REVISION` to `HEAD`.
@@ -22,6 +22,9 @@ codect diff --format <text|json> --mode <types|signatures> [--path <PATH> | --ar
 - `diff` takes two independent revisions (not a range). Both text and JSON diff
   also accept the snapshots `:index`, `:worktree`, `:empty`, and the canonical
   Git empty-tree object ID.
+- `diff --merge-base` compares the merge base of `<BASE>` and `<TARGET>` against
+  `<TARGET>` (`git diff BASE...TARGET`), so commits that only landed on `<BASE>`
+  after the branches diverged do not appear. Both sides must be commits.
 - `--color <auto|always|never>` defaults to `auto`; redirected output never
   contains escape bytes.
 
@@ -34,6 +37,7 @@ codect show --mode signatures --area frontend
 codect diff --mode types HEAD~1 HEAD
 codect diff --format json --mode types HEAD :index       # staged changes
 codect diff --format json --mode types :index :worktree  # unstaged changes
+codect diff --mode types --merge-base main feature       # feature since its branch point
 ```
 
 `show` renders the whole repository as an outline:
@@ -84,6 +88,12 @@ omitted, so an empty result means there are no focused changes.
 disk plus untracked, non-ignored files, and does not follow symlinks; it never
 includes unsaved editor buffers. Mutable snapshot names are labels, so refresh
 after staging or file writes.
+
+By default the base side is the revision you name. `--merge-base` replaces it
+with the merge base of the two commits, the equivalent of `git diff
+BASE...TARGET`. Use it to compare a branch from where it started: commits that
+only landed on the base branch after the two diverged are excluded, so they do
+not appear as spurious changes. Both sides must be commits.
 
 ## Text output
 

@@ -198,6 +198,14 @@ canonical Git empty-tree object ID.
 - Module context is retained in diff output.
 - The same source projection rules apply independently to both commits before they are compared.
 
+A diff may also be taken from the branches' common point. `codect diff
+--merge-base BASE TARGET` replaces the base with the merge base of the two
+commits before projecting, the equivalent of `git diff BASE...TARGET`. This
+excludes commits that only landed on `BASE` after the branches diverged, so a
+feature branch is compared from where it started. Both sides must be commits;
+the snapshots have no merge base. The JSON document marks the base snapshot
+with `merge_base: true` and reports the resolved merge base as its id.
+
 Implementation-only changes are intentionally invisible in both focused diff
 modes. If a function body changes while its explicit signature remains
 unchanged, the focused diff contains no change for that function. The JSON

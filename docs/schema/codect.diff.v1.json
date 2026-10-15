@@ -55,6 +55,10 @@
         },
         "id": {
           "type": "string"
+        },
+        "merge_base": {
+          "description": "Present and true only on the base snapshot of a `--merge-base` diff. It marks that `id` is the merge base of the requested `revision` and the target revision, not the tip of `revision`. Additive; omitted when the base is compared exactly as requested.",
+          "type": "boolean"
         }
       }
     },

@@ -114,6 +114,13 @@ pub trait SnapshotRepository {
         target: &Revision,
     ) -> Result<Vec<CommitStep>, GitError>;
 
+    /// Returns the best merge base of two resolved commits.
+    ///
+    /// Both inputs must already be resolved commits. A pair of commits with no
+    /// common ancestor (for example two independent root commits) is a typed
+    /// [`GitError::NoMergeBase`] rather than an empty result.
+    fn merge_base(&self, one: &Revision, two: &Revision) -> Result<Revision, GitError>;
+
     /// Lists the supported source entries of `revision`'s tree, sorted by raw
     /// repository path bytes.
     fn source_entries(&self, revision: &Revision) -> Result<Vec<SourceEntry>, GitError>;
@@ -225,6 +232,10 @@ impl SnapshotRepository for GitRepository {
         target: &Revision,
     ) -> Result<Vec<CommitStep>, GitError> {
         crate::revision::first_parent_steps(self, base, target)
+    }
+
+    fn merge_base(&self, one: &Revision, two: &Revision) -> Result<Revision, GitError> {
+        crate::revision::merge_base(self, one, two)
     }
 
     fn source_entries(&self, revision: &Revision) -> Result<Vec<SourceEntry>, GitError> {

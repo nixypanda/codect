@@ -25,7 +25,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use engine::{Engine, EngineError};
+use engine::{DiffBase, Engine, EngineError};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
@@ -230,12 +230,14 @@ fn request_into_cmd(request: LoadRequest) -> Cmd {
             mode,
             selection,
             view,
+            merge_base,
         } => Cmd::Diff(DiffRequest {
             base,
             target,
             mode,
             selection,
             view,
+            merge_base,
         }),
     }
 }
@@ -251,12 +253,18 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
         }
         Cmd::Diff(request) => match request.view {
             DiffView::Range => {
+                let base = if request.merge_base {
+                    DiffBase::MergeBase
+                } else {
+                    DiffBase::Given
+                };
                 let result = engine
                     .diff(
                         &request.base,
                         &request.target,
                         request.mode,
                         &request.selection,
+                        base,
                     )
                     .map(Arc::from)
                     .map_err(Box::new);
@@ -272,6 +280,7 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                                 &step.commit_id.to_string(),
                                 request.mode,
                                 &request.selection,
+                                DiffBase::Given,
                             )?,
                             None => Vec::new(),
                         };
@@ -292,6 +301,7 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                     &step.commit_id.to_string(),
                     request.mode,
                     &request.selection,
+                    DiffBase::Given,
                 )
                 .map(Arc::from)
                 .map_err(Box::new);
