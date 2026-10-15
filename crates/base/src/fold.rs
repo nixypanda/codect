@@ -8,9 +8,19 @@
 //!
 //! # Lines
 //!
-//! The model is 1-based: [`FoldRegion::start_line`] and [`FoldRegion::end_line`]
-//! are 1-based line numbers into the source. [`crate::model::SourceSpan`] is
-//! zero-based, so a span's raw lines are its `start_line`/`end_line` plus one.
+//! The model is 1-based: [`FoldRegion::start_line`],
+//! [`FoldRegion::declaration_line`], and [`FoldRegion::end_line`] are 1-based
+//! line numbers into the source. [`crate::model::SourceSpan`] is zero-based, so
+//! a span's raw lines are its `start_line`/`end_line` plus one.
+//!
+//! Two lines describe a region's start. `start_line` is the extended fold start:
+//! it walks upward over the declaration's complete leading annotation block
+//! (doc comments, attributes, decorators), so collapsing from there hides the
+//! annotations too. `declaration_line` is the declaration node's own raw start,
+//! the first line that is not a leading annotation; it is the line a collapsed
+//! row summarizes, so the row shows the declaration's signature rather than the
+//! annotation above it. The two are equal when the declaration has no leading
+//! annotation.
 //!
 //! # Bodies
 //!
@@ -37,8 +47,16 @@ pub struct FoldRegion {
     /// Whether the requested mode's projection retains this declaration, taken
     /// from [`FileOutline::retained`] so it cannot disagree with the projection.
     pub retained: bool,
-    /// 1-based first line, extended upward over leading annotations.
+    /// 1-based first line, extended upward over leading annotations. This is
+    /// where the hidden block begins, so collapsing from here hides the
+    /// annotations too.
     pub start_line: usize,
+    /// 1-based line of the declaration node itself (`span.start_line() + 1`),
+    /// the first line that is not a leading annotation. A collapsed row
+    /// summarizes this line, showing the declaration's own signature rather than
+    /// the attribute, decorator, or doc comment above it. It equals `start_line`
+    /// when there is no leading annotation.
+    pub declaration_line: usize,
     /// 1-based last line, taken from the span and including the body.
     pub end_line: usize,
     /// 1-based nesting depth found by walking `parent_key` to the top.
@@ -95,6 +113,7 @@ pub fn fold_regions(outline: &FileOutline, lines: &[&str]) -> Vec<FoldRegion> {
                 kind: entry.item.kind,
                 retained,
                 start_line: fold_start(lines, raw_start, |line| folded.is_boundary(position, line)),
+                declaration_line: raw_start,
                 end_line: raw_end,
                 level: folded.depth_of(position) + 1,
                 default_open: default_open(retained, entry.item.kind),
@@ -661,6 +680,66 @@ mod tests {
         assert!(!regions[0].default_open, "a function is folded by default");
         assert_eq!(regions[1].start_line, 8);
         assert_eq!(regions[1].end_line, 8);
+    }
+
+    #[test]
+    fn an_attribute_line_extends_the_fold_start_but_not_the_declaration_line() {
+        let lines = ["#[test]", "fn tested() {", "    assert!(true);", "}"];
+        let file = outline_all(vec![projected(
+            "fn::tested",
+            None,
+            ItemKind::Function,
+            // Zero-based span lines 1..=3 -> 1-based 2..=4.
+            1,
+            3,
+        )]);
+
+        let region = &fold_regions(&file, &lines)[0];
+        assert_eq!(region.start_line, 1, "the attribute is folded in");
+        assert_eq!(
+            region.declaration_line, 2,
+            "the declaration itself starts on the `fn` line"
+        );
+        assert_eq!(region.end_line, 4, "the body is inside the region");
+    }
+
+    #[test]
+    fn a_declaration_without_annotations_has_equal_start_and_declaration_lines() {
+        let lines = ["fn plain() {", "    1", "}"];
+        let file = outline_all(vec![projected("fn::plain", None, ItemKind::Function, 0, 2)]);
+
+        let region = &fold_regions(&file, &lines)[0];
+        assert_eq!(region.start_line, 1);
+        assert_eq!(
+            region.declaration_line, 1,
+            "without a leading annotation the two lines coincide"
+        );
+    }
+
+    #[test]
+    fn a_doc_comment_lead_in_points_the_declaration_line_at_the_function() {
+        let lines = [
+            "/// Doc line one.",
+            "/// Doc line two.",
+            "pub fn documented() -> u32 {",
+            "    1",
+            "}",
+        ];
+        let file = outline_all(vec![projected(
+            "fn::documented",
+            None,
+            ItemKind::Function,
+            // Zero-based span lines 2..=4 -> 1-based 3..=5.
+            2,
+            4,
+        )]);
+
+        let region = &fold_regions(&file, &lines)[0];
+        assert_eq!(region.start_line, 1, "the doc comment is folded in");
+        assert_eq!(
+            region.declaration_line, 3,
+            "the declaration itself starts on the `fn` line"
+        );
     }
 
     #[test]

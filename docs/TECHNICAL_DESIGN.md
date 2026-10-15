@@ -1745,9 +1745,12 @@ shows the real committed source of the selected file and folds it with the same
 outline and source spans the `codect.show.v1` document carries, so a declaration
 the requested mode drops is still located and folded with a `hidden in <mode>`
 marker. Containers open and signature bodies fold, and the fold overrides are
-session-sticky. The projection and diff models are untouched: the explorer only
-reads them, and the canonical projection and diff output stay byte-for-byte
-unchanged.
+session-sticky. A collapsed row shows the declaration's own signature line — the
+line the declaration node starts on, excluding leading attributes, decorators,
+and doc comments — followed by the fold suffix; the leading annotations stay
+hidden while the fold is closed. The projection and diff models are untouched:
+the explorer only reads them, and the canonical projection and diff output stay
+byte-for-byte unchanged.
 
 ### 21.2 The Elm Architecture
 

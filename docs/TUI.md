@@ -85,6 +85,11 @@ selected file with mode-driven folds.
   the mode keeps nothing of it; its row is marked `hidden in <mode>`. This is
   what makes `types` filter out a method-only inherent `impl`, say, instead of
   leaving its body in the source.
+- A collapsed row shows the declaration's own signature line — the line the
+  declaration node starts on, excluding leading attributes, decorators, and doc
+  comments — followed by the fold suffix. The leading annotations stay hidden
+  while the fold is closed and reappear when it opens, so a `#[test]` function
+  summarizes as its `fn …` line, not as `#[test]`.
 - `Enter` and `za` toggle the fold at the cursor; `zo`/`zc` open or close it,
   `zO`/`zC` do so recursively, `zR` is the local "unfold all" view, and `zM`
   folds everything again.

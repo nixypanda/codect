@@ -141,10 +141,15 @@ pub enum VisibleRow {
         /// 1-based real source line.
         line: usize,
     },
-    /// A collapsed declaration: its first line plus a fold suffix.
+    /// A collapsed declaration: its signature line plus a fold suffix.
     Fold {
-        /// 1-based real source line the declaration starts on.
+        /// 1-based real source line the hidden block starts on: the declaration's
+        /// extended fold start, over any leading annotations.
         line: usize,
+        /// 1-based real source line the row summarizes: the declaration node's
+        /// own line, excluding leading attributes, decorators, and doc comments.
+        /// It lies within `[line, line + hidden]`.
+        summary_line: usize,
         /// Index of the region in the file's fold-region list.
         region_index: usize,
         /// How many source lines the fold hides (`end_line - line`).
@@ -155,11 +160,12 @@ pub enum VisibleRow {
 }
 
 impl VisibleRow {
-    /// The 1-based source line this row starts on; a fold row names its
-    /// declaration's start line.
+    /// The 1-based source line this row renders text from: a source row names
+    /// itself, a fold row names its declaration's own signature line.
     pub fn source_line(&self) -> usize {
         match self {
-            Self::Source { line } | Self::Fold { line, .. } => *line,
+            Self::Source { line } => *line,
+            Self::Fold { summary_line, .. } => *summary_line,
         }
     }
 
@@ -556,6 +562,7 @@ fn build_visible_rows(
                 let end = region.end_line.clamp(line, total);
                 rows.push(VisibleRow::Fold {
                     line,
+                    summary_line: region.declaration_line.clamp(line, end),
                     region_index: index,
                     hidden: end - line,
                     dropped: !region.retained,

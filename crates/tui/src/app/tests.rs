@@ -141,6 +141,33 @@ fn nested_outline(
 /// A container with a folded signature whose body is three hidden lines.
 const NESTED_SOURCE: &str = "impl Widget {\n    fn size(&self) -> usize {\n        let hidden = 42;\n        hidden\n    }\n}\n";
 
+/// A container whose folded method has a `#[test]` attribute directly above its
+/// `fn` line, so the fold start extends over the attribute.
+const ATTRIBUTED_SOURCE: &str =
+    "impl Widget {\n    #[test]\n    fn tested() {\n        let hidden = 42;\n    }\n}\n";
+
+/// A file whose source is `source`: one open container (`TraitImplementation`)
+/// holding one retained, folded method whose span starts on its `fn` line, with
+/// `#[test]` directly above it.
+fn attributed_child_outline(path: &str, source: &str) -> SourceOutline {
+    nested_outline(path, source, (0, 5), (2, 4), true)
+}
+
+/// A top-level test function whose `#[test]` attribute sits directly above its
+/// `fn` line; the requested mode retains the function.
+const TEST_SOURCE: &str = "#[test]\nfn decode_source() {\n    let hidden = 42;\n}\n";
+
+fn test_function_outline(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let function = item_at("fn::decode_source", None, ItemKind::Function, 1, 3);
+    let superset = vec![function.clone()];
+    let outline = assemble_outline(&supported, superset.clone(), superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
 /// A file whose single top-level container (`TraitImplementation`) is dropped by
 /// the requested mode, so the whole declaration folds to one row even though a
 /// container would otherwise default open.
@@ -219,14 +246,24 @@ fn base_app(request: LoadRequest) -> App {
 }
 
 fn show_app(files: Vec<SourceOutline>) -> App {
+    show_app_mode(files, ProjectionMode::Types)
+}
+
+/// Like [`show_app`] but with an explicit projection mode, so a test can open a
+/// mode that retains a declaration the default `types` mode would drop.
+fn show_app_mode(files: Vec<SourceOutline>, mode: ProjectionMode) -> App {
     let app = base_app(LoadRequest::Show {
         revision: "HEAD".to_owned(),
-        mode: ProjectionMode::Types,
+        mode,
         selection: Selection::all(),
     });
     let (next, _) = update(
         Msg::ShowLoaded {
-            request: show_request(),
+            request: ShowRequest {
+                revision: "HEAD".to_owned(),
+                mode,
+                selection: Selection::all(),
+            },
             result: Ok(files.into()),
         },
         &app,
@@ -1667,12 +1704,95 @@ fn a_folded_signature_child_hides_its_body_and_counts_as_one_row() {
             VisibleRow::Source { line: 1 },
             VisibleRow::Fold {
                 line: 2,
+                summary_line: 2,
                 region_index: 1,
                 hidden: 3,
                 dropped: false,
             },
             VisibleRow::Source { line: 6 },
         ]
+    );
+}
+
+#[test]
+fn a_collapsed_attributed_signature_summarizes_the_declaration_line() {
+    let app = show_app(vec![attributed_child_outline("a.rs", ATTRIBUTED_SOURCE)]);
+    let show = show_ref(&app);
+
+    // The hidden block starts on `#[test]` (line 2), but the row summarizes and
+    // renders the `fn` line (line 3), while still hiding three lines.
+    assert_eq!(
+        show.visible_rows()[1],
+        VisibleRow::Fold {
+            line: 2,
+            summary_line: 3,
+            region_index: 1,
+            hidden: 3,
+            dropped: false,
+        }
+    );
+    assert_eq!(
+        show.visible_rows()[1].source_line(),
+        3,
+        "the rendered line is the declaration's own line"
+    );
+
+    let buffer = render(&app, 100, 20);
+    let row = row_with(&buffer, "fn tested()").expect("the declaration line is rendered");
+    let text = buffer_row(&buffer, row);
+    assert!(
+        !text.contains("#[test]"),
+        "the attribute must not summarize the fold: {text}"
+    );
+    assert!(
+        text.contains("fn tested() {"),
+        "the signature line is the summary: {text}"
+    );
+    assert!(
+        text.contains("3     fn tested()"),
+        "the gutter shows the declaration line: {text}"
+    );
+    assert!(
+        text.contains("⋯ 3 lines"),
+        "the hidden count is unchanged: {text}"
+    );
+}
+
+#[test]
+fn a_collapsed_test_function_in_signatures_mode_shows_its_signature_line() {
+    // The user's report: in signatures/tests mode a retained `#[test]`
+    // function's fold row must show the `fn` line, not `#[test]`.
+    let app = show_app_mode(
+        vec![test_function_outline("a.rs", TEST_SOURCE)],
+        ProjectionMode::Signatures,
+    );
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.visible_rows()[0],
+        VisibleRow::Fold {
+            line: 1,
+            summary_line: 2,
+            region_index: 0,
+            hidden: 3,
+            dropped: false,
+        }
+    );
+
+    let buffer = render(&app, 100, 20);
+    let row = row_with(&buffer, "fn decode_source()").expect("the declaration line is rendered");
+    let text = buffer_row(&buffer, row);
+    assert!(
+        !text.contains("#[test]"),
+        "the attribute must not summarize the fold: {text}"
+    );
+    assert!(
+        text.contains("fn decode_source() {"),
+        "the test's signature line is the summary: {text}"
+    );
+    assert!(
+        text.contains("2 fn decode_source()"),
+        "the gutter shows the declaration line: {text}"
     );
 }
 
@@ -1739,6 +1859,7 @@ fn a_dropped_container_folds_to_one_row_tagged_hidden_in_mode() {
         show.visible_rows(),
         &[VisibleRow::Fold {
             line: 1,
+            summary_line: 1,
             region_index: 0,
             hidden: 5,
             dropped: true,
@@ -1823,6 +1944,7 @@ fn a_collapsed_container_hides_a_nested_collapse_entirely() {
         show.visible_rows(),
         &[VisibleRow::Fold {
             line: 1,
+            summary_line: 1,
             region_index: 0,
             hidden: 5,
             dropped: false,
@@ -1841,6 +1963,7 @@ fn a_single_line_region_folds_with_zero_hidden_lines() {
         show.visible_rows()[1],
         VisibleRow::Fold {
             line: 2,
+            summary_line: 2,
             region_index: 1,
             hidden: 0,
             dropped: false,
@@ -2106,6 +2229,7 @@ fn zc_closes_the_innermost_enclosing_region() {
         show_ref(&closed).visible_rows()[1],
         VisibleRow::Fold {
             line: 2,
+            summary_line: 2,
             region_index: 1,
             hidden: 3,
             dropped: false,
