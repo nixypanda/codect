@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use base::{AreaSet, FileDiff, ProjectedFile, ProjectionMode, RepoPath, Selection};
+use base::{AreaSet, FileDiff, ProjectionMode, RepoPath, Selection, SourceOutline};
 use engine::EngineError;
 use ratatui::layout::{Position, Rect};
 
@@ -95,7 +95,7 @@ pub enum Msg {
     /// A `show` projection effect finished.
     ShowLoaded {
         request: ShowRequest,
-        result: Result<Arc<[ProjectedFile]>, Box<EngineError>>,
+        result: Result<Arc<[SourceOutline]>, Box<EngineError>>,
     },
     /// A `diff` range effect finished.
     DiffLoaded {

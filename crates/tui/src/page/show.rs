@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use base::{ProjectedFile, ProjectionMode, RepoPath, Selection};
+use base::{ProjectionMode, RepoPath, Selection, SourceOutline};
 use engine::EngineError;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -72,7 +72,7 @@ pub struct Show {
     pub revision: String,
     pub mode: ProjectionMode,
     pub scope: Scope,
-    pub files: Arc<[ProjectedFile]>,
+    pub files: Arc<[SourceOutline]>,
     /// Paths the tree shows, in raw path-byte order.
     pub visible: Arc<[RepoPath]>,
     pub selected: Option<RepoPath>,
@@ -86,14 +86,15 @@ pub struct Show {
 }
 
 impl Show {
-    /// The projection currently shown by the body, if a file is selected.
-    pub fn active_file(&self) -> Option<&ProjectedFile> {
+    /// The file currently shown by the body, if one is selected.
+    pub fn active_file(&self) -> Option<&SourceOutline> {
         let path = self.selected.as_ref()?;
         self.files.iter().find(|file| file.path() == path)
     }
 
-    pub fn active_text(&self) -> Option<&str> {
-        self.active_file().map(ProjectedFile::canonical_text)
+    /// The real, unmodified source of the selected file.
+    pub fn active_source(&self) -> Option<&str> {
+        self.active_file().map(|file| file.source.as_str())
     }
 
     /// The syntax-highlighted lines of the selected file, if computed.
@@ -108,11 +109,11 @@ impl Show {
     }
 
     pub fn line_count(&self) -> usize {
-        self.active_text().map_or(0, |text| text.lines().count())
+        self.active_source().map_or(0, |text| text.lines().count())
     }
 
     pub fn max_line_width(&self) -> usize {
-        self.active_text().map_or(0, |text| {
+        self.active_source().map_or(0, |text| {
             text.lines()
                 .map(unicode_width::UnicodeWidthStr::width)
                 .max()
@@ -149,12 +150,7 @@ impl Show {
         let needle_lower = needle.to_lowercase();
         let mut matches = Vec::new();
         if let Some(file) = self.active_file() {
-            collect_matches(
-                file.canonical_text(),
-                &needle_lower,
-                SearchSide::Show,
-                &mut matches,
-            );
+            collect_matches(&file.source, &needle_lower, SearchSide::Show, &mut matches);
         }
         matches
     }
@@ -170,16 +166,16 @@ impl Show {
         let Some(file) = self.files.iter().find(|file| file.path() == &path) else {
             return;
         };
-        let lines = highlight::highlight(file.canonical_text(), file.language(), theme);
+        let lines = highlight::highlight(&file.source, file.language(), theme);
         self.highlight.insert(path, lines);
     }
 }
 
 /// Builds a show scope's visible paths from its files.
-pub fn show_visible(files: &[ProjectedFile]) -> Vec<RepoPath> {
+pub fn show_visible(files: &[SourceOutline]) -> Vec<RepoPath> {
     files
         .iter()
-        .filter(|file| !file.canonical_text().is_empty())
+        .filter(|file| !file.outline.projection.canonical_text().is_empty())
         .map(|file| file.path().clone())
         .collect()
 }
@@ -216,7 +212,7 @@ pub enum Msg {
     /// Reload the same projection in another mode.
     SwitchMode(ProjectionMode),
     /// A `show` projection effect finished.
-    Loaded(ShowRequest, Result<Arc<[ProjectedFile]>, Box<EngineError>>),
+    Loaded(ShowRequest, Result<Arc<[SourceOutline]>, Box<EngineError>>),
 }
 
 /// The pure `show` update. It mutates only the page and returns the shell work
@@ -377,7 +373,7 @@ fn prompt_key(page: &mut Show, key: Key) -> Vec<OutMsg> {
 fn loaded(
     page: &mut Show,
     request: ShowRequest,
-    result: Result<Arc<[ProjectedFile]>, Box<EngineError>>,
+    result: Result<Arc<[SourceOutline]>, Box<EngineError>>,
 ) -> Vec<OutMsg> {
     match result {
         Ok(files) => {
@@ -416,7 +412,7 @@ pub(crate) fn view(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Some(text) = page.active_text() else {
+    let Some(text) = page.active_source() else {
         let (title, detail) = if ctx.busy && ctx.tree_empty {
             ("Loading", "Projecting files…")
         } else if ctx.tree_empty {

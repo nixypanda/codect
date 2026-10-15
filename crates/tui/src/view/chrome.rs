@@ -102,7 +102,7 @@ pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
             theme.fg(theme.palette.del_fg),
         ));
     } else if let Loaded::Show(show) = &app.loaded
-        && let Some(text) = show.active_text()
+        && let Some(text) = show.active_source()
     {
         detail.push(Span::styled(
             format!("{} lines ", text.lines().count()),

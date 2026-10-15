@@ -7,8 +7,8 @@ use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
 use crate::view::view;
 use base::{
-    Area, AreaSet, ItemKind, ProjectedItem, RepoPath, Selection, SelectionGroup, SourceSpan,
-    SupportedPath,
+    Area, AreaSet, ItemKind, ProjectedFile, ProjectedItem, RepoPath, Selection, SelectionGroup,
+    SourceOutline, SourceSpan, SupportedPath, assemble_outline,
 };
 use engine::CommitStep;
 use ratatui::style::Color;
@@ -24,13 +24,54 @@ fn item(text: &str) -> ProjectedItem {
     }
 }
 
-fn projected(path: &str, text: &str) -> ProjectedFile {
-    let path = SupportedPath::new(RepoPath::new(path).expect("valid path"))
-        .expect("test path is supported");
+fn supported(path: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(path).expect("valid path")).expect("test path is supported")
+}
+
+fn projected_file(path: &str, text: &str) -> ProjectedFile {
+    let path = supported(path);
     if text.is_empty() {
         return ProjectedFile::try_new(path, Vec::new()).expect("valid fixture");
     }
     ProjectedFile::try_new(path, vec![item(text)]).expect("valid fixture")
+}
+
+/// A `SourceOutline` whose real source is `source`, built through
+/// `assemble_outline` so its outline is well-formed. The projection text equals
+/// the source, so the tree shows the file.
+fn source_outline(path: &str, source: &str) -> SourceOutline {
+    source_outline_with(path, source, source)
+}
+
+/// A `SourceOutline` whose requested-mode projection is `projection_text` and
+/// whose real source is `source`. An empty `projection_text` hides the file from
+/// the tree, matching `show_visible`.
+fn source_outline_with(path: &str, source: &str, projection_text: &str) -> SourceOutline {
+    let supported = supported(path);
+    let span = whole_span(source);
+    let items = |text: &str| -> Vec<ProjectedItem> {
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ProjectedItem { span, ..item(text) }]
+        }
+    };
+    let outline =
+        assemble_outline(&supported, items(projection_text), items(source)).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+/// A zero-based span covering all of `source`.
+fn whole_span(source: &str) -> SourceSpan {
+    let end_line = source.matches('\n').count();
+    let end_column = source
+        .lines()
+        .next_back()
+        .map_or(0, |line| line.chars().count());
+    SourceSpan::new(0, source.len(), 0, 0, end_line, end_column)
 }
 
 fn show_request() -> ShowRequest {
@@ -62,14 +103,14 @@ fn commits_request() -> DiffRequest {
 fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
     match (old, new) {
         (None, Some(text)) => FileDiff::Added {
-            new: projected(path, text),
+            new: projected_file(path, text),
         },
         (Some(text), None) => FileDiff::Deleted {
-            old: projected(path, text),
+            old: projected_file(path, text),
         },
         (Some(old_text), Some(new_text)) => FileDiff::Modified {
-            old: projected(path, old_text),
-            new: projected(path, new_text),
+            old: projected_file(path, old_text),
+            new: projected_file(path, new_text),
         },
         (None, None) => panic!("a test diff needs at least one side"),
     }
@@ -87,7 +128,7 @@ fn base_app(request: LoadRequest) -> App {
     )
 }
 
-fn show_app(files: Vec<ProjectedFile>) -> App {
+fn show_app(files: Vec<SourceOutline>) -> App {
     let app = base_app(LoadRequest::Show {
         revision: "HEAD".to_owned(),
         mode: ProjectionMode::Types,
@@ -198,7 +239,10 @@ fn focus_content(app: &mut App) {
 }
 
 fn two_files() -> App {
-    show_app(vec![projected("a.rs", "a\n"), projected("b.rs", "b\n")])
+    show_app(vec![
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+    ])
 }
 
 // -----------------------------------------------------------------------
@@ -214,22 +258,22 @@ fn a_loaded_result_installs_files_and_preserves_the_selection() {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
-            result: Ok(vec![projected("a.rs", "A\n"), projected("b.rs", "B\n")].into()),
+            result: Ok(vec![source_outline("a.rs", "A\n"), source_outline("b.rs", "B\n")].into()),
         },
         &app,
     );
 
     assert_eq!(next.loaded.mode(), ProjectionMode::Signatures);
     assert_eq!(selected(&next).as_deref(), Some("a.rs"));
-    assert_eq!(show_ref(&next).active_text(), Some("A\n"));
+    assert_eq!(show_ref(&next).active_source(), Some("A\n"));
 }
 
 #[test]
 fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
     let mut app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("b.rs", "b\n"),
-        projected("c.rs", "c\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+        source_outline("c.rs", "c\n"),
     ]);
     app.tree.cursor = app
         .tree
@@ -241,7 +285,7 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
     let (next, _) = update(
         Msg::ShowLoaded {
             request: show_request(),
-            result: Ok(vec![projected("a.rs", "a\n"), projected("c.rs", "c\n")].into()),
+            result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("c.rs", "c\n")].into()),
         },
         &app,
     );
@@ -277,7 +321,10 @@ fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
 
 #[test]
 fn empty_projections_are_hidden_from_the_tree() {
-    let app = show_app(vec![projected("empty.rs", ""), projected("full.rs", "x\n")]);
+    let app = show_app(vec![
+        source_outline("empty.rs", ""),
+        source_outline("full.rs", "x\n"),
+    ]);
     let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, vec!["full.rs"]);
     assert!(
@@ -300,9 +347,9 @@ fn a_diff_tree_contains_only_changed_paths() {
 #[test]
 fn tree_rows_follow_raw_path_order_and_are_nested() {
     let app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("src/lib.rs", "l\n"),
-        projected("src/main.rs", "m\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("src/lib.rs", "l\n"),
+        source_outline("src/main.rs", "m\n"),
     ]);
     let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, vec!["a.rs", "src", "lib.rs", "main.rs"]);
@@ -314,9 +361,9 @@ fn tree_rows_follow_raw_path_order_and_are_nested() {
 #[test]
 fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
     let mut app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("src/lib.rs", "l\n"),
-        projected("src/main.rs", "m\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("src/lib.rs", "l\n"),
+        source_outline("src/main.rs", "m\n"),
     ]);
     app.tree.cursor = 1;
     assert!(matches!(
@@ -353,8 +400,8 @@ fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
 #[test]
 fn left_on_a_directory_row_folds_it() {
     let mut app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("src/lib.rs", "l\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("src/lib.rs", "l\n"),
     ]);
     app.tree.cursor = 1;
     let (folded, _) = update(Msg::Key(Key::Left), &app);
@@ -642,8 +689,8 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
 #[test]
 fn navigation_defers_highlighting_until_settle() {
     let app = show_app(vec![
-        projected("a.rs", "pub fn a();\n"),
-        projected("b.rs", "pub fn b();\n"),
+        source_outline("a.rs", "pub fn a();\n"),
+        source_outline("b.rs", "pub fn b();\n"),
     ]);
     // Force a fresh selection that has not been highlighted.
     let mut fresh = app.clone();
@@ -664,7 +711,7 @@ fn navigation_defers_highlighting_until_settle() {
 
 #[test]
 fn settle_skips_highlighting_when_the_body_is_hidden() {
-    let mut app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let mut app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     app.size = Size {
         width: 60,
         height: 30,
@@ -798,7 +845,7 @@ fn tree_resize_keys_step_clamp_and_reset() {
 
 #[test]
 fn a_wider_tree_still_leaves_a_usable_body() {
-    let mut app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let mut app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     app.chrome.tree_percent = TREE_MAX_PERCENT;
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("Files"), "{text}");
@@ -1002,7 +1049,7 @@ fn literal_path_entry_builds_a_path_selection() {
 
 #[test]
 fn search_finds_matches_and_steps_them() {
-    let app = show_app(vec![projected("a.rs", "alpha\nbeta\nalpha again\n")]);
+    let app = show_app(vec![source_outline("a.rs", "alpha\nbeta\nalpha again\n")]);
     let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
     assert!(matches!(opened.overlay, Some(Overlay::Search(_))));
 
@@ -1024,8 +1071,8 @@ fn search_finds_matches_and_steps_them() {
 #[test]
 fn switching_files_recomputes_a_committed_search() {
     let mut app = show_app(vec![
-        projected("a.rs", "alpha\n"),
-        projected("b.rs", "beta\nalpha\n"),
+        source_outline("a.rs", "alpha\n"),
+        source_outline("b.rs", "beta\nalpha\n"),
     ]);
     if let Loaded::Show(show) = &mut app.loaded {
         show.search = Some(Search {
@@ -1115,8 +1162,8 @@ const CONTENT_X: u16 = 50;
 #[test]
 fn page_keys_move_the_cursor_in_the_tree_and_scroll_the_body() {
     let app = show_app(vec![
-        projected("a.rs", "one\ntwo\nthree\nfour\nfive\n"),
-        projected("b.rs", "x\n"),
+        source_outline("a.rs", "one\ntwo\nthree\nfour\nfive\n"),
+        source_outline("b.rs", "x\n"),
     ]);
     let (down, _) = update(Msg::Key(Key::PageDown), &app);
     assert!(down.tree.cursor > app.tree.cursor);
@@ -1129,7 +1176,7 @@ fn page_keys_move_the_cursor_in_the_tree_and_scroll_the_body() {
 
 #[test]
 fn body_scrolling_is_clamped_to_the_content() {
-    let mut app = show_app(vec![projected("a.rs", "one\ntwo\nthree\n")]);
+    let mut app = show_app(vec![source_outline("a.rs", "one\ntwo\nthree\n")]);
     focus_content(&mut app);
     for _ in 0..10 {
         let (next, _) = update(Msg::Key(Key::Char('j')), &app);
@@ -1155,8 +1202,8 @@ fn clicking_a_file_selects_it() {
 #[test]
 fn clicking_a_directory_folds_it() {
     let app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("src/lib.rs", "l\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("src/lib.rs", "l\n"),
     ]);
     let (folded, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     let labels: Vec<&str> = folded
@@ -1171,9 +1218,9 @@ fn clicking_a_directory_folds_it() {
 #[test]
 fn the_wheel_moves_the_tree_cursor_and_selects_as_it_passes() {
     let app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("b.rs", "b\n"),
-        projected("c.rs", "c\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+        source_outline("c.rs", "c\n"),
     ]);
     let (moved, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
     assert_eq!(
@@ -1185,7 +1232,10 @@ fn the_wheel_moves_the_tree_cursor_and_selects_as_it_passes() {
 
 #[test]
 fn the_wheel_scrolls_the_content_and_focuses_it() {
-    let app = show_app(vec![projected("a.rs", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n")]);
+    let app = show_app(vec![source_outline(
+        "a.rs",
+        "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+    )]);
     let (down, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &app);
     assert!(matches!(down.loaded, Loaded::Show(ref show) if show.focus == ShowFocus::Body));
     assert_eq!(show_ref(&down).body.scroll, 3);
@@ -1237,7 +1287,7 @@ fn a_click_on_the_header_or_a_divider_does_nothing() {
 
 #[test]
 fn the_status_bar_shows_mode_scope_and_hints() {
-    let app = show_app(vec![projected("a.rs", "x\n")]);
+    let app = show_app(vec![source_outline("a.rs", "x\n")]);
     let buffer = render(&app, 120, 20);
     let header = buffer_row(&buffer, 0);
     let footer = buffer_row(&buffer, 19);
@@ -1252,7 +1302,7 @@ fn the_status_bar_shows_mode_scope_and_hints() {
 
 #[test]
 fn narrow_chrome_keeps_context_and_the_selected_path() {
-    let app = show_app(vec![projected("src/very/deep/file.rs", "x\n")]);
+    let app = show_app(vec![source_outline("src/very/deep/file.rs", "x\n")]);
     let buffer = render(&app, 60, 20);
     let header = buffer_row(&buffer, 0);
     let footer = buffer_row(&buffer, 19);
@@ -1307,7 +1357,7 @@ fn a_load_marks_the_model_busy_until_it_completes() {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
-            result: Ok(vec![projected("a.rs", "a\n"), projected("b.rs", "b\n")].into()),
+            result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("b.rs", "b\n")].into()),
         },
         &loading,
     );
@@ -1362,10 +1412,36 @@ fn buffer_row(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
 
 #[test]
 fn a_wide_terminal_shows_the_tree_and_the_projection() {
-    let app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("Files"), "tree pane missing: {text}");
     assert!(text.contains("pub fn a();"), "body missing: {text}");
+}
+
+#[test]
+fn the_body_shows_the_files_real_source_and_counts_its_lines() {
+    let app = show_app(vec![source_outline("a.rs", "alpha\nbeta\n")]);
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("alpha"), "missing alpha: {text}");
+    assert!(text.contains("beta"), "missing beta: {text}");
+    assert_eq!(show_ref(&app).active_source(), Some("alpha\nbeta\n"));
+    assert_eq!(show_ref(&app).line_count(), 2);
+}
+
+#[test]
+fn the_body_renders_the_source_not_the_canonical_projection() {
+    // The projection text (what the old body rendered) differs from the real
+    // source, so the body can only pass by rendering `source`.
+    let file = source_outline_with("a.rs", "real source line\n", "PROJECTED\n");
+    let app = show_app(vec![file]);
+    assert_eq!(show_ref(&app).active_source(), Some("real source line\n"));
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("real source line"), "source missing: {text}");
+    assert!(
+        !text.contains("PROJECTED"),
+        "the canonical projection must not be rendered: {text}"
+    );
 }
 
 #[test]
@@ -1401,8 +1477,8 @@ fn the_tree_keeps_a_quiet_selected_row_when_the_body_has_focus() {
 fn nerd_icons_render_and_leave_labels_intact() {
     let build = || {
         show_app(vec![
-            projected("src/main.rs", "x\n"),
-            projected("src/Main.elm", "y\n"),
+            source_outline("src/main.rs", "x\n"),
+            source_outline("src/Main.elm", "y\n"),
         ])
     };
     let plain = build();
@@ -1448,7 +1524,7 @@ fn a_narrow_diff_stacks_old_over_new_when_focused() {
 
 #[test]
 fn a_narrow_terminal_shows_only_the_focused_pane() {
-    let app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     let tree = buffer_text(&render(&app, 60, 20));
     assert!(tree.contains("Files"));
     assert!(!tree.contains("pub fn a();"), "body must be hidden: {tree}");
@@ -1469,7 +1545,7 @@ fn a_tiny_terminal_shows_a_message_instead_of_a_frame() {
 
 #[test]
 fn an_empty_result_renders_a_clear_empty_state() {
-    let app = show_app(vec![projected("empty.rs", "")]);
+    let app = show_app(vec![source_outline("empty.rs", "")]);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("No files"), "{text}");
     assert!(
@@ -1489,7 +1565,7 @@ fn a_diff_with_no_rows_renders_a_clear_empty_state() {
 #[test]
 fn a_long_line_is_clipped_and_never_overwrites_the_tree() {
     let long = "x".repeat(300);
-    let app = show_app(vec![projected("a.rs", &format!("{long}\n"))]);
+    let app = show_app(vec![source_outline("a.rs", &format!("{long}\n"))]);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("Files"), "the tree must survive: {text}");
     assert!(!text.contains(&long), "the long line must be clipped");
@@ -1498,7 +1574,7 @@ fn a_long_line_is_clipped_and_never_overwrites_the_tree() {
 
 #[test]
 fn responsive_boundaries_pick_the_right_layout() {
-    let app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     let wide = buffer_text(&render(&app, 80, 20));
     assert!(wide.contains("Files") && wide.contains("pub fn a();"));
 
@@ -1512,7 +1588,7 @@ fn responsive_boundaries_pick_the_right_layout() {
 
 #[test]
 fn horizontal_scroll_shifts_the_visible_columns() {
-    let mut app = show_app(vec![projected("a.rs", "abcdef\n")]);
+    let mut app = show_app(vec![source_outline("a.rs", "abcdef\n")]);
     focus_content(&mut app);
     assert!(buffer_text(&render(&app, 100, 20)).contains("abcdef"));
 
@@ -1530,7 +1606,7 @@ fn the_show_pane_carries_syntax_colors() {
     if !crate::render::theme::colors_enabled() {
         return;
     }
-    let app = show_app(vec![projected("a.rs", "pub struct User;\n")]);
+    let app = show_app(vec![source_outline("a.rs", "pub struct User;\n")]);
     let buffer = render(&app, 100, 20);
     let colored = (0..buffer.area.height).any(|y| {
         (0..buffer.area.width).any(|x| {
@@ -1547,7 +1623,12 @@ fn non_utf8_path_components_render_escaped() {
     let path =
         SupportedPath::new(RepoPath::new(b"src/\xFF/lib.rs".as_slice()).expect("valid path"))
             .expect("supported path");
-    let file = ProjectedFile::try_new(path, vec![item("x\n")]).expect("valid fixture");
+    let outline =
+        assemble_outline(&path, vec![item("x\n")], vec![item("x\n")]).expect("valid fixture");
+    let file = SourceOutline {
+        outline,
+        source: "x\n".to_owned(),
+    };
     let app = show_app(vec![file]);
     let labels: Vec<String> = app.tree.rows.iter().map(|row| row.label.clone()).collect();
     assert!(labels.iter().any(|label| label == "src"), "{labels:?}");
