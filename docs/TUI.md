@@ -59,7 +59,7 @@ full-width `@@` hunk bands. `NO_COLOR` disables all styling.
 | `Ctrl-P` | Open the command palette |
 | `Ctrl-F` | Find a file by name |
 | `/`, then `n`/`N` | Search the current view and step through matches |
-| `m` | Choose Types or Signatures |
+| `m` | Choose types, signatures, or tests |
 | `s` | Choose a scope: everything, a named area, or a literal path |
 | `r` | Edit the show revision |
 | `b`, `t` | Edit the diff base and target revisions |
@@ -79,16 +79,24 @@ need not be memorized:
 `tui show` is a source explorer: the body renders the real source of the
 selected file with mode-driven folds.
 
-- Containers are open and signature bodies are folded, so the body shows the
-  shape of the code without the implementations.
-- A declaration the requested mode drops is folded too; its row is marked
-  `hidden in <mode>`.
+- A retained container is open and a retained signature is folded, so the body
+  shows the shape of the code without the implementations.
+- A declaration the requested mode drops is folded whatever its kind, because
+  the mode keeps nothing of it; its row is marked `hidden in <mode>`. This is
+  what makes `types` filter out a method-only inherent `impl`, say, instead of
+  leaving its body in the source.
+- `Enter` and `za` toggle the fold at the cursor; `zo`/`zc` open or close it,
+  `zO`/`zC` do so recursively, `zR` is the local "unfold all" view, and `zM`
+  folds everything again.
 - Opening or closing a fold is an override that is sticky for the session: it
   survives a mode reload and a selection change. Stepping to a search match
   opens every region around the match so the highlighted text is visible, and a
   later `zc`/`zM` closes it again.
 - The modes are `types`, `signatures`, and `tests`.
-- `zR` is the local "unfold all" view; `zM` folds everything again.
+- Folding uses declaration spans, so a body that is part of the declaration's
+  span (Rust, Python, and Elm) hides fully. A Haskell top-level binding is
+  separate from its signature, so the binding is not inside the outlined
+  declaration and remains visible.
 
 ## Mouse
 

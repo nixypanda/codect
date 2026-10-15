@@ -255,9 +255,10 @@ focused views.
 
 - `codect tui show` is a source explorer: a file tree beside the real source of
   the selected file, folded to the requested mode with semantic folds.
-  Containers open, signature bodies fold, and a declaration the mode drops is
-  folded with a `hidden in <mode>` marker; folds are presentation over the same
-  source, so projection and diff semantics are unchanged.
+  Retained containers open, retained signature bodies fold, and a declaration
+  the mode drops folds whatever its kind with a `hidden in <mode>` marker; folds
+  are presentation over the same source, so projection and diff semantics are
+  unchanged.
 - `codect tui diff range` presents a changed-file tree beside a side-by-side
   comparison of two snapshots — commits, the index, the worktree, or the empty
   tree — with `@@` hunk headers.
@@ -269,7 +270,7 @@ focused views.
   no focused projection changes remain in the list.
 - Projections and diffs are syntax-highlighted, and diffs use full-line added and
   removed backgrounds with intra-line emphasis on the bytes that changed.
-- The user can switch between Types and Signatures, change the scope
+- The user can switch between types, signatures, and tests, change the scope
   (everything, a named area, or a literal path), and enter new revisions
   without leaving the frontend.
 - A command palette and a fuzzy file finder make every action reachable without

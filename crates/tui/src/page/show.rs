@@ -98,9 +98,10 @@ impl ShowFolds {
 /// The sticky fold open/closed overrides for a `show`, keyed by path and
 /// `stable_key`.
 ///
-/// The map is empty until the interactive piece writes it; `is_open` already
-/// consults it, so a later toggle needs no change here. `version` advances on
-/// every `set` so the visible-row projection can tell its cache is stale.
+/// `is_open` consults the override map and falls back to a region's
+/// `default_open`; `set` records the override the interactive fold actions
+/// write. `version` advances on every `set` so the visible-row projection can
+/// tell its cache is stale.
 #[derive(Clone, Debug, Default)]
 pub struct FoldState {
     overrides: BTreeMap<RepoPath, BTreeMap<String, bool>>,
@@ -119,10 +120,6 @@ impl FoldState {
     }
 
     /// Records a sticky open/closed override for `stable_key` on `path`.
-    ///
-    /// Nothing writes an override yet; the interactive folding piece calls
-    /// this. `allow(dead_code)` keeps the read-only seam checked meanwhile.
-    #[allow(dead_code)]
     pub fn set(&mut self, path: &RepoPath, stable_key: &str, open: bool) {
         self.overrides
             .entry(path.clone())

@@ -128,7 +128,8 @@ pub struct App {
     pub loaded: Loaded,
     pub diagnostic: Option<Diagnostic>,
     /// A pending key prefix (currently only `z` for folds). Reset on `Esc`, an
-    /// overlay or prompt opening, and every reload.
+    /// overlay or prompt opening, a mouse event, a selection or focus change,
+    /// and every reload.
     pub pending: Option<char>,
 }
 

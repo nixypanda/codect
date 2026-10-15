@@ -1261,7 +1261,7 @@ fn the_palette_and_finder_render_their_lists() {
     }));
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("commands"), "{text}");
-    assert!(text.contains("Switch Types"), "{text}");
+    assert!(text.contains("Switch types"), "{text}");
 
     let mut app = two_files();
     app.overlay = Some(Overlay::finder(&overlay::Ctx {

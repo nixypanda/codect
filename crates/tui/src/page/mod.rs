@@ -263,7 +263,7 @@ impl Loaded {
         let mut entries = vec![
             (
                 Action::Global(GlobalAction::Mode),
-                "Switch Types / Signatures",
+                "Switch types / signatures / tests",
                 "m",
             ),
             (Action::Global(GlobalAction::Scope), "Change scope", "s"),
