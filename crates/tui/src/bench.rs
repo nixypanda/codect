@@ -171,6 +171,7 @@ pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> App {
             mode: request.mode,
             selection: request.selection.clone(),
             view: request.view,
+            merge_base: request.merge_base,
         },
         width,
         height,
@@ -195,6 +196,7 @@ pub fn history_model(steps: Vec<CommitStep>, diffs: Vec<FileDiff>, width: u16, h
             mode: request.mode,
             selection: request.selection.clone(),
             view: request.view,
+            merge_base: request.merge_base,
         },
         width,
         height,
@@ -241,6 +243,7 @@ pub fn load_diff(diffs: Vec<FileDiff>, model: &App) -> App {
                 DiffViewState::Range(_) => DiffView::Range,
                 DiffViewState::Commits(_) => DiffView::Commits,
             },
+            merge_base: diff.merge_base,
         },
         Loaded::Show(_) => diff_request(),
     };
@@ -272,6 +275,7 @@ fn diff_request() -> DiffRequest {
         mode: ProjectionMode::Types,
         selection: Selection::all(),
         view: DiffView::Range,
+        merge_base: false,
     }
 }
 
@@ -282,6 +286,7 @@ fn commits_request() -> DiffRequest {
         mode: ProjectionMode::Types,
         selection: Selection::all(),
         view: DiffView::Commits,
+        merge_base: false,
     }
 }
 

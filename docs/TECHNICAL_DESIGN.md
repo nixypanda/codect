@@ -619,6 +619,8 @@ Supported commit forms:
 
 Reject ranges such as `A..B` and `A...B` when passed as one argument. The `diff` command takes two independent revision arguments. Reject a tree or blob that cannot peel to a commit.
 
+`diff` resolves the base side with `--merge-base`, replacing the requested base with the merge base of the base and target before comparison (the equivalent of `git diff BASE...TARGET`). This excludes commits that only landed on the base's branch after the two diverged, so a feature branch is diffed from its branch point. `--merge-base` needs two commits: `:index`, `:worktree`, and `:empty` have no merge base, and a pair with no common ancestor is a fatal [`GitError::NoMergeBase`]. `show` never resolves a merge base.
+
 ### 8.3 Tree traversal
 
 - Recursively visit each commit tree.
@@ -954,7 +956,7 @@ Commands:
 
 ```text
 codect show --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... [REVISION]
-codect diff --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect diff --format <text|json> --mode <types|signatures|tests> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 Rules:
@@ -969,6 +971,12 @@ Rules:
 - Both diff sides are required. In both `text` and `json`, a side accepts a
   commit, `:index`, `:worktree`, or `:empty` (or the canonical empty-tree
   object ID).
+- `--merge-base` replaces the base with the merge base of `<BASE>` and
+  `<TARGET>` (section 8.2), so commits that only landed on the base's branch
+  after the two diverged are excluded. It needs two commits: a snapshot side is
+  a usage error (`2`), and two commits with no common ancestor exit `1`. In the
+  JSON document the base snapshot then carries `"merge_base": true`; `revision`
+  stays the requested base and `id` is the resolved merge base.
 - `--path`/`-p` and `--area`/`-a` are mutually exclusive; passing both is a usage error that exits `2` through `clap`. Each is individually repeatable, and a repeated option forms a union of its selections.
 - `--path`/`-p` narrows the projection to the named files or directories; a directory includes every file beneath it. Matching is byte-exact and boundary-aware.
 - Paths resolve relative to the current directory. An absolute path must be inside the repository, `..` may climb but may not leave it, and in a bare repository relative paths resolve against the repository root. Resolution is lexical and never consults the filesystem.
@@ -1709,7 +1717,7 @@ projections. `tui` is the only crate that touches the terminal.
 
 ```text
 codect tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-codect tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui diff range --mode <types|signatures> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
@@ -1720,6 +1728,10 @@ codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>
   and lists the steps after the base, newest first, so it needs commit sides; a
   snapshot side is a usage error. Each selected step compares its first parent
   with the commit. Equal endpoints yield an empty list.
+- `tui diff range` also accepts `--merge-base`, matching `codect diff`: the base
+  pane is labelled with the resolution and the effective commit is the merge
+  base. It is rejected for `tui diff commits`, which walks first-parent history
+  and cannot consume a merge base, and for a snapshot side.
 - The feature is default-on: `default = ["tui"]`, `tui = ["dep:tui"]`.
   Without it, `tui` is an unknown command (exit `2`) and no terminal dependency
   is linked.

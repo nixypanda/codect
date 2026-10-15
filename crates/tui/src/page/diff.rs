@@ -110,6 +110,8 @@ pub struct Diff {
     pub target: String,
     pub mode: ProjectionMode,
     pub scope: Scope,
+    /// Compare the merge base of `base` and `target` against `target`.
+    pub merge_base: bool,
     pub visible: Arc<[RepoPath]>,
     pub selected: Option<RepoPath>,
     pub search: Option<Search>,
@@ -197,12 +199,14 @@ impl Diff {
         mode: ProjectionMode,
         scope: Scope,
         view: DiffViewState,
+        merge_base: bool,
     ) -> Self {
         Self {
             base,
             target,
             mode,
             scope,
+            merge_base,
             visible: Arc::from(Vec::new()),
             selected: None,
             search: None,
@@ -671,6 +675,7 @@ impl Diff {
                 DiffViewState::Range(_) => DiffView::Range,
                 DiffViewState::Commits(_) => DiffView::Commits,
             },
+            merge_base: self.merge_base,
         }
     }
 }
@@ -784,6 +789,13 @@ fn switch_view(page: &mut Diff, view: DiffView) -> Vec<OutMsg> {
             "The commits view needs commit revisions".to_owned(),
         )];
     }
+    // The commits view walks the target's first-parent chain, which a merge
+    // base need not lie on, so it keeps the base exactly as requested.
+    if view == DiffView::Commits && page.merge_base {
+        return vec![OutMsg::Diagnose(
+            "The commits view cannot use a merge-base base".to_owned(),
+        )];
+    }
     page.paging = Paging::Loading;
     let mut request = page.request();
     request.view = view;
@@ -851,6 +863,7 @@ fn loaded(
             page.base = request.base;
             page.target = request.target;
             page.mode = request.mode;
+            page.merge_base = request.merge_base;
             page.scope = Scope::new(request.selection);
             page.prompt = None;
             if !matches!(page.view, DiffViewState::Range(_)) {
@@ -887,6 +900,7 @@ fn history_loaded(
     page.base = request.base;
     page.target = request.target;
     page.mode = request.mode;
+    page.merge_base = request.merge_base;
     page.scope = Scope::new(request.selection);
     page.prompt = None;
     let preferred = match &page.view {
@@ -1014,7 +1028,7 @@ pub(crate) fn view(
         Side::Old => base,
         Side::New => target,
     };
-    let title = pane_title(side, &revision, area.width);
+    let title = pane_title(side, &revision, page.merge_base, area.width);
     let block = pane_block(&title, focused, theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1083,15 +1097,22 @@ pub(crate) fn prompt_view(page: &Diff, theme: &Theme, frame: &mut Frame, area: R
     }
 }
 
-fn pane_title(side: Side, revision: &str, pane_width: u16) -> String {
+fn pane_title(side: Side, revision: &str, merge_base: bool, pane_width: u16) -> String {
     let label = match side {
         Side::Old => "BASE",
         Side::New => "TARGET",
     };
+    // The base pane is the one resolved to the merge base; name that so the
+    // comparison is not mistaken for a tip-to-tip range.
+    let suffix = if merge_base && side == Side::Old {
+        " (merge-base)"
+    } else {
+        ""
+    };
     // Leave room for the rounded border corners on a standalone pane. This
     // also keeps the title within the border in shared-divider layouts.
     let available = (pane_width as usize).saturating_sub(2);
-    truncate_ellipsis(&format!(" {label} · {revision} "), available)
+    truncate_ellipsis(&format!(" {label} · {revision}{suffix} "), available)
 }
 
 fn search_side(side: Side) -> SearchSide {
@@ -1215,13 +1236,27 @@ mod tests {
 
     #[test]
     fn pane_titles_identify_sides_and_fit_narrow_borders() {
-        assert_eq!(pane_title(Side::Old, "main", 20), " BASE · main ");
-        assert_eq!(pane_title(Side::New, "feature", 20), " TARGET · feature ");
+        assert_eq!(pane_title(Side::Old, "main", false, 20), " BASE · main ");
+        assert_eq!(
+            pane_title(Side::New, "feature", false, 20),
+            " TARGET · feature "
+        );
 
-        let narrow = pane_title(Side::New, "a-long-feature-branch", 16);
+        let narrow = pane_title(Side::New, "a-long-feature-branch", false, 16);
         assert_eq!(narrow, " TARGET · a-l…");
         assert_eq!(UnicodeWidthStr::width(narrow.as_str()), 14);
-        assert_eq!(pane_title(Side::Old, "main", 2), "");
+        assert_eq!(pane_title(Side::Old, "main", false, 2), "");
+
+        // The base pane names the merge-base resolution when it is in effect.
+        assert_eq!(
+            pane_title(Side::Old, "main", true, 30),
+            " BASE · main (merge-base) "
+        );
+        assert_eq!(
+            pane_title(Side::New, "feature", true, 30),
+            " TARGET · feature ",
+            "the target pane is never the merge base"
+        );
     }
 
     #[test]

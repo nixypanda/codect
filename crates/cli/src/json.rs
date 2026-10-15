@@ -42,6 +42,7 @@ pub fn diff_document(
     target: &str,
     mode: ProjectionMode,
     diff: &SnapshotDiff,
+    merge_base: bool,
 ) -> String {
     let document = DiffDocument {
         schema: DIFF_SCHEMA,
@@ -50,11 +51,15 @@ pub fn diff_document(
             kind: diff.base_kind,
             revision: base,
             id: diff.base_id.clone(),
+            // Only the base side can be a merge base; the marker is additive
+            // and omitted when the diff compares the base exactly as requested.
+            merge_base: merge_base.then_some(true),
         },
         target: SnapshotDocument {
             kind: diff.target_kind,
             revision: target,
             id: diff.target_id.clone(),
+            merge_base: None,
         },
         files: diff
             .files
@@ -82,6 +87,8 @@ struct SnapshotDocument<'a> {
     kind: &'static str,
     revision: &'a str,
     id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merge_base: Option<bool>,
 }
 
 #[derive(Serialize)]

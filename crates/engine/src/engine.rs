@@ -57,6 +57,20 @@ pub fn is_snapshot_spec(spec: &str) -> bool {
     matches!(spec, ":index" | ":worktree" | ":empty") || EMPTY_TREE_IDS.contains(&spec)
 }
 
+/// How the base side of a focused diff is resolved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiffBase {
+    /// Compare the base revision exactly as requested.
+    Given,
+    /// Replace the base with `merge-base(BASE, TARGET)` before comparing, so
+    /// commits that only landed on the base's branch after the two diverged do
+    /// not appear in the diff.
+    ///
+    /// Both sides must be commits: the index, worktree, and empty snapshots
+    /// have no merge base.
+    MergeBase,
+}
+
 /// A commit-to-commit focused comparison with immutable snapshot identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitDiff {
@@ -328,14 +342,18 @@ impl Engine {
     /// paths whose canonical old and new projections differ are returned, in
     /// raw path-byte order. Implementation-only changes therefore do not appear
     /// at all.
+    ///
+    /// With [`DiffBase::MergeBase`] the base side is the merge base of the two
+    /// commits, so both specs must resolve to commits.
     pub fn diff(
         &self,
         base_spec: &str,
         target_spec: &str,
         mode: ProjectionMode,
         selection: &Selection,
+        base: DiffBase,
     ) -> Result<Vec<FileDiff>, EngineError> {
-        let sides = self.snapshot_sides(base_spec, target_spec, selection)?;
+        let sides = self.snapshot_sides(base_spec, target_spec, selection, base)?;
         let paths = sides.paths();
         let mut caches = Caches::default();
         let mut diffs = Vec::new();
@@ -387,8 +405,9 @@ impl Engine {
         target_spec: &str,
         mode: ProjectionMode,
         selection: &Selection,
+        base: DiffBase,
     ) -> Result<CommitDiff, EngineError> {
-        let base = self.repository.resolve_commit(base_spec)?;
+        let base = self.resolve_base(base_spec, Some(target_spec), base)?;
         let target = self.repository.resolve_commit(target_spec)?;
         self.ensure_groups_in_diff(&base, &target, base_spec, target_spec, selection.groups())?;
         let base_entries = self
@@ -467,8 +486,9 @@ impl Engine {
         target_spec: &str,
         mode: ProjectionMode,
         selection: &Selection,
+        base: DiffBase,
     ) -> Result<SnapshotDiff, EngineError> {
-        let sides = self.snapshot_sides(base_spec, target_spec, selection)?;
+        let sides = self.snapshot_sides(base_spec, target_spec, selection, base)?;
         let paths = sides.paths();
         let mut caches = Caches::default();
         let mut files = Vec::new();
@@ -506,9 +526,13 @@ impl Engine {
         base_spec: &str,
         target_spec: &str,
         selection: &Selection,
+        base: DiffBase,
     ) -> Result<SnapshotSides, EngineError> {
         let sides = SnapshotSides {
-            base: self.snapshot_side(base_spec)?,
+            base: match base {
+                DiffBase::Given => self.snapshot_side(base_spec)?,
+                DiffBase::MergeBase => self.merge_base_side(base_spec, target_spec)?,
+            },
             target: self.snapshot_side(target_spec)?,
         };
         let paths = sides.paths();
@@ -603,6 +627,11 @@ impl Engine {
             return Ok(SnapshotSide::Worktree { entries });
         }
         let revision = self.repository.resolve_commit(spec)?;
+        self.commit_side(spec, revision)
+    }
+
+    /// The commit side for an already-resolved revision, reading its tree.
+    fn commit_side(&self, spec: &str, revision: Revision) -> Result<SnapshotSide, EngineError> {
         let entries = self
             .repository
             .source_entries(&revision)
@@ -614,6 +643,41 @@ impl Engine {
             id: revision.object_id,
             entries,
         })
+    }
+
+    /// Resolves the base side to `merge-base(base, target)`. Both specs must be
+    /// commits; a snapshot spec fails to resolve and is reported as a revision
+    /// error.
+    fn merge_base_side(
+        &self,
+        base_spec: &str,
+        target_spec: &str,
+    ) -> Result<SnapshotSide, EngineError> {
+        let base = self.resolve_base(base_spec, Some(target_spec), DiffBase::MergeBase)?;
+        self.commit_side(base_spec, base)
+    }
+
+    /// Resolves the base side of a diff, applying [`DiffBase`].
+    ///
+    /// `target_spec` is required for [`DiffBase::MergeBase`] and ignored
+    /// otherwise.
+    fn resolve_base(
+        &self,
+        base_spec: &str,
+        target_spec: Option<&str>,
+        base: DiffBase,
+    ) -> Result<Revision, EngineError> {
+        let revision = self.repository.resolve_commit(base_spec)?;
+        match base {
+            DiffBase::Given => Ok(revision),
+            DiffBase::MergeBase => {
+                let target_spec = target_spec.expect("merge-base resolution requires a target");
+                let target = self.repository.resolve_commit(target_spec)?;
+                self.repository
+                    .merge_base(&revision, &target)
+                    .map_err(|source| EngineError::git(source, Some(base_spec)))
+            }
+        }
     }
 
     fn snapshot_outline(

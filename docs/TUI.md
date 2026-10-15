@@ -7,7 +7,7 @@ It is a default-on feature of the CLI.
 
 ```text
 codect tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-codect tui diff range --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui diff range --mode <types|signatures> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
@@ -15,11 +15,13 @@ codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>
   file.
 - `tui diff range` compares the two endpoint snapshots directly; either side
   may be a commit, `:index`, `:worktree`, or `:empty`, as in `codect diff`.
+  `--merge-base` replaces the base with the merge base of the two commits and
+  labels the base pane, matching `codect diff`.
 - `tui diff commits` lists the commits after `BASE` through `TARGET` on
   `TARGET`'s first-parent chain, newest first; selecting a commit compares it
   with its first parent. `BASE` must be on that chain. The commit picker sits
   above the changed-file tree. It needs commit sides, so `:index`, `:worktree`,
-  and `:empty` are a usage error.
+  and `:empty` are a usage error, and it does not accept `--merge-base`.
 - Both views show a side-by-side projection diff.
 
 ![codect tui show — a file tree beside the type projection](showcase/tui-show.png)
