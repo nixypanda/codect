@@ -25,7 +25,7 @@ pub use model::{
     ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath, SourceSpan,
     SupportedPath,
 };
-pub use outline::{FileOutline, FileOutlineDiff, OutlineItem, assemble_outline};
+pub use outline::{FileOutline, FileOutlineDiff, OutlineItem, SourceOutline, assemble_outline};
 pub use path::{Area, AreaError, AreaSet, PathScope, PathSelection};
 pub use render::{
     LINE_WIDTH, diff_document, project_all, select_projector, show_document, sort_files,

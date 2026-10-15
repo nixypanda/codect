@@ -11,8 +11,8 @@ use std::sync::Arc;
 use base::{
     AreaSet, DiagnosticContext, FileDiff, FileOutline, FileOutlineDiff, LanguageProjector,
     Location, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput, ProjectionMode,
-    RepoPath, Selection, SelectionGroup, SupportedPath, assemble_outline, decode_source,
-    select_projector,
+    RepoPath, Selection, SelectionGroup, SourceOutline, SupportedPath, assemble_outline,
+    decode_source, select_projector,
 };
 use git::{CommitStep, GitRepository, ObjectId, Revision, SnapshotRepository, SourceEntry};
 use lang_elm::ElmProjector;
@@ -331,6 +331,47 @@ impl Engine {
                 self.project_entry_outline(projectors, &mut caches, revision_spec, entry, mode)?
             {
                 files.push(file);
+            }
+        }
+        Ok(files)
+    }
+
+    /// Projects every selected file of `revision`, pairing each file's decoded
+    /// source with its mode-independent [`SourceOutline::outline`].
+    ///
+    /// This mirrors [`Engine::show_outlines`] exactly — same revision
+    /// resolution, selection validation, raw path-byte order, scope filtering,
+    /// and per-file success/`None` semantics — but also returns the committed
+    /// blob's decoded UTF-8 text. The blob is read once and decoded once; the
+    /// outline and the returned source therefore come from the same bytes.
+    pub fn show_source_outlines(
+        &self,
+        revision_spec: &str,
+        mode: ProjectionMode,
+        selection: &Selection,
+    ) -> Result<Vec<SourceOutline>, EngineError> {
+        let revision = self.repository.resolve_commit(revision_spec)?;
+        self.ensure_groups(&revision, revision_spec, selection.groups())?;
+        let entries = self
+            .repository
+            .source_entries(&revision)
+            .map_err(|source| EngineError::git(source, Some(revision_spec)))?;
+
+        let projectors: &[&dyn LanguageProjector] = &PROJECTORS;
+        let mut caches = Caches::default();
+        let mut files = Vec::new();
+        for entry in &entries {
+            if !selection.scope().matches(&entry.path) {
+                continue;
+            }
+            if let Some((outline, source)) = self.project_entry_source_outline(
+                projectors,
+                &mut caches,
+                revision_spec,
+                entry,
+                mode,
+            )? {
+                files.push(SourceOutline { outline, source });
             }
         }
         Ok(files)
@@ -877,11 +918,13 @@ impl Engine {
             return Ok(items);
         }
 
-        let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
-        let source = decode_source(path, &bytes)
-            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
+        let source = self.read_source(caches, entry, path, revision_spec)?;
         let items = projector
-            .project(ProjectionInput { path, source, mode })
+            .project(ProjectionInput {
+                path,
+                source: source.as_ref(),
+                mode,
+            })
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))?
             .items()
             .to_vec();
@@ -915,6 +958,29 @@ impl Engine {
         entry: &SourceEntry,
         mode: ProjectionMode,
     ) -> Result<Option<FileOutline>, EngineError> {
+        Ok(self
+            .project_entry_source_outline(projectors, caches, revision_spec, entry, mode)?
+            .map(|(outline, _source)| outline))
+    }
+
+    // Reads, decodes, and projects one entry, returning the file's outline
+    // paired with the decoded source it was built from.
+    //
+    // Shares the outline path's caches: the `(blob id, path, mode)` projection
+    // cache and the blob-id source cache mean a blob is read and decoded once,
+    // and the requested mode and Signatures superset are each computed at most
+    // once per path and operation.
+    //
+    // Returns `None` for an unsupported path, which is an exclusion rather
+    // than a failure.
+    fn project_entry_source_outline(
+        &self,
+        projectors: &[&dyn LanguageProjector],
+        caches: &mut Caches,
+        revision_spec: &str,
+        entry: &SourceEntry,
+        mode: ProjectionMode,
+    ) -> Result<Option<(FileOutline, String)>, EngineError> {
         let Some(projector) = select_projector(projectors, &entry.path) else {
             return Ok(None);
         };
@@ -936,9 +1002,38 @@ impl Engine {
                 superset_mode,
             )?
         };
-        assemble_outline(&path, projection, superset)
-            .map(Some)
-            .map_err(|error| self.projection_failure(error, Some(revision_spec)))
+        let outline = assemble_outline(&path, projection, superset)
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
+        // Already decoded and cached by `project_items_cached`; this only
+        // clones the retained text.
+        let source = self.read_source(caches, entry, &path, revision_spec)?;
+        Ok(Some((outline, source.to_string())))
+    }
+
+    // Reads and decodes one entry's blob, reusing the byte and decoded-source
+    // caches.
+    //
+    // The decoded text is path-independent (a valid UTF-8 blob is the same text
+    // at every path), so the source cache is keyed on the blob id alone; the
+    // path only supplies the invalid-UTF-8 diagnostic context.
+    fn read_source(
+        &self,
+        caches: &mut Caches,
+        entry: &SourceEntry,
+        path: &SupportedPath,
+        revision_spec: &str,
+    ) -> Result<Arc<str>, EngineError> {
+        if let Some(source) = caches.sources.get(&entry.blob_id) {
+            return Ok(Arc::clone(source));
+        }
+        let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
+        let source: Arc<str> = decode_source(path, &bytes)
+            .map_err(|error| self.projection_failure(error, Some(revision_spec)))?
+            .into();
+        caches
+            .sources
+            .insert(entry.blob_id.clone(), Arc::clone(&source));
+        Ok(source)
     }
 
     fn projection_failure(
@@ -965,6 +1060,7 @@ impl Engine {
 #[derive(Default)]
 struct Caches {
     blobs: HashMap<ObjectId, Arc<[u8]>>,
+    sources: HashMap<ObjectId, Arc<str>>,
     projections: HashMap<ObjectId, Vec<CachedProjection>>,
 }
 

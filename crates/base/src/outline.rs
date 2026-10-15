@@ -51,6 +51,32 @@ impl FileOutline {
     }
 }
 
+/// A file's decoded source paired with its mode-independent outline.
+///
+/// The engine reads a projected file's committed blob once; this value retains
+/// the decoded UTF-8 text alongside the [`FileOutline`] built from the same
+/// bytes, so a caller can display real source without re-reading or
+/// re-projecting it. The source is owned (`String`) because `base` has no
+/// snapshot or blob handle to borrow from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceOutline {
+    pub outline: FileOutline,
+    /// The file's decoded UTF-8 source, byte-for-byte as committed.
+    pub source: String,
+}
+
+impl SourceOutline {
+    /// The file's path, taken from the outline so it cannot disagree.
+    pub fn path(&self) -> &RepoPath {
+        self.outline.path()
+    }
+
+    /// The file's language, taken from the outline so it cannot disagree.
+    pub fn language(&self) -> Language {
+        self.outline.language()
+    }
+}
+
 /// One changed file with the complete declaration outline for each present side.
 ///
 /// The variant says which sides exist, so a comparison with neither side, or a
@@ -148,5 +174,18 @@ mod tests {
         assert_eq!(file.outline[1].item.canonical_text, "    fn id(&self);");
         assert_eq!(file.path(), file.projection.path());
         assert_eq!(file.language(), file.projection.language());
+    }
+
+    #[test]
+    fn source_outline_delegates_path_and_language_to_its_outline() {
+        let outline = assemble_outline(&supported("src/lib.rs"), Vec::new(), Vec::new())
+            .expect("valid outline fixture");
+        let source = SourceOutline {
+            outline: outline.clone(),
+            source: "pub fn main() {}\n".to_owned(),
+        };
+
+        assert_eq!(source.path(), outline.path());
+        assert_eq!(source.language(), outline.language());
     }
 }

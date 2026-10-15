@@ -478,3 +478,138 @@ fn merge_base_excludes_commits_that_only_landed_on_the_base_branch() {
         other => panic!("expected a modified file, got {other:?}"),
     }
 }
+
+#[test]
+fn show_source_outlines_mirrors_show_outlines_and_carries_each_committed_blob() {
+    let repo = TestRepo::init();
+    // Identical Rust and Python blobs at two paths each: stable keys are
+    // path-prefixed for both languages, so each pair must be correct for its
+    // own path rather than reusing the other path's cached projection.
+    repo.write("a/m.rs", RUST_MODULE);
+    repo.write("b/m.rs", RUST_MODULE);
+    repo.write("a/m.py", PYTHON_CLASS);
+    repo.write("b/m.py", PYTHON_CLASS);
+    // An unsupported extension in the same revision is excluded, not an error.
+    repo.write("notes.txt", "not source\n");
+    repo.commit("base");
+
+    // Diverge the worktree from the commit: the returned source must be the
+    // committed blob, not what happens to be on disk.
+    repo.write("a/m.rs", RUST_TYPE_VARIANT);
+
+    let engine = engine(&repo);
+    let outlines = engine
+        .show_outlines("HEAD", ProjectionMode::Types, &Selection::all())
+        .expect("show outlines");
+    let sources = engine
+        .show_source_outlines("HEAD", ProjectionMode::Types, &Selection::all())
+        .expect("show source outlines");
+
+    let outline_paths: Vec<String> = outlines.iter().map(|f| f.path().to_string()).collect();
+    let source_paths: Vec<String> = sources.iter().map(|f| f.path().to_string()).collect();
+    assert_eq!(source_paths, outline_paths, "same paths in the same order");
+    assert!(
+        !source_paths.iter().any(|path| path == "notes.txt"),
+        "an unsupported extension is excluded, not an error: {source_paths:?}"
+    );
+
+    // Each file's outline equals the matching `show_outlines` entry.
+    for (outline, source) in outlines.iter().zip(&sources) {
+        assert_eq!(&source.outline, outline);
+    }
+
+    let source_of = |raw: &str| -> &str {
+        sources
+            .iter()
+            .find(|file| file.path().to_string() == raw)
+            .unwrap_or_else(|| panic!("no source outline for {raw}"))
+            .source
+            .as_str()
+    };
+    assert_eq!(source_of("a/m.rs"), RUST_MODULE);
+    assert_eq!(source_of("b/m.rs"), RUST_MODULE);
+    assert_eq!(source_of("a/m.py"), PYTHON_CLASS);
+    assert_eq!(source_of("b/m.py"), PYTHON_CLASS);
+
+    let keys_of = |raw: &str| -> Vec<String> {
+        sources
+            .iter()
+            .find(|file| file.path().to_string() == raw)
+            .unwrap_or_else(|| panic!("no source outline for {raw}"))
+            .outline
+            .outline
+            .iter()
+            .map(|item| item.item.stable_key.clone())
+            .collect()
+    };
+    assert_eq!(
+        keys_of("a/m.rs"),
+        vec!["a/m.rs::mod::outer", "a/m.rs::mod::outer::fn::f"]
+    );
+    assert_eq!(
+        keys_of("b/m.rs"),
+        vec!["b/m.rs::mod::outer", "b/m.rs::mod::outer::fn::f"]
+    );
+    assert_eq!(
+        keys_of("a/m.py"),
+        vec![
+            "a/m.py::class::Widget",
+            "a/m.py::class::Widget::method::render"
+        ]
+    );
+    assert_eq!(
+        keys_of("b/m.py"),
+        vec![
+            "b/m.py::class::Widget",
+            "b/m.py::class::Widget::method::render"
+        ]
+    );
+}
+
+#[test]
+fn invalid_utf8_source_outlines_fail_like_show_outlines() {
+    let repo = TestRepo::init();
+    std::fs::write(repo.path().join("bad.rs"), b"pub struct Broken;\n\xFF\xFE")
+        .expect("write invalid UTF-8 fixture");
+    repo.commit("base");
+
+    let engine = engine(&repo);
+    let outline_error = engine
+        .show_outlines("HEAD", ProjectionMode::Types, &Selection::all())
+        .expect_err("invalid UTF-8");
+    let source_error = engine
+        .show_source_outlines("HEAD", ProjectionMode::Types, &Selection::all())
+        .expect_err("invalid UTF-8");
+
+    // The two entry points decode the same blob, so they must produce the same
+    // typed failure with the same diagnostic context.
+    assert_eq!(format!("{outline_error:?}"), format!("{source_error:?}"));
+    assert!(
+        matches!(source_error, EngineError::Projection { .. }),
+        "got {source_error:?}"
+    );
+}
+
+#[test]
+fn show_source_outlines_rejects_a_selection_that_names_nothing() {
+    let repo = TestRepo::init();
+    repo.write("a.rs", RUST_BASE);
+    repo.commit("base");
+
+    let error = engine(&repo)
+        .show_source_outlines(
+            "HEAD",
+            ProjectionMode::Types,
+            &path_selection(&["missing.rs"]),
+        )
+        .expect_err("unsatisfied selection");
+
+    match error {
+        EngineError::UnsatisfiedSelection { revisions, missing } => {
+            assert_eq!(revisions, "`HEAD`");
+            assert_eq!(missing.len(), 1);
+            assert_eq!(missing[0].label(), "missing.rs");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
