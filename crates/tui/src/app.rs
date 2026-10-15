@@ -468,8 +468,9 @@ fn install_show_selection(app: &mut App) {
         hscroll: 0,
         cursor_line: 1,
     };
+    // `ensure_visible_rows` anchors the cursor onto the first visible row, which
+    // in `tests` mode need not be line 1.
     show.ensure_visible_rows();
-    show.body.cursor_line = show.first_visible_line();
 }
 
 fn install_diff_selection(app: &mut App) {

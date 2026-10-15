@@ -308,27 +308,57 @@ impl Show {
 
     /// Recomputes the visible-row projection when the selected path or the fold
     /// state changed, and clears it when nothing is selected.
+    ///
+    /// The cursor is re-anchored onto a visible row afterwards: the `tests`-mode
+    /// filter can hide the line the cursor sits on (line 1 after a tree
+    /// selection, say), and the body must still draw a cursor.
     pub fn ensure_visible_rows(&mut self) {
         let Some(path) = self.selected.clone() else {
             self.visible_rows = VisibleRows::default();
             return;
         };
         let version = self.fold_state.version();
-        if self.visible_rows.is_current(&path, version) {
+        if !self.visible_rows.is_current(&path, version) {
+            self.ensure_folds();
+            let total = self.source_line_count();
+            let rows: Vec<VisibleRow> = match self.folds.regions(&path) {
+                Some(regions) => {
+                    build_visible_rows(regions, total, &path, &self.fold_state, self.mode)
+                }
+                None => (1..=total)
+                    .map(|line| VisibleRow::Source { line })
+                    .collect(),
+            };
+            self.visible_rows = VisibleRows {
+                key: Some((path, version)),
+                rows: Arc::from(rows),
+            };
+        }
+        self.anchor_cursor_to_visible_row();
+    }
+
+    /// Snaps `cursor_line` onto a visible row whenever no row covers it.
+    ///
+    /// The `tests`-mode filter can hide the very line the cursor sits on — most
+    /// often line 1 after a tree selection — so this picks the nearest visible
+    /// row at or after it (else the last row) rather than leaving the cursor
+    /// undrawn. A cursor already on a visible row is left untouched, so `j`/`k`
+    /// and the wheel's scroll-without-moving-cursor behavior are unaffected; an
+    /// empty projection leaves the cursor at line 1.
+    fn anchor_cursor_to_visible_row(&mut self) {
+        if self.visible_rows.rows.is_empty() {
+            self.body.cursor_line = 1;
             return;
         }
-        self.ensure_folds();
-        let total = self.source_line_count();
-        let rows: Vec<VisibleRow> = match self.folds.regions(&path) {
-            Some(regions) => build_visible_rows(regions, total, &path, &self.fold_state, self.mode),
-            None => (1..=total)
-                .map(|line| VisibleRow::Source { line })
-                .collect(),
-        };
-        self.visible_rows = VisibleRows {
-            key: Some((path, version)),
-            rows: Arc::from(rows),
-        };
+        if self
+            .visible_row_for_source_line(self.body.cursor_line)
+            .is_some()
+        {
+            return;
+        }
+        self.body.cursor_line = self
+            .nearest_visible_line(self.body.cursor_line)
+            .unwrap_or(1);
     }
 
     /// Computes and caches fold regions for the selected file when missing.
@@ -373,14 +403,6 @@ impl Show {
             return None;
         }
         self.visible_row_for_source_line(self.body.cursor_line)
-    }
-
-    /// The source line of the first visible row, or `1` when there is none.
-    pub fn first_visible_line(&self) -> usize {
-        self.visible_rows
-            .rows
-            .first()
-            .map_or(1, VisibleRow::source_line)
     }
 
     /// Moves the cursor to a visible-row index, clamped to the projection, and

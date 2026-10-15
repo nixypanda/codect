@@ -2272,6 +2272,47 @@ fn tests_mode_with_no_retained_declarations_renders_the_empty_state() {
 }
 
 #[test]
+fn tests_mode_selection_anchors_the_cursor_to_a_visible_row() {
+    let mut app = show_app_mode(
+        vec![tests_filter_outline(), source_outline("z.rs", "x\n")],
+        ProjectionMode::Tests,
+    );
+
+    // A fresh load already anchors: line 1 of `a.rs` is not retained, so the
+    // cursor lands on the first visible row (line 5) rather than staying at 1.
+    assert_eq!(
+        show_ref(&app).body.cursor_line,
+        5,
+        "install_show_selection anchors the cursor"
+    );
+    assert_eq!(show_ref(&app).cursor_row(), Some(0), "the cursor is drawn");
+
+    // Selecting another file resets the body to line 1; selecting the filtered
+    // file back must anchor again instead of leaving the cursor on hidden line 1.
+    select_path(&mut app, RepoPath::new("z.rs").expect("valid path"));
+    assert_eq!(show_ref(&app).body.cursor_line, 1);
+    select_path(&mut app, RepoPath::new("a.rs").expect("valid path"));
+    let mut app = settle(app);
+
+    let show = show_ref(&app);
+    assert_eq!(
+        show.body.cursor_line, 5,
+        "a tree selection anchors onto the first visible row"
+    );
+    assert_eq!(show.cursor_row(), Some(0), "the cursor is drawn");
+    assert!(show.visible_row_for_source_line(5).is_some());
+
+    // `j`/`k` still step between visible rows from the anchored cursor.
+    focus_content(&mut app);
+    let down = press(&app, &[Key::Char('j')]);
+    assert_eq!(show_ref(&down).body.cursor_line, 6);
+    assert_eq!(show_ref(&down).cursor_row(), Some(1));
+    let up = press(&down, &[Key::Char('k')]);
+    assert_eq!(show_ref(&up).body.cursor_line, 5);
+    assert_eq!(show_ref(&up).cursor_row(), Some(0));
+}
+
+#[test]
 fn visible_row_for_source_line_reports_gaps_in_tests_mode() {
     let app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
     let show = show_ref(&app);

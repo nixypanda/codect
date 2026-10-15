@@ -232,6 +232,11 @@ impl Loaded {
     }
 
     /// Resets the body to the top after the selection changed.
+    ///
+    /// The cursor starts at line 1, but the `tests`-mode filter may hide that
+    /// line, so the projection is rebuilt and the cursor anchored onto the first
+    /// visible row, matching the show install path; otherwise the body would
+    /// draw no cursor until the first `j`/`k`.
     pub fn reset_body_scroll(&mut self) {
         match self {
             Self::Show(show) => {
@@ -239,7 +244,8 @@ impl Loaded {
                     scroll: 0,
                     hscroll: 0,
                     cursor_line: 1,
-                }
+                };
+                show.ensure_visible_rows();
             }
             Self::Diff(diff) => diff.set_body_scroll(0),
         }
