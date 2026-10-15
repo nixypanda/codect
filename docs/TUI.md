@@ -81,10 +81,16 @@ selected file with mode-driven folds.
 
 - A retained container is open and a retained signature is folded, so the body
   shows the shape of the code without the implementations.
-- A declaration the requested mode drops is folded whatever its kind, because
-  the mode keeps nothing of it; its row is marked `hidden in <mode>`. This is
-  what makes `types` filter out a method-only inherent `impl`, say, instead of
-  leaving its body in the source.
+- `tests` mode is a filter rather than a marker: a declaration the mode drops is
+  removed entirely — no row, its lines gone — and lines outside every retained
+  declaration or container are hidden too, so only the retained tests and the
+  containers that hold them remain. Exclusion is independent of folding, so
+  `za`/`zR` cannot reveal a dropped declaration, and a file with nothing
+  retained shows an empty state.
+- In `types` and `signatures` a declaration the requested mode drops is folded
+  whatever its kind, because the mode keeps nothing of it; its row is marked
+  `hidden in <mode>`. This is what makes `types` filter out a method-only
+  inherent `impl`, say, instead of leaving its body in the source.
 - A collapsed row shows the declaration's own signature line — the line the
   declaration node starts on, excluding leading attributes, decorators, and doc
   comments — followed by the fold suffix. The leading annotations stay hidden

@@ -255,12 +255,15 @@ focused views.
 
 - `codect tui show` is a source explorer: a file tree beside the real source of
   the selected file, folded to the requested mode with semantic folds.
-  Retained containers open, retained signature bodies fold, and a declaration
-  the mode drops folds whatever its kind with a `hidden in <mode>` marker. A
-  collapsed row shows the declaration's own signature line — the line the
-  declaration node starts on, excluding leading attributes, decorators, and doc
-  comments — followed by the fold suffix. Folds are presentation over the same
-  source, so projection and diff semantics are unchanged.
+  Retained containers open, retained signature bodies fold, and in `types` and
+  `signatures` a declaration the mode drops folds whatever its kind with a
+  `hidden in <mode>` marker. `tests` mode is instead a filter: it shows only the
+  retained test declarations and the containers that hold them, with no marker
+  rows for what it drops. A collapsed row shows the declaration's own signature
+  line — the line the declaration node starts on, excluding leading attributes,
+  decorators, and doc comments — followed by the fold suffix. Folds are
+  presentation over the same source, so projection and diff semantics are
+  unchanged.
 - `codect tui diff range` presents a changed-file tree beside a side-by-side
   comparison of two snapshots — commits, the index, the worktree, or the empty
   tree — with `@@` hunk headers.

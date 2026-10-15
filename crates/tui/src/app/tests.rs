@@ -191,6 +191,65 @@ fn dropped_container_outline(path: &str, source: &str) -> SourceOutline {
     }
 }
 
+/// A file exercising the `tests`-mode filter. Line layout:
+///
+/// ```text
+///  1 pub enum Dropped {        // dropped by the mode
+///  2     A,
+///  3 }
+///  4
+///  5 #[cfg(test)]
+///  6 mod tests {               // retained container, open
+///  7     use super::*;
+///  8
+///  9     fn helper() {}         // dropped by the mode, inside the container
+/// 10
+/// 11     #[test]
+/// 12     fn checks() {          // retained, folded
+/// 13         let hidden = 1;
+/// 14     }
+/// 15 }
+/// 16
+/// 17 #[test]
+/// 18 fn top_level() {          // retained, folded
+/// 19     assert!(true);
+/// 20 }
+/// ```
+const TESTS_FILTER_SOURCE: &str = "\
+pub enum Dropped {\n    A,\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    fn helper() {}\n\n    #[test]\n    fn checks() {\n        let hidden = 1;\n    }\n}\n\n#[test]\nfn top_level() {\n    assert!(true);\n}\n";
+
+/// [`TESTS_FILTER_SOURCE`] as a `SourceOutline`. The requested-mode projection
+/// retains `mod tests` and its `checks` test plus the top-level `top_level`
+/// test; the `Dropped` enum and the `helper` function are located only through
+/// the Signatures superset, so the mode drops them.
+fn tests_filter_outline() -> SourceOutline {
+    let path = supported("a.rs");
+    let dropped = item_at("Dropped", None, ItemKind::Type, 0, 2);
+    let module = item_at("mod tests", None, ItemKind::Module, 5, 14);
+    let helper = item_at(
+        "mod tests::helper",
+        Some("mod tests"),
+        ItemKind::Function,
+        8,
+        8,
+    );
+    let checks = item_at(
+        "mod tests::checks",
+        Some("mod tests"),
+        ItemKind::Function,
+        11,
+        13,
+    );
+    let top_level = item_at("top_level", None, ItemKind::Function, 17, 19);
+    let projection = vec![module.clone(), checks.clone(), top_level.clone()];
+    let superset = vec![dropped, module, helper, checks, top_level];
+    let outline = assemble_outline(&path, projection, superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TESTS_FILTER_SOURCE.to_owned(),
+    }
+}
+
 fn show_request() -> ShowRequest {
     ShowRequest {
         revision: "HEAD".to_owned(),
@@ -2116,6 +2175,235 @@ fn a_dropped_declaration_renders_the_hidden_in_mode_tag() {
     assert!(
         !text.contains("42"),
         "the hidden body must be absent: {text}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Tests mode: a filter over the outline
+// -----------------------------------------------------------------------
+
+#[test]
+fn tests_mode_removes_dropped_declarations_entirely() {
+    let app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    let show = show_ref(&app);
+
+    // The dropped top-level enum and the dropped helper inside `mod tests` are
+    // gone: no row and no lines.
+    for hidden in [1, 2, 3, 4, 9] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "line {hidden} must have no visible row: {:?}",
+            show.visible_rows()
+        );
+    }
+    assert!(
+        !show
+            .visible_rows()
+            .iter()
+            .any(|row| matches!(row, VisibleRow::Fold { dropped: true, .. })),
+        "tests mode must not emit a `hidden in tests` marker row: {:?}",
+        show.visible_rows()
+    );
+
+    // The retained container and its body show as source; the retained tests
+    // fold to their signature rows.
+    assert_eq!(show.visible_row_for_source_line(5), Some(0));
+    assert_eq!(show.visible_row_for_source_line(6), Some(1));
+    assert_eq!(show.visible_row_for_source_line(7), Some(2));
+    assert_eq!(
+        show.visible_row_for_source_line(12),
+        Some(5),
+        "a line inside a collapsed retained test maps to its fold row"
+    );
+    assert_eq!(
+        show.visible_rows()[5],
+        VisibleRow::Fold {
+            line: 11,
+            summary_line: 12,
+            region_index: 3,
+            hidden: 3,
+            dropped: false,
+        }
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("mod tests {"), "{text}");
+    assert!(text.contains("use super::*;"), "{text}");
+    assert!(text.contains("fn checks() {"), "{text}");
+    assert!(text.contains("fn top_level() {"), "{text}");
+    assert!(
+        !text.contains("pub enum Dropped"),
+        "the dropped declaration leaked: {text}"
+    );
+    assert!(
+        !text.contains("fn helper"),
+        "the dropped helper leaked: {text}"
+    );
+    assert!(
+        !text.contains("let hidden"),
+        "the hidden body leaked: {text}"
+    );
+    assert!(
+        !text.contains("assert!(true)"),
+        "the hidden body leaked: {text}"
+    );
+    assert!(
+        !text.contains("hidden in tests"),
+        "a marker row leaked: {text}"
+    );
+}
+
+#[test]
+fn tests_mode_with_no_retained_declarations_renders_the_empty_state() {
+    let app = show_app_mode(
+        vec![dropped_container_outline("a.rs", NESTED_SOURCE)],
+        ProjectionMode::Tests,
+    );
+    assert_eq!(
+        show_ref(&app).line_count(),
+        0,
+        "a file with nothing retained has no rows"
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("No test declarations"), "{text}");
+    assert!(text.contains("Nothing retained in this mode."), "{text}");
+}
+
+#[test]
+fn visible_row_for_source_line_reports_gaps_in_tests_mode() {
+    let app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.visible_row_for_source_line(1),
+        None,
+        "a line in a dropped declaration has no row"
+    );
+    assert_eq!(
+        show.visible_row_for_source_line(9),
+        None,
+        "a dropped helper inside a retained container has no row"
+    );
+    assert_eq!(
+        show.visible_row_for_source_line(16),
+        None,
+        "a blank line outside every retained region has no row"
+    );
+    assert_eq!(
+        show.visible_row_for_source_line(6),
+        Some(1),
+        "a line in the retained container maps to its source row"
+    );
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(13)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Fold { line: 11, .. })
+        ),
+        "a line inside a collapsed retained test maps to its fold row"
+    );
+}
+
+#[test]
+fn tests_mode_exclusion_survives_open_all() {
+    let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    focus_content(&mut app);
+    // `zR` opens every region, but an excluded declaration has no fold state to
+    // open: it must stay removed.
+    let opened = press(&app, &[Key::Char('z'), Key::Char('R')]);
+    let show = show_ref(&opened);
+    for hidden in [1, 2, 3, 4, 9] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "line {hidden} must stay hidden after zR"
+        );
+    }
+    assert!(
+        !show
+            .visible_rows()
+            .iter()
+            .any(|row| matches!(row, VisibleRow::Fold { dropped: true, .. }))
+    );
+}
+
+#[test]
+fn types_mode_keeps_marker_rows_for_dropped_declarations() {
+    let app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Types);
+    let show = show_ref(&app);
+
+    let dropped: Vec<usize> = show
+        .visible_rows()
+        .iter()
+        .filter_map(|row| match row {
+            VisibleRow::Fold {
+                line,
+                dropped: true,
+                ..
+            } => Some(*line),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dropped,
+        vec![1, 9],
+        "types mode still marks dropped declarations: {:?}",
+        show.visible_rows()
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("pub enum Dropped"), "{text}");
+    assert!(text.contains("hidden in types"), "{text}");
+}
+
+#[test]
+fn tests_mode_search_ignores_hidden_dropped_matches_and_reveals_retained_ones() {
+    let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    focus_content(&mut app);
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.set_search("hidden");
+    }
+    let show = show_ref(&app);
+    let matches = &show.search.as_ref().expect("search").matches;
+    assert_eq!(
+        matches.len(),
+        1,
+        "only the visible `let hidden` line matches"
+    );
+    assert_eq!(matches[0].line, 13);
+
+    // Stepping opens the collapsed retained test and lands the cursor on it.
+    let stepped = press(&app, &[Key::Char('n')]);
+    let show = show_ref(&stepped);
+    assert_eq!(show.body.cursor_line, 13, "the cursor reaches the match");
+    assert!(
+        show.visible_row_for_source_line(13).is_some(),
+        "the match's line is now a visible source row"
+    );
+
+    // A match that lives only in a dropped declaration is not counted and is
+    // skipped by stepping.
+    let mut dropped = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    if let Loaded::Show(show) = &mut dropped.loaded {
+        show.set_search("Dropped");
+    }
+    assert!(
+        show_ref(&dropped)
+            .search
+            .as_ref()
+            .expect("search")
+            .matches
+            .is_empty(),
+        "a match inside a dropped declaration must not be counted"
+    );
+    let before = show_ref(&dropped).body.cursor_line;
+    let stepped = press(&dropped, &[Key::Char('n')]);
+    assert_eq!(
+        show_ref(&stepped).body.cursor_line,
+        before,
+        "stepping does nothing when no visible match exists"
     );
 }
 

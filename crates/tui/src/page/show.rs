@@ -169,12 +169,18 @@ impl VisibleRow {
         }
     }
 
-    /// The last source line this row covers; a fold covers its hidden body, so
-    /// a match inside the body maps back to the fold row.
-    fn source_end(&self) -> usize {
+    /// Whether this row covers the 1-based `source_line`.
+    ///
+    /// A source row covers exactly its own line; a fold row covers its whole
+    /// hidden span `[line, line + hidden]` (its extended start through its end
+    /// line), so a match anywhere inside the body maps back to the fold row.
+    /// The projection can have gaps — `tests` mode removes whole declarations —
+    /// so a line covered by no row resolves to `None` rather than to a
+    /// neighbouring row.
+    fn covers(&self, source_line: usize) -> bool {
         match self {
-            Self::Source { line } => *line,
-            Self::Fold { line, hidden, .. } => line + hidden,
+            Self::Source { line } => *line == source_line,
+            Self::Fold { line, hidden, .. } => *line <= source_line && source_line <= line + hidden,
         }
     }
 }
@@ -258,14 +264,15 @@ impl Show {
         &self.visible_rows.rows
     }
 
-    /// The visible-row index a 1-based source line maps to, or `None` when the
-    /// line is past the file. A line inside a collapsed declaration resolves to
-    /// its fold row.
+    /// The visible-row index a 1-based source line maps to, or `None` when no
+    /// visible row covers it. A line inside a collapsed declaration resolves to
+    /// its fold row; in `tests` mode a line inside a removed declaration (and a
+    /// line outside every retained container) resolves to `None`.
     pub fn visible_row_for_source_line(&self, line: usize) -> Option<usize> {
         self.visible_rows
             .rows
             .iter()
-            .position(|row| row.source_end() >= line)
+            .position(|row| row.covers(line))
     }
 
     /// The widest visible row, so horizontal scroll reaches a fold suffix too.
@@ -313,7 +320,7 @@ impl Show {
         self.ensure_folds();
         let total = self.source_line_count();
         let rows: Vec<VisibleRow> = match self.folds.regions(&path) {
-            Some(regions) => build_visible_rows(regions, total, &path, &self.fold_state),
+            Some(regions) => build_visible_rows(regions, total, &path, &self.fold_state, self.mode),
             None => (1..=total)
                 .map(|line| VisibleRow::Source { line })
                 .collect(),
@@ -390,7 +397,9 @@ impl Show {
     }
 
     /// Re-anchors the cursor after a fold change or reload: clamps it to a real
-    /// source line and snaps a now-hidden line to the nearest visible row.
+    /// source line and snaps a now-hidden line to the nearest visible row. In
+    /// `tests` mode a line inside a removed declaration is hidden, so this picks
+    /// the next retained row rather than leaving the cursor on nothing.
     pub fn reanchor_cursor(&mut self) {
         let total = self.source_line_count();
         if total == 0 {
@@ -400,8 +409,19 @@ impl Show {
         let clamped = self.body.cursor_line.clamp(1, total);
         self.body.cursor_line = match self.visible_row_for_source_line(clamped) {
             Some(row) => self.visible_rows.rows[row].source_line(),
-            None => clamped,
+            None => self.nearest_visible_line(clamped).unwrap_or(clamped),
         };
+    }
+
+    /// The source line of the first visible row at or after `line`, else the
+    /// last visible row's line, else `None` when the projection is empty.
+    fn nearest_visible_line(&self, line: usize) -> Option<usize> {
+        self.visible_rows
+            .rows
+            .iter()
+            .find(|row| row.source_line() >= line)
+            .or_else(|| self.visible_rows.rows.last())
+            .map(VisibleRow::source_line)
     }
 
     /// Clamps both body offsets to the current projection and scrolls the cursor
@@ -478,6 +498,7 @@ impl Show {
             self.search = None;
             return;
         }
+        self.ensure_visible_rows();
         self.search = Some(Search {
             needle: needle.to_owned(),
             matches: self.search_matches(needle),
@@ -490,6 +511,7 @@ impl Show {
         let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
             return;
         };
+        self.ensure_visible_rows();
         let matches = self.search_matches(&needle);
         if let Some(search) = &mut self.search {
             search.matches = matches;
@@ -503,6 +525,12 @@ impl Show {
         if let Some(file) = self.active_file() {
             collect_matches(&file.source, &needle_lower, SearchSide::Show, &mut matches);
         }
+        // A `tests`-mode body removes whole declarations, so a match on a line
+        // with no visible row can never be highlighted or stepped to. Drop it so
+        // the count and `n`/`N` stepping stay truthful. In the other modes every
+        // line maps to a row (fold rows cover their hidden bodies), so this is a
+        // no-op there.
+        matches.retain(|matched| self.visible_row_for_source_line(matched.line).is_some());
         matches
     }
 
@@ -533,12 +561,34 @@ pub fn show_visible(files: &[SourceOutline]) -> Vec<RepoPath> {
 
 /// Builds the visible-row projection from a file's fold regions.
 ///
+/// `types` and `signatures` are marker modes: every declaration is located and
+/// a dropped one collapses to a row tagged `hidden in <mode>`. `tests` is a
+/// filter mode: a dropped declaration is removed entirely and lines outside
+/// every retained declaration or container are hidden too, so the body shows
+/// only the retained declarations and the containers that hold them.
+fn build_visible_rows(
+    regions: &[FoldRegion],
+    total: usize,
+    path: &RepoPath,
+    state: &FoldState,
+    mode: ProjectionMode,
+) -> Vec<VisibleRow> {
+    if mode == ProjectionMode::Tests {
+        build_filtered_rows(regions, total, path, state)
+    } else {
+        build_marker_rows(regions, total, path, state)
+    }
+}
+
+/// The marker-mode projection for `types` and `signatures`: the contiguous walk
+/// that emits every line as source or as a fold row, dropping none.
+///
 /// The walk is top-down and O(lines + regions): a collapsed region is emitted
 /// once and the cursor jumps past its body, so a nested region is never visited
 /// while an ancestor is collapsed. Region lines are clamped to `total`, so a
 /// span that runs past the file hides only what exists and a single-line region
 /// yields a fold row with `hidden == 0`.
-fn build_visible_rows(
+fn build_marker_rows(
     regions: &[FoldRegion],
     total: usize,
     path: &RepoPath,
@@ -574,6 +624,83 @@ fn build_visible_rows(
                 line += 1;
             }
         }
+    }
+    rows
+}
+
+/// The `tests`-mode projection: a real filter over the outline.
+///
+/// A retained region contributes its lines (a closed signature still folds to
+/// one row, as in the other modes, but a dropped declaration contributes
+/// nothing). The walk is O(total + regions): retained spans are marked with a
+/// difference array and a dropped or collapsed region is skipped in one jump.
+/// A dropped region's whole subtree is skipped, which is safe because a
+/// container that holds a test is itself retained, so a dropped container can
+/// have no retained descendant.
+///
+/// Exclusion is independent of fold state: a dropped region is never emitted
+/// and its lines are never source, so `za`/`zR` cannot reveal it.
+fn build_filtered_rows(
+    regions: &[FoldRegion],
+    total: usize,
+    path: &RepoPath,
+    state: &FoldState,
+) -> Vec<VisibleRow> {
+    // `in_retained[line]` is true iff the line lies within some retained
+    // region's span. A difference array keeps this O(total + regions).
+    let mut coverage = vec![0i64; total + 2];
+    for region in regions {
+        if !region.retained || region.start_line > total {
+            continue;
+        }
+        let start = region.start_line.max(1);
+        let end = region.end_line.min(total);
+        if start <= end {
+            coverage[start] += 1;
+            coverage[end + 1] -= 1;
+        }
+    }
+    let mut in_retained = vec![false; total + 1];
+    let mut open_runs = 0i64;
+    for line in 1..=total {
+        open_runs += coverage[line];
+        in_retained[line] = open_runs > 0;
+    }
+
+    let mut collapsed_at: HashMap<usize, usize> = HashMap::new();
+    let mut excluded_at: HashMap<usize, usize> = HashMap::new();
+    for (index, region) in regions.iter().enumerate() {
+        if !region.retained {
+            excluded_at.entry(region.start_line).or_insert(index);
+        } else if !state.is_open(path, region) {
+            collapsed_at.entry(region.start_line).or_insert(index);
+        }
+    }
+
+    let mut rows = Vec::new();
+    let mut line = 1;
+    while line <= total {
+        if let Some(&index) = excluded_at.get(&line) {
+            line = regions[index].end_line.clamp(line, total) + 1;
+            continue;
+        }
+        if let Some(&index) = collapsed_at.get(&line) {
+            let region = &regions[index];
+            let end = region.end_line.clamp(line, total);
+            rows.push(VisibleRow::Fold {
+                line,
+                summary_line: region.declaration_line.clamp(line, end),
+                region_index: index,
+                hidden: end - line,
+                dropped: false,
+            });
+            line = end + 1;
+            continue;
+        }
+        if in_retained[line] {
+            rows.push(VisibleRow::Source { line });
+        }
+        line += 1;
     }
     rows
 }
@@ -811,6 +938,10 @@ fn fold_action(page: &mut Show, action: ShowAction, height: u16) {
 
 /// The region a fold action targets: the fold row under the cursor, otherwise
 /// the innermost region whose span contains the cursor's source line.
+///
+/// In `tests` mode the excluded (dropped) regions are not rendered, so they are
+/// never a valid target; the filter keeps the cursor on a retained ancestor if
+/// one somehow contains the line.
 fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
     let row = page.cursor_row()?;
     match page.visible_rows().get(row)? {
@@ -818,7 +949,11 @@ fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
         VisibleRow::Source { line } => regions
             .iter()
             .enumerate()
-            .filter(|(_, region)| region.start_line <= *line && *line <= region.end_line)
+            .filter(|(_, region)| {
+                region.start_line <= *line
+                    && *line <= region.end_line
+                    && (page.mode != ProjectionMode::Tests || region.retained)
+            })
             .max_by_key(|(_, region)| region.level)
             .map(|(index, _)| index),
     }
@@ -947,6 +1082,19 @@ pub(crate) fn view(
             ("No files", "No source files in this scope.")
         } else {
             ("No file selected", "Select a file to view its source.")
+        };
+        render_empty(frame, inner, title, detail, theme);
+        return;
+    }
+
+    // A selected file whose projection keeps nothing to draw: `tests` mode on a
+    // file with no tests (or Elm/Haskell, which retain nothing), or a genuinely
+    // empty file. Show why the pane is blank rather than leaving it empty.
+    if page.line_count() == 0 {
+        let (title, detail) = if page.mode == ProjectionMode::Tests {
+            ("No test declarations", "Nothing retained in this mode.")
+        } else {
+            ("Empty file", "This file has no source lines.")
         };
         render_empty(frame, inner, title, detail, theme);
         return;
