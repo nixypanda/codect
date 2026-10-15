@@ -43,9 +43,11 @@ pub struct FoldRegion {
     pub end_line: usize,
     /// 1-based nesting depth found by walking `parent_key` to the top.
     pub level: usize,
-    /// Whether the declaration starts unfolded: containers are open so the
-    /// declarations they hold stay reachable, signatures are closed because the
-    /// requested mode already drops them.
+    /// Whether the declaration starts unfolded. A retained container is open so
+    /// the declarations it holds stay reachable; a retained signature is closed
+    /// because the requested mode keeps only its shape; and a declaration the
+    /// requested mode drops is closed whatever its kind, so its body is replaced
+    /// by a fold row marked `hidden in <mode>`.
     pub default_open: bool,
 }
 
@@ -55,6 +57,11 @@ pub struct FoldRegion {
 /// source order, so the result is deterministic and in source order too. `lines`
 /// is the buffer's full line list; a line referenced past its end is treated as
 /// blank, matching the plugin's `lines[i] or ""`.
+///
+/// Each region's [`FoldRegion::default_open`] mirrors the plugin's
+/// `default_closed`: a declaration the requested mode drops is closed whichever
+/// its kind, so the mode's filtering is visible as a fold row rather than a body
+/// left open.
 ///
 /// The function is pure: it reads no files and writes nothing.
 pub fn fold_regions(outline: &FileOutline, lines: &[&str]) -> Vec<FoldRegion> {
@@ -81,15 +88,16 @@ pub fn fold_regions(outline: &FileOutline, lines: &[&str]) -> Vec<FoldRegion> {
         .enumerate()
         .map(|(position, entry)| {
             let (raw_start, raw_end) = folded.spans[position];
+            let retained = outline.retained_in_mode(entry);
             FoldRegion {
                 stable_key: entry.item.stable_key.clone(),
                 parent_key: entry.item.parent_key.clone(),
                 kind: entry.item.kind,
-                retained: outline.retained_in_mode(entry),
+                retained,
                 start_line: fold_start(lines, raw_start, |line| folded.is_boundary(position, line)),
                 end_line: raw_end,
                 level: folded.depth_of(position) + 1,
-                default_open: default_open(entry.item.kind),
+                default_open: default_open(retained, entry.item.kind),
             }
         })
         .collect()
@@ -127,11 +135,21 @@ pub fn fold_start(lines: &[&str], start_line: usize, is_boundary: impl Fn(usize)
 
 /// Whether a declaration starts open (its body visible) or closed (folded).
 ///
+/// A declaration the requested mode drops is closed whatever its kind, so its
+/// body is replaced by a `hidden in <mode>` fold row; a retained container is
+/// open so the declarations it holds stay reachable; and a retained signature is
+/// closed because the requested mode already keeps only its shape. This mirrors
+/// the plugin's `default_closed` (`editors/nvim/lua/codect/state.lua`).
+fn default_open(retained: bool, kind: ItemKind) -> bool {
+    retained && is_open_kind(kind)
+}
+
+/// Whether a retained declaration of this kind starts unfolded.
+///
 /// Containers are open so the declarations they hold stay reachable; signatures
-/// are closed because the requested mode already drops them. The match is
-/// exhaustive with no wildcard, so a new [`ItemKind`] is a compile error here
-/// rather than a silent default.
-fn default_open(kind: ItemKind) -> bool {
+/// are closed. The match is exhaustive with no wildcard, so a new [`ItemKind`]
+/// is a compile error here rather than a silent default.
+fn is_open_kind(kind: ItemKind) -> bool {
     match kind {
         ItemKind::Module
         | ItemKind::Type
@@ -927,6 +945,28 @@ mod tests {
             "the outline still locates the dropped item"
         );
         assert!(!regions[0].retained);
+        assert!(
+            !regions[0].default_open,
+            "a dropped signature is closed by default"
+        );
+    }
+
+    #[test]
+    fn a_dropped_container_is_closed_so_the_mode_actually_filters_it() {
+        // An inherent `impl` is a container, but the mode drops it: it must fold
+        // (not stay open and render its body as source), matching the plugin.
+        let lines = ["impl Widget {", "    fn size(&self) -> usize { 0 }", "}"];
+        let region = projected("impl Widget", None, ItemKind::TraitImplementation, 0, 2);
+        let file = assemble_outline(&supported("src/lib.rs"), Vec::new(), vec![region.clone()])
+            .expect("valid fixture");
+
+        let regions = fold_regions(&file, &lines);
+        assert_eq!(regions.len(), 1);
+        assert!(!regions[0].retained, "the impl is dropped by the mode");
+        assert!(
+            !regions[0].default_open,
+            "a dropped container folds so its body is hidden"
+        );
     }
 
     #[test]
@@ -956,11 +996,33 @@ mod tests {
         ];
 
         for kind in folded {
-            assert!(!default_open(kind), "{kind:?} must be folded by default");
+            assert!(!is_open_kind(kind), "{kind:?} must be folded by default");
         }
         for kind in open {
-            assert!(default_open(kind), "{kind:?} must be open by default");
+            assert!(is_open_kind(kind), "{kind:?} must be open by default");
         }
+    }
+
+    #[test]
+    fn default_open_closes_everything_the_mode_drops_of_any_kind() {
+        // The mode's filtering wins over the kind: a dropped container folds just
+        // as a dropped signature does, matching the plugin's `default_closed`.
+        assert!(
+            !default_open(false, ItemKind::TraitImplementation),
+            "a dropped container must be closed"
+        );
+        assert!(
+            !default_open(false, ItemKind::Function),
+            "a dropped signature must be closed"
+        );
+        assert!(
+            default_open(true, ItemKind::TraitImplementation),
+            "a retained container is open"
+        );
+        assert!(
+            !default_open(true, ItemKind::Function),
+            "a retained signature is closed"
+        );
     }
 
     #[test]

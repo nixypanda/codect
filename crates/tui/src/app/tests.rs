@@ -141,6 +141,29 @@ fn nested_outline(
 /// A container with a folded signature whose body is three hidden lines.
 const NESTED_SOURCE: &str = "impl Widget {\n    fn size(&self) -> usize {\n        let hidden = 42;\n        hidden\n    }\n}\n";
 
+/// A file whose single top-level container (`TraitImplementation`) is dropped by
+/// the requested mode, so the whole declaration folds to one row even though a
+/// container would otherwise default open.
+fn dropped_container_outline(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let container = item_at("impl Widget", None, ItemKind::TraitImplementation, 0, 5);
+    let child = item_at(
+        "impl Widget::size",
+        Some("impl Widget"),
+        ItemKind::Method,
+        1,
+        4,
+    );
+    let superset = vec![container, child];
+    // The requested-mode projection is empty: the outline is kept as the
+    // superset, but neither declaration is retained.
+    let outline = assemble_outline(&supported, Vec::new(), superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
 fn show_request() -> ShowRequest {
     ShowRequest {
         revision: "HEAD".to_owned(),
@@ -1698,6 +1721,43 @@ fn a_dropped_declaration_folds_and_marks_the_row_dropped() {
         })
         .expect("a fold row for the dropped child");
     assert_eq!(fold, (2, 3, true), "the child is dropped by the mode");
+}
+
+#[test]
+fn a_dropped_container_folds_to_one_row_tagged_hidden_in_mode() {
+    // The requested mode drops the container, so the body must not render as
+    // source: the whole declaration is one fold row marked `hidden in types`.
+    let app = show_app(vec![dropped_container_outline("a.rs", NESTED_SOURCE)]);
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.line_count(),
+        1,
+        "a dropped container is one fold row, not an open body"
+    );
+    assert_eq!(
+        show.visible_rows(),
+        &[VisibleRow::Fold {
+            line: 1,
+            region_index: 0,
+            hidden: 5,
+            dropped: true,
+        }]
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(
+        text.contains("hidden in types"),
+        "the dropped tag is missing: {text}"
+    );
+    assert!(
+        !text.contains("let hidden"),
+        "the dropped body must be absent: {text}"
+    );
+    assert!(
+        !text.contains("42"),
+        "the dropped body must be absent: {text}"
+    );
 }
 
 #[test]
