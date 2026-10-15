@@ -123,9 +123,8 @@ pub fn source_outline(path: &str, source: &str) -> SourceOutline {
 /// A [`SourceOutline`] whose requested-mode projection is `projection_text` and
 /// whose real source is `source`.
 ///
-/// An empty `projection_text` hides the file from the tree, mirroring the
-/// `show_visible` filter; `source` stays independent so a caller can prove the
-/// body renders source rather than the projection.
+/// `source` is independent of `projection_text`, so a caller can prove the body
+/// renders source rather than the projection.
 pub fn source_outline_with(path: &str, source: &str, projection_text: &str) -> SourceOutline {
     let path = SupportedPath::new(RepoPath::new(path).expect("benchmark path is valid"))
         .expect("benchmark path has a supported extension");

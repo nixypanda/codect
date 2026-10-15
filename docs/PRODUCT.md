@@ -253,8 +253,11 @@ Area configuration is declarative data. It defines names and paths only and is n
 The default CLI build includes an interactive terminal frontend for the same
 focused views.
 
-- `codect tui show` presents a file tree beside the canonical projection of the
-  selected file.
+- `codect tui show` is a source explorer: a file tree beside the real source of
+  the selected file, folded to the requested mode with semantic folds.
+  Containers open, signature bodies fold, and a declaration the mode drops is
+  folded with a `hidden in <mode>` marker; folds are presentation over the same
+  source, so projection and diff semantics are unchanged.
 - `codect tui diff range` presents a changed-file tree beside a side-by-side
   comparison of two snapshots — commits, the index, the worktree, or the empty
   tree — with `@@` hunk headers.

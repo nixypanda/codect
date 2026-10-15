@@ -44,8 +44,7 @@ fn source_outline(path: &str, source: &str) -> SourceOutline {
 }
 
 /// A `SourceOutline` whose requested-mode projection is `projection_text` and
-/// whose real source is `source`. An empty `projection_text` hides the file from
-/// the tree, matching `show_visible`.
+/// whose real source is `source`; the outline superset comes from `source`.
 fn source_outline_with(path: &str, source: &str, projection_text: &str) -> SourceOutline {
     let supported = supported(path);
     let span = whole_span(source);
@@ -399,18 +398,60 @@ fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
 }
 
 #[test]
-fn empty_projections_are_hidden_from_the_tree() {
+fn empty_projections_are_still_explorable_in_the_tree() {
     let app = show_app(vec![
-        source_outline("empty.rs", ""),
+        source_outline_with("empty.rs", "// comment only\n", ""),
         source_outline("full.rs", "x\n"),
     ]);
     let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, vec!["full.rs"]);
+    assert_eq!(labels, vec!["empty.rs", "full.rs"]);
     assert!(
-        !app.loaded
+        app.loaded
             .visible()
-            .contains(&RepoPath::new("empty.rs").unwrap())
+            .contains(&RepoPath::new("empty.rs").unwrap()),
+        "a file with an empty projection must still appear in the tree"
     );
+}
+
+/// A `SourceOutline` with no declarations at all: an empty outline over real
+/// source, as the engine builds for a file of only imports and comments.
+fn declaration_less(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let outline = assemble_outline(&supported, Vec::new(), Vec::new()).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+#[test]
+fn a_declaration_less_file_is_visible_and_renders_its_full_source() {
+    let source = "// only a comment\nuse std::fmt;\n";
+    let app = show_app(vec![
+        declaration_less("comments.rs", source),
+        source_outline("full.rs", "x\n"),
+    ]);
+
+    assert!(
+        app.loaded
+            .visible()
+            .contains(&RepoPath::new("comments.rs").unwrap()),
+        "a declaration-less file must appear in the tree"
+    );
+    let show = show_ref(&app);
+    assert_eq!(show.active_source(), Some(source));
+    assert_eq!(show.line_count(), 2, "no fold rows");
+    assert!(
+        show.visible_rows()
+            .iter()
+            .all(|row| matches!(row, VisibleRow::Source { .. })),
+        "a declaration-less file has no folds: {:?}",
+        show.visible_rows()
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("only a comment"), "{text}");
+    assert!(text.contains("use std::fmt;"), "{text}");
 }
 
 #[test]
@@ -1385,8 +1426,23 @@ fn the_status_bar_shows_mode_scope_and_hints() {
     assert!(header.contains("scope:"), "{header}");
     assert!(!header.contains("a.rs"), "{header}");
     assert!(footer.contains("a.rs"), "{footer}");
-    assert!(footer.contains("1 lines"), "{footer}");
+    assert!(footer.contains("1 of 1 lines"), "{footer}");
     assert!(footer.contains("help"), "{footer}");
+}
+
+#[test]
+fn the_status_bar_counts_visible_rows_against_source_lines() {
+    // The nested fixture folds the child's three-line body into one row, so
+    // three of the six source lines are visible rows.
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let text = buffer_text(&render(&app, 120, 20));
+    assert!(text.contains("3 of 6 lines"), "{text}");
 }
 
 #[test]
@@ -1523,10 +1579,14 @@ fn cell_x_of(buffer: &ratatui::buffer::Buffer, y: u16, needle: &str) -> Option<u
 }
 
 #[test]
-fn a_wide_terminal_shows_the_tree_and_the_projection() {
+fn a_wide_terminal_shows_the_tree_and_the_source() {
     let app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("Files"), "tree pane missing: {text}");
+    assert!(
+        text.contains(" Source "),
+        "source pane title missing: {text}"
+    );
     assert!(text.contains("pub fn a();"), "body missing: {text}");
 }
 
@@ -1751,19 +1811,51 @@ fn a_match_inside_a_fold_resolves_to_the_fold_row() {
 }
 
 #[test]
-fn stepping_a_search_inside_a_fold_stays_on_the_visible_rows() {
+fn stepping_to_a_match_inside_a_fold_opens_the_enclosing_regions() {
     let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
     let mut app = show_app(vec![nested_outline("a.rs", source, (0, 5), (1, 4), true)]);
-    if let Loaded::Show(show) = &mut app.loaded {
+    focus_content(&mut app);
+    // Fold everything so the matched text sits behind both a collapsed container
+    // and a collapsed signature.
+    let folded = press(&app, &[Key::Char('z'), Key::Char('M')]);
+    assert_eq!(show_ref(&folded).line_count(), 1, "everything is folded");
+    let mut searching = folded;
+    if let Loaded::Show(show) = &mut searching.loaded {
         show.set_search("needle");
     }
-    let (stepped, _) = update(Msg::Key(Key::Char('n')), &app);
-    let show = show_ref(&stepped);
 
-    assert_eq!(show.search.as_ref().expect("search").cursor, 1);
+    let (stepped, _) = update(Msg::Key(Key::Char('n')), &searching);
+    let show = show_ref(&stepped);
+    let search = show.search.as_ref().expect("search");
+    let matched = search.matches[search.cursor].line;
     assert!(
-        show.body.scroll <= (show.line_count() - 1) as u16,
-        "the scroll clamps to the visible rows"
+        matched == 3 || matched == 4,
+        "the match is in the folded body: {matched}"
+    );
+    assert_eq!(show.line_count(), 6, "every enclosing region opened");
+    assert_eq!(
+        show.visible_row_for_source_line(matched),
+        Some(matched - 1),
+        "the matched line is now a real source row"
+    );
+    let row = show.visible_row_for_source_line(matched).expect("a row");
+    let viewport = stepped.size.height as usize - 4;
+    assert!(
+        row >= show.body.scroll as usize && row < show.body.scroll as usize + viewport,
+        "the matched row is scrolled into view: row {row}, scroll {}",
+        show.body.scroll
+    );
+    assert!(
+        !show.search_ranges(matched).is_empty(),
+        "the match stays highlighted after the rows changed"
+    );
+
+    // The auto-open writes ordinary overrides, so `zM` can close it again.
+    let closed = press(&stepped, &[Key::Char('z'), Key::Char('M')]);
+    assert_eq!(
+        show_ref(&closed).line_count(),
+        1,
+        "an explicit zM closes the auto-opened regions"
     );
 }
 
@@ -2190,13 +2282,10 @@ fn a_tiny_terminal_shows_a_message_instead_of_a_frame() {
 
 #[test]
 fn an_empty_result_renders_a_clear_empty_state() {
-    let app = show_app(vec![source_outline("empty.rs", "")]);
+    let app = show_app(Vec::new());
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("No files"), "{text}");
-    assert!(
-        text.contains("No projected file content in this scope."),
-        "{text}"
-    );
+    assert!(text.contains("No source files in this scope."), "{text}");
 }
 
 #[test]
@@ -2300,9 +2389,17 @@ fn a_long_diff_line_is_wrapped_inside_its_pane() {
 fn the_help_overlay_lists_the_keys() {
     let mut app = two_files();
     app.overlay = Some(Overlay::Help);
-    let text = buffer_text(&render(&app, 100, 20));
+    let text = buffer_text(&render(&app, 100, 32));
     assert!(text.contains("help"), "{text}");
     assert!(text.contains("quit"), "{text}");
+    assert!(text.contains("Fold"), "the fold section is missing: {text}");
+    for key in ["Enter / za", "zo / zc", "zO / zC", "zR / zM"] {
+        assert!(text.contains(key), "missing fold key {key}: {text}");
+    }
+    assert!(
+        text.contains("wheel"),
+        "the popup must fit every line: {text}"
+    );
 }
 
 #[test]

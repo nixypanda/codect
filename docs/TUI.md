@@ -6,13 +6,13 @@ It is a default-on feature of the CLI.
 ## Launch
 
 ```text
-codect tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-codect tui diff range --mode <types|signatures> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
-codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui show --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... [REVISION]
+codect tui diff range --mode <types|signatures|tests> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui diff commits --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
-- `tui show` opens a file tree beside the canonical projection of the selected
-  file.
+- `tui show` opens a source explorer: a file tree beside the real source of the
+  selected file, folded to the requested mode.
 - `tui diff range` compares the two endpoint snapshots directly; either side
   may be a commit, `:index`, `:worktree`, or `:empty`, as in `codect diff`.
   `--merge-base` replaces the base with the merge base of the two commits and
@@ -25,9 +25,9 @@ codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>
   error, and it does not accept `--merge-base`.
 - Both views show a side-by-side projection diff.
 
-![codect tui show — a file tree beside the type projection](showcase/tui-show.png)
+![codect tui show — a file tree beside the mode-folded source](showcase/tui-show.png)
 
-*`codect tui show --mode types`: the file tree, the canonical projection, and the status bar.*
+*`codect tui show --mode types`: the file tree, the source folded to the mode, and the status bar.*
 
 The diff panes use Tokyo Night night/day syntax colors and added/deleted line
 backgrounds, brighter intra-line emphasis on the bytes that changed, and
@@ -46,12 +46,16 @@ full-width `@@` hunk bands. `NO_COLOR` disables all styling.
 | Key | Action |
 |---|---|
 | `q`, `Ctrl-C` | Quit |
-| `↑`/`↓` or `k`/`j` | Move in the focused commit list or tree, or scroll the content |
-| `←`/`→` or `h`/`l` | Fold/unfold the tree, or scroll the projection sideways |
+| `↑`/`↓` or `k`/`j` | Move in the focused commit list or tree, move the source cursor, or scroll the content |
+| `←`/`→` or `h`/`l` | Fold/unfold the tree, or pan the source sideways |
 | `g` / `G` | Jump to the top or bottom |
 | `PageUp`/`PageDown`, `Ctrl-U`/`Ctrl-D` | Move or scroll a half page |
 | `Tab`, `Shift-Tab` | Cycle through Commits, Files, and Diff in commits view; switch between tree and content elsewhere |
-| `Enter` | Open a file or fold a directory |
+| `Enter` | Open a file or fold a directory; in the source body, toggle the fold at the cursor |
+| `za` | Toggle the fold at the cursor (same as `Enter` in the body) |
+| `zo` / `zc` | Open or close the fold at the cursor |
+| `zO` / `zC` | Open or close the fold and its nested regions |
+| `zR` / `zM` | Unfold every region / fold every region |
 | `Ctrl-P` | Open the command palette |
 | `Ctrl-F` | Find a file by name |
 | `/`, then `n`/`N` | Search the current view and step through matches |
@@ -69,6 +73,22 @@ need not be memorized:
 ![codect command palette](showcase/tui-overlay.png)
 
 *`Ctrl-P` command palette; keys and palette entries dispatch the same actions.*
+
+## Folds
+
+`tui show` is a source explorer: the body renders the real source of the
+selected file with mode-driven folds.
+
+- Containers are open and signature bodies are folded, so the body shows the
+  shape of the code without the implementations.
+- A declaration the requested mode drops is folded too; its row is marked
+  `hidden in <mode>`.
+- Opening or closing a fold is an override that is sticky for the session: it
+  survives a mode reload and a selection change. Stepping to a search match
+  opens every region around the match so the highlighted text is visible, and a
+  later `zc`/`zM` closes it again.
+- The modes are `types`, `signatures`, and `tests`.
+- `zR` is the local "unfold all" view; `zM` folds everything again.
 
 ## Mouse
 

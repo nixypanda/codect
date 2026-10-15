@@ -1740,6 +1740,15 @@ codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>
 - A non-terminal invocation exits `1` with empty stdout and one diagnostic on
   stderr.
 
+`tui show` is a source explorer rather than a projection renderer: the body
+shows the real committed source of the selected file and folds it with the same
+outline and source spans the `codect.show.v1` document carries, so a declaration
+the requested mode drops is still located and folded with a `hidden in <mode>`
+marker. Containers open and signature bodies fold, and the fold overrides are
+session-sticky. The projection and diff models are untouched: the explorer only
+reads them, and the canonical projection and diff output stay byte-for-byte
+unchanged.
+
 ### 21.2 The Elm Architecture
 
 `tui` follows The Elm Architecture. Each page (`page/show.rs`, `page/diff.rs`)

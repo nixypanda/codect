@@ -366,7 +366,7 @@ pub(crate) fn render(
             ("Loading", "Projecting files…")
         } else {
             match ctx.loaded {
-                Loaded::Show(_) => ("No files", "No projected file content in this scope."),
+                Loaded::Show(_) => ("No files", "No source files in this scope."),
                 Loaded::Diff(_) => ("No changes", "Body-only edits are omitted."),
             }
         };

@@ -1,5 +1,5 @@
-//! The `show` page: one revision's projection, the tree selection over it, the
-//! body's scroll offsets, the committed search, and per-file highlighting.
+//! The `show` page: one revision's source explorer, the tree selection over it,
+//! the body's scroll offsets, the committed search, and per-file highlighting.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -401,6 +401,35 @@ impl Show {
         };
     }
 
+    /// Opens every region that encloses `line` so the matched source is visible,
+    /// then recomputes the visible rows.
+    ///
+    /// The auto-open writes ordinary sticky overrides, so an explicit `zc`/`zM`
+    /// can close the region again. A region already open (by default or by an
+    /// earlier override) is left alone, so no needless recompute runs.
+    pub fn reveal_source_line(&mut self, line: usize) {
+        let Some(path) = self.selected.clone() else {
+            return;
+        };
+        self.ensure_folds();
+        let Some(regions) = self.folds.regions(&path).map(<[FoldRegion]>::to_vec) else {
+            return;
+        };
+        let mut opened = false;
+        for region in &regions {
+            if region.start_line <= line
+                && line <= region.end_line
+                && !self.fold_state.is_open(&path, region)
+            {
+                self.fold_state.set(&path, &region.stable_key, true);
+                opened = true;
+            }
+        }
+        if opened {
+            self.ensure_visible_rows();
+        }
+    }
+
     /// Scrolls the body so the row covering a source line is visible.
     fn scroll_to_source_line(&mut self, line: usize, height: u16) {
         if let Some(row) = self.visible_row_for_source_line(line) {
@@ -467,12 +496,12 @@ impl Show {
 }
 
 /// Builds a show scope's visible paths from its files.
+///
+/// Every file the engine returned is visible, in the engine's order. The body
+/// renders real source, so a file whose requested-mode projection is empty — one
+/// of only imports or comments, say — is still explorable.
 pub fn show_visible(files: &[SourceOutline]) -> Vec<RepoPath> {
-    files
-        .iter()
-        .filter(|file| !file.outline.projection.canonical_text().is_empty())
-        .map(|file| file.path().clone())
-        .collect()
+    files.iter().map(|file| file.path().clone()).collect()
 }
 
 /// Builds the visible-row projection from a file's fold regions.
@@ -597,12 +626,14 @@ pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
         }
         Msg::StepSearch(forward) => {
             if let Some(matched) = advance_search(&mut page.search, forward) {
+                page.reveal_source_line(matched.line);
                 page.scroll_to_source_line(matched.line, ctx.height);
             }
             Vec::new()
         }
         Msg::ScrollToCurrent => {
             if let Some(matched) = current_match(&page.search) {
+                page.reveal_source_line(matched.line);
                 page.scroll_to_source_line(matched.line, ctx.height);
             }
             Vec::new()
@@ -876,7 +907,7 @@ pub(crate) fn view(
     edge: Edge,
 ) {
     let theme = ctx.theme;
-    let block = pane_block(" Projection ", focused, theme, edge);
+    let block = pane_block(" Source ", focused, theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -884,9 +915,9 @@ pub(crate) fn view(
         let (title, detail) = if ctx.busy && ctx.tree_empty {
             ("Loading", "Projecting files…")
         } else if ctx.tree_empty {
-            ("No files", "No projected file content in this scope.")
+            ("No files", "No source files in this scope.")
         } else {
-            ("No file selected", "Select a file to view its projection.")
+            ("No file selected", "Select a file to view its source.")
         };
         render_empty(frame, inner, title, detail, theme);
         return;
