@@ -416,13 +416,20 @@ fn commit_picker_renders_rows_and_selected_revision_labels() {
 
 #[test]
 fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
-    let app = commits_app(12);
-    let (mut clicked, mut commands) = update(Msg::Mouse(click(4, 3)), &app);
+    let mut app = commits_app(12);
+    app.size = Size {
+        width: 100,
+        height: 20,
+    };
+    // The picker is a full-width band pinned to the bottom: the content spans
+    // rows 1..=18, the band is 9 rows tall, so its outer top is row 10 and its
+    // first inner row is 11. A click on the second inner row reaches index 1.
+    let (mut clicked, mut commands) = update(Msg::Mouse(click(4, 12)), &app);
     coalesce_commit_loads(&mut clicked, &mut commands);
     assert_eq!(diff_focus_of(&clicked), Focus::Commits);
     assert!(matches!(commands.as_slice(), [Cmd::Step { index: 1, .. }]));
 
-    let (mut wheeled, mut commands) = update(Msg::Mouse(scroll(4, 3, false)), &app);
+    let (mut wheeled, mut commands) = update(Msg::Mouse(scroll(4, 12, false)), &app);
     coalesce_commit_loads(&mut wheeled, &mut commands);
     assert_eq!(diff_focus_of(&wheeled), Focus::Commits);
     assert!(matches!(commands.as_slice(), [Cmd::Step { index: 3, .. }]));
@@ -430,13 +437,14 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     let mut narrow = app.clone();
     narrow.size = Size {
         width: 60,
-        height: 30,
+        height: 20,
     };
-    let (mut narrow_clicked, mut commands) = update(Msg::Mouse(click(4, 3)), &narrow);
+    let (mut narrow_clicked, mut commands) = update(Msg::Mouse(click(4, 12)), &narrow);
     coalesce_commit_loads(&mut narrow_clicked, &mut commands);
     assert!(matches!(commands.as_slice(), [Cmd::Step { index: 1, .. }]));
 
-    let (files, commands) = update(Msg::Mouse(click(4, 11)), &app);
+    // A click above the band lands in the Files tree and emits no command.
+    let (files, commands) = update(Msg::Mouse(click(4, 3)), &app);
     assert_eq!(diff_focus_of(&files), Focus::Tree);
     assert!(commands.is_empty());
 }

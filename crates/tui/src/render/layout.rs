@@ -118,12 +118,42 @@ pub(crate) struct BodyLayout {
     pub dividers: Vec<Rect>,
 }
 
+// The commit picker's band height cap, including its top and bottom borders.
+const COMMITS_BAND_MAX_HEIGHT: u16 = 9;
+
+// The fewest rows kept above the band for the tree and diff panes.
+const BODY_MIN_HEIGHT: u16 = 3;
+
+// Splits the body into a top strip and a bottom commits band. The band is
+// pinned to the bottom, capped at [`COMMITS_BAND_MAX_HEIGHT`], and never grows
+// past the rows left over after reserving [`BODY_MIN_HEIGHT`] for the top.
+fn split_commits_band(content: Rect) -> (Rect, Rect) {
+    let band_height = content
+        .height
+        .min(COMMITS_BAND_MAX_HEIGHT)
+        .min(content.height.saturating_sub(BODY_MIN_HEIGHT));
+    let top = Rect {
+        height: content.height - band_height,
+        ..content
+    };
+    let band = Rect {
+        y: content.y + (content.height - band_height),
+        height: band_height,
+        ..content
+    };
+    (top, band)
+}
+
 // The body panes for the current size, content, and focus.
 //
 // Shared by `view::render_body` and mouse hit-testing, so a click or wheel maps
-// to exactly the pane that was drawn. Below [`SIDE_BY_SIDE_MIN_WIDTH`] only the
-// focused pane occupies the body; a focused diff stacks old over new. When the
-// tree is focused in a narrow terminal every pane is hidden except the tree.
+// to exactly the pane that was drawn. In a commits diff the picker is a
+// full-width band pinned to the bottom of the body, capped at
+// [`COMMITS_BAND_MAX_HEIGHT`] rows with at least [`BODY_MIN_HEIGHT`] rows kept
+// above it. Below [`SIDE_BY_SIDE_MIN_WIDTH`] the top strip shows only the
+// focused pane; a focused diff stacks old over new. When the tree is focused in
+// a narrow terminal every pane is hidden except the tree, and the band stays
+// pinned underneath.
 pub(crate) fn body_layout(
     content: Rect,
     tree_percent: u16,
@@ -132,12 +162,47 @@ pub(crate) fn body_layout(
     focus: Focus,
 ) -> BodyLayout {
     if content.width < SIDE_BY_SIDE_MIN_WIDTH {
-        let slots = match (is_diff, focus) {
-            (true, Focus::Commits) if has_commits => vec![Slot {
+        if is_diff && has_commits {
+            let (top, band) = split_commits_band(content);
+            // On the shortest bodies the strip is too small to give both
+            // stacked diff sides a bordered box; the split still tiles and a
+            // focused diff just shows one side's border without content rows.
+            let mut slots = match focus {
+                Focus::Tree => vec![Slot {
+                    pane: PaneSlot::Tree,
+                    outer: top,
+                    edge: Edge::Solo,
+                }],
+                Focus::Content | Focus::Commits => {
+                    let halves =
+                        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+                            .split(top);
+                    vec![
+                        Slot {
+                            pane: PaneSlot::Old,
+                            outer: halves[0],
+                            edge: Edge::Solo,
+                        },
+                        Slot {
+                            pane: PaneSlot::New,
+                            outer: halves[1],
+                            edge: Edge::Solo,
+                        },
+                    ]
+                }
+            };
+            slots.push(Slot {
                 pane: PaneSlot::Commits,
-                outer: content,
+                outer: band,
                 edge: Edge::Solo,
-            }],
+            });
+            return BodyLayout {
+                slots,
+                dividers: Vec::new(),
+            };
+        }
+
+        let slots = match (is_diff, focus) {
             (_, Focus::Tree) => vec![Slot {
                 pane: PaneSlot::Tree,
                 outer: content,
@@ -185,9 +250,33 @@ pub(crate) fn body_layout(
             vec![tree_percent, 100 - tree_percent],
         )
     };
+
+    if is_diff && has_commits {
+        // The band takes the bottom; the columns tile only the strip above it,
+        // so the dividers never cross into the picker.
+        let (top, band) = split_commits_band(content);
+        let (columns, dividers) = split_with_dividers(top, &weights);
+        let last = panes.len() - 1;
+        let mut slots: Vec<Slot> = panes
+            .into_iter()
+            .enumerate()
+            .map(|(index, pane)| Slot {
+                pane,
+                outer: columns[index],
+                edge: edge_for(index, last),
+            })
+            .collect();
+        slots.push(Slot {
+            pane: PaneSlot::Commits,
+            outer: band,
+            edge: Edge::Solo,
+        });
+        return BodyLayout { slots, dividers };
+    }
+
     let (columns, dividers) = split_with_dividers(content, &weights);
     let last = panes.len() - 1;
-    let mut slots: Vec<Slot> = panes
+    let slots: Vec<Slot> = panes
         .into_iter()
         .enumerate()
         .map(|(index, pane)| Slot {
@@ -196,35 +285,6 @@ pub(crate) fn body_layout(
             edge: edge_for(index, last),
         })
         .collect();
-    if has_commits && is_diff {
-        let left = slots.remove(0);
-        // Leave at least three rows for Files. At normal sizes the picker has
-        // seven visible rows plus its borders, and shrinks on short terminals.
-        let commits_height = left
-            .outer
-            .height
-            .min(9)
-            .min(left.outer.height.saturating_sub(3));
-        let commits = Slot {
-            pane: PaneSlot::Commits,
-            outer: Rect {
-                height: commits_height,
-                ..left.outer
-            },
-            edge: left.edge,
-        };
-        let files = Slot {
-            pane: PaneSlot::Tree,
-            outer: Rect {
-                y: left.outer.y + commits_height,
-                height: left.outer.height - commits_height,
-                ..left.outer
-            },
-            edge: left.edge,
-        };
-        slots.insert(0, files);
-        slots.insert(0, commits);
-    }
     BodyLayout { slots, dividers }
 }
 
@@ -556,37 +616,126 @@ mod tests {
     }
 
     #[test]
-    fn commits_split_only_the_left_column_and_adapt_to_height() {
-        let normal = body_layout(content(), 30, true, true, Focus::Commits);
-        let panes: Vec<_> = normal.slots.iter().map(|slot| slot.pane).collect();
+    fn commits_form_a_bottom_band_and_adapt_to_height() {
+        // The picker is a full-width band pinned to the bottom; the columns tile
+        // only the strip above it, and the dividers never cross into the band.
+        let wide = body_layout(content(), 30, true, true, Focus::Commits);
+        let panes: Vec<_> = wide.slots.iter().map(|slot| slot.pane).collect();
         assert_eq!(
             panes,
             vec![
-                PaneSlot::Commits,
                 PaneSlot::Tree,
                 PaneSlot::Old,
-                PaneSlot::New
+                PaneSlot::New,
+                PaneSlot::Commits
             ]
         );
-        assert_eq!(normal.slots[0].outer.height, 9);
-        assert_eq!(normal.slots[1].outer.height, content().height - 9);
-        assert_eq!(normal.slots[0].outer.width, normal.slots[1].outer.width);
-        assert_eq!(normal.slots[2].outer.height, content().height);
-
-        let short = body_layout(Rect::new(0, 1, 100, 6), 30, true, true, Focus::Commits);
-        assert_eq!(short.slots[0].outer.height, 3);
-        assert_eq!(short.slots[1].outer.height, 3);
-
-        let narrow = Rect::new(0, 1, 60, 20);
-        for (focus, expected) in [
-            (Focus::Commits, PaneSlot::Commits),
-            (Focus::Tree, PaneSlot::Tree),
-        ] {
-            let layout = body_layout(narrow, 30, true, true, focus);
-            assert_eq!(layout.slots.len(), 1);
-            assert_eq!(layout.slots[0].pane, expected);
-            assert_eq!(layout.slots[0].outer, narrow);
+        let band = &wide.slots[3];
+        assert_eq!(band.edge, Edge::Solo);
+        assert_eq!(band.outer.width, content().width);
+        assert_eq!(band.outer.height, 9);
+        assert_eq!(band.outer.y, content().y + content().height - 9);
+        for slot in &wide.slots[..3] {
+            assert_eq!(slot.outer.height, content().height - 9);
         }
+        assert_eq!(wide.dividers.len(), 2);
+        for divider in &wide.dividers {
+            assert_eq!(divider.height, content().height - 9);
+        }
+
+        // A short body keeps three rows above the band and three rows of band.
+        let short = body_layout(Rect::new(0, 1, 100, 6), 30, true, true, Focus::Commits);
+        let panes: Vec<_> = short.slots.iter().map(|slot| slot.pane).collect();
+        assert_eq!(
+            panes,
+            vec![
+                PaneSlot::Tree,
+                PaneSlot::Old,
+                PaneSlot::New,
+                PaneSlot::Commits
+            ]
+        );
+        assert_eq!(short.slots[3].outer.height, 3);
+        for slot in &short.slots[..3] {
+            assert_eq!(slot.outer.height, 3);
+        }
+
+        // Narrow: the band stays pinned and the focused pane fills the strip
+        // above; a focused commit list shows the diff it selects.
+        let narrow = Rect::new(0, 1, 60, 20);
+        let commits = body_layout(narrow, 30, true, true, Focus::Commits);
+        let panes: Vec<_> = commits.slots.iter().map(|slot| slot.pane).collect();
+        assert_eq!(panes, vec![PaneSlot::Old, PaneSlot::New, PaneSlot::Commits]);
+        assert!(commits.dividers.is_empty());
+        let band = commits.slots.last().expect("a commits band");
+        assert_eq!(band.outer.width, narrow.width);
+        assert_eq!(band.outer.y, narrow.y + narrow.height - band.outer.height);
+        assert_eq!(band.outer.y + band.outer.height, narrow.y + narrow.height);
+
+        // The two diff sides tile the strip and abut the band directly.
+        let old = &commits.slots[0];
+        let new = &commits.slots[1];
+        assert_eq!(old.outer.y, narrow.y);
+        assert_eq!(old.outer.y + old.outer.height, new.outer.y);
+        assert_eq!(new.outer.y + new.outer.height, band.outer.y);
+
+        let tree = body_layout(narrow, 30, true, true, Focus::Tree);
+        let panes: Vec<_> = tree.slots.iter().map(|slot| slot.pane).collect();
+        assert_eq!(panes, vec![PaneSlot::Tree, PaneSlot::Commits]);
+        assert_eq!(tree.slots[1].outer, band.outer);
+    }
+
+    #[test]
+    fn commits_band_spans_the_width_across_the_responsive_boundary() {
+        // Width 80 is the first side-by-side layout; 79 stacks the diff instead.
+        // The band is full width at the bottom either way.
+        for width in [80u16, 79] {
+            let content = Rect::new(0, 1, width, 20);
+            let layout = body_layout(content, 30, true, true, Focus::Commits);
+            let band = layout
+                .slots
+                .iter()
+                .find(|slot| slot.pane == PaneSlot::Commits)
+                .expect("a commits band");
+            assert_eq!(band.outer.x, content.x);
+            assert_eq!(band.outer.width, width);
+            assert_eq!(band.outer.y + band.outer.height, content.y + content.height);
+        }
+
+        // At the minimum body height the band keeps the bottom three rows and
+        // the strip above still tiles, even though the two stacked diff sides
+        // are squeezed into the remaining rows.
+        let tiny = Rect::new(0, 1, 79, 6);
+        let layout = body_layout(tiny, 30, true, true, Focus::Commits);
+        let band = layout
+            .slots
+            .iter()
+            .find(|slot| slot.pane == PaneSlot::Commits)
+            .expect("a commits band");
+        assert_eq!(band.outer.height, 3);
+        assert_eq!(band.outer.y, tiny.y + tiny.height - 3);
+        // The stacked sides start at the top and abut the band, so the strip is
+        // exactly the rows above the band rather than an overlapping band.
+        let old = layout
+            .slots
+            .iter()
+            .find(|slot| slot.pane == PaneSlot::Old)
+            .expect("an old side");
+        let new = layout
+            .slots
+            .iter()
+            .find(|slot| slot.pane == PaneSlot::New)
+            .expect("a new side");
+        assert_eq!(old.outer.y, tiny.y);
+        assert_eq!(old.outer.y + old.outer.height, new.outer.y);
+        assert_eq!(new.outer.y + new.outer.height, band.outer.y);
+        let stacked: u16 = layout
+            .slots
+            .iter()
+            .filter(|slot| matches!(slot.pane, PaneSlot::Old | PaneSlot::New))
+            .map(|slot| slot.outer.height)
+            .sum();
+        assert_eq!(stacked, 3);
     }
 
     #[test]

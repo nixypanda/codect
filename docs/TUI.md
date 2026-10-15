@@ -19,9 +19,10 @@ codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>
   labels the base pane, matching `codect diff`.
 - `tui diff commits` lists the commits after `BASE` through `TARGET` on
   `TARGET`'s first-parent chain, newest first; selecting a commit compares it
-  with its first parent. `BASE` must be on that chain. The commit picker sits
-  above the changed-file tree. It needs commit sides, so `:index`, `:worktree`,
-  and `:empty` are a usage error, and it does not accept `--merge-base`.
+  with its first parent. `BASE` must be on that chain. The commit picker is
+  pinned as a full-width band at the bottom of the body, above the status bar.
+  It needs commit sides, so `:index`, `:worktree`, and `:empty` are a usage
+  error, and it does not accept `--merge-base`.
 - Both views show a side-by-side projection diff.
 
 ![codect tui show — a file tree beside the type projection](showcase/tui-show.png)
@@ -36,7 +37,7 @@ full-width `@@` hunk bands. `NO_COLOR` disables all styling.
 
 *`codect tui diff range`: a side-by-side projection diff with hunk bands.*
 
-![codect tui diff commits — commit picker above the changed-file tree](showcase/tui-diff-commits.png)
+![codect tui diff commits — commit picker pinned as a band below the diff](showcase/tui-diff-commits.png)
 
 *`codect tui diff commits`: the commit picker, the changed-file tree, and the selected step's diff.*
 
@@ -100,8 +101,11 @@ terminal. Overlays stay keyboard-driven while they are open.
 - The frontend is read-only: it reads committed blobs and never writes the
   repository, worktree, or index.
 - Terminals narrower than 40 columns or shorter than 8 rows show a minimal
-  "terminal too small" view; between 40 and 79 columns one region is shown at a
-  time, and at 80 columns or wider the tree and content share the screen.
+  "terminal too small" view; between 40 and 79 columns one focused region is
+  shown at a time, and at 80 columns or wider the tree and content share the
+  screen. The commits view keeps its picker band pinned at the bottom of the
+  body on every width; above the band, narrow terminals show the focused pane,
+  or the two stacked diff sides when Diff or Commits is focused.
 
 ## Building without the frontend
 

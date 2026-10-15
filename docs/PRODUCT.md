@@ -258,7 +258,8 @@ focused views.
 - `codect tui diff range` presents a changed-file tree beside a side-by-side
   comparison of two snapshots — commits, the index, the worktree, or the empty
   tree — with `@@` hunk headers.
-- `codect tui diff commits` adds a scrollable commit list above the file tree.
+- `codect tui diff commits` adds a scrollable commit list below the file tree
+  and diff, pinned as a full-width band at the bottom of the body.
   It follows the target's first-parent chain after the base, newest first, so it
   needs commit endpoints.
   Selecting a commit compares that commit with its first parent; commits with
