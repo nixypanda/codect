@@ -214,37 +214,17 @@ impl Loaded {
         }
     }
 
-    /// The largest vertical scroll offset the body can take.
-    pub fn max_scroll(&self) -> u16 {
-        let count = match self {
-            Self::Show(show) => show.line_count(),
-            Self::Diff(diff) => diff.rows().len(),
-        };
-        count.saturating_sub(1) as u16
-    }
-
-    /// The largest horizontal scroll offset the body can take.
-    pub fn max_hscroll(&self) -> u16 {
-        match self {
-            Self::Show(show) => show.max_line_width().saturating_sub(1) as u16,
-            Self::Diff(_) => 0,
-        }
-    }
-
-    /// Clamps both scroll offsets after the terminal changed size.
-    pub fn clamp_scroll(&mut self) {
-        if let Self::Show(show) = self {
-            show.ensure_visible_rows();
-        }
-        let max = self.max_scroll();
-        let max_h = self.max_hscroll();
+    /// Clamps both scroll offsets after the terminal changed size and scrolls a
+    /// now-out-of-view cursor row back into view.
+    pub fn clamp_scroll(&mut self, height: u16) {
         match self {
             Self::Show(show) => {
-                show.body.scroll = show.body.scroll.min(max);
-                show.body.hscroll = show.body.hscroll.min(max_h);
+                show.ensure_visible_rows();
                 show.reanchor_cursor();
+                show.clamp_view(height);
             }
             Self::Diff(diff) => {
+                let max = diff.rows().len().saturating_sub(1) as u16;
                 let current = diff.body_scroll();
                 diff.set_body_scroll(current.min(max));
             }

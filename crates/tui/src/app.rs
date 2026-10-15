@@ -255,7 +255,7 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
         Msg::Mouse(event) => mouse(&mut next, event, &mut cmds),
         Msg::Resize { width, height } => {
             next.size = Size { width, height };
-            next.loaded.clamp_scroll();
+            next.loaded.clamp_scroll(height);
         }
         Msg::Tick => {
             next.chrome.spinner = next.chrome.spinner.wrapping_add(1);
@@ -547,6 +547,13 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     }
     if let Some(action) = command_for(key, app) {
         apply_action(app, action, cmds);
+        return;
+    }
+    // A bare `Enter` in the source body toggles the fold at the cursor, as the
+    // help and docs advertise. The tree's `Enter` (open a file or a directory)
+    // is reached through `focus_key`, so this only fires over the body.
+    if key == Key::Enter && show_body_focused(app) {
+        apply_action(app, Action::Show(ShowAction::ToggleFold), cmds);
         return;
     }
     if key == Key::Char('z') && show_body_focused(app) {

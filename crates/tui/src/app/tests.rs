@@ -2107,6 +2107,194 @@ fn z_open_all_and_close_all_set_every_region() {
     assert_eq!(show_ref(&opened).line_count(), 6, "zR opens everything");
 }
 
+/// Asserts both body offsets are within the current projection and the cursor
+/// row sits inside a `viewport(height)`-row window.
+fn assert_view_consistent(show: &Show, height: u16) {
+    let count = show.line_count();
+    assert!(count > 0, "the projection must not be empty");
+    assert!(
+        (show.body.scroll as usize) < count,
+        "scroll {} must be below line_count {}",
+        show.body.scroll,
+        count
+    );
+    let max_h = show.max_line_width().saturating_sub(1) as u16;
+    assert!(
+        show.body.hscroll <= max_h,
+        "hscroll {} must be <= max_line_width-1 {}",
+        show.body.hscroll,
+        max_h
+    );
+    let viewport = height.saturating_sub(4) as usize;
+    assert!(viewport > 0, "the test viewport must be non-empty");
+    if let Some(row) = show.cursor_row() {
+        assert!(
+            row >= show.body.scroll as usize && row < show.body.scroll as usize + viewport,
+            "cursor row {row} must be inside [{}..{})",
+            show.body.scroll,
+            show.body.scroll as usize + viewport
+        );
+    }
+}
+
+/// A container with `methods` one-line folded methods, so the projection is
+/// taller than a small viewport while still containing fold regions.
+fn multi_method_outline(path: &str, methods: usize) -> SourceOutline {
+    let supported = supported(path);
+    let mut source = String::from("impl Widget {\n");
+    for index in 0..methods {
+        source.push_str(&format!("    fn m{index}(&self) {{}}\n"));
+    }
+    source.push_str("}\n");
+    let last = methods + 1;
+    let container = item_at("impl Widget", None, ItemKind::TraitImplementation, 0, last);
+    let superset: Vec<ProjectedItem> = std::iter::once(container)
+        .chain((0..methods).map(|index| {
+            let line = index + 1;
+            item_at(
+                &format!("impl Widget::m{index}"),
+                Some("impl Widget"),
+                ItemKind::Method,
+                line,
+                line,
+            )
+        }))
+        .collect();
+    let outline = assemble_outline(&supported, superset.clone(), superset).expect("valid fixture");
+    SourceOutline { outline, source }
+}
+
+#[test]
+fn shrinking_fold_actions_clamp_the_scroll_and_keep_the_cursor_in_view() {
+    let focus = |height: u16| {
+        let mut app = folder_app();
+        app.size.height = height;
+        focus_content(&mut app);
+        app
+    };
+    // `G` scrolls to the bottom of a two-row viewport; a shrinking fold then
+    // leaves `scroll` past the new row count unless it is clamped.
+    for (name, keys) in [
+        ("zc", [Key::Char('z'), Key::Char('c')].as_slice()),
+        ("zC", [Key::Char('z'), Key::Char('C')].as_slice()),
+        ("zM", [Key::Char('z'), Key::Char('M')].as_slice()),
+    ] {
+        let bottom = press(&focus(6), &[Key::Char('G')]);
+        assert!(show_ref(&bottom).body.scroll > 0, "{name}: G scrolled");
+        let folded = press(&bottom, keys);
+        assert_eq!(
+            show_ref(&folded).line_count(),
+            1,
+            "{name}: everything folds"
+        );
+        assert_view_consistent(show_ref(&folded), 6);
+    }
+
+    // A widening action must keep the cursor row in view too.
+    let bottom = press(&focus(6), &[Key::Char('G')]);
+    let opened = press(&bottom, &[Key::Char('z'), Key::Char('R')]);
+    assert_eq!(show_ref(&opened).line_count(), 6, "zR opens everything");
+    assert_view_consistent(show_ref(&opened), 6);
+}
+
+#[test]
+fn fold_all_after_a_bottom_jump_leaves_source_rows_to_draw() {
+    // The exact blank-pane reproduction: jump to the bottom of a tall
+    // projection, fold everything, and the pane must still draw the one row
+    // rather than starting its draw past the end.
+    let mut app = show_app(vec![multi_method_outline("a.rs", 6)]);
+    app.size.height = 8;
+    focus_content(&mut app);
+    let bottom = press(&app, &[Key::Char('G')]);
+    assert!(
+        show_ref(&bottom).body.scroll > 0,
+        "G scrolled the tall body"
+    );
+
+    let folded = press(&bottom, &[Key::Char('z'), Key::Char('M')]);
+    let show = show_ref(&folded);
+    assert_eq!(show.line_count(), 1, "everything folds to one row");
+    assert_eq!(show.body.scroll, 0, "the scroll is clamped back to zero");
+    assert_view_consistent(show, 8);
+
+    let text = buffer_text(&render(&folded, 100, 8));
+    assert!(
+        text.contains("impl Widget {"),
+        "the pane must not be blank: {text}"
+    );
+}
+
+#[test]
+fn a_fold_action_clamps_hscroll_into_range() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    // Pan to the widest the fold row's suffix allows.
+    let mut wide = app;
+    for _ in 0..128 {
+        wide = press(&wide, &[Key::Char('l')]);
+    }
+    let before = show_ref(&wide).body.hscroll;
+    assert!(before > 0, "the body panned right");
+    assert_eq!(
+        before as usize,
+        show_ref(&wide).max_line_width() - 1,
+        "panning stops at the widest visible row"
+    );
+
+    // Opening the region drops the fold suffix and narrows the projection.
+    let opened = press(&wide, &[Key::Char('z'), Key::Char('R')]);
+    assert!(
+        show_ref(&opened).body.hscroll < before,
+        "hscroll must shrink with the projection"
+    );
+    assert_view_consistent(show_ref(&opened), wide.size.height);
+}
+
+#[test]
+fn a_resize_scrolls_the_cursor_back_into_view() {
+    let source: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+    let mut app = show_app(vec![source_outline("a.rs", &source)]);
+    app.size.height = 20;
+    focus_content(&mut app);
+    let bottom = press(&app, &[Key::Char('G')]);
+    assert_eq!(show_ref(&bottom).body.cursor_line, 30);
+
+    let (resized, _) = update(
+        Msg::Resize {
+            width: 100,
+            height: 6,
+        },
+        &bottom,
+    );
+    let resized = settle(resized);
+    let show = show_ref(&resized);
+    assert_eq!(
+        show.body.cursor_line, 30,
+        "the resize keeps the cursor on its line"
+    );
+    assert_view_consistent(show, 6);
+}
+
+#[test]
+fn a_bare_enter_toggles_the_fold_in_the_body() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    // Move onto the folded child, then toggle it with a bare Enter.
+    let app = press(&app, &[Key::Char('j')]);
+    assert_eq!(show_ref(&app).body.cursor_line, 2);
+    assert_eq!(show_ref(&app).line_count(), 3);
+
+    let expanded = press(&app, &[Key::Enter]);
+    assert_eq!(show_ref(&expanded).line_count(), 6, "Enter opens the fold");
+
+    let collapsed = press(&expanded, &[Key::Enter]);
+    assert_eq!(
+        show_ref(&collapsed).line_count(),
+        3,
+        "Enter closes it again"
+    );
+}
+
 #[test]
 fn the_z_prefix_cancels_on_an_unrelated_key_and_on_esc() {
     let mut app = folder_app();

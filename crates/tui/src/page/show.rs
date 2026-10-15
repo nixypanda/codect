@@ -401,6 +401,25 @@ impl Show {
         };
     }
 
+    /// Clamps both body offsets to the current projection and scrolls the cursor
+    /// row back into view.
+    ///
+    /// Every change to the visible-row projection funnels through here: a fold
+    /// action can shrink the projection below the current `scroll` (blanking the
+    /// pane) or shrink it below `hscroll` (clipping every row), and a resize can
+    /// leave the cursor outside the new viewport. `scroll` and `hscroll` are
+    /// clamped before the cursor is revealed, so `scroll_to_row` sees the real
+    /// bounds.
+    pub fn clamp_view(&mut self, height: u16) {
+        let max = self.line_count().saturating_sub(1) as u16;
+        self.body.scroll = self.body.scroll.min(max);
+        let max_h = self.max_line_width().saturating_sub(1) as u16;
+        self.body.hscroll = self.body.hscroll.min(max_h);
+        if let Some(row) = self.cursor_row() {
+            self.scroll_to_row(row, height);
+        }
+    }
+
     /// Opens every region that encloses `line` so the matched source is visible,
     /// then recomputes the visible rows.
     ///
@@ -613,7 +632,7 @@ pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
     match msg {
         Msg::Key(key) => body_key(page, key, ctx),
         Msg::Fold(action) => {
-            fold_action(page, action);
+            fold_action(page, action, ctx.height);
             Vec::new()
         }
         Msg::Scroll(delta) => {
@@ -723,7 +742,7 @@ fn cursor_action(page: &mut Show, action: GlobalAction, ctx: &Ctx) {
 }
 
 /// Applies one semantic fold action to the region at the cursor.
-fn fold_action(page: &mut Show, action: ShowAction) {
+fn fold_action(page: &mut Show, action: ShowAction, height: u16) {
     let Some(path) = page.selected.clone() else {
         return;
     };
@@ -778,6 +797,7 @@ fn fold_action(page: &mut Show, action: ShowAction) {
     }
     page.ensure_visible_rows();
     page.reanchor_cursor();
+    page.clamp_view(height);
 }
 
 /// The region a fold action targets: the fold row under the cursor, otherwise
