@@ -156,7 +156,7 @@ pub struct Range {
     pub highlight: DiffHighlights,
 }
 
-/// The commits view: a picker above the file tree, one step's diff shown.
+/// The commits view: one step's diff shown above a full-width picker band.
 #[derive(Clone, Debug)]
 pub struct Commits {
     pub focus: CommitsFocus,

@@ -1786,12 +1786,14 @@ keeps no persistent cache.
 - A file tree sits beside a content region, separated by a shared single-column
   divider (panes drop the borders they share, so no border is drawn twice).
   `Tab` toggles between them in show and range views. In commits view, a
-  scrollable commit picker sits above the file tree in the left column, capped
-  at seven visible rows on normal terminals and reduced on short terminals;
+  scrollable commit picker is pinned as a full-width band at the bottom of the
+  body, below the file tree and diff and above the status bar, capped at nine
+  rows including its borders with at least three rows kept above it;
   `Tab` cycles Commits, Files, and Diff. For a diff the two sides are one focus unit, and
-  vertical scrolling moves both in lockstep; below 80 columns the sides stack
-  vertically when Diff is focused, while Commits or Files takes the full width
-  when focused. The same geometry determines drawing and mouse hit testing.
+  vertical scrolling moves both in lockstep; below 80 columns the strip above
+  the band shows only the focused pane, stacking the two diff sides vertically
+  when Diff or Commits is focused, while Files takes the full strip when
+  focused. The same geometry determines drawing and mouse hit testing.
 - Modal overlays capture keys until dismissed: help, revision entry, the scope
   chooser, the mode picker, the command palette (`Ctrl-P`), the fuzzy file
   finder (`Ctrl-F`), and search (`/`). Every overlay dims the frame behind it.

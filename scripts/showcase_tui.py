@@ -34,8 +34,8 @@ FRAMES = [
      "intra-line emphasis on the bytes that changed."),
     ("tui-diff-commits", "Terminal frontend — diff commits",
      "codect tui diff commits --mode types",
-     "A scrollable commit picker above the changed-file tree. Selecting a commit "
-     "diffs it against its first parent."),
+     "A scrollable commit picker pinned as a full-width band below the diff. "
+     "Selecting a commit diffs it against its first parent."),
     ("tui-overlay", "Terminal frontend — command palette",
      "codect tui show --mode types  ·  Ctrl-P",
      "Every action is reachable from the command palette, so bindings need not be "

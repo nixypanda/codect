@@ -897,6 +897,10 @@ fn step_in_range(app: &App, index: usize) -> bool {
 // Derived state
 // ---------------------------------------------------------------------------
 
+/// Whether the diff body is drawn, so `settle` knows whether to highlight it.
+/// It is false only when the terminal is too small or, on a narrow terminal
+/// with the tree focused, when the tree replaces the body. The commits band is
+/// drawn whenever the tree is, so this tracks the diff panes specifically.
 fn body_is_visible(app: &App) -> bool {
     if app.size.width < SINGLE_PANE_MIN_WIDTH || app.size.height < MIN_HEIGHT {
         return false;
