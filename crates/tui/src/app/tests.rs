@@ -1920,6 +1920,38 @@ fn stepping_to_a_match_inside_a_fold_opens_the_enclosing_regions() {
 }
 
 #[test]
+fn stepping_to_a_match_moves_the_cursor_to_the_match_row() {
+    let mut lines: Vec<String> = (1..=30).map(|n| format!("line {n}")).collect();
+    lines[24] = "the needle line".to_owned();
+    let source = lines.join("\n") + "\n";
+    let mut app = show_app(vec![source_outline("a.rs", &source)]);
+    app.size.height = 8;
+    focus_content(&mut app);
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.set_search("needle");
+    }
+
+    let (stepped, _) = update(Msg::Key(Key::Char('n')), &app);
+    let stepped = settle(stepped);
+    let show = show_ref(&stepped);
+    let search = show.search.as_ref().expect("search");
+    let matched = search.matches[search.cursor].line;
+    assert_eq!(matched, 25, "the needle is on line 25");
+    assert_eq!(
+        show.body.cursor_line, matched,
+        "stepping moves the cursor onto the match"
+    );
+    assert_view_consistent(show, 8);
+
+    // `j` continues from the match rather than snapping the viewport back to a
+    // stale cursor.
+    let advanced = press(&stepped, &[Key::Char('j')]);
+    let advanced = show_ref(&advanced);
+    assert_eq!(advanced.body.cursor_line, matched + 1);
+    assert_view_consistent(advanced, 8);
+}
+
+#[test]
 fn the_folded_body_renders_the_signature_and_hides_the_body() {
     let app = show_app(vec![nested_outline(
         "a.rs",
@@ -2318,6 +2350,41 @@ fn the_z_prefix_cancels_on_an_unrelated_key_and_on_esc() {
     // A real key after a cancelled prefix behaves normally.
     let after = press(&cancelled, &[Key::Char('j')]);
     assert_eq!(show_ref(&after).body.cursor_line, 2);
+}
+
+#[test]
+fn a_mouse_event_clears_the_z_prefix() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let armed = press(&app, &[Key::Char('z')]);
+    assert_eq!(armed.pending, Some('z'));
+
+    // A wheel over the body changes focus; the armed prefix must not swallow
+    // the next key.
+    let (cleared, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &armed);
+    assert_eq!(cleared.pending, None);
+
+    let moved = press(&cleared, &[Key::Char('j')]);
+    assert_eq!(
+        show_ref(&moved).body.cursor_line,
+        2,
+        "j was not swallowed by a stale prefix"
+    );
+}
+
+#[test]
+fn a_selection_change_clears_the_z_prefix() {
+    let mut app = show_app(vec![
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+    ]);
+    focus_content(&mut app);
+    let armed = press(&app, &[Key::Char('z')]);
+    assert_eq!(armed.pending, Some('z'));
+
+    let mut changed = armed.clone();
+    select_path(&mut changed, RepoPath::new("b.rs").expect("valid path"));
+    assert_eq!(changed.pending, None, "a selection change drops the prefix");
 }
 
 #[test]

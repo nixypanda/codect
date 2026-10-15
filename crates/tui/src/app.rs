@@ -252,7 +252,12 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
 
     match msg {
         Msg::Key(key) => handle_key(&mut next, key, &mut cmds),
-        Msg::Mouse(event) => mouse(&mut next, event, &mut cmds),
+        Msg::Mouse(event) => {
+            // A mouse event can change the focused pane; drop any armed key
+            // prefix so it cannot swallow the next key.
+            next.pending = None;
+            mouse(&mut next, event, &mut cmds);
+        }
         Msg::Resize { width, height } => {
             next.size = Size { width, height };
             next.loaded.clamp_scroll(height);
@@ -782,6 +787,9 @@ fn tree_apply(app: &mut App, msg: tree::Msg) {
 }
 
 fn select_path(app: &mut App, path: RepoPath) {
+    // Selecting a file moves the tree cursor; drop any armed key prefix so it
+    // cannot swallow the next key.
+    app.pending = None;
     app.loaded.set_selected(Some(path.clone()));
     app.tree.reveal(&path);
     app.loaded.reset_body_scroll();

@@ -449,10 +449,15 @@ impl Show {
         }
     }
 
-    /// Scrolls the body so the row covering a source line is visible.
-    fn scroll_to_source_line(&mut self, line: usize, height: u16) {
+    /// Moves the cursor to the visible row covering a source line and scrolls it
+    /// into view.
+    ///
+    /// A line inside a collapsed region resolves to that region's fold row, so
+    /// search stepping lands the cursor on a visible row rather than leaving it
+    /// behind for the next `j`/`k` to snap the viewport back to.
+    fn move_cursor_to_source_line(&mut self, line: usize, height: u16) {
         if let Some(row) = self.visible_row_for_source_line(line) {
-            self.scroll_to_row(row, height);
+            self.move_cursor_to_row(row, height);
         }
     }
 
@@ -646,14 +651,14 @@ pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
         Msg::StepSearch(forward) => {
             if let Some(matched) = advance_search(&mut page.search, forward) {
                 page.reveal_source_line(matched.line);
-                page.scroll_to_source_line(matched.line, ctx.height);
+                page.move_cursor_to_source_line(matched.line, ctx.height);
             }
             Vec::new()
         }
         Msg::ScrollToCurrent => {
             if let Some(matched) = current_match(&page.search) {
                 page.reveal_source_line(matched.line);
-                page.scroll_to_source_line(matched.line, ctx.height);
+                page.move_cursor_to_source_line(matched.line, ctx.height);
             }
             Vec::new()
         }
