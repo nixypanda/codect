@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::action::GlobalAction;
+use crate::action::{GlobalAction, ShowAction};
 use crate::api::Cmd;
 use crate::component::text_input::TextInput;
 use crate::render::block::pane_block;
@@ -25,7 +25,7 @@ use crate::util::input::Key;
 
 use super::{
     Ctx, OutMsg, Paging, Scope, Search, SearchSide, ViewCtx, advance_search, collect_matches,
-    current_match, mode_label, page_step, scroll_by, scroll_offset_to, search_ranges, text_edit,
+    current_match, mode_label, page_step, scroll_offset_to, search_ranges, text_edit,
 };
 
 /// The panes `Tab` cycles in a `show`.
@@ -35,11 +35,16 @@ pub enum ShowFocus {
     Body,
 }
 
-/// The body scroll offsets of a `show`: vertical and horizontal.
+/// The body scroll offsets of a `show`: vertical and horizontal, plus the
+/// 1-based source line the body cursor sits on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShowBody {
     pub scroll: u16,
     pub hscroll: u16,
+    /// The 1-based real source line the cursor sits on. It always names a
+    /// visible row's source line: a line inside a collapsed region resolves to
+    /// that region's fold row.
+    pub cursor_line: usize,
 }
 
 /// Bounded, per-path syntax highlighting for a `show`.
@@ -153,7 +158,9 @@ pub enum VisibleRow {
 }
 
 impl VisibleRow {
-    fn source_line(&self) -> usize {
+    /// The 1-based source line this row starts on; a fold row names its
+    /// declaration's start line.
+    pub fn source_line(&self) -> usize {
         match self {
             Self::Source { line } | Self::Fold { line, .. } => *line,
         }
@@ -349,18 +356,63 @@ impl Show {
         }]
     }
 
+    /// The visible-row index the cursor sits on, or `None` when no file or no
+    /// rows.
+    pub fn cursor_row(&self) -> Option<usize> {
+        if self.visible_rows.rows.is_empty() {
+            return None;
+        }
+        self.visible_row_for_source_line(self.body.cursor_line)
+    }
+
+    /// The source line of the first visible row, or `1` when there is none.
+    pub fn first_visible_line(&self) -> usize {
+        self.visible_rows
+            .rows
+            .first()
+            .map_or(1, VisibleRow::source_line)
+    }
+
+    /// Moves the cursor to a visible-row index, clamped to the projection, and
+    /// scrolls it into view.
+    pub fn move_cursor_to_row(&mut self, index: usize, height: u16) {
+        let count = self.line_count();
+        if count == 0 {
+            self.body.cursor_line = 1;
+            return;
+        }
+        let index = index.min(count - 1);
+        self.body.cursor_line = self.visible_rows.rows[index].source_line();
+        self.scroll_to_row(index, height);
+    }
+
+    /// Re-anchors the cursor after a fold change or reload: clamps it to a real
+    /// source line and snaps a now-hidden line to the nearest visible row.
+    pub fn reanchor_cursor(&mut self) {
+        let total = self.source_line_count();
+        if total == 0 {
+            self.body.cursor_line = 1;
+            return;
+        }
+        let clamped = self.body.cursor_line.clamp(1, total);
+        self.body.cursor_line = match self.visible_row_for_source_line(clamped) {
+            Some(row) => self.visible_rows.rows[row].source_line(),
+            None => clamped,
+        };
+    }
+
     /// Scrolls the body so the row covering a source line is visible.
     fn scroll_to_source_line(&mut self, line: usize, height: u16) {
-        let Some(row) = self.visible_row_for_source_line(line) else {
-            return;
-        };
-        let max = self.line_count().saturating_sub(1);
-        if let Some(next) = scroll_offset_to(
-            row,
-            self.body.scroll as usize,
-            height.saturating_sub(4) as usize,
-        ) {
-            self.body.scroll = next.min(max as u16);
+        if let Some(row) = self.visible_row_for_source_line(line) {
+            self.scroll_to_row(row, height);
+        }
+    }
+
+    /// Scrolls the body so the row at `index` is visible.
+    fn scroll_to_row(&mut self, index: usize, height: u16) {
+        let max = self.line_count().saturating_sub(1) as u16;
+        if let Some(next) = scroll_offset_to(index, self.body.scroll as usize, viewport(height)) {
+            self.body.scroll = next.min(max);
         }
     }
 
@@ -483,6 +535,11 @@ fn fold_suffix(hidden: usize, dropped: bool, mode: ProjectionMode) -> String {
     suffix
 }
 
+/// The body rows the cursor is kept within, matching the search scroll budget.
+fn viewport(height: u16) -> usize {
+    height.saturating_sub(4) as usize
+}
+
 // ---------------------------------------------------------------------------
 // Update
 // ---------------------------------------------------------------------------
@@ -492,6 +549,8 @@ fn fold_suffix(hidden: usize, dropped: bool, mode: ProjectionMode) -> String {
 pub enum Msg {
     /// A key that is not a semantic action, routed while the body has focus.
     Key(Key),
+    /// A semantic fold action routed from a key prefix or the command palette.
+    Fold(ShowAction),
     /// A wheel scroll of the body by a signed number of rows.
     Scroll(i32),
     /// A scroll action: top, bottom, page up, or page down.
@@ -523,15 +582,17 @@ pub enum Msg {
 pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
     page.ensure_visible_rows();
     match msg {
-        Msg::Key(key) => body_key(page, key),
+        Msg::Key(key) => body_key(page, key, ctx),
+        Msg::Fold(action) => {
+            fold_action(page, action);
+            Vec::new()
+        }
         Msg::Scroll(delta) => {
             scroll_body(page, delta);
             Vec::new()
         }
         Msg::Action(action) => {
-            let step = page_step(ctx.height);
-            let max = page.line_count().saturating_sub(1) as u16;
-            page.body.scroll = scroll_by(action, page.body.scroll, step, max);
+            cursor_action(page, action, ctx);
             Vec::new()
         }
         Msg::StepSearch(forward) => {
@@ -594,15 +655,16 @@ impl Show {
     }
 }
 
-fn body_key(page: &mut Show, key: Key) -> Vec<OutMsg> {
-    let max = page.line_count().saturating_sub(1) as u16;
+fn body_key(page: &mut Show, key: Key, ctx: &Ctx) -> Vec<OutMsg> {
     let max_h = page.max_line_width().saturating_sub(1) as u16;
     match key {
         Key::Down | Key::Char('j') => {
-            page.body.scroll = page.body.scroll.saturating_add(1).min(max);
+            let row = page.cursor_row().map_or(0, |row| row + 1);
+            page.move_cursor_to_row(row, ctx.height);
         }
         Key::Up | Key::Char('k') => {
-            page.body.scroll = page.body.scroll.saturating_sub(1);
+            let row = page.cursor_row().map_or(0, |row| row.saturating_sub(1));
+            page.move_cursor_to_row(row, ctx.height);
         }
         Key::Right | Key::Char('l') => {
             page.body.hscroll = page.body.hscroll.saturating_add(1).min(max_h);
@@ -613,6 +675,122 @@ fn body_key(page: &mut Show, key: Key) -> Vec<OutMsg> {
         _ => {}
     }
     Vec::new()
+}
+
+/// Moves the body cursor for a top/bottom/page action, keeping it visible.
+fn cursor_action(page: &mut Show, action: GlobalAction, ctx: &Ctx) {
+    let step = page_step(ctx.height) as usize;
+    let current = page.cursor_row().unwrap_or(0);
+    let last = page.line_count().saturating_sub(1);
+    let row = match action {
+        GlobalAction::Top => 0,
+        GlobalAction::Bottom => last,
+        GlobalAction::PageUp => current.saturating_sub(step),
+        _ => (current + step).min(last),
+    };
+    page.move_cursor_to_row(row, ctx.height);
+}
+
+/// Applies one semantic fold action to the region at the cursor.
+fn fold_action(page: &mut Show, action: ShowAction) {
+    let Some(path) = page.selected.clone() else {
+        return;
+    };
+    let Some(regions) = page.folds.regions(&path).map(<[FoldRegion]>::to_vec) else {
+        return;
+    };
+    if regions.is_empty() {
+        return;
+    }
+    match action {
+        ShowAction::OpenAll => {
+            for region in &regions {
+                page.fold_state.set(&path, &region.stable_key, true);
+            }
+        }
+        ShowAction::CloseAll => {
+            for region in &regions {
+                page.fold_state.set(&path, &region.stable_key, false);
+            }
+        }
+        _ => {
+            let Some(target) = target_region(page, &regions) else {
+                return;
+            };
+            match action {
+                ShowAction::ToggleFold => {
+                    let open = !page.fold_state.is_open(&path, &regions[target]);
+                    page.fold_state
+                        .set(&path, &regions[target].stable_key, open);
+                }
+                ShowAction::OpenFold => {
+                    page.fold_state
+                        .set(&path, &regions[target].stable_key, true);
+                }
+                ShowAction::CloseFold => {
+                    page.fold_state
+                        .set(&path, &regions[target].stable_key, false);
+                }
+                ShowAction::OpenRecursive => {
+                    for key in subtree_keys(&regions, target) {
+                        page.fold_state.set(&path, &key, true);
+                    }
+                }
+                ShowAction::CloseRecursive => {
+                    for key in subtree_keys(&regions, target) {
+                        page.fold_state.set(&path, &key, false);
+                    }
+                }
+                ShowAction::EditRevision | ShowAction::OpenAll | ShowAction::CloseAll => {}
+            }
+        }
+    }
+    page.ensure_visible_rows();
+    page.reanchor_cursor();
+}
+
+/// The region a fold action targets: the fold row under the cursor, otherwise
+/// the innermost region whose span contains the cursor's source line.
+fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
+    let row = page.cursor_row()?;
+    match page.visible_rows().get(row)? {
+        VisibleRow::Fold { region_index, .. } => Some(*region_index),
+        VisibleRow::Source { line } => regions
+            .iter()
+            .enumerate()
+            .filter(|(_, region)| region.start_line <= *line && *line <= region.end_line)
+            .max_by_key(|(_, region)| region.level)
+            .map(|(index, _)| index),
+    }
+}
+
+/// The stable key of a region and every region nested under it, following
+/// `parent_key`.
+fn subtree_keys(regions: &[FoldRegion], root: usize) -> Vec<String> {
+    let root_key = regions[root].stable_key.as_str();
+    let mut keys = vec![root_key.to_owned()];
+    for region in regions {
+        if region.stable_key == root_key {
+            continue;
+        }
+        let mut current = region.parent_key.as_deref();
+        let mut walked = 0;
+        while let Some(parent) = current {
+            if parent == root_key {
+                keys.push(region.stable_key.clone());
+                break;
+            }
+            walked += 1;
+            if walked > regions.len() {
+                break;
+            }
+            current = regions
+                .iter()
+                .find(|candidate| candidate.stable_key == parent)
+                .and_then(|candidate| candidate.parent_key.as_deref());
+        }
+    }
+    keys
 }
 
 fn scroll_body(page: &mut Show, delta: i32) {
@@ -722,9 +900,17 @@ pub(crate) fn view(
     let width = (inner.width as usize).saturating_sub(gutter + usize::from(needs_scrollbar));
     let skip = page.body.scroll as usize;
     let hscroll = page.body.hscroll as usize;
+    let cursor_row = if focused { page.cursor_row() } else { None };
+    let cursor_bg = theme.color(theme.palette.surface_alt);
 
     let mut lines = Vec::new();
-    for row in page.visible_rows().iter().skip(skip).take(height) {
+    for (index, row) in page
+        .visible_rows()
+        .iter()
+        .enumerate()
+        .skip(skip)
+        .take(height)
+    {
         let number = row.source_line();
         let ranges = page.search_ranges(number);
         let mut runs = page.row_runs(number, theme);
@@ -738,8 +924,19 @@ pub(crate) fn view(
                 text: fold_suffix(*hidden, *dropped, page.mode),
             });
         }
-        let clipped = highlight::clip_runs(&runs, hscroll, width);
-        let mut spans = vec![gutter_span(number, gutter, theme)];
+        let mut clipped = highlight::clip_runs(&runs, hscroll, width);
+        let mut gutter = gutter_span(number, gutter, theme);
+        if cursor_row == Some(index) {
+            for run in &mut clipped {
+                if run.style.bg.is_none() {
+                    run.style = run.style.bg(cursor_bg);
+                }
+            }
+            if gutter.style.bg.is_none() {
+                gutter.style = gutter.style.bg(cursor_bg);
+            }
+        }
+        let mut spans = vec![gutter];
         spans.extend(
             clipped
                 .into_iter()

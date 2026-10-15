@@ -590,7 +590,7 @@ fn render_scope(frame: &mut Frame, area: Rect, chooser: &ScopeChooser, theme: &T
 }
 
 fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let popup = centered(area, 54, 23);
+    let popup = centered(area, 54, 24);
     if popup.width == 0 || popup.height == 0 {
         return;
     }
@@ -605,6 +605,7 @@ fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
         key_line("↑ ↓ / k j", "move in the tree or scroll", theme),
         key_line("← → / h l", "fold the tree or pan sideways", theme),
         key_line("g / G", "jump to the top or bottom", theme),
+        key_line("za zo zc", "fold at cursor; zO zC zR zM", theme),
         Line::from(""),
         Line::from(section("Find", theme)),
         key_line("Ctrl-P", "open the command palette", theme),

@@ -306,6 +306,17 @@ fn focus_content(app: &mut App) {
     app.loaded.set_focus(Focus::Content);
 }
 
+/// Sends a key sequence through `update`, settling between keys exactly as the
+/// runtime does per input batch.
+fn press(app: &App, keys: &[Key]) -> App {
+    let mut current = app.clone();
+    for &key in keys {
+        let (next, _) = update(Msg::Key(key), &current);
+        current = settle(next);
+    }
+    current
+}
+
 fn two_files() -> App {
     show_app(vec![
         source_outline("a.rs", "a\n"),
@@ -1228,7 +1239,7 @@ const TREE_Y: u16 = 2;
 const CONTENT_X: u16 = 50;
 
 #[test]
-fn page_keys_move_the_cursor_in_the_tree_and_scroll_the_body() {
+fn page_keys_move_the_cursor_in_the_tree_and_the_body_cursor() {
     let app = show_app(vec![
         source_outline("a.rs", "one\ntwo\nthree\nfour\nfive\n"),
         source_outline("b.rs", "x\n"),
@@ -1238,24 +1249,28 @@ fn page_keys_move_the_cursor_in_the_tree_and_scroll_the_body() {
 
     let mut body = app.clone();
     focus_content(&mut body);
-    let (scrolled, _) = update(Msg::Key(Key::PageDown), &body);
-    assert!(show_ref(&scrolled).body.scroll > 0);
+    let (moved, _) = update(Msg::Key(Key::PageDown), &body);
+    assert_eq!(
+        show_ref(&moved).body.cursor_line,
+        5,
+        "PageDown moves the body cursor to the last visible row"
+    );
 }
 
 #[test]
-fn body_scrolling_is_clamped_to_the_content() {
+fn the_body_cursor_is_clamped_to_the_content() {
     let mut app = show_app(vec![source_outline("a.rs", "one\ntwo\nthree\n")]);
     focus_content(&mut app);
     for _ in 0..10 {
         let (next, _) = update(Msg::Key(Key::Char('j')), &app);
         app = next;
     }
-    assert_eq!(show_ref(&app).body.scroll, 2);
+    assert_eq!(show_ref(&app).body.cursor_line, 3);
     for _ in 0..10 {
         let (next, _) = update(Msg::Key(Key::Char('k')), &app);
         app = next;
     }
-    assert_eq!(show_ref(&app).body.scroll, 0);
+    assert_eq!(show_ref(&app).body.cursor_line, 1);
 }
 
 #[test]
@@ -1307,8 +1322,14 @@ fn the_wheel_scrolls_the_content_and_focuses_it() {
     let (down, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &app);
     assert!(matches!(down.loaded, Loaded::Show(ref show) if show.focus == ShowFocus::Body));
     assert_eq!(show_ref(&down).body.scroll, 3);
+    assert_eq!(
+        show_ref(&down).body.cursor_line,
+        1,
+        "the wheel scrolls the viewport without moving the cursor"
+    );
     let (up, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, true)), &down);
     assert_eq!(show_ref(&up).body.scroll, 0);
+    assert_eq!(show_ref(&up).body.cursor_line, 1);
 }
 
 #[test]
@@ -1476,6 +1497,29 @@ fn buffer_row(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
         .filter_map(|x| buffer.cell((x, y)))
         .map(|cell| cell.symbol())
         .collect()
+}
+
+/// The first row index containing `needle`, if any.
+fn row_with(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<u16> {
+    (0..buffer.area.height).find(|&y| buffer_row(buffer, y).contains(needle))
+}
+
+/// The cell column where `needle` starts on row `y`, if any.
+fn cell_x_of(buffer: &ratatui::buffer::Buffer, y: u16, needle: &str) -> Option<u16> {
+    let cells: Vec<&str> = (0..buffer.area.width)
+        .filter_map(|x| buffer.cell((x, y)))
+        .map(|cell| cell.symbol())
+        .collect();
+    let joined = cells.concat();
+    let byte = joined.find(needle)?;
+    let mut offset = 0;
+    for (index, symbol) in cells.iter().enumerate() {
+        if offset == byte {
+            return Some(index as u16);
+        }
+        offset += symbol.len();
+    }
+    None
 }
 
 #[test]
@@ -1765,6 +1809,283 @@ fn a_dropped_declaration_renders_the_hidden_in_mode_tag() {
     assert!(
         !text.contains("42"),
         "the hidden body must be absent: {text}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Interactive folding
+// -----------------------------------------------------------------------
+
+/// A container with one folded child, both retained.
+fn folder_app() -> App {
+    show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )])
+}
+
+#[test]
+fn the_body_cursor_moves_and_stays_in_view() {
+    let source: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+    let mut app = show_app(vec![source_outline("a.rs", &source)]);
+    app.size.height = 6;
+    focus_content(&mut app);
+    assert_eq!(show_ref(&app).body.cursor_line, 1);
+
+    let viewport = app.size.height as usize - 4;
+    for _ in 0..5 {
+        app = press(&app, &[Key::Char('j')]);
+    }
+    let show = show_ref(&app);
+    let cursor = show.body.cursor_line;
+    let row = show.visible_row_for_source_line(cursor).expect("a row");
+    assert_eq!(cursor, 6, "j moves one visible row");
+    assert!(show.body.scroll > 0, "the cursor stays in view");
+    assert!(
+        row >= show.body.scroll as usize && row < show.body.scroll as usize + viewport,
+        "the cursor row is within the viewport"
+    );
+
+    let down = press(&app, &[Key::Char('G')]);
+    assert_eq!(show_ref(&down).body.cursor_line, 20);
+    assert!(show_ref(&down).body.scroll > 0, "G scrolls the last row in");
+
+    let up = press(&down, &[Key::Char('g')]);
+    assert_eq!(show_ref(&up).body.cursor_line, 1);
+    assert_eq!(show_ref(&up).body.scroll, 0);
+
+    let end = press(&up, &[Key::End]);
+    assert_eq!(show_ref(&end).body.cursor_line, 20);
+    assert_eq!(show_ref(&press(&end, &[Key::Home])).body.cursor_line, 1);
+}
+
+#[test]
+fn za_toggles_the_fold_at_the_cursor() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    assert_eq!(show_ref(&app).line_count(), 3);
+
+    // Move onto the folded child declaration, then toggle it open and shut.
+    let app = press(&app, &[Key::Char('j')]);
+    assert_eq!(show_ref(&app).body.cursor_line, 2);
+
+    let expanded = press(&app, &[Key::Char('z'), Key::Char('a')]);
+    assert_eq!(show_ref(&expanded).line_count(), 6, "the body rows appear");
+    assert_eq!(show_ref(&expanded).body.cursor_line, 2);
+
+    let collapsed = press(&expanded, &[Key::Char('z'), Key::Char('a')]);
+    assert_eq!(
+        show_ref(&collapsed).line_count(),
+        3,
+        "the fold closes again"
+    );
+}
+
+#[test]
+fn za_at_the_container_start_folds_the_container() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    // `Enter` is an alias for toggle.
+    let toggled = press(&app, &[Key::Char('z'), Key::Enter]);
+    assert_eq!(show_ref(&toggled).line_count(), 1);
+    assert_eq!(show_ref(&toggled).body.cursor_line, 1);
+}
+
+#[test]
+fn zc_closes_the_enclosing_container_from_a_line_inside_it() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let last = press(&app, &[Key::Char('G')]);
+    assert_eq!(show_ref(&last).body.cursor_line, 6);
+
+    let closed = press(&last, &[Key::Char('z'), Key::Char('c')]);
+    assert_eq!(show_ref(&closed).line_count(), 1, "the container folds");
+    assert_eq!(show_ref(&closed).body.cursor_line, 1, "the cursor snaps in");
+}
+
+#[test]
+fn zc_closes_the_innermost_enclosing_region() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    // Open the child, then sit on a body line inside it.
+    let open = press(&app, &[Key::Char('j'), Key::Char('z'), Key::Char('o')]);
+    assert_eq!(show_ref(&open).line_count(), 6);
+    let inside = press(&open, &[Key::Char('j')]);
+    assert_eq!(show_ref(&inside).body.cursor_line, 3);
+
+    let closed = press(&inside, &[Key::Char('z'), Key::Char('c')]);
+    assert_eq!(show_ref(&closed).line_count(), 3, "only the child folds");
+    assert_eq!(
+        show_ref(&closed).visible_rows()[1],
+        VisibleRow::Fold {
+            line: 2,
+            region_index: 1,
+            hidden: 3,
+            dropped: false,
+        }
+    );
+}
+
+#[test]
+fn z_open_recursive_and_close_recursive_set_descendants() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let closed = press(&app, &[Key::Char('z'), Key::Char('C')]);
+    assert_eq!(show_ref(&closed).line_count(), 1, "zC closes the subtree");
+
+    let opened = press(&closed, &[Key::Char('z'), Key::Char('O')]);
+    assert_eq!(
+        show_ref(&opened).line_count(),
+        6,
+        "zO opens the region and its descendants"
+    );
+}
+
+#[test]
+fn z_open_all_and_close_all_set_every_region() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let closed = press(&app, &[Key::Char('z'), Key::Char('M')]);
+    assert_eq!(show_ref(&closed).line_count(), 1, "zM closes everything");
+
+    let opened = press(&closed, &[Key::Char('z'), Key::Char('R')]);
+    assert_eq!(show_ref(&opened).line_count(), 6, "zR opens everything");
+}
+
+#[test]
+fn the_z_prefix_cancels_on_an_unrelated_key_and_on_esc() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+
+    let pending = press(&app, &[Key::Char('z')]);
+    assert_eq!(pending.pending, Some('z'));
+
+    let cancelled = press(&pending, &[Key::Char('x')]);
+    assert_eq!(cancelled.pending, None);
+    assert_eq!(
+        show_ref(&cancelled).body.cursor_line,
+        1,
+        "the unrelated key is swallowed"
+    );
+
+    let escaped = press(&pending, &[Key::Esc]);
+    assert_eq!(escaped.pending, None);
+    assert_eq!(show_ref(&escaped).body.cursor_line, 1);
+
+    // A real key after a cancelled prefix behaves normally.
+    let after = press(&cancelled, &[Key::Char('j')]);
+    assert_eq!(show_ref(&after).body.cursor_line, 2);
+}
+
+#[test]
+fn a_fold_override_survives_a_reload_and_a_selection_change() {
+    let files = || {
+        vec![
+            nested_outline("a.rs", NESTED_SOURCE, (0, 5), (1, 4), true),
+            source_outline("b.rs", "x\n"),
+        ]
+    };
+    let mut app = show_app(files());
+    focus_content(&mut app);
+    let opened = press(&app, &[Key::Char('j'), Key::Char('z'), Key::Char('a')]);
+    assert_eq!(show_ref(&opened).line_count(), 6);
+
+    let (reloaded, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                mode: ProjectionMode::Signatures,
+                ..show_request()
+            },
+            result: Ok(files().into()),
+        },
+        &opened,
+    );
+    let reloaded = settle(reloaded);
+    assert_eq!(selected(&reloaded).as_deref(), Some("a.rs"));
+    assert_eq!(
+        show_ref(&reloaded).line_count(),
+        6,
+        "the override is sticky across a mode reload"
+    );
+
+    let mut tree = reloaded;
+    tree.loaded.set_focus(Focus::Tree);
+    let down = press(&tree, &[Key::Char('j')]);
+    assert_eq!(selected(&down).as_deref(), Some("b.rs"));
+    let up = press(&down, &[Key::Char('k')]);
+    assert_eq!(selected(&up).as_deref(), Some("a.rs"));
+    assert_eq!(
+        show_ref(&up).line_count(),
+        6,
+        "the override is sticky across a selection change"
+    );
+}
+
+#[test]
+fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
+    let app = folder_app();
+    let entries = app.loaded.palette_entries();
+    for (action, hint) in [
+        (ShowAction::ToggleFold, "za"),
+        (ShowAction::OpenFold, "zo"),
+        (ShowAction::CloseFold, "zc"),
+        (ShowAction::OpenRecursive, "zO"),
+        (ShowAction::CloseRecursive, "zC"),
+        (ShowAction::OpenAll, "zR"),
+        (ShowAction::CloseAll, "zM"),
+    ] {
+        assert!(
+            entries
+                .iter()
+                .any(|(entry, _, key)| *entry == Action::Show(action) && *key == hint),
+            "missing palette entry for {hint}"
+        );
+    }
+
+    let mut focused = app.clone();
+    focus_content(&mut focused);
+    let mut cmds = Vec::new();
+    let mut via_palette = focused.clone();
+    apply_action(
+        &mut via_palette,
+        Action::Show(ShowAction::CloseAll),
+        &mut cmds,
+    );
+    let via_keys = press(&focused, &[Key::Char('z'), Key::Char('M')]);
+    assert_eq!(show_ref(&via_palette).line_count(), 1);
+    assert_eq!(
+        show_ref(&via_palette).line_count(),
+        show_ref(&via_keys).line_count()
+    );
+}
+
+#[test]
+fn the_focused_body_draws_the_cursor_row() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let theme = &app.chrome.theme;
+    let cursor_bg = theme.color(theme.palette.surface_alt);
+
+    let buffer = render(&app, 100, 20);
+    let row = row_with(&buffer, "impl Widget {").expect("the cursor row");
+    let x = cell_x_of(&buffer, row, "impl Widget {").expect("the source cell");
+    assert_eq!(
+        buffer.cell((x, row)).map(|cell| cell.bg),
+        Some(cursor_bg),
+        "the cursor row carries a distinct background"
+    );
+
+    let unfocused = folder_app();
+    let buffer = render(&unfocused, 100, 20);
+    let row = row_with(&buffer, "impl Widget {").expect("the cursor row");
+    let x = cell_x_of(&buffer, row, "impl Widget {").expect("the source cell");
+    assert_ne!(
+        buffer.cell((x, row)).map(|cell| cell.bg),
+        Some(cursor_bg),
+        "an unfocused body draws no cursor"
     );
 }
 

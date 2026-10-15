@@ -33,6 +33,20 @@ pub enum GlobalAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShowAction {
     EditRevision,
+    /// Toggle the region under the cursor.
+    ToggleFold,
+    /// Open the region under the cursor.
+    OpenFold,
+    /// Close the region under the cursor.
+    CloseFold,
+    /// Open the region under the cursor and every descendant.
+    OpenRecursive,
+    /// Close the region under the cursor and every descendant.
+    CloseRecursive,
+    /// Open every region of the active file.
+    OpenAll,
+    /// Close every region of the active file.
+    CloseAll,
 }
 
 /// A semantic command valid only in the `diff` range view.

@@ -242,6 +242,7 @@ impl Loaded {
             Self::Show(show) => {
                 show.body.scroll = show.body.scroll.min(max);
                 show.body.hscroll = show.body.hscroll.min(max_h);
+                show.reanchor_cursor();
             }
             Self::Diff(diff) => {
                 let current = diff.body_scroll();
@@ -257,6 +258,7 @@ impl Loaded {
                 show.body = ShowBody {
                     scroll: 0,
                     hscroll: 0,
+                    cursor_line: 1,
                 }
             }
             Self::Diff(diff) => diff.set_body_scroll(0),
@@ -288,7 +290,24 @@ impl Loaded {
         ];
         match self {
             Self::Show(_) => {
-                entries.push((Action::Show(ShowAction::EditRevision), "Edit revision", "r"))
+                entries.push((Action::Show(ShowAction::EditRevision), "Edit revision", "r"));
+                entries.extend([
+                    (Action::Show(ShowAction::ToggleFold), "Toggle fold", "za"),
+                    (Action::Show(ShowAction::OpenFold), "Open fold", "zo"),
+                    (Action::Show(ShowAction::CloseFold), "Close fold", "zc"),
+                    (
+                        Action::Show(ShowAction::OpenRecursive),
+                        "Open fold recursively",
+                        "zO",
+                    ),
+                    (
+                        Action::Show(ShowAction::CloseRecursive),
+                        "Close fold recursively",
+                        "zC",
+                    ),
+                    (Action::Show(ShowAction::OpenAll), "Open all folds", "zR"),
+                    (Action::Show(ShowAction::CloseAll), "Close all folds", "zM"),
+                ]);
             }
             Self::Diff(diff) => match &diff.view {
                 DiffViewState::Range(_) => {
