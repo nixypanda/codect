@@ -6,6 +6,7 @@
 pub mod diagnostic;
 pub mod diff;
 pub mod doc;
+pub mod fold;
 pub mod keys;
 pub mod language;
 pub mod model;
@@ -19,6 +20,7 @@ pub use diagnostic::{
 };
 pub use diff::{AlignedRow, DiffLine, DiffRowKind, FileDiff, aligned_rows, unified_hunks};
 pub use doc::Doc;
+pub use fold::{FoldRegion, fold_regions, fold_start};
 pub use keys::KeyAllocator;
 pub use language::{LanguageProjector, ProjectionInput};
 pub use model::{
