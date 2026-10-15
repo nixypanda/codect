@@ -114,8 +114,10 @@ pub fn projected(path: &str, text: &str) -> ProjectedFile {
 /// source. The requested-mode projection equals the source, so the file is
 /// visible in the tree.
 ///
-/// One top-level item's `SourceSpan` covers the whole source, so later
-/// outline-driven work has a real span to fold.
+/// One top-level item's `SourceSpan` covers the whole source. The kind is an
+/// open container (`Module`), so the whole synthetic file renders rather than
+/// collapsing to one fold row; that keeps the long-file benchmarks measuring the
+/// body they intend to.
 pub fn source_outline(path: &str, source: &str) -> SourceOutline {
     source_outline_with(path, source, source)
 }
@@ -136,7 +138,7 @@ pub fn source_outline_with(path: &str, source: &str, projection_text: &str) -> S
             vec![ProjectedItem {
                 stable_key: "item".to_owned(),
                 parent_key: None,
-                kind: ItemKind::Function,
+                kind: ItemKind::Module,
                 name: "item".to_owned(),
                 span,
                 canonical_text: text.to_owned(),
@@ -190,10 +192,15 @@ fn base(request: LoadRequest, width: u16, height: u16) -> App {
     )
 }
 
-/// A model showing `files`, installed and settled through the real runtime
-/// paths so highlighting and the derived cache are populated as at runtime.
-pub fn show_model(files: Vec<SourceOutline>, width: u16, height: u16) -> App {
-    let request = show_request();
+/// A model showing `files` in `mode`, installed and settled through the real
+/// runtime paths so highlighting and the derived cache are populated as at
+/// runtime.
+pub fn show_model(mode: ProjectionMode, files: Vec<SourceOutline>, width: u16, height: u16) -> App {
+    let request = ShowRequest {
+        revision: "HEAD".to_owned(),
+        mode,
+        selection: Selection::all(),
+    };
     let model = base(
         LoadRequest::Show {
             revision: request.revision.clone(),

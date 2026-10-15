@@ -64,7 +64,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "repo".to_owned());
 
     let files = engine.show_source_outlines("HEAD", ProjectionMode::Types, &selection)?;
-    let mut show = show_model(files, width, height);
+    let mut show = show_model(ProjectionMode::Types, files, width, height);
     show.root = root.clone();
     render("tui-show", &show, &args.out, width, height)?;
 

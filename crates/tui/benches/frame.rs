@@ -31,7 +31,7 @@ use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use base::{FileDiff, Language, SourceOutline};
+use base::{FileDiff, Language, ProjectionMode, SourceOutline};
 use criterion::measurement::WallTime;
 use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
@@ -77,6 +77,7 @@ fn long_rust(lines: usize) -> String {
 
 fn show_two_files(width: u16, height: u16) -> Model {
     bench::show_model(
+        ProjectionMode::Types,
         vec![
             bench::source_outline("src/Main.elm", &elm_source()),
             bench::source_outline("src/lib.rs", &rust_source()),
@@ -88,6 +89,7 @@ fn show_two_files(width: u16, height: u16) -> Model {
 
 fn show_long_file(width: u16, height: u16) -> Model {
     bench::show_model(
+        ProjectionMode::Types,
         vec![bench::source_outline("src/lib.rs", &long_rust(4000))],
         width,
         height,
@@ -105,7 +107,7 @@ fn many_files(count: usize, width: u16, height: u16) -> Model {
             bench::source_outline(&path, &long_rust(20))
         })
         .collect();
-    bench::show_model(files, width, height)
+    bench::show_model(ProjectionMode::Types, files, width, height)
 }
 
 fn diff_one_large(width: u16, height: u16) -> Model {
@@ -329,7 +331,7 @@ fn update_benchmarks(c: &mut Criterion) {
     });
 
     let files_300 = show_files(300);
-    let empty = bench::show_model(Vec::new(), WIDE.0, WIDE.1);
+    let empty = bench::show_model(ProjectionMode::Types, Vec::new(), WIDE.0, WIDE.1);
     group.bench_function("load_show_300_files", |b| {
         b.iter_batched(
             || files_300.clone(),
