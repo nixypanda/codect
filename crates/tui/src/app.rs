@@ -163,6 +163,9 @@ impl App {
                 paging: Paging::Loading,
                 search: None,
                 highlight: Default::default(),
+                folds: Default::default(),
+                fold_state: Default::default(),
+                visible_rows: Default::default(),
                 prompt: None,
             }),
             LoadRequest::Diff {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::component::overlay::Overlay;
 use crate::component::text_input::TextInput;
-use crate::page::show::ShowHighlights;
+use crate::page::show::{ShowHighlights, VisibleRow};
 use crate::page::{DiffSide, DiffViewState, Loaded, Search, SearchMatch, SearchSide, ShowFocus};
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
@@ -53,7 +53,13 @@ fn source_outline_with(path: &str, source: &str, projection_text: &str) -> Sourc
         if text.is_empty() {
             Vec::new()
         } else {
-            vec![ProjectedItem { span, ..item(text) }]
+            // A whole-file fixture is an open container, so every source line
+            // renders unless a fold test nests a signature under it.
+            vec![ProjectedItem {
+                kind: ItemKind::Module,
+                span,
+                ..item(text)
+            }]
         }
     };
     let outline =
@@ -73,6 +79,68 @@ fn whole_span(source: &str) -> SourceSpan {
         .map_or(0, |line| line.chars().count());
     SourceSpan::new(0, source.len(), 0, 0, end_line, end_column)
 }
+
+/// A projected item with zero-based inclusive `start_line`/`end_line`.
+fn item_at(
+    key: &str,
+    parent: Option<&str>,
+    kind: ItemKind,
+    start_line: usize,
+    end_line: usize,
+) -> ProjectedItem {
+    ProjectedItem {
+        stable_key: key.to_owned(),
+        parent_key: parent.map(str::to_owned),
+        kind,
+        name: key.to_owned(),
+        span: SourceSpan::new(0, 0, start_line, 0, end_line, 0),
+        canonical_text: format!("{key};"),
+    }
+}
+
+/// A file whose source is `source`: one open container declaration
+/// (`TraitImplementation`) holding one folded signature child (`Method`), each
+/// spanning real source lines.
+///
+/// `child_retained` marks the child as kept by the requested mode, so the fold
+/// row is not `dropped`.
+fn nested_outline(
+    path: &str,
+    source: &str,
+    container: (usize, usize),
+    child: (usize, usize),
+    child_retained: bool,
+) -> SourceOutline {
+    let supported = supported(path);
+    let container = item_at(
+        "impl Widget",
+        None,
+        ItemKind::TraitImplementation,
+        container.0,
+        container.1,
+    );
+    let child = item_at(
+        "impl Widget::size",
+        Some("impl Widget"),
+        ItemKind::Method,
+        child.0,
+        child.1,
+    );
+    let superset = vec![container.clone(), child.clone()];
+    let projection = if child_retained {
+        superset.clone()
+    } else {
+        vec![container]
+    };
+    let outline = assemble_outline(&supported, projection, superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+/// A container with a folded signature whose body is three hidden lines.
+const NESTED_SOURCE: &str = "impl Widget {\n    fn size(&self) -> usize {\n        let hidden = 42;\n        hidden\n    }\n}\n";
 
 fn show_request() -> ShowRequest {
     ShowRequest {
@@ -1441,6 +1509,262 @@ fn the_body_renders_the_source_not_the_canonical_projection() {
     assert!(
         !text.contains("PROJECTED"),
         "the canonical projection must not be rendered: {text}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Folding
+// -----------------------------------------------------------------------
+
+#[test]
+fn a_folded_signature_child_hides_its_body_and_counts_as_one_row() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let show = show_ref(&app);
+
+    assert_eq!(show.source_line_count(), 6);
+    assert_eq!(
+        show.line_count(),
+        3,
+        "container line, fold row, close brace"
+    );
+    assert_eq!(show.line_count(), show.visible_rows().len());
+    assert_eq!(
+        show.visible_rows(),
+        &[
+            VisibleRow::Source { line: 1 },
+            VisibleRow::Fold {
+                line: 2,
+                region_index: 1,
+                hidden: 3,
+                dropped: false,
+            },
+            VisibleRow::Source { line: 6 },
+        ]
+    );
+}
+
+#[test]
+fn the_fold_suffix_widens_the_horizontal_scroll_range() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let show = show_ref(&app);
+
+    let fold_line = NESTED_SOURCE.lines().nth(1).expect("the folded signature");
+    let expected = fold_line.chars().count() + "  ⋯ 3 lines".chars().count();
+    assert_eq!(
+        show.max_line_width(),
+        expected,
+        "max width must include the fold suffix"
+    );
+}
+
+#[test]
+fn a_dropped_declaration_folds_and_marks_the_row_dropped() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        false,
+    )]);
+    let show = show_ref(&app);
+
+    let fold = show
+        .visible_rows()
+        .iter()
+        .find_map(|row| match row {
+            VisibleRow::Fold {
+                line,
+                hidden,
+                dropped,
+                ..
+            } => Some((*line, *hidden, *dropped)),
+            VisibleRow::Source { .. } => None,
+        })
+        .expect("a fold row for the dropped child");
+    assert_eq!(fold, (2, 3, true), "the child is dropped by the mode");
+}
+
+#[test]
+fn is_open_honors_default_open_and_a_sticky_override() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let Loaded::Show(show) = &mut app.loaded else {
+        panic!("expected a show");
+    };
+    show.ensure_visible_rows();
+    let regions = show
+        .folds
+        .regions(&path)
+        .expect("fold regions are cached")
+        .to_vec();
+
+    assert!(
+        show.fold_state.is_open(&path, &regions[0]),
+        "a container is open by default"
+    );
+    assert!(
+        !show.fold_state.is_open(&path, &regions[1]),
+        "a method is folded by default"
+    );
+
+    show.fold_state.set(&path, &regions[1].stable_key, true);
+    assert!(
+        show.fold_state.is_open(&path, &regions[1]),
+        "the override wins over default_open"
+    );
+    show.ensure_visible_rows();
+    assert_eq!(
+        show.line_count(),
+        6,
+        "opening the child reveals every source line"
+    );
+}
+
+#[test]
+fn a_collapsed_container_hides_a_nested_collapse_entirely() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let Loaded::Show(show) = &mut app.loaded else {
+        panic!("expected a show");
+    };
+    show.fold_state.set(&path, "impl Widget", false);
+    show.ensure_visible_rows();
+
+    assert_eq!(show.visible_rows().len(), 1, "only the outer fold row");
+    assert_eq!(
+        show.visible_rows(),
+        &[VisibleRow::Fold {
+            line: 1,
+            region_index: 0,
+            hidden: 5,
+            dropped: false,
+        }]
+    );
+}
+
+#[test]
+fn a_single_line_region_folds_with_zero_hidden_lines() {
+    let source = "trait Greeter {\n    fn hello(&self);\n}\n";
+    let app = show_app(vec![nested_outline("a.rs", source, (0, 2), (1, 1), true)]);
+    let show = show_ref(&app);
+
+    assert_eq!(show.line_count(), 3);
+    assert_eq!(
+        show.visible_rows()[1],
+        VisibleRow::Fold {
+            line: 2,
+            region_index: 1,
+            hidden: 0,
+            dropped: false,
+        }
+    );
+}
+
+#[test]
+fn a_match_inside_a_fold_resolves_to_the_fold_row() {
+    let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
+    let mut app = show_app(vec![nested_outline("a.rs", source, (0, 5), (1, 4), true)]);
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.set_search("needle");
+    }
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.search.as_ref().expect("search").matches.len(),
+        2,
+        "both matches are in the hidden body"
+    );
+    assert_eq!(show.visible_row_for_source_line(1), Some(0));
+    assert_eq!(show.visible_row_for_source_line(2), Some(1), "fold row");
+    assert_eq!(show.visible_row_for_source_line(3), Some(1), "hidden body");
+    assert_eq!(show.visible_row_for_source_line(4), Some(1), "hidden body");
+    assert_eq!(show.visible_row_for_source_line(6), Some(2));
+    assert_eq!(show.visible_row_for_source_line(7), None);
+}
+
+#[test]
+fn stepping_a_search_inside_a_fold_stays_on_the_visible_rows() {
+    let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
+    let mut app = show_app(vec![nested_outline("a.rs", source, (0, 5), (1, 4), true)]);
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.set_search("needle");
+    }
+    let (stepped, _) = update(Msg::Key(Key::Char('n')), &app);
+    let show = show_ref(&stepped);
+
+    assert_eq!(show.search.as_ref().expect("search").cursor, 1);
+    assert!(
+        show.body.scroll <= (show.line_count() - 1) as u16,
+        "the scroll clamps to the visible rows"
+    );
+}
+
+#[test]
+fn the_folded_body_renders_the_signature_and_hides_the_body() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let text = buffer_text(&render(&app, 100, 20));
+
+    assert!(text.contains("impl Widget {"), "{text}");
+    assert!(text.contains("fn size(&self) -> usize {"), "{text}");
+    assert!(text.contains("⋯ 3 lines"), "fold suffix missing: {text}");
+    assert!(
+        !text.contains("42"),
+        "the hidden body must be absent: {text}"
+    );
+    assert!(
+        !text.contains("let hidden"),
+        "the hidden body must be absent: {text}"
+    );
+}
+
+#[test]
+fn a_dropped_declaration_renders_the_hidden_in_mode_tag() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        false,
+    )]);
+    let text = buffer_text(&render(&app, 100, 20));
+
+    assert!(
+        text.contains("hidden in types"),
+        "the dropped tag is missing: {text}"
+    );
+    assert!(
+        !text.contains("42"),
+        "the hidden body must be absent: {text}"
     );
 }
 

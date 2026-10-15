@@ -233,6 +233,9 @@ impl Loaded {
 
     /// Clamps both scroll offsets after the terminal changed size.
     pub fn clamp_scroll(&mut self) {
+        if let Self::Show(show) = self {
+            show.ensure_visible_rows();
+        }
         let max = self.max_scroll();
         let max_h = self.max_hscroll();
         match self {
@@ -359,6 +362,7 @@ impl Loaded {
     ) {
         match self {
             Self::Show(show) => {
+                show.ensure_visible_rows();
                 if visible_body {
                     show.ensure_highlight(theme);
                 }
