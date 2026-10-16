@@ -21,13 +21,9 @@ use crate::render::text::truncate_ellipsis;
 
 use super::RenderCtx;
 
-/// The steps a commits view selects between.
 #[derive(Clone, Debug)]
 pub enum CommitList {
-    /// No commits in the selected range.
     Empty,
-    /// A non-empty list with a cursor, a scroll offset, and an optional target
-    /// whose projection is in flight.
     Steps {
         steps: Arc<[CommitStep]>,
         cursor: usize,
@@ -36,33 +32,24 @@ pub enum CommitList {
     },
 }
 
-/// The picker's state.
 #[derive(Clone, Debug)]
 pub struct CommitPicker {
     pub list: CommitList,
 }
 
-/// A message the picker understands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Msg {
-    /// Move the cursor by a signed number of steps.
     Move(i32),
-    /// Page the cursor by a signed number of steps.
     Page(i32),
     ToTop,
     ToBottom,
-    /// Select (or begin loading) the step at an absolute index.
     Select(usize),
-    /// The in-flight step finished loading; commit it as the shown step.
     Loaded(usize),
-    /// A step load failed; drop the target so the shown step stays put.
     Failed,
 }
 
-/// What the picker asks its parent to do.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutMsg {
-    /// The step at this index should be loaded.
     StepRequested(usize),
 }
 
@@ -87,7 +74,6 @@ impl CommitPicker {
         }
     }
 
-    /// The steps, or an empty slice when there are none.
     pub fn steps_slice(&self) -> &[CommitStep] {
         match &self.list {
             CommitList::Empty => &[],
@@ -99,7 +85,6 @@ impl CommitPicker {
         matches!(self.list, CommitList::Empty)
     }
 
-    /// The index of the step whose projection is currently shown.
     pub fn cursor(&self) -> usize {
         match &self.list {
             CommitList::Empty => 0,
@@ -107,7 +92,6 @@ impl CommitPicker {
         }
     }
 
-    /// The scroll offset of the picker.
     pub fn scroll(&self) -> usize {
         match &self.list {
             CommitList::Empty => 0,
@@ -115,7 +99,6 @@ impl CommitPicker {
         }
     }
 
-    /// The index whose projection is being loaded, if any.
     pub fn target(&self) -> Option<usize> {
         match &self.list {
             CommitList::Empty => None,
@@ -123,8 +106,6 @@ impl CommitPicker {
         }
     }
 
-    /// The index navigation should act on: the target when a load is in flight,
-    /// otherwise the shown step.
     pub fn navigation_index(&self) -> usize {
         self.target().unwrap_or_else(|| self.cursor())
     }
@@ -139,7 +120,6 @@ impl CommitPicker {
         self.steps_slice().len()
     }
 
-    /// Applies a message. Only a navigation change produces an [`OutMsg`].
     pub fn update(&mut self, msg: Msg) -> Option<OutMsg> {
         match msg {
             Msg::Move(delta) => {
@@ -191,7 +171,6 @@ impl CommitPicker {
         let index = index.min(self.len() - 1);
         let cursor = self.cursor();
         if index == cursor {
-            // Navigating back to the shown step cancels any in-flight load.
             if let CommitList::Steps { target, .. } = &mut self.list {
                 *target = None;
             }
@@ -203,10 +182,6 @@ impl CommitPicker {
         Some(OutMsg::StepRequested(index))
     }
 }
-
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
 
 pub(crate) fn render(
     state: &CommitPicker,

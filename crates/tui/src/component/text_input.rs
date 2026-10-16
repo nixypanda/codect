@@ -7,7 +7,6 @@ use ratatui::text::{Line, Span};
 
 use crate::render::theme::Theme;
 
-/// An edit to apply to a [`TextInput`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Edit {
     Insert(char),
@@ -19,11 +18,9 @@ pub enum Edit {
     End,
 }
 
-/// A single-line editable field.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextInput {
     pub text: String,
-    /// A byte offset into `text`, always on a character boundary.
     pub cursor: usize,
 }
 
@@ -34,7 +31,6 @@ impl TextInput {
         Self { text, cursor }
     }
 
-    /// Applies one edit. The cursor stays on a character boundary.
     pub fn edit(&mut self, edit: Edit) {
         match edit {
             Edit::Insert(character) => self.insert(character),
@@ -77,16 +73,11 @@ impl TextInput {
         }
     }
 
-    /// The trimmed value to apply.
     pub fn value(&self) -> String {
         self.text.trim().to_owned()
     }
 }
 
-/// Draws one editable line with a leading `prefix` and an inverted cursor cell.
-///
-/// Shared by the overlay inputs (palette, finder, search) and the revision
-/// prompt, so the cursor rendering has exactly one owner.
 pub(crate) fn input_line(prefix: &str, input: &TextInput, theme: &Theme) -> Line<'static> {
     let before = &input.text[..input.cursor];
     let after = &input.text[input.cursor..];
@@ -112,10 +103,6 @@ pub(crate) fn input_line(prefix: &str, input: &TextInput, theme: &Theme) -> Line
     Line::from(spans)
 }
 
-// Draws a revision prompt popup: a titled, scrimmed box with one editable line.
-//
-// Shared by the `show` revision prompt and the diff base/target prompts, which
-// belong to the loaded page rather than an overlay.
 pub(crate) fn render_prompt(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,

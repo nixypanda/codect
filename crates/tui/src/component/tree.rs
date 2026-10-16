@@ -25,7 +25,6 @@ use crate::render::theme::Theme;
 
 use super::RenderCtx;
 
-/// A row in the visible file tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RowKind {
     Directory { path: RepoPath, expanded: bool },
@@ -40,7 +39,6 @@ impl RowKind {
     }
 }
 
-/// One visible tree row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreeRow {
     pub depth: usize,
@@ -48,45 +46,31 @@ pub struct TreeRow {
     pub kind: RowKind,
 }
 
-/// The tree component's state.
 #[derive(Clone, Debug, Default)]
 pub struct Tree {
-    /// Directories the user folded. Everything is expanded by default.
     pub collapsed: BTreeSet<RepoPath>,
     pub rows: Arc<[TreeRow]>,
     pub cursor: usize,
 }
 
-/// A message the tree understands.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Msg {
-    /// Move the cursor by a signed number of rows.
     Move(i32),
-    /// Page the cursor by a signed number of rows.
     Page(i32),
     ToTop,
     ToBottom,
-    /// Expand the directory under the cursor, or step into it if it is already
-    /// expanded.
     Open,
-    /// Fold the directory under the cursor, or move to the containing directory.
     Close,
-    /// Fold or unfold the directory under the cursor.
     Toggle,
-    /// Select or fold the row at an absolute index, from a click.
     Click(usize),
 }
 
-/// What the tree asks its parent to do.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutMsg {
-    /// The file under the cursor became the selection.
     Selected(RepoPath),
 }
 
 impl Tree {
-    /// Replaces the rows for a new projection, dropping folds for directories
-    /// that no longer exist and clamping the cursor.
     pub fn sync(&mut self, visible: &[RepoPath]) {
         self.rows = Arc::from(build_rows(visible, &self.collapsed));
         self.collapsed
@@ -98,40 +82,34 @@ impl Tree {
         }
     }
 
-    /// Puts the cursor on the row for a file, if it is visible.
     pub fn reveal(&mut self, path: &RepoPath) {
         if let Some(index) = self.row_of_file(path) {
             self.cursor = index;
         }
     }
 
-    /// The index of the row for a file, if present.
     pub fn row_of_file(&self, path: &RepoPath) -> Option<usize> {
         self.rows.iter().position(
             |row| matches!(&row.kind, RowKind::File { path: candidate } if candidate == path),
         )
     }
 
-    /// The index of the row for a directory, if present.
     pub fn row_of_directory(&self, path: &RepoPath) -> Option<usize> {
         self.rows.iter().position(|row| {
             matches!(&row.kind, RowKind::Directory { path: candidate, .. } if candidate == path)
         })
     }
 
-    /// The index of the first file row, if any.
     pub fn first_file_row(&self) -> Option<usize> {
         self.rows
             .iter()
             .position(|row| matches!(row.kind, RowKind::File { .. }))
     }
 
-    /// The row under the cursor, if any.
     pub fn current_row(&self) -> Option<&TreeRow> {
         self.rows.get(self.cursor)
     }
 
-    /// Applies a message. Folding rebuilds the rows from `visible`.
     pub fn update(&mut self, msg: Msg, visible: &[RepoPath]) -> Option<OutMsg> {
         match msg {
             Msg::Move(delta) => self.move_cursor(delta),
@@ -228,7 +206,6 @@ impl Tree {
         }
     }
 
-    /// Folds or unfolds `path`, then keeps the cursor on that directory row.
     fn set_collapsed(&mut self, path: RepoPath, collapsed: bool, visible: &[RepoPath]) {
         if collapsed {
             self.collapsed.insert(path.clone());
@@ -239,7 +216,6 @@ impl Tree {
         self.cursor = self.row_of_directory(&path).unwrap_or(0);
     }
 
-    /// Moves the cursor to the directory row that contains `path`, if visible.
     fn move_to_parent(&mut self, path: &RepoPath) {
         let Some(separator) = path.as_bytes().iter().rposition(|&byte| byte == b'/') else {
             return;
@@ -252,12 +228,6 @@ impl Tree {
     }
 }
 
-/// Derives the visible tree rows from the visible files.
-///
-/// Files arrive in raw path-byte order, so a directory's descendants form a
-/// contiguous block and each directory row is emitted exactly once, at the
-/// position of its first descendant. A collapsed directory emits only its own
-/// row and skips its entire subtree.
 pub fn build_rows(visible: &[RepoPath], collapsed: &BTreeSet<RepoPath>) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     let mut stack: Vec<Vec<u8>> = Vec::new();
@@ -343,10 +313,6 @@ fn component_label(component: &[u8]) -> String {
 fn is_within(path: &[u8], directory: &[u8]) -> bool {
     path.len() > directory.len() && path[directory.len()] == b'/' && path.starts_with(directory)
 }
-
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
 
 pub(crate) fn render(
     state: &Tree,
@@ -438,7 +404,6 @@ fn tree_line(
 
     let mut spans: Vec<Span<'static>> = Vec::new();
 
-    // The selection bar reserves its column on every row so labels stay aligned.
     if highlighted {
         spans.push(Span::styled(
             "▌".to_owned(),
@@ -519,7 +484,6 @@ fn tree_line(
     if used < width {
         spans.push(Span::styled(" ".repeat(width - used), base));
     }
-    // Keep the selection fill behind guides and icons as well as the label.
     for span in &mut spans {
         span.style = base.patch(span.style);
     }

@@ -1,5 +1,10 @@
 //! The `show` page: one revision's source explorer, the tree selection over it,
 //! the body's scroll offsets, the committed search, and per-file highlighting.
+//!
+//! The body cursor always names a visible row's source line, so the `tests`-mode
+//! filter (which can hide the cursor's line) anchors it to the nearest visible
+//! row; both body offsets are clamped to the projection before the cursor is
+//! revealed.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -28,26 +33,19 @@ use super::{
     current_match, mode_label, page_step, scroll_offset_to, search_ranges, text_edit,
 };
 
-/// The panes `Tab` cycles in a `show`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShowFocus {
     Tree,
     Body,
 }
 
-/// The body scroll offsets of a `show`: vertical and horizontal, plus the
-/// 1-based source line the body cursor sits on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShowBody {
     pub scroll: u16,
     pub hscroll: u16,
-    /// The 1-based real source line the cursor sits on. It always names a
-    /// visible row's source line: a line inside a collapsed region resolves to
-    /// that region's fold row.
     pub cursor_line: usize,
 }
 
-/// Bounded, per-path syntax highlighting for a `show`.
 #[derive(Clone, Debug, Default)]
 pub struct ShowHighlights {
     cache: BoundedCache<Arc<Vec<StyledLine>>>,
@@ -71,7 +69,6 @@ impl ShowHighlights {
     }
 }
 
-/// Bounded, per-path fold regions for a `show`.
 #[derive(Clone, Debug, Default)]
 pub struct ShowFolds {
     cache: BoundedCache<Arc<Vec<FoldRegion>>>,
@@ -95,13 +92,6 @@ impl ShowFolds {
     }
 }
 
-/// The sticky fold open/closed overrides for a `show`, keyed by path and
-/// `stable_key`.
-///
-/// `is_open` consults the override map and falls back to a region's
-/// `default_open`; `set` records the override the interactive fold actions
-/// write. `version` advances on every `set` so the visible-row projection can
-/// tell its cache is stale.
 #[derive(Clone, Debug, Default)]
 pub struct FoldState {
     overrides: BTreeMap<RepoPath, BTreeMap<String, bool>>,
@@ -109,8 +99,6 @@ pub struct FoldState {
 }
 
 impl FoldState {
-    /// Whether `region` is open: its sticky override when one exists, else its
-    /// `default_open`.
     pub fn is_open(&self, path: &RepoPath, region: &FoldRegion) -> bool {
         self.overrides
             .get(path)
@@ -119,7 +107,6 @@ impl FoldState {
             .unwrap_or(region.default_open)
     }
 
-    /// Records a sticky open/closed override for `stable_key` on `path`.
     pub fn set(&mut self, path: &RepoPath, stable_key: &str, open: bool) {
         self.overrides
             .entry(path.clone())
@@ -133,35 +120,21 @@ impl FoldState {
     }
 }
 
-/// One rendered row of a `show` body.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VisibleRow {
-    /// A real source line, rendered verbatim.
     Source {
-        /// 1-based real source line.
         line: usize,
     },
-    /// A collapsed declaration: its signature line plus a fold suffix.
     Fold {
-        /// 1-based real source line the hidden block starts on: the declaration's
-        /// extended fold start, over any leading annotations.
         line: usize,
-        /// 1-based real source line the row summarizes: the declaration node's
-        /// own line, excluding leading attributes, decorators, and doc comments.
-        /// It lies within `[line, line + hidden]`.
         summary_line: usize,
-        /// Index of the region in the file's fold-region list.
         region_index: usize,
-        /// How many source lines the fold hides (`end_line - line`).
         hidden: usize,
-        /// Whether the requested mode drops the declaration.
         dropped: bool,
     },
 }
 
 impl VisibleRow {
-    /// The 1-based source line this row renders text from: a source row names
-    /// itself, a fold row names its declaration's own signature line.
     pub fn source_line(&self) -> usize {
         match self {
             Self::Source { line } => *line,
@@ -169,14 +142,6 @@ impl VisibleRow {
         }
     }
 
-    /// Whether this row covers the 1-based `source_line`.
-    ///
-    /// A source row covers exactly its own line; a fold row covers its whole
-    /// hidden span `[line, line + hidden]` (its extended start through its end
-    /// line), so a match anywhere inside the body maps back to the fold row.
-    /// The projection can have gaps — `tests` mode removes whole declarations —
-    /// so a line covered by no row resolves to `None` rather than to a
-    /// neighbouring row.
     fn covers(&self, source_line: usize) -> bool {
         match self {
             Self::Source { line } => *line == source_line,
@@ -185,7 +150,6 @@ impl VisibleRow {
     }
 }
 
-/// The visible-row projection and the key it was built for.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct VisibleRows {
     key: Option<(RepoPath, u64)>,
@@ -200,14 +164,12 @@ impl VisibleRows {
     }
 }
 
-/// A loaded `show` projection.
 #[derive(Clone, Debug)]
 pub struct Show {
     pub revision: String,
     pub mode: ProjectionMode,
     pub scope: Scope,
     pub files: Arc<[SourceOutline]>,
-    /// Paths the tree shows, in raw path-byte order.
     pub visible: Arc<[RepoPath]>,
     pub selected: Option<RepoPath>,
     pub focus: ShowFocus,
@@ -215,59 +177,43 @@ pub struct Show {
     pub paging: Paging,
     pub search: Option<Search>,
     pub highlight: ShowHighlights,
-    /// Fold regions per path, computed lazily, mirroring `highlight`.
     pub folds: ShowFolds,
-    /// Sticky fold open/closed overrides; empty until interactive folding.
     pub fold_state: FoldState,
-    /// The cached visible-row projection for the selected file.
     pub(crate) visible_rows: VisibleRows,
-    /// The revision editor, which only exists on a `show`.
     pub prompt: Option<TextInput>,
 }
 
 impl Show {
-    /// The file currently shown by the body, if one is selected.
     pub fn active_file(&self) -> Option<&SourceOutline> {
         let path = self.selected.as_ref()?;
         self.files.iter().find(|file| file.path() == path)
     }
 
-    /// The real, unmodified source of the selected file.
     pub fn active_source(&self) -> Option<&str> {
         self.active_file().map(|file| file.source.as_str())
     }
 
-    /// The syntax-highlighted lines of the selected file, if computed.
     pub fn active_lines(&self) -> Option<&[StyledLine]> {
         let path = self.selected.as_ref()?;
         self.highlight.lines(path)
     }
 
-    /// The search ranges on one line of the show body.
     pub fn search_ranges(&self, line: usize) -> Vec<(usize, usize, bool)> {
         search_ranges(self.search.as_ref(), SearchSide::Show, line)
     }
 
-    /// The number of visible rows the body renders; a folded declaration is one
-    /// row.
     pub fn line_count(&self) -> usize {
         self.visible_rows.rows.len()
     }
 
-    /// The number of real source lines in the selected file.
     pub fn source_line_count(&self) -> usize {
         self.active_source().map_or(0, |text| text.lines().count())
     }
 
-    /// The visible-row projection of the selected file.
     pub fn visible_rows(&self) -> &[VisibleRow] {
         &self.visible_rows.rows
     }
 
-    /// The visible-row index a 1-based source line maps to, or `None` when no
-    /// visible row covers it. A line inside a collapsed declaration resolves to
-    /// its fold row; in `tests` mode a line inside a removed declaration (and a
-    /// line outside every retained container) resolves to `None`.
     pub fn visible_row_for_source_line(&self, line: usize) -> Option<usize> {
         self.visible_rows
             .rows
@@ -275,7 +221,6 @@ impl Show {
             .position(|row| row.covers(line))
     }
 
-    /// The widest visible row, so horizontal scroll reaches a fold suffix too.
     pub fn max_line_width(&self) -> usize {
         let Some(text) = self.active_source() else {
             return 0;
@@ -306,12 +251,6 @@ impl Show {
             .unwrap_or(0)
     }
 
-    /// Recomputes the visible-row projection when the selected path or the fold
-    /// state changed, and clears it when nothing is selected.
-    ///
-    /// The cursor is re-anchored onto a visible row afterwards: the `tests`-mode
-    /// filter can hide the line the cursor sits on (line 1 after a tree
-    /// selection, say), and the body must still draw a cursor.
     pub fn ensure_visible_rows(&mut self) {
         let Some(path) = self.selected.clone() else {
             self.visible_rows = VisibleRows::default();
@@ -337,14 +276,6 @@ impl Show {
         self.anchor_cursor_to_visible_row();
     }
 
-    /// Snaps `cursor_line` onto a visible row whenever no row covers it.
-    ///
-    /// The `tests`-mode filter can hide the very line the cursor sits on — most
-    /// often line 1 after a tree selection — so this picks the nearest visible
-    /// row at or after it (else the last row) rather than leaving the cursor
-    /// undrawn. A cursor already on a visible row is left untouched, so `j`/`k`
-    /// and the wheel's scroll-without-moving-cursor behavior are unaffected; an
-    /// empty projection leaves the cursor at line 1.
     fn anchor_cursor_to_visible_row(&mut self) {
         if self.visible_rows.rows.is_empty() {
             self.body.cursor_line = 1;
@@ -361,7 +292,6 @@ impl Show {
             .unwrap_or(1);
     }
 
-    /// Computes and caches fold regions for the selected file when missing.
     fn ensure_folds(&mut self) {
         let Some(path) = self.selected.clone() else {
             return;
@@ -377,8 +307,6 @@ impl Show {
         self.folds.insert(path, regions);
     }
 
-    /// The highlighted runs of one real source line, falling back to plain text
-    /// when highlighting has not run.
     fn row_runs(&self, line: usize, theme: &Theme) -> Vec<highlight::Run> {
         if let Some(styled) = self.active_lines() {
             return styled
@@ -396,8 +324,6 @@ impl Show {
         }]
     }
 
-    /// The visible-row index the cursor sits on, or `None` when no file or no
-    /// rows.
     pub fn cursor_row(&self) -> Option<usize> {
         if self.visible_rows.rows.is_empty() {
             return None;
@@ -405,8 +331,6 @@ impl Show {
         self.visible_row_for_source_line(self.body.cursor_line)
     }
 
-    /// Moves the cursor to a visible-row index, clamped to the projection, and
-    /// scrolls it into view.
     pub fn move_cursor_to_row(&mut self, index: usize, height: u16) {
         let count = self.line_count();
         if count == 0 {
@@ -418,10 +342,6 @@ impl Show {
         self.scroll_to_row(index, height);
     }
 
-    /// Re-anchors the cursor after a fold change or reload: clamps it to a real
-    /// source line and snaps a now-hidden line to the nearest visible row. In
-    /// `tests` mode a line inside a removed declaration is hidden, so this picks
-    /// the next retained row rather than leaving the cursor on nothing.
     pub fn reanchor_cursor(&mut self) {
         let total = self.source_line_count();
         if total == 0 {
@@ -435,8 +355,6 @@ impl Show {
         };
     }
 
-    /// The source line of the first visible row at or after `line`, else the
-    /// last visible row's line, else `None` when the projection is empty.
     fn nearest_visible_line(&self, line: usize) -> Option<usize> {
         self.visible_rows
             .rows
@@ -446,15 +364,6 @@ impl Show {
             .map(VisibleRow::source_line)
     }
 
-    /// Clamps both body offsets to the current projection and scrolls the cursor
-    /// row back into view.
-    ///
-    /// Every change to the visible-row projection funnels through here: a fold
-    /// action can shrink the projection below the current `scroll` (blanking the
-    /// pane) or shrink it below `hscroll` (clipping every row), and a resize can
-    /// leave the cursor outside the new viewport. `scroll` and `hscroll` are
-    /// clamped before the cursor is revealed, so `scroll_to_row` sees the real
-    /// bounds.
     pub fn clamp_view(&mut self, height: u16) {
         let max = self.line_count().saturating_sub(1) as u16;
         self.body.scroll = self.body.scroll.min(max);
@@ -465,12 +374,6 @@ impl Show {
         }
     }
 
-    /// Opens every region that encloses `line` so the matched source is visible,
-    /// then recomputes the visible rows.
-    ///
-    /// The auto-open writes ordinary sticky overrides, so an explicit `zc`/`zM`
-    /// can close the region again. A region already open (by default or by an
-    /// earlier override) is left alone, so no needless recompute runs.
     pub fn reveal_source_line(&mut self, line: usize) {
         let Some(path) = self.selected.clone() else {
             return;
@@ -494,19 +397,12 @@ impl Show {
         }
     }
 
-    /// Moves the cursor to the visible row covering a source line and scrolls it
-    /// into view.
-    ///
-    /// A line inside a collapsed region resolves to that region's fold row, so
-    /// search stepping lands the cursor on a visible row rather than leaving it
-    /// behind for the next `j`/`k` to snap the viewport back to.
     fn move_cursor_to_source_line(&mut self, line: usize, height: u16) {
         if let Some(row) = self.visible_row_for_source_line(line) {
             self.move_cursor_to_row(row, height);
         }
     }
 
-    /// Scrolls the body so the row at `index` is visible.
     fn scroll_to_row(&mut self, index: usize, height: u16) {
         let max = self.line_count().saturating_sub(1) as u16;
         if let Some(next) = scroll_offset_to(index, self.body.scroll as usize, viewport(height)) {
@@ -514,7 +410,6 @@ impl Show {
         }
     }
 
-    /// Recomputes the committed search for the current selection.
     pub fn set_search(&mut self, needle: &str) {
         if needle.is_empty() {
             self.search = None;
@@ -528,7 +423,6 @@ impl Show {
         });
     }
 
-    /// Recomputes a committed search after the selection changed.
     pub fn resync_search(&mut self) {
         let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
             return;
@@ -547,16 +441,10 @@ impl Show {
         if let Some(file) = self.active_file() {
             collect_matches(&file.source, &needle_lower, SearchSide::Show, &mut matches);
         }
-        // A `tests`-mode body removes whole declarations, so a match on a line
-        // with no visible row can never be highlighted or stepped to. Drop it so
-        // the count and `n`/`N` stepping stay truthful. In the other modes every
-        // line maps to a row (fold rows cover their hidden bodies), so this is a
-        // no-op there.
         matches.retain(|matched| self.visible_row_for_source_line(matched.line).is_some());
         matches
     }
 
-    /// Computes and caches highlighting for the selected file when missing.
     pub fn ensure_highlight(&mut self, theme: &Theme) {
         let Some(path) = self.selected.clone() else {
             return;
@@ -572,22 +460,10 @@ impl Show {
     }
 }
 
-/// Builds a show scope's visible paths from its files.
-///
-/// Every file the engine returned is visible, in the engine's order. The body
-/// renders real source, so a file whose requested-mode projection is empty — one
-/// of only imports or comments, say — is still explorable.
 pub fn show_visible(files: &[SourceOutline]) -> Vec<RepoPath> {
     files.iter().map(|file| file.path().clone()).collect()
 }
 
-/// Builds the visible-row projection from a file's fold regions.
-///
-/// `types` and `signatures` are marker modes: every declaration is located and
-/// a dropped one collapses to a row tagged `hidden in <mode>`. `tests` is a
-/// filter mode: a dropped declaration is removed entirely and lines outside
-/// every retained declaration or container are hidden too, so the body shows
-/// only the retained declarations and the containers that hold them.
 fn build_visible_rows(
     regions: &[FoldRegion],
     total: usize,
@@ -602,14 +478,6 @@ fn build_visible_rows(
     }
 }
 
-/// The marker-mode projection for `types` and `signatures`: the contiguous walk
-/// that emits every line as source or as a fold row, dropping none.
-///
-/// The walk is top-down and O(lines + regions): a collapsed region is emitted
-/// once and the cursor jumps past its body, so a nested region is never visited
-/// while an ancestor is collapsed. Region lines are clamped to `total`, so a
-/// span that runs past the file hides only what exists and a single-line region
-/// yields a fold row with `hidden == 0`.
 fn build_marker_rows(
     regions: &[FoldRegion],
     total: usize,
@@ -619,8 +487,6 @@ fn build_marker_rows(
     let mut collapsed_at: HashMap<usize, usize> = HashMap::new();
     for (index, region) in regions.iter().enumerate() {
         if !state.is_open(path, region) {
-            // Source order puts an ancestor before its descendants, so the
-            // first entry at a line is the outermost collapsed region.
             collapsed_at.entry(region.start_line).or_insert(index);
         }
     }
@@ -650,26 +516,12 @@ fn build_marker_rows(
     rows
 }
 
-/// The `tests`-mode projection: a real filter over the outline.
-///
-/// A retained region contributes its lines (a closed signature still folds to
-/// one row, as in the other modes, but a dropped declaration contributes
-/// nothing). The walk is O(total + regions): retained spans are marked with a
-/// difference array and a dropped or collapsed region is skipped in one jump.
-/// A dropped region's whole subtree is skipped, which is safe because a
-/// container that holds a test is itself retained, so a dropped container can
-/// have no retained descendant.
-///
-/// Exclusion is independent of fold state: a dropped region is never emitted
-/// and its lines are never source, so `za`/`zR` cannot reveal it.
 fn build_filtered_rows(
     regions: &[FoldRegion],
     total: usize,
     path: &RepoPath,
     state: &FoldState,
 ) -> Vec<VisibleRow> {
-    // `in_retained[line]` is true iff the line lies within some retained
-    // region's span. A difference array keeps this O(total + regions).
     let mut coverage = vec![0i64; total + 2];
     for region in regions {
         if !region.retained || region.start_line > total {
@@ -727,9 +579,6 @@ fn build_filtered_rows(
     rows
 }
 
-/// The dim suffix a folded row appends after its real source line: a fold
-/// affordance, the hidden line count when there is one, and the projection mode
-/// that dropped the body.
 fn fold_suffix(hidden: usize, dropped: bool, mode: ProjectionMode) -> String {
     let mut suffix = String::from("  ⋯");
     if hidden > 0 {
@@ -741,50 +590,28 @@ fn fold_suffix(hidden: usize, dropped: bool, mode: ProjectionMode) -> String {
     suffix
 }
 
-/// The body rows the cursor is kept within, matching the search scroll budget.
 fn viewport(height: u16) -> usize {
     height.saturating_sub(4) as usize
 }
 
-// ---------------------------------------------------------------------------
-// Update
-// ---------------------------------------------------------------------------
-
-/// A message the `show` page understands.
 #[derive(Debug)]
 pub enum Msg {
-    /// A key that is not a semantic action, routed while the body has focus.
     Key(Key),
-    /// A semantic fold action routed from a key prefix or the command palette.
     Fold(ShowAction),
-    /// A wheel scroll of the body by a signed number of rows.
     Scroll(i32),
-    /// A scroll action: top, bottom, page up, or page down.
     Action(GlobalAction),
-    /// Advance the committed search to the next or previous match.
     StepSearch(bool),
-    /// Scroll the current search match into view without advancing.
     ScrollToCurrent,
-    /// Cycle the focused pane forward or backward.
     CycleFocus(bool),
-    /// A key typed while the revision prompt is open.
     Prompt(Key),
-    /// Open the revision prompt on the current revision.
     EditRevision,
-    /// Replace the committed search.
     SetSearch(String),
-    /// Drop the committed search.
     ClearSearch,
-    /// Reload the same projection with a new scope.
     ReloadScope(Selection),
-    /// Reload the same projection in another mode.
     SwitchMode(ProjectionMode),
-    /// A `show` projection effect finished.
     Loaded(ShowRequest, Result<Arc<[SourceOutline]>, Box<EngineError>>),
 }
 
-/// The pure `show` update. It mutates only the page and returns the shell work
-/// it produced.
 pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
     page.ensure_visible_rows();
     match msg {
@@ -853,7 +680,6 @@ pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
 }
 
 impl Show {
-    /// The effect request that reloads the projection exactly as it is.
     pub fn request(&self) -> ShowRequest {
         ShowRequest {
             revision: self.revision.clone(),
@@ -885,7 +711,6 @@ fn body_key(page: &mut Show, key: Key, ctx: &Ctx) -> Vec<OutMsg> {
     Vec::new()
 }
 
-/// Moves the body cursor for a top/bottom/page action, keeping it visible.
 fn cursor_action(page: &mut Show, action: GlobalAction, ctx: &Ctx) {
     let step = page_step(ctx.height) as usize;
     let current = page.cursor_row().unwrap_or(0);
@@ -899,7 +724,6 @@ fn cursor_action(page: &mut Show, action: GlobalAction, ctx: &Ctx) {
     page.move_cursor_to_row(row, ctx.height);
 }
 
-/// Applies one semantic fold action to the region at the cursor.
 fn fold_action(page: &mut Show, action: ShowAction, height: u16) {
     let Some(path) = page.selected.clone() else {
         return;
@@ -958,12 +782,6 @@ fn fold_action(page: &mut Show, action: ShowAction, height: u16) {
     page.clamp_view(height);
 }
 
-/// The region a fold action targets: the fold row under the cursor, otherwise
-/// the innermost region whose span contains the cursor's source line.
-///
-/// In `tests` mode the excluded (dropped) regions are not rendered, so they are
-/// never a valid target; the filter keeps the cursor on a retained ancestor if
-/// one somehow contains the line.
 fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
     let row = page.cursor_row()?;
     match page.visible_rows().get(row)? {
@@ -981,8 +799,6 @@ fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
     }
 }
 
-/// The stable key of a region and every region nested under it, following
-/// `parent_key`.
 fn subtree_keys(regions: &[FoldRegion], root: usize) -> Vec<String> {
     let root_key = regions[root].stable_key.as_str();
     let mut keys = vec![root_key.to_owned()];
@@ -1079,11 +895,6 @@ fn loaded(
     }
 }
 
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
-
-/// Draws the projection body.
 pub(crate) fn view(
     page: &Show,
     ctx: &ViewCtx,
@@ -1109,9 +920,6 @@ pub(crate) fn view(
         return;
     }
 
-    // A selected file whose projection keeps nothing to draw: `tests` mode on a
-    // file with no tests (or Elm/Haskell, which retain nothing), or a genuinely
-    // empty file. Show why the pane is blank rather than leaving it empty.
     if page.line_count() == 0 {
         let (title, detail) = if page.mode == ProjectionMode::Tests {
             ("No test declarations", "Nothing retained in this mode.")
@@ -1191,7 +999,6 @@ pub(crate) fn view(
     }
 }
 
-/// Draws the revision prompt when it is open.
 pub(crate) fn prompt_view(page: &Show, theme: &Theme, frame: &mut Frame, area: Rect) {
     if let Some(input) = &page.prompt {
         crate::component::text_input::render_prompt(frame, area, "revision", input, theme);

@@ -10,6 +10,10 @@
 //! both kinds share: scope, paging, search, and the tree's change badge, plus
 //! the small pieces of runtime the shell folds back. The per-kind items are
 //! re-exported here so a caller reads `page::Diff` rather than the submodule.
+//!
+//! After a resize both body offsets are clamped and a hidden cursor row is
+//! scrolled back into view; after a selection change a `show` body resets to the
+//! top and re-anchors through the same rule.
 
 use base::{FileDiff, ProjectionMode, RepoPath};
 
@@ -27,7 +31,6 @@ pub(crate) mod show;
 pub(crate) use diff::{Commits, CommitsFocus, Diff, DiffSide, DiffViewState, Range};
 pub(crate) use show::{Show, ShowBody, ShowFocus};
 
-/// The projection modes the frontend can select.
 pub(crate) fn available_modes() -> [ProjectionMode; 3] {
     [
         ProjectionMode::Types,
@@ -44,7 +47,6 @@ pub(crate) fn mode_label(mode: ProjectionMode) -> &'static str {
     }
 }
 
-/// A projection scope: the selection and its short status-bar label.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Scope {
     pub selection: base::Selection,
@@ -67,14 +69,12 @@ impl Scope {
     }
 }
 
-/// Whether a projection is being loaded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Paging {
     Ready,
     Loading,
 }
 
-/// Which projection a search match belongs to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchSide {
     Show,
@@ -82,18 +82,14 @@ pub enum SearchSide {
     New,
 }
 
-/// One occurrence of the search needle on a line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchMatch {
     pub side: SearchSide,
-    /// One-based line number.
     pub line: usize,
-    /// Byte range within the line.
     pub start: usize,
     pub end: usize,
 }
 
-/// A committed search: highlights persist after the input closes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Search {
     pub needle: String,
@@ -101,7 +97,6 @@ pub struct Search {
     pub cursor: usize,
 }
 
-/// How a file changed in a focused diff, for tree badges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChangeKind {
     Added,
@@ -109,11 +104,6 @@ pub enum ChangeKind {
     Deleted,
 }
 
-// ---------------------------------------------------------------------------
-// The loaded sum
-// ---------------------------------------------------------------------------
-
-/// The projection currently loaded.
 #[derive(Clone, Debug)]
 pub enum Loaded {
     Show(Show),
@@ -121,7 +111,6 @@ pub enum Loaded {
 }
 
 impl Loaded {
-    /// The tree paths the current projection shows.
     pub fn visible(&self) -> &[RepoPath] {
         match self {
             Self::Show(show) => &show.visible,
@@ -175,7 +164,6 @@ impl Loaded {
         self.paging() == Paging::Loading
     }
 
-    /// The wrapped visual rows of the active diff; empty for a `show`.
     pub fn diff_rows(&self) -> &[VisualRow] {
         match self {
             Self::Show(_) => &[],
@@ -183,7 +171,6 @@ impl Loaded {
         }
     }
 
-    /// The focus, normalized for layout.
     pub(crate) fn focus(&self) -> Focus {
         match self {
             Self::Show(show) => match show.focus {
@@ -194,7 +181,6 @@ impl Loaded {
         }
     }
 
-    /// Moves focus to the pane a hit test selected.
     pub(crate) fn set_focus(&mut self, focus: Focus) {
         match self {
             Self::Show(show) => {
@@ -214,8 +200,6 @@ impl Loaded {
         }
     }
 
-    /// Clamps both scroll offsets after the terminal changed size and scrolls a
-    /// now-out-of-view cursor row back into view.
     pub fn clamp_scroll(&mut self, height: u16) {
         match self {
             Self::Show(show) => {
@@ -231,12 +215,6 @@ impl Loaded {
         }
     }
 
-    /// Resets the body to the top after the selection changed.
-    ///
-    /// The cursor starts at line 1, but the `tests`-mode filter may hide that
-    /// line, so the projection is rebuilt and the cursor anchored onto the first
-    /// visible row, matching the show install path; otherwise the body would
-    /// draw no cursor until the first `j`/`k`.
     pub fn reset_body_scroll(&mut self) {
         match self {
             Self::Show(show) => {
@@ -251,7 +229,6 @@ impl Loaded {
         }
     }
 
-    /// The tree badge for a path, when a diff marks it.
     pub fn change_kind(&self, path: &RepoPath) -> Option<ChangeKind> {
         let Self::Diff(diff) = self else {
             return None;
@@ -264,7 +241,6 @@ impl Loaded {
         })
     }
 
-    /// The actions the command palette offers for this projection.
     pub fn palette_entries(&self) -> Vec<(Action, &'static str, &'static str)> {
         let mut entries = vec![
             (
@@ -307,9 +283,6 @@ impl Loaded {
                         "Edit target revision",
                         "t",
                     ));
-                    // A snapshot endpoint has no first-parent history to walk,
-                    // and a merge-base base need not lie on the target's
-                    // first-parent chain, so the commits view is not offered.
                     if !engine::is_snapshot_spec(&diff.base)
                         && !engine::is_snapshot_spec(&diff.target)
                         && !diff.merge_base
@@ -355,8 +328,6 @@ impl Loaded {
         entries
     }
 
-    /// Runs the selection-dependent work a frame needs: highlighting, the
-    /// committed-search re-sync, and the wrapped diff rows.
     pub fn settle(
         &mut self,
         theme: &Theme,
@@ -384,42 +355,27 @@ impl Loaded {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Page runtime
-// ---------------------------------------------------------------------------
-
-/// The read-only context a page `update` reads from the shell: the terminal
-/// height, which paging arithmetic needs. Everything else a page acts on is its
-/// own state.
 #[derive(Clone, Copy, Debug)]
 pub struct Ctx {
     pub height: u16,
 }
 
-/// What a page asks the shell to do after handling a message. A page never
-/// mutates the tree, chrome, overlay, or diagnostic itself.
 #[derive(Debug)]
 pub enum OutMsg {
-    /// Describe an effect; the shell folds it into the runtime's command list.
     Effect(Cmd),
-    /// Show a self-expiring diagnostic.
     Diagnose(String),
 }
 
-/// The read-only context a page `view` reads: the design tokens and the shell
-/// flags that decide an empty or loading pane.
 pub struct ViewCtx<'a> {
     pub theme: &'a Theme,
     pub busy: bool,
     pub tree_empty: bool,
 }
 
-/// How many rows one page key moves.
 pub(super) fn page_step(height: u16) -> u16 {
     (height.saturating_sub(3) / 2).max(1)
 }
 
-/// The scroll offset a top/bottom/page key selects.
 pub(super) fn scroll_by(action: GlobalAction, current: u16, step: u16, max: u16) -> u16 {
     match action {
         GlobalAction::Top => 0,
@@ -429,7 +385,6 @@ pub(super) fn scroll_by(action: GlobalAction, current: u16, step: u16, max: u16)
     }
 }
 
-/// Advances a committed search and returns the newly current match.
 pub(super) fn advance_search(search: &mut Option<Search>, forward: bool) -> Option<SearchMatch> {
     let search = search.as_mut()?;
     if search.matches.is_empty() {
@@ -444,8 +399,6 @@ pub(super) fn advance_search(search: &mut Option<Search>, forward: bool) -> Opti
     search.matches.get(search.cursor).cloned()
 }
 
-/// The scroll offset that brings a match at `index` into a viewport of
-/// `height`, or `None` when it is already visible.
 pub(super) fn scroll_offset_to(index: usize, scroll: usize, height: usize) -> Option<u16> {
     if index < scroll {
         Some(index as u16)
@@ -456,13 +409,11 @@ pub(super) fn scroll_offset_to(index: usize, scroll: usize, height: usize) -> Op
     }
 }
 
-/// The match the committed search is currently on.
 pub(super) fn current_match(search: &Option<Search>) -> Option<SearchMatch> {
     let search = search.as_ref()?;
     search.matches.get(search.cursor).cloned()
 }
 
-/// The text edit a key performs while a prompt is open.
 pub(super) fn text_edit(key: Key) -> Option<Edit> {
     match key {
         Key::Char(character) => Some(Edit::Insert(character)),
@@ -475,10 +426,6 @@ pub(super) fn text_edit(key: Key) -> Option<Edit> {
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Search helpers
-// ---------------------------------------------------------------------------
 
 fn search_ranges(
     search: Option<&Search>,

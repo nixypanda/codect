@@ -15,11 +15,6 @@ use crate::page::Loaded;
 use crate::render::icons::Icons;
 use crate::render::theme::Theme;
 
-/// The read-only slice of the app that a pane component's render needs.
-///
-/// It carries the theme and icons, whether a projection is in flight, and the
-/// loaded content — enough for the tree, commits, and any future pane to draw
-/// themselves without reaching into the whole app.
 pub(crate) struct RenderCtx<'a> {
     pub theme: &'a Theme,
     pub icons: &'a Icons,

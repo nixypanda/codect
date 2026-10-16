@@ -25,8 +25,6 @@ use crate::util::input::Key;
 
 use super::text_input::{Edit, TextInput, input_line};
 
-/// One ranked palette or finder result: an index into the source list, a fuzzy
-/// score, and the byte offsets that matched for highlighting.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ranked {
     pub index: usize,
@@ -34,7 +32,6 @@ pub struct Ranked {
     pub positions: Vec<usize>,
 }
 
-/// The command palette: a fuzzy list of actions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaletteState {
     pub input: TextInput,
@@ -42,7 +39,6 @@ pub struct PaletteState {
     pub cursor: usize,
 }
 
-/// The fuzzy file finder: a fuzzy list of visible paths.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FinderState {
     pub input: TextInput,
@@ -50,22 +46,16 @@ pub struct FinderState {
     pub cursor: usize,
 }
 
-/// The search input. Live matches are written straight to the loaded search so
-/// the view previews them while the user types.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchState {
     pub input: TextInput,
 }
 
-/// The scope chooser's state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScopeChooser {
-    /// `None` while areas are still loading.
     pub areas: Option<AreaSet>,
     pub cursor: usize,
-    /// `Some` while the user is typing a literal path.
     pub input: Option<TextInput>,
-    /// A chooser-local failure, such as a malformed config or bad path.
     pub error: Option<String>,
 }
 
@@ -79,7 +69,6 @@ impl ScopeChooser {
         }
     }
 
-    /// `all`, each area name, then the literal-path entry.
     pub fn options(&self) -> Vec<String> {
         let mut options = vec!["all".to_owned()];
         if let Some(areas) = &self.areas {
@@ -94,7 +83,6 @@ impl ScopeChooser {
     }
 }
 
-/// A modal interaction that captures keys until it closes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Overlay {
     Help,
@@ -105,36 +93,26 @@ pub enum Overlay {
     Search(SearchState),
 }
 
-/// What the parent offers the overlay so it can refresh its fuzzy lists.
 pub struct Ctx<'a> {
     pub visible: &'a [RepoPath],
     pub entries: &'a [(Action, &'static str, &'static str)],
     pub mode: ProjectionMode,
 }
 
-/// A message the overlay understands.
 #[derive(Debug)]
 pub enum Msg {
     Key(Key),
     AreasLoaded(Result<AreaSet, Box<EngineError>>),
 }
 
-/// What the overlay asks its parent to do.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutMsg {
-    /// Close the overlay.
     Close,
-    /// A scope was chosen.
     Selection(Selection),
-    /// A projection mode was chosen.
     Mode(ProjectionMode),
-    /// A palette entry was chosen.
     Action(Action),
-    /// A finder result was chosen.
     File(RepoPath),
-    /// The search input changed.
     Search(String),
-    /// The search was committed.
     SearchCommit,
 }
 
@@ -179,7 +157,6 @@ impl Overlay {
         })
     }
 
-    /// Whether the overlay captures text, so `q` types instead of quitting.
     pub fn captures_text(&self) -> bool {
         matches!(
             self,
@@ -187,7 +164,6 @@ impl Overlay {
         )
     }
 
-    /// Applies a message, returning the parent work it produced.
     pub fn update(&mut self, msg: Msg, ctx: &Ctx) -> Vec<OutMsg> {
         match msg {
             Msg::AreasLoaded(result) => {
@@ -210,7 +186,6 @@ impl Overlay {
     fn key(&mut self, key: Key, ctx: &Ctx) -> Vec<OutMsg> {
         match self {
             Self::Help => {
-                // A dismissal key closes help; every other key is swallowed.
                 if key == Key::Esc || key == Key::Char('?') {
                     vec![OutMsg::Close]
                 } else {
@@ -467,22 +442,14 @@ impl FinderState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
-
-/// What the overlay renderer reads from the app, beyond its own state.
 pub(crate) struct RenderCtx<'a> {
     pub theme: &'a Theme,
     pub mode: ProjectionMode,
     pub entries: &'a [(Action, &'static str, &'static str)],
     pub visible: &'a [RepoPath],
-    /// The committed search's match count, for the search summary line.
     pub matches: usize,
 }
 
-/// Draws the modal overlay. The revision prompts are *not* here: they belong to
-/// the loaded projection and are drawn by [`crate::view::prompt`].
 pub(crate) fn render(state: &Overlay, ctx: &RenderCtx, frame: &mut Frame, area: Rect) {
     let theme = ctx.theme;
     match state {

@@ -8,6 +8,10 @@
 //! and the current model into a replacement model plus a list of effects to
 //! run. Engine calls only ever leave this module as a [`Cmd`]. The pure `view`
 //! lives in [`crate::view`].
+//!
+//! An armed fold prefix (`z`) claims the next key and is cleared by `Esc`, an
+//! overlay or prompt opening, a mouse event, a selection or focus change, and
+//! every reload.
 
 use std::sync::Arc;
 
@@ -32,40 +36,30 @@ use crate::render::theme::Theme;
 pub use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::util::input::{Key, Mouse, MouseKind};
 
-/// The file-tree pane width, as a percentage of the terminal, and its bounds.
 const TREE_DEFAULT_PERCENT: u16 = 30;
 const TREE_MIN_PERCENT: u16 = 15;
 const TREE_MAX_PERCENT: u16 = 60;
 const TREE_STEP: u16 = 5;
 
-/// How many ticks a diagnostic stays visible before it fades out.
 const DIAGNOSTIC_TICKS: u8 = 40;
 
-/// How many rows one wheel notch moves.
 const MOUSE_SCROLL_STEP: i32 = 3;
 
-/// The terminal size, always set as a pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Size {
     pub width: u16,
     pub height: u16,
 }
 
-/// State that outlives any projection.
 #[derive(Clone)]
 pub struct Chrome {
-    /// The file-tree pane width as a percentage of the terminal.
     pub tree_percent: u16,
-    /// The resolved design tokens; view code never names a raw color.
     pub theme: Theme,
-    /// The resolved tree glyph set; icons are opt-in.
     pub icons: Icons,
-    /// The spinner animation frame, advanced by [`Msg::Tick`].
     pub spinner: u8,
     pub quit: bool,
 }
 
-/// A self-expiring status message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Diagnostic {
     pub text: String,
@@ -81,7 +75,6 @@ impl Diagnostic {
     }
 }
 
-/// Every input the core accepts.
 #[derive(Debug)]
 pub enum Msg {
     Key(Key),
@@ -90,34 +83,26 @@ pub enum Msg {
         width: u16,
         height: u16,
     },
-    /// A periodic tick, used to animate the spinner and expire a diagnostic.
     Tick,
-    /// A `show` projection effect finished.
     ShowLoaded {
         request: ShowRequest,
         result: Result<Arc<[SourceOutline]>, Box<EngineError>>,
     },
-    /// A `diff` range effect finished.
     DiffLoaded {
         request: DiffRequest,
         result: Result<Arc<[FileDiff]>, Box<EngineError>>,
     },
-    /// A commits-view effect finished: the steps and the first step's diff.
     HistoryLoaded {
         request: DiffRequest,
         result: Result<HistoryPayload, Box<EngineError>>,
     },
-    /// A single commit step's projection finished.
     StepLoaded {
         index: usize,
         result: Result<Arc<[FileDiff]>, Box<EngineError>>,
     },
-    /// The area configuration finished loading for the scope chooser.
     AreasLoaded(Result<AreaSet, Box<EngineError>>),
 }
 
-/// The entire UI state. It is replaced wholesale by `update`, never edited in
-/// place by anything else.
 #[derive(Clone)]
 pub struct App {
     pub root: String,
@@ -127,14 +112,10 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub loaded: Loaded,
     pub diagnostic: Option<Diagnostic>,
-    /// A pending key prefix (currently only `z` for folds). Reset on `Esc`, an
-    /// overlay or prompt opening, a mouse event, a selection or focus change,
-    /// and every reload.
     pub pending: Option<char>,
 }
 
 impl App {
-    /// A model whose projection is still loading.
     pub fn new(
         root: String,
         request: LoadRequest,
@@ -213,7 +194,6 @@ impl App {
         }
     }
 
-    /// Whether a projection is in flight, so the view can spin.
     pub fn is_busy(&self) -> bool {
         self.loaded.is_loading()
     }
@@ -222,7 +202,6 @@ impl App {
         self.loaded.diff_rows()
     }
 
-    /// The wrapped rows of the active diff, recomputed without the cache.
     #[cfg(feature = "bench")]
     pub(crate) fn compute_diff_rows(&self) -> Vec<crate::render::layout::VisualRow> {
         match &self.loaded {
@@ -241,11 +220,6 @@ impl App {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Update
-// ---------------------------------------------------------------------------
-
-/// The pure update function. It performs no I/O and reads no external state.
 pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
     let mut next = app.clone();
     let mut cmds = Vec::new();
@@ -254,8 +228,6 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
     match msg {
         Msg::Key(key) => handle_key(&mut next, key, &mut cmds),
         Msg::Mouse(event) => {
-            // A mouse event can change the focused pane; drop any armed key
-            // prefix so it cannot swallow the next key.
             next.pending = None;
             mouse(&mut next, event, &mut cmds);
         }
@@ -340,7 +312,6 @@ fn ctx(app: &App) -> Ctx {
     }
 }
 
-/// Folds a page's requests into shared state and the command list.
 fn fold(app: &mut App, outs: Vec<OutMsg>, cmds: &mut Vec<Cmd>) {
     for out in outs {
         match out {
@@ -438,8 +409,6 @@ fn route_prompt(app: &mut App, key: Key, ctx: Ctx) -> Vec<OutMsg> {
     }
 }
 
-/// Sets the selection after a content install: keep the previous path when it
-/// is still visible, otherwise choose the nearest visible file.
 fn install_show_selection(app: &mut App) {
     let Loaded::Show(show) = &mut app.loaded else {
         return;
@@ -468,8 +437,6 @@ fn install_show_selection(app: &mut App) {
         hscroll: 0,
         cursor_line: 1,
     };
-    // `ensure_visible_rows` anchors the cursor onto the first visible row, which
-    // in `tests` mode need not be line 1.
     show.ensure_visible_rows();
 }
 
@@ -514,10 +481,6 @@ fn nearest_visible(tree: &Tree, hint: usize) -> Option<RepoPath> {
     Some(tree.rows[chosen].kind.path().clone())
 }
 
-// ---------------------------------------------------------------------------
-// Key routing
-// ---------------------------------------------------------------------------
-
 fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     if key == Key::CtrlC {
         app.chrome.quit = true;
@@ -525,8 +488,6 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     }
     let capturing =
         app.overlay.as_ref().is_some_and(Overlay::captures_text) || app.loaded.prompt_active();
-    // A pending prefix claims the next key: it selects a fold action or, for any
-    // other key including `Esc`, is simply cancelled.
     if let Some(prefix) = app.pending.take() {
         if let Some(action) = prefix_action(prefix, key, app) {
             apply_action(app, action, cmds);
@@ -556,9 +517,6 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         apply_action(app, action, cmds);
         return;
     }
-    // A bare `Enter` in the source body toggles the fold at the cursor, as the
-    // help and docs advertise. The tree's `Enter` (open a file or a directory)
-    // is reached through `focus_key`, so this only fires over the body.
     if key == Key::Enter && show_body_focused(app) {
         apply_action(app, Action::Show(ShowAction::ToggleFold), cmds);
         return;
@@ -578,13 +536,10 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     }
 }
 
-/// Whether the show body owns the keys: a `show` is loaded and the body is the
-/// focused pane.
 fn show_body_focused(app: &App) -> bool {
     matches!(app.loaded, Loaded::Show(_)) && app.loaded.focus() == Focus::Content
 }
 
-/// The action a pending prefix's second key selects, or `None` to cancel.
 fn prefix_action(prefix: char, key: Key, app: &App) -> Option<Action> {
     if prefix != 'z' || !matches!(app.loaded, Loaded::Show(_)) {
         return None;
@@ -789,17 +744,11 @@ fn tree_apply(app: &mut App, msg: tree::Msg) {
 }
 
 fn select_path(app: &mut App, path: RepoPath) {
-    // Selecting a file moves the tree cursor; drop any armed key prefix so it
-    // cannot swallow the next key.
     app.pending = None;
     app.loaded.set_selected(Some(path.clone()));
     app.tree.reveal(&path);
     app.loaded.reset_body_scroll();
 }
-
-// ---------------------------------------------------------------------------
-// Overlay
-// ---------------------------------------------------------------------------
 
 fn overlay_update(app: &mut App, msg: overlay::Msg) -> Vec<overlay::OutMsg> {
     let Some(mut current) = app.overlay.take() else {
@@ -842,10 +791,6 @@ fn apply_overlay_out(app: &mut App, out: overlay::OutMsg, cmds: &mut Vec<Cmd>) {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Mouse
-// ---------------------------------------------------------------------------
 
 fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
     if app.overlay.is_some()
@@ -958,7 +903,6 @@ fn commit_click_index(app: &App, inner: Rect, row: u16) -> Option<usize> {
     (index < commits.picker.steps_slice().len()).then_some(index)
 }
 
-/// Whether a step index is within the current commit list.
 fn step_in_range(app: &App, index: usize) -> bool {
     match &app.loaded {
         Loaded::Diff(diff) => match &diff.view {
@@ -969,14 +913,6 @@ fn step_in_range(app: &App, index: usize) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Derived state
-// ---------------------------------------------------------------------------
-
-/// Whether the diff body is drawn, so `settle` knows whether to highlight it.
-/// It is false only when the terminal is too small or, on a narrow terminal
-/// with the tree focused, when the tree replaces the body. The commits band is
-/// drawn whenever the tree is, so this tracks the diff panes specifically.
 fn body_is_visible(app: &App) -> bool {
     if app.size.width < SINGLE_PANE_MIN_WIDTH || app.size.height < MIN_HEIGHT {
         return false;
@@ -984,12 +920,10 @@ fn body_is_visible(app: &App) -> bool {
     app.size.width >= SIDE_BY_SIDE_MIN_WIDTH || app.loaded.focus() != Focus::Tree
 }
 
-/// The focus, normalized for layout.
 pub(crate) fn layout_focus(app: &App) -> Focus {
     app.loaded.focus()
 }
 
-/// Runs the selection-dependent work a frame needs, once per input batch.
 pub(crate) fn settle(mut app: App) -> App {
     let visible_body = body_is_visible(&app);
     let width = app.size.width;
@@ -1000,8 +934,6 @@ pub(crate) fn settle(mut app: App) -> App {
     app
 }
 
-/// Replaces all step projections in one input batch with its final target. A
-/// full reload wins when the view or endpoints also changed.
 pub(crate) fn coalesce_commit_loads(app: &mut App, cmds: &mut Vec<Cmd>) {
     let Loaded::Diff(diff) = &mut app.loaded else {
         return;
