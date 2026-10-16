@@ -9,10 +9,10 @@ use crate::test_support::{
     ATTRIBUTED_SOURCE, NESTED_SOURCE, area_set, assert_view_consistent, attributed_child_outline,
     base_app, buffer_row, buffer_text, cell_x_of, click, commits_app, commits_ref, commits_request,
     declaration_less, diff_app, diff_focus_of, diff_ref, diff_request, dropped_container_outline,
-    file_diff, focus_content, folder_app, item, multi_method_outline, nested_outline, press,
-    render, row_with, scroll, selected, show_app, show_app_mode, show_ref, show_request,
-    source_outline, source_outline_with, test_function_outline, tests_filter_outline, two_files,
-    two_function_outline,
+    file_diff, focus_content, folder_app, item, merge_base_range_app, multi_method_outline,
+    nested_outline, press, render, row_with, scroll, selected, show_app, show_app_mode, show_ref,
+    show_request, snapshot_range_app, source_outline, source_outline_with, tail_palette_entries,
+    test_function_outline, tests_filter_outline, two_files, two_function_outline,
 };
 use base::{
     Area, RepoPath, Selection, SelectionGroup, SourceOutline, SupportedPath, assemble_outline,
@@ -2583,6 +2583,264 @@ fn the_band_bindings_match_their_palette_entries() {
             }),
             "no palette entry matches the band binding {hint}"
         );
+    }
+}
+
+#[test]
+fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
+    let show = folder_app();
+    let range = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+    let snapshot = snapshot_range_app();
+    let merge_base = merge_base_range_app();
+    let commits = commits_app(3);
+
+    // The accessor is exactly the registry's `palette == true` subset, sorted
+    // by (rank, registration order).
+    for app in [&show, &range, &snapshot, &merge_base, &commits] {
+        let mut specs: Vec<crate::command::CommandSpec> = crate::command::commands(app)
+            .into_iter()
+            .filter(|spec| spec.palette)
+            .collect();
+        specs.sort_by_key(|spec| spec.rank);
+        let expected: Vec<_> = specs
+            .iter()
+            .map(|spec| (spec.run, spec.label, spec.hint))
+            .collect();
+        assert_eq!(app.loaded.palette_entries(), expected);
+    }
+
+    let mut show_expected = vec![
+        (
+            Action::Global(GlobalAction::Mode),
+            "Switch types / signatures / tests",
+            "m",
+        ),
+        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
+        (Action::Show(ShowAction::EditRevision), "Edit revision", "r"),
+        (Action::Show(ShowAction::ToggleFold), "Toggle fold", "za"),
+        (Action::Show(ShowAction::OpenFold), "Open fold", "zo"),
+        (Action::Show(ShowAction::CloseFold), "Close fold", "zc"),
+        (
+            Action::Show(ShowAction::OpenRecursive),
+            "Open fold recursively",
+            "zO",
+        ),
+        (
+            Action::Show(ShowAction::CloseRecursive),
+            "Close fold recursively",
+            "zC",
+        ),
+        (Action::Show(ShowAction::OpenAll), "Open all folds", "zR"),
+        (Action::Show(ShowAction::CloseAll), "Close all folds", "zM"),
+    ];
+    show_expected.extend(tail_palette_entries());
+    assert_eq!(show.loaded.palette_entries().len(), 20);
+    assert_eq!(show.loaded.palette_entries(), show_expected);
+
+    let mut range_expected = vec![
+        (
+            Action::Global(GlobalAction::Mode),
+            "Switch types / signatures / tests",
+            "m",
+        ),
+        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
+        (
+            Action::Range(RangeAction::EditBase),
+            "Edit base revision",
+            "b",
+        ),
+        (
+            Action::Range(RangeAction::EditTarget),
+            "Edit target revision",
+            "t",
+        ),
+        (
+            Action::Range(RangeAction::SwitchToCommits),
+            "Switch to commits view",
+            "",
+        ),
+    ];
+    range_expected.extend(tail_palette_entries());
+    assert_eq!(range.loaded.palette_entries().len(), 15);
+    assert_eq!(range.loaded.palette_entries(), range_expected);
+
+    let mut snapshot_expected = vec![
+        (
+            Action::Global(GlobalAction::Mode),
+            "Switch types / signatures / tests",
+            "m",
+        ),
+        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
+        (
+            Action::Range(RangeAction::EditBase),
+            "Edit base revision",
+            "b",
+        ),
+        (
+            Action::Range(RangeAction::EditTarget),
+            "Edit target revision",
+            "t",
+        ),
+    ];
+    snapshot_expected.extend(tail_palette_entries());
+    assert_eq!(snapshot.loaded.palette_entries().len(), 14);
+    assert_eq!(snapshot.loaded.palette_entries(), snapshot_expected);
+
+    let mut merge_base_expected = vec![
+        (
+            Action::Global(GlobalAction::Mode),
+            "Switch types / signatures / tests",
+            "m",
+        ),
+        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
+        (
+            Action::Range(RangeAction::EditBase),
+            "Edit base revision",
+            "b",
+        ),
+        (
+            Action::Range(RangeAction::EditTarget),
+            "Edit target revision",
+            "t",
+        ),
+    ];
+    merge_base_expected.extend(tail_palette_entries());
+    assert_eq!(merge_base.loaded.palette_entries().len(), 14);
+    assert_eq!(merge_base.loaded.palette_entries(), merge_base_expected);
+
+    let mut commits_expected = vec![
+        (
+            Action::Global(GlobalAction::Mode),
+            "Switch types / signatures / tests",
+            "m",
+        ),
+        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
+        (
+            Action::Commits(CommitsAction::SwitchToRange),
+            "Switch to range view",
+            "",
+        ),
+    ];
+    commits_expected.extend(tail_palette_entries());
+    assert_eq!(commits.loaded.palette_entries().len(), 13);
+    assert_eq!(commits.loaded.palette_entries(), commits_expected);
+}
+
+#[test]
+fn command_lookup_reproduces_the_key_table() {
+    let apps = [
+        folder_app(),
+        diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]),
+        commits_app(3),
+    ];
+    for app in &apps {
+        for spec in crate::command::commands(app) {
+            for binding in &spec.bindings {
+                if let (crate::command::KeySeq::Key(key), crate::command::KeyScope::Anywhere) =
+                    (binding.seq, binding.scope)
+                {
+                    assert_eq!(
+                        command_for(key, app),
+                        Some(spec.run),
+                        "{:?} must bind {key:?}",
+                        spec.id
+                    );
+                }
+            }
+        }
+        for key in [
+            Key::Char('q'),
+            Key::CtrlC,
+            Key::Esc,
+            Key::Enter,
+            Key::CtrlJ,
+            Key::CtrlK,
+        ] {
+            assert_eq!(command_for(key, app), None, "{key:?} must not be a command");
+        }
+    }
+}
+
+#[test]
+fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
+    let mut show = folder_app();
+    focus_content(&mut show);
+    let groups = show.loaded.prefix_groups();
+    assert_eq!(groups.len(), 1, "one prefix group");
+    assert_eq!(groups[0].key, 'z');
+    assert_eq!(groups[0].name, "fold");
+    let keys: Vec<char> = groups[0].bindings.iter().map(|b| b.key).collect();
+    assert_eq!(keys, ['a', 'o', 'c', 'O', 'C', 'R', 'M']);
+    let hints: Vec<&str> = groups[0].bindings.iter().map(|b| b.hint).collect();
+    assert_eq!(hints, ["za", "zo", "zc", "zO", "zC", "zR", "zM"]);
+
+    // The prefix only parks while the show body holds focus.
+    assert_eq!(
+        crate::command::pending_prefix(&show, Key::Char('z')),
+        Some('z')
+    );
+    let tree = folder_app();
+    assert_eq!(crate::command::pending_prefix(&tree, Key::Char('z')), None);
+    assert!(
+        crate::command::prefix_groups_in_scope(&tree.loaded, Some(Focus::Tree)).is_empty(),
+        "the tree focus has no prefix in scope"
+    );
+    assert_eq!(
+        crate::command::prefix_groups_in_scope(&show.loaded, Some(Focus::Content)).len(),
+        1
+    );
+    for app in [
+        diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]),
+        commits_app(3),
+    ] {
+        assert_eq!(crate::command::pending_prefix(&app, Key::Char('z')), None);
+        assert!(app.loaded.prefix_groups().is_empty());
+        assert!(
+            crate::command::prefix_groups_in_scope(&app.loaded, Some(Focus::Content)).is_empty()
+        );
+    }
+}
+
+#[test]
+fn every_palette_entry_dispatches_its_registered_binding() {
+    for app in [
+        folder_app(),
+        diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]),
+        commits_app(3),
+    ] {
+        let specs = crate::command::commands(&app);
+        let entries = app.loaded.palette_entries();
+        for spec in &specs {
+            let listed = entries.iter().any(|(action, label, hint)| {
+                *action == spec.run && *label == spec.label && *hint == spec.hint
+            });
+            assert_eq!(listed, spec.palette, "palette membership for {:?}", spec.id);
+
+            for binding in &spec.bindings {
+                match binding.seq {
+                    crate::command::KeySeq::Key(key)
+                        if binding.scope == crate::command::KeyScope::Anywhere =>
+                    {
+                        assert_eq!(command_for(key, &app), Some(spec.run));
+                    }
+                    crate::command::KeySeq::Prefixed(prefix, second) => {
+                        let group = app
+                            .loaded
+                            .prefix_groups()
+                            .into_iter()
+                            .find(|group| group.key == prefix)
+                            .expect("a prefix group");
+                        let band = group
+                            .bindings
+                            .iter()
+                            .find(|binding| binding.key == second)
+                            .expect("a band binding");
+                        assert_eq!(band.action, spec.run);
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 

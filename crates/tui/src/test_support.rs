@@ -10,6 +10,7 @@ use base::{
 use engine::CommitStep;
 use ratatui::style::{Color, Modifier};
 
+use crate::action::{Action, GlobalAction};
 use crate::app::{App, DiffRequest, DiffView, LoadRequest, Msg, ShowRequest, settle, update};
 use crate::page::{Diff, DiffViewState, Loaded, Show};
 use crate::render::icons::{IconStyle, Icons};
@@ -343,6 +344,82 @@ pub(crate) fn commits_app(count: usize) -> App {
         &app,
     );
     settle(next)
+}
+
+pub(crate) fn snapshot_range_app() -> App {
+    let request = DiffRequest {
+        base: ":index".to_owned(),
+        target: ":worktree".to_owned(),
+        ..diff_request()
+    };
+    let app = base_app(LoadRequest::Diff {
+        base: request.base.clone(),
+        target: request.target.clone(),
+        mode: request.mode,
+        selection: request.selection.clone(),
+        view: DiffView::Range,
+        merge_base: request.merge_base,
+    });
+    let (next, _) = update(
+        Msg::DiffLoaded {
+            request,
+            result: Ok(vec![file_diff("a.rs", None, Some("a\n"))].into()),
+        },
+        &app,
+    );
+    settle(next)
+}
+
+pub(crate) fn merge_base_range_app() -> App {
+    let request = DiffRequest {
+        base: "main".to_owned(),
+        target: "feature".to_owned(),
+        merge_base: true,
+        ..diff_request()
+    };
+    let app = base_app(LoadRequest::Diff {
+        base: request.base.clone(),
+        target: request.target.clone(),
+        mode: request.mode,
+        selection: request.selection.clone(),
+        view: DiffView::Range,
+        merge_base: request.merge_base,
+    });
+    let (next, _) = update(
+        Msg::DiffLoaded {
+            request,
+            result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
+        },
+        &app,
+    );
+    settle(next)
+}
+
+pub(crate) fn tail_palette_entries() -> Vec<(Action, &'static str, &'static str)> {
+    vec![
+        (Action::Global(GlobalAction::Finder), "Find file", "Ctrl-F"),
+        (Action::Global(GlobalAction::Search), "Search in view", "/"),
+        (Action::Global(GlobalAction::NextPane), "Switch pane", "Tab"),
+        (
+            Action::Global(GlobalAction::TreeWider),
+            "Widen file tree",
+            "]",
+        ),
+        (
+            Action::Global(GlobalAction::TreeNarrower),
+            "Narrow file tree",
+            "[",
+        ),
+        (
+            Action::Global(GlobalAction::TreeReset),
+            "Reset file tree",
+            "\\",
+        ),
+        (Action::Global(GlobalAction::Top), "Jump to top", "g"),
+        (Action::Global(GlobalAction::Bottom), "Jump to bottom", "G"),
+        (Action::Global(GlobalAction::Help), "Help", "?"),
+        (Action::Global(GlobalAction::Quit), "Quit", "q"),
+    ]
 }
 
 pub(crate) fn show_ref(app: &App) -> &Show {

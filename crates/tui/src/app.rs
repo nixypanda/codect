@@ -542,18 +542,7 @@ fn show_body_focused(app: &App) -> bool {
 }
 
 fn parked_prefix(app: &App, key: Key) -> Option<char> {
-    let Key::Char(character) = key else {
-        return None;
-    };
-    // Only a `show` body carries prefixes.
-    if !show_body_focused(app) {
-        return None;
-    }
-    app.loaded
-        .prefix_groups()
-        .iter()
-        .any(|group| group.key == character)
-        .then_some(character)
+    crate::command::pending_prefix(app, key)
 }
 
 fn clear_prefix(app: &mut App) {
@@ -563,39 +552,7 @@ fn clear_prefix(app: &mut App) {
 }
 
 fn command_for(key: Key, app: &App) -> Option<Action> {
-    use GlobalAction::*;
-    let show = matches!(app.loaded, Loaded::Show(_));
-    let diff = matches!(app.loaded, Loaded::Diff(_));
-    let global = match key {
-        Key::Char('?') => Help,
-        Key::Char('s') => Scope,
-        Key::Char('m') => Mode,
-        Key::Char('[') => TreeNarrower,
-        Key::Char(']') => TreeWider,
-        Key::Char('\\') => TreeReset,
-        Key::Tab => NextPane,
-        Key::BackTab => PreviousPane,
-        Key::Char('g') | Key::Home => Top,
-        Key::Char('G') | Key::End => Bottom,
-        Key::Char('n') => NextMatch,
-        Key::Char('N') => PreviousMatch,
-        Key::CtrlP => Palette,
-        Key::CtrlF => Finder,
-        Key::Char('/') => Search,
-        Key::PageDown | Key::CtrlD => PageDown,
-        Key::PageUp | Key::CtrlU => PageUp,
-        Key::Char('r') if show => {
-            return Some(Action::Show(ShowAction::EditRevision));
-        }
-        Key::Char('b') if diff => {
-            return Some(Action::Range(RangeAction::EditBase));
-        }
-        Key::Char('t') if diff => {
-            return Some(Action::Range(RangeAction::EditTarget));
-        }
-        _ => return None,
-    };
-    Some(Action::Global(global))
+    crate::command::action_for_key(app, key)
 }
 
 fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>) {

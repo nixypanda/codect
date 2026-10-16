@@ -36,6 +36,7 @@ use ratatui::backend::CrosstermBackend;
 mod action;
 mod api;
 mod app;
+mod command;
 mod component;
 #[cfg(test)]
 mod golden;

@@ -17,9 +17,7 @@
 
 use base::{FileDiff, ProjectionMode, RepoPath};
 
-use crate::action::{
-    Action, Binding, CommitsAction, GlobalAction, PrefixGroup, RangeAction, ShowAction,
-};
+use crate::action::{Action, GlobalAction, PrefixGroup};
 use crate::api::Cmd;
 use crate::component::text_input::Edit;
 use crate::render::layout::VisualRow;
@@ -47,55 +45,6 @@ pub(crate) fn mode_label(mode: ProjectionMode) -> &'static str {
         ProjectionMode::Signatures => "signatures",
         ProjectionMode::Tests => "tests",
     }
-}
-
-const FOLD_PREFIX: char = 'z';
-
-fn fold_bindings() -> Vec<Binding> {
-    vec![
-        Binding {
-            key: 'a',
-            action: Action::Show(ShowAction::ToggleFold),
-            label: "Toggle fold",
-            hint: "za",
-        },
-        Binding {
-            key: 'o',
-            action: Action::Show(ShowAction::OpenFold),
-            label: "Open fold",
-            hint: "zo",
-        },
-        Binding {
-            key: 'c',
-            action: Action::Show(ShowAction::CloseFold),
-            label: "Close fold",
-            hint: "zc",
-        },
-        Binding {
-            key: 'O',
-            action: Action::Show(ShowAction::OpenRecursive),
-            label: "Open fold recursively",
-            hint: "zO",
-        },
-        Binding {
-            key: 'C',
-            action: Action::Show(ShowAction::CloseRecursive),
-            label: "Close fold recursively",
-            hint: "zC",
-        },
-        Binding {
-            key: 'R',
-            action: Action::Show(ShowAction::OpenAll),
-            label: "Open all folds",
-            hint: "zR",
-        },
-        Binding {
-            key: 'M',
-            action: Action::Show(ShowAction::CloseAll),
-            label: "Close all folds",
-            hint: "zM",
-        },
-    ]
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -293,89 +242,11 @@ impl Loaded {
     }
 
     pub fn palette_entries(&self) -> Vec<(Action, &'static str, &'static str)> {
-        let mut entries = vec![
-            (
-                Action::Global(GlobalAction::Mode),
-                "Switch types / signatures / tests",
-                "m",
-            ),
-            (Action::Global(GlobalAction::Scope), "Change scope", "s"),
-        ];
-        match self {
-            Self::Show(_) => {
-                entries.push((Action::Show(ShowAction::EditRevision), "Edit revision", "r"));
-                entries.extend(
-                    fold_bindings()
-                        .into_iter()
-                        .map(|binding| (binding.action, binding.label, binding.hint)),
-                );
-            }
-            Self::Diff(diff) => match &diff.view {
-                DiffViewState::Range(_) => {
-                    entries.push((
-                        Action::Range(RangeAction::EditBase),
-                        "Edit base revision",
-                        "b",
-                    ));
-                    entries.push((
-                        Action::Range(RangeAction::EditTarget),
-                        "Edit target revision",
-                        "t",
-                    ));
-                    if !engine::is_snapshot_spec(&diff.base)
-                        && !engine::is_snapshot_spec(&diff.target)
-                        && !diff.merge_base
-                    {
-                        entries.push((
-                            Action::Range(RangeAction::SwitchToCommits),
-                            "Switch to commits view",
-                            "",
-                        ));
-                    }
-                }
-                DiffViewState::Commits(_) => entries.push((
-                    Action::Commits(CommitsAction::SwitchToRange),
-                    "Switch to range view",
-                    "",
-                )),
-            },
-        }
-        entries.extend([
-            (Action::Global(GlobalAction::Finder), "Find file", "Ctrl-F"),
-            (Action::Global(GlobalAction::Search), "Search in view", "/"),
-            (Action::Global(GlobalAction::NextPane), "Switch pane", "Tab"),
-            (
-                Action::Global(GlobalAction::TreeWider),
-                "Widen file tree",
-                "]",
-            ),
-            (
-                Action::Global(GlobalAction::TreeNarrower),
-                "Narrow file tree",
-                "[",
-            ),
-            (
-                Action::Global(GlobalAction::TreeReset),
-                "Reset file tree",
-                "\\",
-            ),
-            (Action::Global(GlobalAction::Top), "Jump to top", "g"),
-            (Action::Global(GlobalAction::Bottom), "Jump to bottom", "G"),
-            (Action::Global(GlobalAction::Help), "Help", "?"),
-            (Action::Global(GlobalAction::Quit), "Quit", "q"),
-        ]);
-        entries
+        crate::command::palette_entries(self)
     }
 
     pub fn prefix_groups(&self) -> Vec<PrefixGroup> {
-        match self {
-            Self::Show(_) => vec![PrefixGroup {
-                key: FOLD_PREFIX,
-                name: "fold",
-                bindings: fold_bindings(),
-            }],
-            Self::Diff(_) => Vec::new(),
-        }
+        crate::command::prefix_groups(self)
     }
 
     pub fn settle(
