@@ -19,11 +19,6 @@ pub use repository::{
     CommitStep, GitRepository, HashKind, ObjectId, Revision, SnapshotRepository, SourceEntry,
 };
 
-/// A typed failure in the read-only Git layer.
-///
-/// No variant exposes a `gix` type; underlying Git errors are type-erased into
-/// a boxed [`std::error::Error`] so the chain survives for diagnostics without
-/// leaking the implementation (TECHNICAL_DESIGN.md section 15).
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
     #[error("no Git repository found starting at `{start}`")]
@@ -49,8 +44,6 @@ pub enum GitError {
         source: Box<dyn Error + Send + Sync + 'static>,
     },
 
-    /// The `diff` command takes two independent revision arguments, so a range
-    /// passed as one argument is rejected.
     #[error("revision `{revision}` does not identify exactly one object; ranges are not supported")]
     RevisionRange {
         repository: PathBuf,

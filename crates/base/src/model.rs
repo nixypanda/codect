@@ -2,6 +2,12 @@
 //!
 //! The model describes a projection, not a universal programming-language AST,
 //! and is deliberately free of language grammar and Git types.
+//!
+//! Emission is determined solely by [`ProjectedItem::parent_key`]: `None` items
+//! are emitted and `Some(_)` items are index-only, and [`ProjectedFile::try_new`]
+//! rejects duplicate keys and a dangling, self-referential, or cyclic parent
+//! chain. Stable keys never embed byte offsets, and repository paths sort by raw
+//! bytes.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -10,12 +16,6 @@ use bstr::{BString, ByteSlice};
 
 use crate::diagnostic::{ProjectionError, RepoPathError};
 
-/// The MVP supports [`ProjectionMode::Types`], [`ProjectionMode::Signatures`],
-/// and [`ProjectionMode::Tests`]; `Public` and `Full` are later product modes.
-///
-/// `Tests` is the Signatures projection restricted to test declarations. It is a
-/// peer variant rather than a filter flag so an unrecognized mode fails loudly
-/// on the `mode` value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProjectionMode {
     Types,
@@ -24,10 +24,6 @@ pub enum ProjectionMode {
 }
 
 impl ProjectionMode {
-    /// The mode-independent superset the outline is derived from. The only mode
-    /// question answered by a method: the others are a yes or no, and are
-    /// decided by exhaustive `match` where needed so a new variant is a compile
-    /// error.
     pub fn superset(self) -> Self {
         match self {
             Self::Types | Self::Signatures => Self::Signatures,
@@ -44,7 +40,6 @@ pub enum Language {
     Rust,
 }
 
-/// Must never carry a language AST node, a Tree-sitter node, or a `gix` handle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ItemKind {
     Module,
@@ -68,11 +63,6 @@ pub enum ItemKind {
     ForeignBlock,
 }
 
-/// A half-open byte range and its zero-based start/end line-column positions.
-///
-/// Byte offsets index the decoded UTF-8 source; line and column values are
-/// zero-based. `start_byte <= end_byte` and the start position is not after the
-/// end position; [`SourceSpan::new`] establishes this.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceSpan {
     start_byte: usize,
@@ -84,7 +74,6 @@ pub struct SourceSpan {
 }
 
 impl SourceSpan {
-    /// All positions must come from one parse of the same source.
     pub fn new(
         start_byte: usize,
         end_byte: usize,
@@ -132,17 +121,7 @@ impl SourceSpan {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectedItem {
-    /// A stable identity for the declaration within its projected file. Keys
-    /// must not include byte offsets (TECHNICAL_DESIGN.md section 5.2).
     pub stable_key: String,
-    /// The `stable_key` of the containing top-level declaration when this item
-    /// is an **index-only** nested entry.
-    ///
-    /// An item with `parent_key == Some(_)` is not emitted separately by
-    /// [`ProjectedFile`]: [`ProjectedItem::canonical_text`] already appears inside
-    /// its ancestor's fragment. Emission is determined solely by this field, not
-    /// by container naming in `stable_key`. Adapters must ensure the referenced
-    /// key exists and that the item reaches a top-level ancestor.
     pub parent_key: Option<String>,
     pub kind: ItemKind,
     pub name: String,
@@ -150,32 +129,6 @@ pub struct ProjectedItem {
     pub canonical_text: String,
 }
 
-/// A projected source file and its declaration list.
-///
-/// # Canonical text
-///
-/// [`ProjectedFile::canonical_text`] is a pure function of `items`, computed by
-/// [`ProjectedFile::try_new`], and is never independently mutable. The fields
-/// are private and there is intentionally no mutable item accessor. Emission is
-/// determined solely by [`ProjectedItem::parent_key`]:
-///
-/// 1. Only items with `parent_key == None` are emitted. Their canonical-text
-///    fragments are joined by exactly one blank line, and the result ends with
-///    exactly one trailing newline. A file with no top-level items has empty
-///    canonical text.
-/// 2. An item with `parent_key == Some(_)` is an index-only entry. Its text is
-///    already contained in the fragment of the ancestor that owns it, so it is
-///    never emitted as its own top-level block.
-/// 3. Every item fragment is self-contained. A top-level fragment includes the
-///    canonical rendering of its nested members, indented four spaces per
-///    nesting level. A nested item's text appears exactly once in the file text.
-/// 4. The `parent_key` relationship is independent of the container naming used
-///    in stable keys. Naming a container in a stable key does not suppress
-///    emission; only `parent_key == Some(_)` does. Adapters mark declarations
-///    they want emitted as top-level.
-/// 5. Every item reaches a top-level ancestor: the constructor rejects a
-///    dangling, self-referential, or cyclic `parent_key`, and a duplicate
-///    `stable_key`, so canonical-text assembly cannot silently drop an item.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectedFile {
     path: SupportedPath,
@@ -184,20 +137,10 @@ pub struct ProjectedFile {
 }
 
 impl ProjectedFile {
-    /// Builds a projected file, validating the `parent_key` forest.
-    ///
-    /// Rejects a duplicate `stable_key`, a `parent_key` with no matching item,
-    /// a self-parent, and a cycle. On success every nested item has a top-level
-    /// ancestor, so no item is silently dropped by canonical-text assembly.
-    ///
-    /// A failure here means an adapter produced a value it should not have; see
-    /// [`ProjectionError::AstInvariant`].
     pub fn try_new(
         path: SupportedPath,
         items: Vec<ProjectedItem>,
     ) -> Result<Self, ProjectionError> {
-        // A duplicate key makes outline retention and per-declaration addressing
-        // ambiguous, so the item list must name each declaration once.
         let mut index: HashMap<&str, usize> = HashMap::with_capacity(items.len());
         for (position, item) in items.iter().enumerate() {
             if index.insert(item.stable_key.as_str(), position).is_some() {
@@ -209,9 +152,6 @@ impl ProjectedFile {
             }
         }
 
-        // Walk every ancestor chain to top level. Missing keys, self-parents,
-        // and revisits are all fatal, and together they guarantee a top-level
-        // ancestor exists for every item.
         for item in &items {
             let mut current = item.parent_key.as_deref();
             let mut visited = HashSet::new();
@@ -244,7 +184,6 @@ impl ProjectedFile {
         Ok(Self::assemble(path, items))
     }
 
-    // Assembles a file whose invariants are already established.
     fn assemble(path: SupportedPath, items: Vec<ProjectedItem>) -> Self {
         let canonical_text = derive_canonical_text(&items);
         Self {
@@ -300,12 +239,6 @@ fn derive_canonical_text(items: &[ProjectedItem]) -> String {
     text
 }
 
-/// A normalized repository-relative path.
-///
-/// Git paths are byte strings, not guaranteed UTF-8 operating-system paths, so
-/// `RepoPath` owns the raw bytes and uses `/` as the separator. It sorts by raw
-/// path bytes for deterministic output and must not be converted to a
-/// [`std::path::PathBuf`] merely to inspect a committed tree.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct RepoPath(BString);
 
@@ -336,8 +269,6 @@ impl RepoPath {
         self.0.as_slice()
     }
 
-    /// The file extension bytes after the final `.` in the final component;
-    /// `None` for hidden files (leading `.`) and names ending in `.`.
     pub fn extension(&self) -> Option<&[u8]> {
         let bytes = self.0.as_slice();
         let file_name_start = bytes
@@ -367,12 +298,10 @@ impl RepoPath {
         self.extension() == Some(b"hs")
     }
 
-    /// Python source (`.py`) and type stubs (`.pyi`).
     pub fn is_python(&self) -> bool {
         matches!(self.extension(), Some(b"py" | b"pyi"))
     }
 
-    /// Extension matching is case-sensitive ASCII bytes.
     pub fn language(&self) -> Option<Language> {
         if self.is_elm() {
             Some(Language::Elm)
@@ -387,8 +316,6 @@ impl RepoPath {
         }
     }
 
-    /// True when `self` is `dir` itself or a descendant path under it. The check
-    /// is byte-exact and boundary-aware, so `src` does not contain `src2/x.rs`.
     pub fn is_within(&self, dir: &RepoPath) -> bool {
         let path = self.as_bytes();
         let dir = dir.as_bytes();
@@ -397,8 +324,6 @@ impl RepoPath {
 }
 
 impl fmt::Display for RepoPath {
-    /// Escapes invalid UTF-8 bytes as `\xNN`; valid UTF-8, including spaces, is
-    /// preserved. This never panics.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for chunk in ByteSlice::utf8_chunks(self.0.as_slice()) {
             f.write_str(chunk.valid())?;
@@ -410,10 +335,6 @@ impl fmt::Display for RepoPath {
     }
 }
 
-/// A repository path whose extension names a supported language.
-///
-/// Constructed only through [`SupportedPath::new`], so [`SupportedPath::language`]
-/// can never disagree with [`SupportedPath::path`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SupportedPath {
     path: RepoPath,
@@ -421,7 +342,6 @@ pub struct SupportedPath {
 }
 
 impl SupportedPath {
-    /// `None` when the path's extension names no supported language.
     pub fn new(path: RepoPath) -> Option<Self> {
         path.language().map(|language| Self { path, language })
     }
@@ -436,8 +356,6 @@ impl SupportedPath {
 }
 
 impl fmt::Display for SupportedPath {
-    /// Delegates to the path so diagnostics render exactly as they did when the
-    /// path and language were stored separately.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.path.fmt(f)
     }
@@ -633,8 +551,6 @@ mod tests {
         let file = ProjectedFile::try_new(supported("src/lib.rs"), vec![top, nested])
             .expect("valid fixture");
 
-        // The nested fragment appears once, inside its ancestor, not as its own
-        // block.
         assert_eq!(file.canonical_text(), "impl User {\n    fn id(&self);\n}\n");
         assert_eq!(file.canonical_text().matches("fn id(&self);").count(), 1);
         assert_eq!(file.items().len(), 2);

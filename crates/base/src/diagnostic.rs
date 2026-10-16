@@ -1,13 +1,16 @@
 //! Typed library errors and user-facing diagnostics.
 //!
 //! Core does not depend on `miette`; presenting a report belongs to the CLI.
+//!
+//! Unsupported extensions, symlinks, submodules, and macro-generated
+//! declarations are exclusions rather than errors, and a projection failure
+//! must never yield a partial result.
 
 use std::error::Error;
 use std::path::PathBuf;
 
 use crate::model::{Language, RepoPath, SourceSpan, SupportedPath};
 
-/// A rejected repository-relative path (TECHNICAL_DESIGN.md section 5.1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum RepoPathError {
     #[error("repository path is empty")]
@@ -23,15 +26,8 @@ pub enum RepoPathError {
     NotNormalized,
 }
 
-/// A fatal failure while projecting one supported source file.
-///
-/// Unsupported extensions, symlinks, submodules, and macro-generated
-/// declarations are exclusions, not projection errors. An error here means
-/// Codect must not emit a partial result.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectionError {
-    /// Elm, Haskell, Python, and Rust source contents must be valid UTF-8; see
-    /// TECHNICAL_DESIGN.md section 5.1.
     #[error("source file `{path}` is not valid UTF-8")]
     InvalidUtf8 {
         path: SupportedPath,
@@ -45,7 +41,6 @@ pub enum ProjectionError {
         range: SourceSpan,
     },
 
-    /// The parsed tree contained `ERROR` or missing nodes.
     #[error("`{path}` contains {language:?} syntax errors", language = .path.language())]
     ErroneousSyntax {
         path: SupportedPath,
@@ -70,11 +65,6 @@ impl ProjectionError {
         }
     }
 
-    /// The path and its derived language, as stored on the error.
-    ///
-    /// [`ProjectionError::path`] and [`ProjectionError::language`] are the two
-    /// halves of this value; use this when a caller needs them together (for
-    /// example to build a [`DiagnosticContext`]).
     pub fn supported_path(&self) -> &SupportedPath {
         match self {
             Self::InvalidUtf8 { path, .. }
@@ -93,10 +83,6 @@ impl ProjectionError {
         }
     }
 
-    /// The source range involved in the failure, when one is meaningful. UTF-8
-    /// failures carry no range because decoding fails before a coherent range
-    /// exists; the underlying [`std::str::Utf8Error`] reports the valid prefix
-    /// length instead.
     pub fn range(&self) -> Option<&SourceSpan> {
         match self {
             Self::InvalidUtf8 { .. } => None,
@@ -107,8 +93,6 @@ impl ProjectionError {
     }
 }
 
-/// Maps invalid UTF-8 to [`ProjectionError::InvalidUtf8`] because a supported
-/// source blob must be valid UTF-8.
 pub fn decode_source<'a>(
     path: &SupportedPath,
     bytes: &'a [u8],
@@ -119,31 +103,19 @@ pub fn decode_source<'a>(
     })
 }
 
-/// Structured context attached to a diagnostic report (TECHNICAL_DESIGN.md
-/// section 15).
-///
-/// Every field is optional because a given failure may not have all of them.
-/// Values are kept structured rather than preformatted so the CLI can decide
-/// how to render them.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct DiagnosticContext {
     pub repository: Option<PathBuf>,
     pub revision: Option<String>,
-    /// The file location, when the failure has one. A range implies a path.
     pub location: Option<Location>,
 }
 
-/// The source file a failure occurred in, and the range within it when one is
-/// meaningful.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Location {
     pub path: SupportedPath,
     pub range: Option<SourceSpan>,
 }
 
-/// A structured diagnostic: context plus an underlying error chain.
-///
-/// The CLI converts this value into its own user-facing report.
 #[derive(Debug, thiserror::Error)]
 #[error("{source}")]
 pub struct Diagnostic {

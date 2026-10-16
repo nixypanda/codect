@@ -10,90 +10,56 @@ use std::collections::BTreeSet;
 use crate::diagnostic::ProjectionError;
 use crate::model::{Language, ProjectedFile, ProjectedItem, RepoPath, SupportedPath};
 
-/// One declaration in a file's mode-independent outline.
-///
-/// The outline is derived from the Signatures projection, which is the superset
-/// of the Types projection, so it can locate a declaration the requested mode
-/// drops entirely (for example an inherent `impl` in Types mode). The item is
-/// the Signatures-superset declaration itself, so it cannot disagree with the
-/// projection it came from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutlineItem {
-    /// The declaration from the Signatures superset; `canonical_text` is the
-    /// outline's `signature`.
     pub item: ProjectedItem,
 }
 
-/// A requested-mode projection paired with the file's complete outline.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileOutline {
     pub projection: ProjectedFile,
-    /// The `stable_key`s the requested mode retains.
     pub retained: BTreeSet<String>,
-    /// The Signatures superset, in source order.
     pub outline: Vec<OutlineItem>,
 }
 
 impl FileOutline {
-    /// The file's path, taken from the projection so it cannot disagree.
     pub fn path(&self) -> &RepoPath {
         self.projection.path()
     }
 
-    /// The file's language, taken from the projection so it cannot disagree.
     pub fn language(&self) -> Language {
         self.projection.language()
     }
 
-    /// Whether the requested mode's projection retains `item`'s `stable_key`.
     pub fn retained_in_mode(&self, item: &OutlineItem) -> bool {
         self.retained.contains(&item.item.stable_key)
     }
 }
 
-/// A file's decoded source paired with its mode-independent outline.
-///
-/// The engine reads a projected file's committed blob once; this value retains
-/// the decoded UTF-8 text alongside the [`FileOutline`] built from the same
-/// bytes, so a caller can display real source without re-reading or
-/// re-projecting it. The source is owned (`String`) because `base` has no
-/// snapshot or blob handle to borrow from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceOutline {
     pub outline: FileOutline,
-    /// The file's decoded UTF-8 source, byte-for-byte as committed.
     pub source: String,
 }
 
 impl SourceOutline {
-    /// The file's path, taken from the outline so it cannot disagree.
     pub fn path(&self) -> &RepoPath {
         self.outline.path()
     }
 
-    /// The file's language, taken from the outline so it cannot disagree.
     pub fn language(&self) -> Language {
         self.outline.language()
     }
 }
 
-/// One changed file with the complete declaration outline for each present side.
-///
-/// The variant says which sides exist, so a comparison with neither side, or a
-/// path that disagrees with a present side, is not representable.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FileOutlineDiff {
-    /// Only the new side is present.
     Added { new: FileOutline },
-    /// Only the old side is present.
     Deleted { old: FileOutline },
-    /// Both sides are present and differ in their requested-mode projection.
     Modified { old: FileOutline, new: FileOutline },
 }
 
 impl FileOutlineDiff {
-    /// The compared file's path, taken from a present side so it can never
-    /// disagree with the variant.
     pub fn path(&self) -> &RepoPath {
         match self {
             Self::Added { new } => new.path(),
@@ -103,11 +69,6 @@ impl FileOutlineDiff {
     }
 }
 
-/// Builds a [`FileOutline`] from the requested-mode and Signatures projections.
-///
-/// Retention is `stable_key` membership in `projection`, so a declaration the
-/// requested mode drops is still located through `superset`. Both projections
-/// are validated, so the outline cannot carry a malformed parent forest.
 pub fn assemble_outline(
     path: &SupportedPath,
     projection: Vec<ProjectedItem>,

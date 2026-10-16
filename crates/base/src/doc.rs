@@ -14,23 +14,13 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::render::LINE_WIDTH;
 
-/// A small layout document, rendered by [`render`].
 #[derive(Clone, Debug)]
 pub enum Doc {
     Text(String),
     Line,
-    /// A space when flat, a line break when broken.
     SoftLine,
-    /// Nothing when flat, a line break when broken.
     SoftNil,
-    /// Text emitted only when the enclosing group is broken, used for the
-    /// trailing comma that keeps an appended list item on a single diff line.
     Broken(&'static str),
-    /// Columns charged to the fit decisions of the groups that follow, emitted
-    /// as nothing.
-    ///
-    /// A broken list's trailing comma lands on its last item's line, a column
-    /// that item's own group cannot see.
     Reserve(usize),
     Indent(Box<Doc>),
     Group(Box<Doc>),
@@ -38,7 +28,6 @@ pub enum Doc {
 }
 
 impl Doc {
-    /// Renders the document at the top level (nesting depth zero).
     pub fn render(&self) -> String {
         render(self, 0)
     }
@@ -49,7 +38,6 @@ struct Output {
     depth: usize,
     at_line_start: bool,
     column: usize,
-    // Columns a later [`Doc::Broken`] will write on this line.
     reserved: usize,
 }
 
@@ -70,7 +58,6 @@ impl Output {
         self.text.push('\n');
         self.at_line_start = true;
         self.column = 0;
-        // A reserved column belongs to the line it was charged on.
         self.reserved = 0;
     }
 
@@ -83,7 +70,6 @@ impl Output {
     }
 }
 
-/// Renders a document at a nesting depth of four spaces per level.
 pub fn render(doc: &Doc, depth: usize) -> String {
     let mut output = Output {
         text: String::new(),
@@ -142,8 +128,6 @@ fn render_into(doc: &Doc, output: &mut Output, flat: bool) {
     }
 }
 
-// The display width of `doc` rendered flat, or `None` when it contains a hard
-// [`Doc::Line`] and can therefore never be flat.
 fn flat_width(doc: &Doc) -> Option<usize> {
     match doc {
         Doc::Text(value) => Some(UnicodeWidthStr::width(value.as_str())),
@@ -166,7 +150,6 @@ mod tests {
     use super::{Doc, render};
     use crate::render::LINE_WIDTH;
 
-    // A comma-separated bracketed list in the shape the adapters build.
     fn list(items: &[String]) -> Doc {
         let mut inner = vec![Doc::SoftNil];
         for (index, item) in items.iter().enumerate() {
@@ -215,8 +198,6 @@ mod tests {
 
     #[test]
     fn flat_width_counts_display_columns_not_bytes() {
-        // Each CJK character is two columns wide. Forty of them overflow the
-        // budget even though the byte length is not what decides.
         let wide = "名".repeat(40);
         let items = vec![wide.clone(), wide.clone()];
         assert!(
@@ -243,7 +224,6 @@ mod tests {
 
     #[test]
     fn reserve_charges_the_following_group_the_columns_it_reserves() {
-        // Exactly `LINE_WIDTH` flat, so only the reserved column pushes it over.
         let item = "x".repeat(LINE_WIDTH - 2);
         let doc = Doc::Concat(vec![Doc::Reserve(1), list(&[item])]);
         assert_eq!(

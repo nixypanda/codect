@@ -27,61 +27,35 @@
 //! [`FoldRegion::end_line`] is the span's end line, which the projection schema
 //! guarantees includes the declaration's body. A folded region therefore hides
 //! the body; it does not stop at the signature.
+//!
+//! # Modes
+//!
+//! A declaration the requested mode drops is closed whatever its kind, so its
+//! body becomes a `hidden in <mode>` fold row; a retained container is open so
+//! its declarations stay reachable, and a retained signature is closed.
+//!
+//! Block annotation openers are tried closest-first (`{-#` before `{-`, `#![`
+//! before `#[`) because the shorter opener's closer also matches the longer
+//! opener's.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::model::{ItemKind, ProjectedItem};
 use crate::outline::FileOutline;
 
-/// One declaration's fold region within a file, in source order.
-///
-/// `start_line` is extended upward over the complete leading annotation block
-/// (doc comments, attributes, decorators); `end_line` is the span's end line and
-/// includes the body. Regions are returned in outline order, which is source
-/// order.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FoldRegion {
     pub stable_key: String,
     pub parent_key: Option<String>,
     pub kind: ItemKind,
-    /// Whether the requested mode's projection retains this declaration, taken
-    /// from [`FileOutline::retained`] so it cannot disagree with the projection.
     pub retained: bool,
-    /// 1-based first line, extended upward over leading annotations. This is
-    /// where the hidden block begins, so collapsing from here hides the
-    /// annotations too.
     pub start_line: usize,
-    /// 1-based line of the declaration node itself (`span.start_line() + 1`),
-    /// the first line that is not a leading annotation. A collapsed row
-    /// summarizes this line, showing the declaration's own signature rather than
-    /// the attribute, decorator, or doc comment above it. It equals `start_line`
-    /// when there is no leading annotation.
     pub declaration_line: usize,
-    /// 1-based last line, taken from the span and including the body.
     pub end_line: usize,
-    /// 1-based nesting depth found by walking `parent_key` to the top.
     pub level: usize,
-    /// Whether the declaration starts unfolded. A retained container is open so
-    /// the declarations it holds stay reachable; a retained signature is closed
-    /// because the requested mode keeps only its shape; and a declaration the
-    /// requested mode drops is closed whatever its kind, so its body is replaced
-    /// by a fold row marked `hidden in <mode>`.
     pub default_open: bool,
 }
 
-/// Builds fold regions from a file's complete outline and its source lines.
-///
-/// `outline.outline` is the mode-independent Signatures superset, already in
-/// source order, so the result is deterministic and in source order too. `lines`
-/// is the buffer's full line list; a line referenced past its end is treated as
-/// blank, matching the plugin's `lines[i] or ""`.
-///
-/// Each region's [`FoldRegion::default_open`] mirrors the plugin's
-/// `default_closed`: a declaration the requested mode drops is closed whichever
-/// its kind, so the mode's filtering is visible as a fold row rather than a body
-/// left open.
-///
-/// The function is pure: it reads no files and writes nothing.
 pub fn fold_regions(outline: &FileOutline, lines: &[&str]) -> Vec<FoldRegion> {
     let items: Vec<&ProjectedItem> = outline.outline.iter().map(|entry| &entry.item).collect();
     let index: HashMap<&str, usize> = items
@@ -89,7 +63,6 @@ pub fn fold_regions(outline: &FileOutline, lines: &[&str]) -> Vec<FoldRegion> {
         .enumerate()
         .map(|(position, item)| (item.stable_key.as_str(), position))
         .collect();
-    // Raw 1-based spans, used unchanged for both boundary checks and end lines.
     let spans: Vec<(usize, usize)> = items
         .iter()
         .map(|item| (item.span.start_line() + 1, item.span.end_line() + 1))
@@ -122,21 +95,6 @@ pub fn fold_regions(outline: &FileOutline, lines: &[&str]) -> Vec<FoldRegion> {
         .collect()
 }
 
-/// Extends a 1-based fold start upward over complete leading annotation blocks.
-///
-/// A declaration's span excludes its attributes, decorators, and doc comments,
-/// so the fold start must walk up over them. `lines` is the buffer's full line
-/// list and `is_boundary(line)` answers whether a 1-based line belongs to a
-/// different, non-ancestor declaration, which ends a leading run.
-///
-/// A `trailing` form that directly follows another declaration (a `//`, `#`, or
-/// `--` comment owned by the declaration above) stops the run; a forward-
-/// attaching form (`///`, `//!`, `/**`, `/*!`, `{-|`, `{-#`, `#[`, `#![`, `@…`)
-/// belongs to the declaration below and may cross into the preceding
-/// declaration's span.
-///
-/// A `start_line` of zero or one has nothing above it to claim and is returned
-/// unchanged.
 pub fn fold_start(lines: &[&str], start_line: usize, is_boundary: impl Fn(usize) -> bool) -> usize {
     let mut line = start_line;
     while line > 1 {
@@ -152,22 +110,10 @@ pub fn fold_start(lines: &[&str], start_line: usize, is_boundary: impl Fn(usize)
     line
 }
 
-/// Whether a declaration starts open (its body visible) or closed (folded).
-///
-/// A declaration the requested mode drops is closed whatever its kind, so its
-/// body is replaced by a `hidden in <mode>` fold row; a retained container is
-/// open so the declarations it holds stay reachable; and a retained signature is
-/// closed because the requested mode already keeps only its shape. This mirrors
-/// the plugin's `default_closed` (`editors/nvim/lua/codect/state.lua`).
 fn default_open(retained: bool, kind: ItemKind) -> bool {
     retained && is_open_kind(kind)
 }
 
-/// Whether a retained declaration of this kind starts unfolded.
-///
-/// Containers are open so the declarations they hold stay reachable; signatures
-/// are closed. The match is exhaustive with no wildcard, so a new [`ItemKind`]
-/// is a compile error here rather than a silent default.
 fn is_open_kind(kind: ItemKind) -> bool {
     match kind {
         ItemKind::Module
@@ -192,17 +138,13 @@ fn is_open_kind(kind: ItemKind) -> bool {
     }
 }
 
-/// The derived view of one file's items that boundary and nesting queries need.
 struct FoldInput<'a> {
     items: Vec<&'a ProjectedItem>,
     index: HashMap<&'a str, usize>,
-    /// Raw 1-based inclusive spans, parallel to `items`.
     spans: Vec<(usize, usize)>,
 }
 
 impl FoldInput<'_> {
-    /// True when `items[j]` is an ancestor of `items[i]` (following `parent_key`
-    /// up from `i`). A cycle is cut off rather than followed forever.
     fn is_ancestor(&self, i: usize, j: usize) -> bool {
         let key = self.items[j].stable_key.as_str();
         let mut current = self.items[i].parent_key.as_deref();
@@ -223,16 +165,12 @@ impl FoldInput<'_> {
         false
     }
 
-    /// True when 1-based `line` belongs to a different, non-ancestor
-    /// declaration: the boundary a leading run must not cross.
     fn is_boundary(&self, i: usize, line: usize) -> bool {
         self.spans.iter().enumerate().any(|(j, &(start, end))| {
             j != i && (start..=end).contains(&line) && !self.is_ancestor(i, j)
         })
     }
 
-    /// The number of ancestors of `items[i]`. A missing parent ends the chain; a
-    /// cycle (which the outline constructor forbids) is treated as depth zero.
     fn depth_of(&self, i: usize) -> usize {
         let mut depth = 0;
         let mut seen = HashSet::new();
@@ -252,15 +190,12 @@ impl FoldInput<'_> {
     }
 }
 
-/// A block annotation's opener and closer.
 #[derive(Clone, Copy)]
 struct BlockSpec {
     open: &'static str,
     close: &'static str,
 }
 
-/// Block annotations, closest-first: `{-#` must precede `{-`, and `#![` must
-/// precede `#[`, because each former's closer also matches the latter.
 const BLOCK_SPECS: [BlockSpec; 5] = [
     BlockSpec {
         open: "/*",
@@ -284,17 +219,12 @@ const BLOCK_SPECS: [BlockSpec; 5] = [
     },
 ];
 
-/// How a leading annotation block attaches to the declaration below it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AnnotationForm {
-    /// Belongs to the declaration below and may cross into the one above.
     Forward,
-    /// Belongs to the declaration above when it directly follows it.
     Trailing,
 }
 
-/// The start line of a complete leading annotation block ending at `last`, plus
-/// its form, or `None` when `last` does not end one. `last` is 1-based.
 fn annotation_start(lines: &[&str], last: usize) -> Option<(usize, Option<AnnotationForm>)> {
     let raw = line(lines, last);
     if is_blank(raw) {
@@ -302,7 +232,6 @@ fn annotation_start(lines: &[&str], last: usize) -> Option<(usize, Option<Annota
     }
     let trimmed = ltrim(raw);
 
-    // A shebang on line 1 is a file directive, not a declaration annotation.
     if last == 1 && trimmed.starts_with("#!") && !trimmed.starts_with("#![") {
         return None;
     }
@@ -327,8 +256,6 @@ fn annotation_start(lines: &[&str], last: usize) -> Option<(usize, Option<Annota
     None
 }
 
-/// A single-line comment. `#[` and `#![` open Rust attributes, not comments,
-/// and `#-}` closes a Haskell `{-# … #-}` pragma.
 fn is_line_comment(s: &str) -> bool {
     if s.starts_with("///") || s.starts_with("//!") || s.starts_with("//") {
         return true;
@@ -345,7 +272,6 @@ fn is_line_comment(s: &str) -> bool {
     false
 }
 
-/// Classifies an annotation block by its opening line.
 fn annotation_form(s: &str) -> Option<AnnotationForm> {
     if s.starts_with("///") || s.starts_with("//!") {
         return Some(AnnotationForm::Forward);
@@ -377,12 +303,6 @@ fn annotation_form(s: &str) -> Option<AnnotationForm> {
     None
 }
 
-/// The line that opens a block annotation ending at `last`, or `None`.
-///
-/// Scans upward tracking nesting depth (string-aware), so a balanced inner block
-/// (`/* inner */`) is skipped and the outermost opener is returned. Blank lines
-/// inside the already-open block are tolerated; a blank line between separate
-/// annotation runs still ends the search.
 fn find_block_start(lines: &[&str], last: usize, spec: BlockSpec) -> Option<usize> {
     let mut depth: i64 = 0;
     for number in (1..=last).rev() {
@@ -402,16 +322,10 @@ fn find_block_start(lines: &[&str], last: usize, spec: BlockSpec) -> Option<usiz
             }
             return None;
         }
-        // depth > 0: inside the block. A blank line here is interior.
     }
     None
 }
 
-/// The line that opens a `@decorator` ending at `last`, including parenthesized
-/// or continued forms, or `None`.
-///
-/// Blank lines inside the parentheses are tolerated; the search still stops at a
-/// blank or uncontinued line between separate runs.
 fn find_decorator_start(lines: &[&str], last: usize) -> Option<usize> {
     let mut depth: i64 = 0;
     for number in (1..=last).rev() {
@@ -430,12 +344,6 @@ fn find_decorator_start(lines: &[&str], last: usize) -> Option<usize> {
     None
 }
 
-/// Replaces the contents of string literals with spaces.
-///
-/// Delimiter counting must ignore brackets inside strings: `#[doc = "a ] b"]`
-/// has one `[` and one `]`, not one and two. Raw/byte-string prefixes are
-/// blanked too; they are never delimiters. A Rust lifetime (`'a`, `'static`) is
-/// copied verbatim rather than treated as a char literal.
 fn strip_strings(source: &str) -> Vec<u8> {
     let bytes = source.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -474,12 +382,6 @@ fn strip_strings(source: &str) -> Vec<u8> {
     out
 }
 
-/// The index just past a quoted string starting at `start`.
-///
-/// Handles `\` escapes and an unterminated string (consumes the rest of the
-/// line). `'` is treated as a string delimiter, which is right for Python
-/// decorators and Rust char literals; a bare lifetime is handled by
-/// [`lifetime_end`] before this is reached.
 fn quoted_string_end(bytes: &[u8], start: usize) -> usize {
     let quote = bytes[start];
     let mut i = start + 1;
@@ -496,10 +398,6 @@ fn quoted_string_end(bytes: &[u8], start: usize) -> usize {
     bytes.len()
 }
 
-/// The index just past a raw/byte string starting at `start`, or `None`.
-///
-/// Recognizes `r"…"`, `r#"…"#`, `br"…"`, `br#"…"#`, and `rb…` forms. The closing
-/// quote must be followed by the same number of `#` characters.
 fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
     let rest = &bytes[start..];
     for prefix in [b"br".as_slice(), b"rb".as_slice(), b"r".as_slice()] {
@@ -524,8 +422,6 @@ fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-/// The index just past a Rust lifetime starting at `start` (`'a`, `'static`), or
-/// `None` when the `'` opens a char literal. A lifetime has no closing quote.
 fn lifetime_end(bytes: &[u8], start: usize) -> Option<usize> {
     let mut i = start + 1;
     if !matches!(bytes.get(i), Some(byte) if byte.is_ascii_alphabetic() || *byte == b'_') {
@@ -542,9 +438,6 @@ fn lifetime_end(bytes: &[u8], start: usize) -> Option<usize> {
     }
 }
 
-/// The index just past the first occurrence of `needle` at or after `from`, or
-/// `haystack.len()` when there is none (an unterminated literal consumes its
-/// line).
 fn find_bytes(haystack: &[u8], from: usize, needle: &[u8]) -> usize {
     if needle.is_empty() || from > haystack.len() {
         return haystack.len();
@@ -558,8 +451,6 @@ fn find_bytes(haystack: &[u8], from: usize, needle: &[u8]) -> usize {
     }
 }
 
-/// The 1-based `number` line, or `""` when it is past the end. Matches the
-/// plugin's `lines[i] or ""`.
 fn line<'a>(lines: &[&'a str], number: usize) -> &'a str {
     number
         .checked_sub(1)
@@ -568,19 +459,14 @@ fn line<'a>(lines: &[&'a str], number: usize) -> &'a str {
         .unwrap_or("")
 }
 
-/// True for an empty line or one made only of Lua `%s` whitespace, matching the
-/// plugin's byte-oriented blank test.
 fn is_blank(s: &str) -> bool {
     s.as_bytes().iter().all(|byte| is_lua_space(*byte))
 }
 
-/// Lua's `%s` set, byte for byte, so blank and trim tests agree with the plugin.
 fn is_lua_space(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r')
 }
 
-/// Removes leading Lua whitespace. ASCII spaces are char boundaries, so the
-/// result is always a valid slice.
 fn ltrim(s: &str) -> &str {
     let bytes = s.as_bytes();
     let mut start = 0;
@@ -590,7 +476,6 @@ fn ltrim(s: &str) -> &str {
     &s[start..]
 }
 
-/// Whether `haystack` contains `needle` as a byte substring.
 fn contains_bytes(haystack: &[u8], needle: &str) -> bool {
     let needle = needle.as_bytes();
     !needle.is_empty()
@@ -599,7 +484,6 @@ fn contains_bytes(haystack: &[u8], needle: &str) -> bool {
             .any(|window| window == needle)
 }
 
-/// Counts non-overlapping occurrences of `needle`, matching `count_plain`.
 fn count_plain(haystack: &[u8], needle: &str) -> usize {
     let needle = needle.as_bytes();
     if needle.is_empty() {
@@ -628,8 +512,6 @@ mod tests {
         SupportedPath::new(RepoPath::new(raw).unwrap()).unwrap()
     }
 
-    /// A `ProjectedItem` with zero-based `start_line`/`end_line`. Byte offsets
-    /// and columns are irrelevant to folding.
     fn projected(
         key: &str,
         parent: Option<&str>,
@@ -647,7 +529,6 @@ mod tests {
         }
     }
 
-    /// All `superset` items are retained by passing them as the projection too.
     fn outline_all(superset: Vec<ProjectedItem>) -> FileOutline {
         assemble_outline(&supported("src/lib.rs"), superset.clone(), superset)
             .expect("valid outline fixture")
@@ -666,7 +547,6 @@ mod tests {
             "pub fn other() {}",
         ];
         let file = outline_all(vec![
-            // Zero-based span lines 2..=5 -> 1-based 3..=6.
             projected("fn::documented", None, ItemKind::Function, 2, 5),
             projected("fn::other", None, ItemKind::Function, 7, 7),
         ]);
@@ -689,7 +569,6 @@ mod tests {
             "fn::tested",
             None,
             ItemKind::Function,
-            // Zero-based span lines 1..=3 -> 1-based 2..=4.
             1,
             3,
         )]);
@@ -729,7 +608,6 @@ mod tests {
             "fn::documented",
             None,
             ItemKind::Function,
-            // Zero-based span lines 2..=4 -> 1-based 3..=5.
             2,
             4,
         )]);
@@ -964,7 +842,6 @@ mod tests {
         ];
         let file = outline_all(vec![
             projected("impl Widget", None, ItemKind::TraitImplementation, 0, 9),
-            // Zero-based span lines 2..=4 -> 1-based 3..=5, doc comment on line 2.
             projected(
                 "impl Widget::new",
                 Some("impl Widget"),
@@ -1032,8 +909,6 @@ mod tests {
 
     #[test]
     fn a_dropped_container_is_closed_so_the_mode_actually_filters_it() {
-        // An inherent `impl` is a container, but the mode drops it: it must fold
-        // (not stay open and render its body as source), matching the plugin.
         let lines = ["impl Widget {", "    fn size(&self) -> usize { 0 }", "}"];
         let region = projected("impl Widget", None, ItemKind::TraitImplementation, 0, 2);
         let file = assemble_outline(&supported("src/lib.rs"), Vec::new(), vec![region.clone()])
@@ -1084,8 +959,6 @@ mod tests {
 
     #[test]
     fn default_open_closes_everything_the_mode_drops_of_any_kind() {
-        // The mode's filtering wins over the kind: a dropped container folds just
-        // as a dropped signature does, matching the plugin's `default_closed`.
         assert!(
             !default_open(false, ItemKind::TraitImplementation),
             "a dropped container must be closed"
@@ -1108,12 +981,8 @@ mod tests {
     fn fold_start_stops_at_a_trailing_comment_owned_by_the_previous_declaration() {
         let lines = ["pub fn a() {}", "// trailing", "pub fn b() {}"];
 
-        // With line 1 known to be another declaration's, the trailing comment is
-        // not claimed.
         assert_eq!(fold_start(&lines, 3, |line| line == 1), 3);
 
-        // Without that boundary the trailing comment is claimed, because a `//`
-        // comment on its own is a valid leading annotation.
         assert_eq!(fold_start(&lines, 3, |_| false), 2);
     }
 
@@ -1126,7 +995,6 @@ mod tests {
     #[test]
     fn lines_past_the_end_are_treated_as_blank() {
         let lines = ["pub fn a() {}"];
-        // A missing line cannot be an annotation, so the start is unchanged.
         assert_eq!(fold_start(&lines, 5, |_| false), 5);
         assert_eq!(annotation_start(&lines, 5), None);
     }

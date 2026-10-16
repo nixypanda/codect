@@ -1,4 +1,7 @@
 //! Revision resolution and commit peeling. Ranges are rejected.
+//!
+//! History walking follows only the first parent of each commit, so `base` must
+//! lie on `target`'s first-parent chain.
 
 use std::path::Path;
 
@@ -7,8 +10,6 @@ use bstr::BStr;
 use crate::GitError;
 use crate::repository::{CommitStep, GitRepository, ObjectId, Revision};
 
-// Traverses only the first parent of each commit. Reading metadata here does
-// not inspect trees or project source, so long histories remain cheap to list.
 pub(crate) fn first_parent_steps(
     repo: &GitRepository,
     base: &Revision,
@@ -108,8 +109,6 @@ pub(crate) fn resolve_commit(repo: &GitRepository, spec: &str) -> Result<Revisio
     })
 }
 
-// Distinguishes a genuinely non-peelable object (a tree or blob) from a read
-// failure.
 fn peel_to_commit(
     repo: &GitRepository,
     repository: &Path,
