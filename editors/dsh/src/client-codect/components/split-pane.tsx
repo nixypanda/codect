@@ -40,7 +40,6 @@ function writeNumber(key: string, value: number): void {
   try {
     globalThis.localStorage?.setItem(key, String(value));
   } catch {
-    // Persisting the width is best-effort.
   }
 }
 

@@ -27,22 +27,12 @@ declare module "@deepseek-ai/dsh-typert-protocol" {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
 const Config = z.object({
-  /** Path to the codect binary. Defaults to "codect" on PATH. */
   binary: z.string().default("codect"),
-  /** Default timeout for codect invocations, in milliseconds. */
   timeoutMs: z.number().step(1).min(1000).max(120000).default(30000),
 });
 
 type ConfigType = Schemastery.TypeT<typeof Config>;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 async function execCodect(
   binary: string,
@@ -97,7 +87,6 @@ function assertRevision(flag: string, value: string): void {
   }
 }
 
-/** `--path` and `--area` are mutually exclusive; reject both being present. */
 function assertNotBothSelectors(paths?: string[], areas?: string[]): void {
   if (paths?.length && areas?.length) {
     throw new RemoteError(
@@ -107,10 +96,6 @@ function assertNotBothSelectors(paths?: string[], areas?: string[]): void {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// Service
-// ---------------------------------------------------------------------------
 
 class CodectService extends TypertRemoteService {
   static inject = ["typert"];

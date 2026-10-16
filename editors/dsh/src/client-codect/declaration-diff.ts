@@ -16,12 +16,10 @@
 
 import type { DiffChange, DiffFile, OutlineItem } from "../shared/schema";
 
-/** Whether the active mode's projection retains this declaration. */
 function retained(item: OutlineItem): boolean {
   return item.retained_in_mode !== false;
 }
 
-/** Compare the two sides of a file's outline into declaration-level changes. */
 export function diffChanges(file: DiffFile): DiffChange[] {
   const baseItems = new Map<string, OutlineItem>(
     (file.base?.outline ?? []).map((item) => [item.stable_key, item])
@@ -30,7 +28,6 @@ export function diffChanges(file: DiffFile): DiffChange[] {
     (file.target?.outline ?? []).map((item) => [item.stable_key, item])
   );
 
-  // A key's parent may only exist on one side, so build the ancestry from both.
   const parentOf = new Map<string, string | null>();
   for (const item of file.base?.outline ?? []) {
     parentOf.set(item.stable_key, item.parent_key);
@@ -67,9 +64,6 @@ export function diffChanges(file: DiffFile): DiffChange[] {
     }
   }
 
-  // Suppress every reported change that has another reported change somewhere
-  // in its descendant chain, so a container is not repeated alongside the leaf
-  // that actually changed.
   const reported = new Set(changes.map((change) => change.item.stable_key));
   const suppressed = new Set<string>();
   for (const change of changes) {

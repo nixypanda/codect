@@ -314,7 +314,6 @@ const CSS = `
 .codect-decl-changed .codect-decl-marker { color: var(--dsw-alias-state-warn-primary, #d29922); }
 `;
 
-/** Inject the stylesheet once per document. Safe to call repeatedly. */
 export function ensureStyles(doc?: Document | null): void {
   const target = doc ?? (typeof document === "undefined" ? null : document);
   if (target === null) return;

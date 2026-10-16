@@ -4,6 +4,11 @@
  *
  * Produces lib/client.js in the exact ModuleLoader format that DSH expects:
  *   window.__ModuleLoader__.load({ id: "...", factory: (require) => { ... } })
+ *
+ * A packaging guard fails the build when a declared `exports` entry has no
+ * emitted declaration, or when a declaration's relative specifier escapes
+ * `lib/`; declarations must be self-contained because the published tarball
+ * ships only `lib/`.
  */
 
 import {
@@ -34,17 +39,15 @@ function build(args) {
   execSync(`${esbuild} ${args}`, { stdio: "inherit" });
 }
 
-// 1. Host service
 console.log("Building host service...");
 build(`${join(srcDir, "api-codect/index.ts")} --bundle --format=esm --platform=node --target=node22 --packages=external --outfile=${join(libDir, "index.js")}`);
 
-// 2. Typert host
 console.log("Building typert.host.js...");
 build(`${join(srcDir, "api-codect/typert.host.ts")} --bundle --format=esm --platform=node --target=node22 --packages=external --outfile=${join(libDir, "typert.host.js")}`);
 
-// 3. Client — build as CJS, then wrap in ModuleLoader format. React and the
-// JSX runtime come from the browser platform table; relative imports (views,
-// definition, the Remote contribution) are bundled.
+// The client is built as CJS, then wrapped in ModuleLoader format. React and
+// the JSX runtime come from the browser platform table; relative imports
+// (views, definition, the Remote contribution) are bundled.
 console.log("Building client.js...");
 build(`${join(srcDir, "client-codect/client.ts")} --bundle --format=cjs --platform=browser --target=es2022 --packages=external --outfile=${join(libDir, "client.tmp.js")}`);
 
@@ -64,12 +67,9 @@ ${cjs}
 writeFileSync(join(libDir, "client.js"), wrapper);
 rmSync(join(libDir, "client.tmp.js"));
 
-// 4. Shared schema
 console.log("Building shared schema...");
 build(`${join(srcDir, "shared/schema.ts")} --bundle --format=esm --platform=browser --packages=external --outfile=${join(libDir, "types/types.js")}`);
 
-// 5. Type declarations
-//
 // Emit declarations with `tsc` against the committed stubs in scripts/stubs
 // instead of hand-writing them. The published tarball ships only lib/, so the
 // declarations must be self-contained (no `../../src` specifiers). The
@@ -87,14 +87,12 @@ execSync(`${process.env.TSC_BINARY || "tsc"} -p tsconfig.build.json`, {
 // declaration so `exports["./client"].types` resolves.
 writeFileSync(join(libDir, "types/client/index.d.ts"), `export {}\n`);
 
-// 6. Packaging guard — fail the build on declaration/export regressions.
 guardPackaging();
 
 function guardPackaging() {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const exportsMap = pkg.exports || {};
 
-  // (a) Every declared `exports[<subpath>].types` must exist in the build.
   for (const [subpath, entry] of Object.entries(exportsMap)) {
     if (!entry || typeof entry !== "object" || !entry.types) continue;
     const target = resolve(root, entry.types);
@@ -106,9 +104,6 @@ function guardPackaging() {
     }
   }
 
-  // (b) Every relative import/export in a lib/**/*.d.ts must resolve to a
-  // declaration/TS file inside lib/. Declarations must never reach out of the
-  // shipped tree (e.g. the old broken `../../src` re-exports).
   const specifierRe = /(?:^|[^\w$])(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
   for (const file of walk(libDir).filter((f) => f.endsWith(".d.ts"))) {
     const contents = readFileSync(file, "utf8");

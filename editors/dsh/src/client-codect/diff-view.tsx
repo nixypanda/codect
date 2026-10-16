@@ -59,11 +59,6 @@ const SNAPSHOT_LIST_ID = "codect-snapshot-sides";
  */
 const SNAPSHOT_SIDES = [":index", ":worktree", ":empty"];
 
-/**
- * One-click comparisons over the common snapshot pairs: uncommitted changes
- * (`HEAD → :worktree`), staged changes (`HEAD → :index`), unstaged changes
- * (`:index → :worktree`), and the whole non-ignored tree (`:empty → :worktree`).
- */
 const SNAPSHOT_PRESETS: { id: string; base: string; target: string }[] = [
   { id: "worktree", base: "HEAD", target: ":worktree" },
   { id: "index", base: "HEAD", target: ":index" },
@@ -91,7 +86,6 @@ function writeLayout(layout: DiffLayout): void {
   try {
     globalThis.localStorage?.setItem(LAYOUT_KEY, layout);
   } catch {
-    // Persisting the layout is best-effort.
   }
 }
 
@@ -223,7 +217,6 @@ export function DiffView({ root, codect, labels, t, onNavigate, diffView }: Diff
       try {
         globalThis.localStorage?.setItem(TREE_COLLAPSED_KEY, String(!prev));
       } catch {
-        // best-effort
       }
       return !prev;
     });

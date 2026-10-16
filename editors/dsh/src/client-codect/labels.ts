@@ -6,7 +6,6 @@
  * the plugin's `t` function.
  */
 
-/** The shared code-card label shape used by `ReadBlock` and `DiffBlock`. */
 export interface CodeLabels {
   codeLabel: string;
   copy: string;

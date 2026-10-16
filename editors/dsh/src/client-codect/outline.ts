@@ -8,13 +8,11 @@
 
 import type { OutlineItem } from "../shared/schema";
 
-/** One outline entry with its computed nesting depth. */
 export interface OutlineRow {
   depth: number;
   item: OutlineItem;
 }
 
-/** The minimal outline shape the depth walk needs. */
 type Keyed = Pick<OutlineItem, "stable_key" | "parent_key">;
 
 function depthOf(item: Keyed, byKey: ReadonlyMap<string, Keyed>): number {
@@ -25,7 +23,6 @@ function depthOf(item: Keyed, byKey: ReadonlyMap<string, Keyed>): number {
     seen.add(parent);
     const next = byKey.get(parent);
     if (next === undefined) {
-      // A dangling parent link still contributes one level.
       return depth + 1;
     }
     depth += 1;
@@ -34,7 +31,6 @@ function depthOf(item: Keyed, byKey: ReadonlyMap<string, Keyed>): number {
   return depth;
 }
 
-/** Decorate an outline with nesting depth, preserving declaration order. */
 export function outlineRows(items: readonly OutlineItem[]): OutlineRow[] {
   const byKey = new Map<string, Keyed>(items.map((item) => [item.stable_key, item]));
   return items.map((item) => ({ depth: depthOf(item, byKey), item }));

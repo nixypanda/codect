@@ -19,13 +19,10 @@ export type DiffLayout = "unified" | "split";
 export interface DiffBodyProps {
   file: DiffFile;
   labels: CodeLabels;
-  /** `split` and `unified` both need `diffView` for highlighting. */
   layout?: DiffLayout;
-  /** Optional `dsh-diff-view` client service (see `ctx.diffView`). */
   diffView?: any;
 }
 
-/** The canonical projection texts for a file's two sides ("" when absent). */
 export function diffTexts(file: DiffFile): { before: string; after: string } {
   return {
     before: file.base?.projection.text ?? "",
@@ -70,7 +67,6 @@ export function DiffBody({ file, labels, layout = "unified", diffView }: DiffBod
     );
   }
 
-  // No `dsh-diff-view`: keep the platform unified renderer (no highlighting).
   if (typeof DiffBlock === "function") {
     const diffs = [
       {

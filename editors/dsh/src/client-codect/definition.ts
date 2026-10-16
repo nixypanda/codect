@@ -7,11 +7,9 @@
  * Pattern follows dsh-client-ui-sidebar-files/lib/types/client/definition.js.
  */
 
-/** Tab kinds this plugin owns. */
 export const SHOW_KIND = "codect-show";
 export const DIFF_KIND = "codect-diff";
 
-/** This plugin's identity in the tab system — matches package name. */
 export const CODECT_ID = "@nixypanda/dsh-codect";
 
 export type CodectTabKind = typeof SHOW_KIND | typeof DIFF_KIND;
@@ -30,11 +28,9 @@ export interface CodectGuide {
   order: number;
   title: () => string;
   description: () => string;
-  /** Guide icon name, or `null` to use the tab's default. */
   icon: string | null;
 }
 
-/** Definition for the "show" tab type. */
 export function showDefinition(t: (key: string) => string): CodectTabDefinition {
   return {
     id: `${CODECT_ID}-show`,
@@ -54,7 +50,6 @@ export function showDefinition(t: (key: string) => string): CodectTabDefinition 
   };
 }
 
-/** Definition for the "diff" tab type. */
 export function diffDefinition(t: (key: string) => string): CodectTabDefinition {
   return {
     id: `${CODECT_ID}-diff`,
