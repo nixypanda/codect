@@ -185,6 +185,7 @@ fn hints(app: &App) -> String {
                 "type to filter   ↑↓ choose   Enter open   Esc close ".to_owned()
             }
             Overlay::Search(_) => "type to search   Enter next   Esc cancel ".to_owned(),
+            Overlay::WhichKey { .. } => "↑↓ / Ctrl-K/J choose   Enter run   Esc close ".to_owned(),
             Overlay::Help => "Esc close ".to_owned(),
         };
     }

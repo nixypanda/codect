@@ -151,10 +151,12 @@ fn render_overlay(app: &App, frame: &mut Frame, area: Rect) {
     match &app.overlay {
         Some(state) => {
             let entries = app.loaded.palette_entries();
+            let groups = app.loaded.prefix_groups();
             let ctx = overlay::RenderCtx {
                 theme: &app.chrome.theme,
                 mode: app.loaded.mode(),
                 entries: &entries,
+                groups: &groups,
                 visible: app.loaded.visible(),
                 matches: app.loaded.search().map_or(0, |search| search.matches.len()),
             };

@@ -59,3 +59,19 @@ pub enum Action {
     Range(RangeAction),
     Commits(CommitsAction),
 }
+
+/// A binding under a prefix. `hint` is the full keystroke the palette shows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Binding {
+    pub key: char,
+    pub action: Action,
+    pub label: &'static str,
+    pub hint: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrefixGroup {
+    pub key: char,
+    pub name: &'static str,
+    pub bindings: Vec<Binding>,
+}

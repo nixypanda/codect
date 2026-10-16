@@ -67,6 +67,12 @@ full-width `@@` hunk bands. `NO_COLOR` disables all styling.
 | `?` | Toggle help |
 | `Esc` | Close an overlay, clear a search, or dismiss a diagnostic |
 
+Pressing `z` opens the fold prefix as a which-key band across the bottom of the
+body, just above the status bar, listing the fold bindings. Step through it with
+`↑`/`↓` or `Ctrl-K`/`Ctrl-J` and run the highlighted binding with `Enter`, or
+press a binding's own key, so `za`, `zo`, and the rest still work unchanged. Any
+other key, `Esc`, a click, or a reload closes the band.
+
 Every overlay action is also reachable from the command palette, so bindings
 need not be memorized:
 
