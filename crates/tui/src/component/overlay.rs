@@ -557,7 +557,7 @@ fn render_scope(frame: &mut Frame, area: Rect, chooser: &ScopeChooser, theme: &T
 }
 
 fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let popup = centered(area, 56, 29);
+    let popup = centered(area, 56, 31);
     if popup.width == 0 || popup.height == 0 {
         return;
     }
@@ -593,7 +593,9 @@ fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
         key_line("q / Ctrl-C", "quit", theme),
         Line::from(""),
         Line::from(section("Mouse", theme)),
-        key_line("click", "open a file or fold a directory", theme),
+        key_line("click", "select a file or fold a directory", theme),
+        key_line("gutter + / -", "fold or unfold a declaration", theme),
+        key_line("click line", "move the source cursor", theme),
         key_line("wheel", "scroll the tree or the content", theme),
     ];
     frame.render_widget(Paragraph::new(lines), inner);

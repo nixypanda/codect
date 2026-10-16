@@ -19,7 +19,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::page::{ChangeKind, Loaded};
 use crate::render::block::pane_block;
 use crate::render::empty::render_empty;
-use crate::render::layout::{Edge, window_offset};
+use crate::render::layout::Edge;
 use crate::render::text::truncate_ellipsis;
 use crate::render::theme::Theme;
 
@@ -51,6 +51,8 @@ pub struct Tree {
     pub collapsed: BTreeSet<RepoPath>,
     pub rows: Arc<[TreeRow]>,
     pub cursor: usize,
+    pub scroll: usize,
+    pub viewport: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +65,7 @@ pub enum Msg {
     Close,
     Toggle,
     Click(usize),
+    Scroll(i32),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,14 +80,17 @@ impl Tree {
             .retain(|path| self.rows.iter().any(|row| row.kind.path() == path));
         if !self.rows.is_empty() {
             self.cursor = self.cursor.min(self.rows.len() - 1);
+            self.scroll = self.scroll.min(self.rows.len() - 1);
         } else {
             self.cursor = 0;
+            self.scroll = 0;
         }
     }
 
-    pub fn reveal(&mut self, path: &RepoPath) {
+    pub fn reveal(&mut self, path: &RepoPath, height: usize) {
         if let Some(index) = self.row_of_file(path) {
             self.cursor = index;
+            self.ensure_cursor_visible(height);
         }
     }
 
@@ -110,8 +116,9 @@ impl Tree {
         self.rows.get(self.cursor)
     }
 
-    pub fn update(&mut self, msg: Msg, visible: &[RepoPath]) -> Option<OutMsg> {
-        match msg {
+    pub fn update(&mut self, msg: Msg, visible: &[RepoPath], height: usize) -> Option<OutMsg> {
+        let scrolled = matches!(&msg, Msg::Scroll(_));
+        let out = match msg {
             Msg::Move(delta) => self.move_cursor(delta),
             Msg::Page(delta) => self.move_cursor(delta),
             Msg::ToTop => self.move_cursor_to(0),
@@ -120,7 +127,15 @@ impl Tree {
             Msg::Close => self.close(visible),
             Msg::Toggle => self.toggle(visible),
             Msg::Click(index) => self.click(index, visible),
+            Msg::Scroll(delta) => {
+                self.scroll_viewport(delta, height);
+                None
+            }
+        };
+        if !scrolled {
+            self.ensure_cursor_visible(height);
         }
+        out
     }
 
     fn move_cursor(&mut self, delta: i32) -> Option<OutMsg> {
@@ -225,6 +240,40 @@ impl Tree {
         if let Some(index) = self.row_of_directory(&parent) {
             self.cursor = index;
         }
+    }
+
+    pub fn fit_viewport(&mut self, height: usize) {
+        let shrunk = height < self.viewport;
+        self.viewport = height;
+        self.scroll = self.scroll.min(self.max_scroll(height));
+        if shrunk {
+            self.ensure_cursor_visible(height);
+        }
+    }
+
+    fn max_scroll(&self, height: usize) -> usize {
+        self.rows.len().saturating_sub(height)
+    }
+
+    fn ensure_cursor_visible(&mut self, height: usize) {
+        if height == 0 {
+            return;
+        }
+        if self.cursor < self.scroll {
+            self.scroll = self.cursor;
+        } else if self.cursor >= self.scroll.saturating_add(height) {
+            self.scroll = self.cursor + 1 - height;
+        }
+        self.scroll = self.scroll.min(self.max_scroll(height));
+    }
+
+    fn scroll_viewport(&mut self, delta: i32, height: usize) {
+        let scroll = if delta < 0 {
+            self.scroll.saturating_sub(delta.unsigned_abs() as usize)
+        } else {
+            self.scroll.saturating_add(delta as usize)
+        };
+        self.scroll = scroll.min(self.max_scroll(height));
     }
 }
 
@@ -343,7 +392,7 @@ pub(crate) fn render(
     let height = inner.height as usize;
     let needs_scrollbar = state.rows.len() > height;
     let width = (inner.width as usize).saturating_sub(usize::from(needs_scrollbar));
-    let offset = window_offset(state.cursor, state.rows.len(), height);
+    let offset = state.scroll.min(state.rows.len().saturating_sub(height));
     let selected = ctx.loaded.selected();
 
     let mut lines = Vec::new();
@@ -364,7 +413,7 @@ pub(crate) fn render(
 
     if needs_scrollbar {
         let mut scrollbar = ScrollbarState::new(state.rows.len())
-            .position(state.cursor)
+            .position(offset)
             .viewport_content_length(height);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)

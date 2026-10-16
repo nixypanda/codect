@@ -115,7 +115,9 @@ selected file with mode-driven folds.
 |---|---|
 | Click a file | Select it; clicking a directory folds or unfolds it |
 | Click a commit | Select it and show its parent-to-commit diff |
-| Wheel over a pane | Scroll that pane and focus it |
+| Click the `+`/`-` gutter | Fold or unfold the declaration on that row |
+| Click a source line | Move the source cursor there |
+| Wheel over a pane | Scroll that pane and focus it; over the file tree it scrolls the view without moving the selection |
 
 Mouse capture is enabled so clicks and the wheel work. That takes over the
 terminal's own text selection, so to copy text hold the terminal's selection

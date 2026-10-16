@@ -382,6 +382,20 @@ fn two_files() -> App {
     ])
 }
 
+const TWO_FUNCTION_SOURCE: &str = "fn a() {\n    one\n}\nfn b() {\n    two\n}\n";
+
+fn two_function_outline(path: &str) -> SourceOutline {
+    let supported = supported(path);
+    let a = item_at("fn::a", None, ItemKind::Function, 0, 2);
+    let b = item_at("fn::b", None, ItemKind::Function, 3, 5);
+    let superset = vec![a.clone(), b.clone()];
+    let outline = assemble_outline(&supported, superset.clone(), superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TWO_FUNCTION_SOURCE.to_owned(),
+    }
+}
+
 #[test]
 fn a_loaded_result_installs_files_and_preserves_the_selection() {
     let app = two_files();
@@ -1366,18 +1380,202 @@ fn clicking_a_directory_folds_it() {
 }
 
 #[test]
-fn the_wheel_moves_the_tree_cursor_and_selects_as_it_passes() {
-    let app = show_app(vec![
-        source_outline("a.rs", "a\n"),
-        source_outline("b.rs", "b\n"),
-        source_outline("c.rs", "c\n"),
-    ]);
-    let (moved, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
+fn the_wheel_scrolls_the_tree_without_moving_the_selection() {
+    let files: Vec<SourceOutline> = (0..40)
+        .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
+        .collect();
+    let app = show_app(files);
+    assert_eq!(app.tree.scroll, 0);
+    assert_eq!(selected(&app).as_deref(), Some("f00.rs"));
+
+    let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
+    assert_eq!(scrolled.tree.scroll, 3, "the wheel moves the viewport");
     assert_eq!(
-        moved.tree.cursor, 2,
-        "the wheel step clamps to the last row"
+        scrolled.tree.cursor, 0,
+        "the wheel does not move the cursor"
     );
-    assert_eq!(selected(&moved).as_deref(), Some("c.rs"));
+    assert_eq!(
+        selected(&scrolled).as_deref(),
+        Some("f00.rs"),
+        "the wheel does not change the selection"
+    );
+
+    let (up, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, true)), &scrolled);
+    assert_eq!(up.tree.scroll, 0, "scrolling up clamps at the top");
+}
+
+#[test]
+fn moving_the_tree_cursor_after_a_scroll_reveals_it() {
+    let files: Vec<SourceOutline> = (0..40)
+        .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
+        .collect();
+    let app = show_app(files);
+    let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
+    assert_eq!(scrolled.tree.scroll, 3);
+
+    let moved = press(&scrolled, &[Key::Char('j'); 30]);
+    assert_eq!(moved.tree.cursor, 30);
+    assert_eq!(moved.tree.scroll, 5, "the viewport follows the cursor");
+}
+
+#[test]
+fn clicking_the_fold_gutter_toggles_without_moving_the_cursor() {
+    let app = show_app_mode(
+        vec![two_function_outline("a.rs")],
+        ProjectionMode::Signatures,
+    );
+    let buffer = render(&app, 100, 20);
+    let second = row_with(&buffer, "fn b").expect("the second fold row");
+    let marker_x = cell_x_of(&buffer, second, "+").expect("a fold marker");
+
+    let (opened, _) = update(Msg::Mouse(click(marker_x, second)), &app);
+    assert_eq!(
+        show_ref(&opened).body.cursor_line,
+        1,
+        "the marker click leaves the cursor where it was"
+    );
+    assert!(
+        matches!(
+            show_ref(&opened).visible_rows()[1],
+            VisibleRow::Source { line: 4 }
+        ),
+        "the clicked declaration is now open"
+    );
+    let first = show_ref(&opened).fold_marker(&show_ref(&opened).visible_rows()[0]);
+    assert_eq!(first, Some('+'), "the other declaration stays folded");
+}
+
+#[test]
+fn clicking_a_source_line_moves_the_cursor() {
+    let app = show_app_mode(
+        vec![two_function_outline("a.rs")],
+        ProjectionMode::Signatures,
+    );
+    let buffer = render(&app, 100, 20);
+    let second = row_with(&buffer, "fn b").expect("the second fold row");
+    let text_x = cell_x_of(&buffer, second, "fn b").expect("the folded signature text");
+
+    let (placed, _) = update(Msg::Mouse(click(text_x, second)), &app);
+    assert_eq!(
+        show_ref(&placed).body.cursor_line,
+        4,
+        "clicking a line moves the cursor to it"
+    );
+}
+
+#[test]
+fn clicking_the_pane_padding_does_not_toggle_a_fold() {
+    let app = show_app_mode(
+        vec![two_function_outline("a.rs")],
+        ProjectionMode::Signatures,
+    );
+    let (clicked, _) = update(Msg::Mouse(click(30, 2)), &app);
+    assert!(
+        matches!(
+            show_ref(&clicked).visible_rows()[0],
+            VisibleRow::Fold { .. }
+        ),
+        "a click left of the pane's inner area is not a marker click"
+    );
+}
+
+#[test]
+fn shrinking_the_tree_keeps_the_cursor_visible() {
+    let files: Vec<SourceOutline> = (0..40)
+        .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
+        .collect();
+    let app = press(&show_app(files), &[Key::Char('G')]);
+    assert_eq!(app.tree.cursor, 39);
+
+    let (resized, _) = update(
+        Msg::Resize {
+            width: 100,
+            height: 6,
+        },
+        &app,
+    );
+    let resized = settle(resized);
+    let height = resized.tree.viewport;
+    assert!(height >= 1, "the tree still has a viewport");
+    assert!(
+        resized.tree.scroll <= resized.tree.cursor
+            && resized.tree.cursor < resized.tree.scroll + height,
+        "the cursor stays inside the viewport after a shrink"
+    );
+}
+
+#[test]
+fn a_selection_scrolls_the_hidden_tree_to_the_file() {
+    let files: Vec<SourceOutline> = (0..40)
+        .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
+        .collect();
+    let mut app = show_app(files);
+    app.size = Size {
+        width: 60,
+        height: 20,
+    };
+    focus_content(&mut app);
+
+    select_path(&mut app, RepoPath::new("f39.rs").expect("valid path"));
+
+    let height = tree_viewport_height(&app);
+    assert!(height >= 1, "a hidden tree still has a drawing height");
+    assert_eq!(app.tree.cursor, 39);
+    assert!(
+        app.tree.scroll <= app.tree.cursor && app.tree.cursor < app.tree.scroll + height,
+        "the hidden tree is scrolled to the revealed file"
+    );
+}
+
+#[test]
+fn growing_the_tree_keeps_a_scrolled_away_viewport() {
+    let files: Vec<SourceOutline> = (0..40)
+        .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
+        .collect();
+    let app = show_app(files);
+    let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
+    assert_eq!(scrolled.tree.scroll, 3);
+
+    let (resized, _) = update(
+        Msg::Resize {
+            width: 100,
+            height: 40,
+        },
+        &scrolled,
+    );
+    let resized = settle(resized);
+    assert_eq!(
+        resized.tree.scroll, 3,
+        "growing the tree does not re-reveal a scrolled-away cursor"
+    );
+}
+
+#[test]
+fn a_tree_click_uses_the_scrolled_offset() {
+    let files: Vec<SourceOutline> = (0..40)
+        .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
+        .collect();
+    let app = show_app(files);
+    let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
+    assert_eq!(scrolled.tree.scroll, 3);
+
+    let (clicked, _) = update(Msg::Mouse(click(TREE_X, TREE_Y)), &scrolled);
+    assert_eq!(clicked.tree.cursor, 3, "the click maps to the scrolled row");
+    assert_eq!(selected(&clicked).as_deref(), Some("f03.rs"));
+}
+
+#[test]
+fn the_wheel_scrolls_the_show_pane_from_its_padding() {
+    let app = show_app(vec![source_outline(
+        "a.rs",
+        "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+    )]);
+    let (down, _) = update(Msg::Mouse(scroll(30, 5, false)), &app);
+    assert_eq!(
+        show_ref(&down).body.scroll,
+        3,
+        "the wheel acts anywhere in the pane, including its padding"
+    );
 }
 
 #[test]
