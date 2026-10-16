@@ -74,6 +74,14 @@ impl Diagnostic {
     }
 }
 
+/// The pending fold prefix, owned by the shell rather than the which-key
+/// overlay. `pending` is `Some(c)` exactly while a `Prefixed(c, _)` binding is
+/// armed and the which-key band is open.
+#[derive(Clone, Debug, Default)]
+pub struct Keymap {
+    pub pending: Option<char>,
+}
+
 #[derive(Debug)]
 pub enum Msg {
     Key(Key),
@@ -109,6 +117,7 @@ pub struct App {
     pub chrome: Chrome,
     pub tree: Tree,
     pub overlay: Option<Overlay>,
+    pub keymap: Keymap,
     pub loaded: Loaded,
     pub diagnostic: Option<Diagnostic>,
 }
@@ -186,6 +195,7 @@ impl App {
             },
             tree: Tree::default(),
             overlay: None,
+            keymap: Keymap::default(),
             loaded,
             diagnostic: None,
         }
@@ -481,12 +491,13 @@ fn nearest_visible(tree: &Tree, hint: usize) -> Option<RepoPath> {
 }
 
 fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
+    // 1. Ctrl-C always quits.
     if key == Key::CtrlC {
         app.chrome.quit = true;
         return;
     }
-    // Ctrl-K/Ctrl-J were k/j before the band; keep that alias outside it.
-    let key = if matches!(app.overlay, Some(Overlay::WhichKey { .. })) {
+    // 2. Ctrl-K/Ctrl-J were k/j before the band; keep that alias outside it.
+    let key = if app.overlay.as_ref().is_some_and(Overlay::keeps_ctrl_jk) {
         key
     } else {
         match key {
@@ -495,45 +506,72 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
             other => other,
         }
     };
-    let capturing =
-        app.overlay.as_ref().is_some_and(Overlay::captures_text) || app.loaded.prompt_active();
-    if key == Key::Char('q') && !capturing {
-        app.chrome.quit = true;
-        return;
-    }
-    if app.overlay.is_some() {
-        let outs = overlay_update(app, overlay::Msg::Key(key));
+    // 3. An open overlay owns the key.
+    if let Some((captures_text, modal)) =
+        app.overlay.as_ref().map(|o| (o.captures_text(), o.modal()))
+    {
+        // 3a. `q` quits unless the overlay captures text (or a prompt does).
+        if key == Key::Char('q') && !(captures_text || app.loaded.prompt_active()) {
+            app.chrome.quit = true;
+            return;
+        }
+        // 3b. Route the key to the overlay and apply its outs.
+        let (handled, outs) = overlay_key(app, key);
         for out in outs {
             apply_overlay_out(app, out, cmds);
         }
-        return;
+        // 3c. A handled key, or any modal overlay, stops here.
+        if handled || modal {
+            return;
+        }
     }
+    // Prompts are not overlays until task 4.4; route to them as before.
     if app.loaded.prompt_active() {
         let ctx = ctx(app);
         let outs = route_prompt(app, key, ctx);
         fold(app, outs, cmds);
         return;
     }
+    // 4. A pending prefix resolves or cancels.
+    if let Some(prefix) = app.keymap.pending {
+        clear_prefix(app);
+        if let Key::Char(character) = key
+            && let Some(action) = prefixed_action(app, prefix, character)
+        {
+            apply_action(app, action, cmds);
+        }
+        return;
+    }
+    // 5. `q` quits.
+    if key == Key::Char('q') {
+        app.chrome.quit = true;
+        return;
+    }
+    // 6. A prefix key arms the band.
+    if let Some(prefix) = crate::command::pending_prefix(app, key) {
+        app.keymap.pending = Some(prefix);
+        app.overlay = Some(Overlay::which_key());
+        return;
+    }
+    // 7. A bound key runs its command.
     if let Some(action) = command_for(key, app) {
         apply_action(app, action, cmds);
         return;
     }
+    // 8. Enter folds in the show body; otherwise forward to the focused pane.
     if key == Key::Enter && show_body_focused(app) {
         apply_action(app, Action::Show(ShowAction::ToggleFold), cmds);
         return;
     }
-    if let Some(prefix) = parked_prefix(app, key) {
-        app.overlay = Some(Overlay::which_key(prefix));
+    if focus_key(app, key, cmds) {
         return;
     }
-    match key {
-        Key::Esc => {
-            app.diagnostic = None;
-            let ctx = ctx(app);
-            let outs = route_clear_search(app, ctx);
-            fold(app, outs, cmds);
-        }
-        _ => focus_key(app, key, cmds),
+    // 9. Esc clears the diagnostic and the search.
+    if key == Key::Esc {
+        app.diagnostic = None;
+        let ctx = ctx(app);
+        let outs = route_clear_search(app, ctx);
+        fold(app, outs, cmds);
     }
 }
 
@@ -541,11 +579,17 @@ fn show_body_focused(app: &App) -> bool {
     matches!(app.loaded, Loaded::Show(_)) && app.loaded.focus() == Focus::Content
 }
 
-fn parked_prefix(app: &App, key: Key) -> Option<char> {
-    crate::command::pending_prefix(app, key)
+/// The action a `Prefixed(prefix, key)` binding in scope runs, if any.
+fn prefixed_action(app: &App, prefix: char, key: char) -> Option<Action> {
+    crate::command::prefix_groups_in_scope(&app.loaded, Some(app.loaded.focus()))
+        .iter()
+        .find(|group| group.key == prefix)
+        .and_then(|group| group.bindings.iter().find(|binding| binding.key == key))
+        .map(|binding| binding.action)
 }
 
 fn clear_prefix(app: &mut App) {
+    app.keymap.pending = None;
     if matches!(app.overlay, Some(Overlay::WhichKey { .. })) {
         app.overlay = None;
     }
@@ -586,42 +630,55 @@ fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>) {
     }
 }
 
+/// Open `overlay`, defensively clearing any pending prefix so the invariant
+/// `keymap.pending.is_some() == (overlay is WhichKey)` holds.
+fn open_overlay(app: &mut App, overlay: Overlay) {
+    app.keymap.pending = None;
+    app.overlay = Some(overlay);
+}
+
 fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
     use GlobalAction::*;
     let ctx = ctx(app);
     match action {
         Quit => app.chrome.quit = true,
-        Help => app.overlay = Some(Overlay::help()),
+        Help => open_overlay(app, Overlay::help()),
         Scope => {
-            app.overlay = Some(Overlay::scope());
+            open_overlay(app, Overlay::scope());
             cmds.push(Cmd::LoadAreas);
         }
-        Mode => app.overlay = Some(Overlay::mode(app.loaded.mode())),
+        Mode => open_overlay(app, Overlay::mode(app.loaded.mode())),
         Palette => {
             let entries = app.loaded.palette_entries();
             let groups = app.loaded.prefix_groups();
             let mode = app.loaded.mode();
             let visible = app.loaded.visible();
-            app.overlay = Some(Overlay::palette(&overlay::Ctx {
+            let pending_prefix = app.keymap.pending;
+            let palette = Overlay::palette(&overlay::Ctx {
                 visible,
                 entries: &entries,
                 groups: &groups,
                 mode,
-            }));
+                pending_prefix,
+            });
+            open_overlay(app, palette);
         }
         Finder => {
             let entries = app.loaded.palette_entries();
             let groups = app.loaded.prefix_groups();
             let mode = app.loaded.mode();
             let visible = app.loaded.visible();
-            app.overlay = Some(Overlay::finder(&overlay::Ctx {
+            let pending_prefix = app.keymap.pending;
+            let finder = Overlay::finder(&overlay::Ctx {
                 visible,
                 entries: &entries,
                 groups: &groups,
                 mode,
-            }));
+                pending_prefix,
+            });
+            open_overlay(app, finder);
         }
-        Search => app.overlay = Some(Overlay::search()),
+        Search => open_overlay(app, Overlay::search()),
         TreeWider => {
             app.chrome.tree_percent = (app.chrome.tree_percent + TREE_STEP).min(TREE_MAX_PERCENT);
         }
@@ -664,16 +721,45 @@ fn focus_command(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
     fold(app, outs, cmds);
 }
 
-fn focus_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
+/// Forward `key` to the focused pane, as the old `focus_key` did. Returns
+/// whether the pane consumed the key, so an unhandled `Esc` can clear the
+/// diagnostic and the search (step 9).
+fn focus_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) -> bool {
     if app.loaded.focus() == Focus::Tree {
         if let Some(msg) = tree_key(key) {
             tree_apply(app, msg);
+            return true;
         }
-        return;
+        return false;
     }
+    let handled = pane_key_handled(app, key);
     let ctx = ctx(app);
     let outs = route_page_key(app, key, ctx);
     fold(app, outs, cmds);
+    handled
+}
+
+/// The keys a focused body pane consumes today (`page::{show,diff}::body_key`).
+fn pane_key_handled(app: &App, key: Key) -> bool {
+    match &app.loaded {
+        Loaded::Show(_) => matches!(
+            key,
+            Key::Down
+                | Key::Char('j')
+                | Key::Up
+                | Key::Char('k')
+                | Key::Right
+                | Key::Char('l')
+                | Key::Left
+                | Key::Char('h')
+        ),
+        Loaded::Diff(diff) => match diff.focus() {
+            Focus::Content | Focus::Commits => {
+                matches!(key, Key::Down | Key::Char('j') | Key::Up | Key::Char('k'))
+            }
+            Focus::Tree => false,
+        },
+    }
 }
 
 fn page_step(height: u16) -> u16 {
@@ -720,25 +806,44 @@ fn overlay_update(app: &mut App, msg: overlay::Msg) -> Vec<overlay::OutMsg> {
     let Some(mut current) = app.overlay.take() else {
         return Vec::new();
     };
+    let outs = current.update(msg);
+    app.overlay = Some(current);
+    outs
+}
+
+/// Route a key to the open overlay. Returns `(handled, outs)`; `handled` is
+/// false only when a non-modal overlay declines the key.
+fn overlay_key(app: &mut App, key: Key) -> (bool, Vec<overlay::OutMsg>) {
+    let Some(mut current) = app.overlay.take() else {
+        return (false, Vec::new());
+    };
     let entries = app.loaded.palette_entries();
     let groups = app.loaded.prefix_groups();
     let mode = app.loaded.mode();
     let visible = app.loaded.visible();
+    let pending_prefix = app.keymap.pending;
     let ctx = overlay::Ctx {
         visible,
         entries: &entries,
         groups: &groups,
         mode,
+        pending_prefix,
     };
-    let outs = current.update(msg, &ctx);
+    let result = current.key(key, &ctx);
     app.overlay = Some(current);
-    outs
+    match result {
+        Some(outs) => (true, outs),
+        None => (false, Vec::new()),
+    }
 }
 
 fn apply_overlay_out(app: &mut App, out: overlay::OutMsg, cmds: &mut Vec<Cmd>) {
     let ctx = ctx(app);
     match out {
-        overlay::OutMsg::Close => app.overlay = None,
+        overlay::OutMsg::Close => {
+            app.overlay = None;
+            app.keymap.pending = None;
+        }
         overlay::OutMsg::Selection(selection) => {
             let outs = route_reload_scope(app, selection, ctx);
             fold(app, outs, cmds);

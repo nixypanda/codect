@@ -888,6 +888,7 @@ fn the_palette_and_finder_render_their_lists() {
         entries: &app.loaded.palette_entries(),
         groups: &app.loaded.prefix_groups(),
         mode: app.loaded.mode(),
+        pending_prefix: app.keymap.pending,
     }));
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("commands"), "{text}");
@@ -899,6 +900,7 @@ fn the_palette_and_finder_render_their_lists() {
         entries: &app.loaded.palette_entries(),
         groups: &app.loaded.prefix_groups(),
         mode: app.loaded.mode(),
+        pending_prefix: app.keymap.pending,
     }));
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("find file"), "{text}");
@@ -2304,12 +2306,14 @@ fn the_which_key_band_cancels_on_an_unrelated_key_and_on_esc() {
     let band = press(&app, &[Key::Char('z')]);
     assert_eq!(
         band.overlay,
-        Some(Overlay::which_key('z')),
+        Some(Overlay::which_key()),
         "pressing z opens the fold band"
     );
+    assert_eq!(band.keymap.pending, Some('z'), "the prefix is pending");
 
     let cancelled = press(&band, &[Key::Char('x')]);
     assert_eq!(cancelled.overlay, None, "an unrelated key closes the band");
+    assert_eq!(cancelled.keymap.pending, None, "the prefix is cleared");
     assert_eq!(
         show_ref(&cancelled).body.cursor_line,
         1,
@@ -2318,6 +2322,7 @@ fn the_which_key_band_cancels_on_an_unrelated_key_and_on_esc() {
 
     let escaped = press(&band, &[Key::Esc]);
     assert_eq!(escaped.overlay, None, "Esc closes the band");
+    assert_eq!(escaped.keymap.pending, None, "Esc clears the prefix");
     assert_eq!(show_ref(&escaped).body.cursor_line, 1);
 
     let after = press(&cancelled, &[Key::Char('j')]);
@@ -2522,33 +2527,22 @@ fn the_band_keys_select_and_run_a_binding() {
 
     // Ctrl-J and Ctrl-K move the highlight without dispatching a binding.
     let opened = press(&app, &[Key::Char('z')]);
-    assert_eq!(opened.overlay, Some(Overlay::which_key('z')));
+    assert_eq!(opened.overlay, Some(Overlay::which_key()));
+    assert_eq!(opened.keymap.pending, Some('z'));
     let down = press(&opened, &[Key::CtrlJ]);
-    assert_eq!(
-        down.overlay,
-        Some(Overlay::WhichKey {
-            prefix: 'z',
-            cursor: 1
-        })
-    );
+    assert_eq!(down.overlay, Some(Overlay::WhichKey { cursor: 1 }));
     let up = press(&down, &[Key::CtrlK]);
-    assert_eq!(up.overlay, Some(Overlay::which_key('z')));
+    assert_eq!(up.overlay, Some(Overlay::which_key()));
     let clamped = press(&up, &[Key::CtrlK]);
     assert_eq!(
         clamped.overlay,
-        Some(Overlay::which_key('z')),
+        Some(Overlay::which_key()),
         "the highlight clamps at the first binding"
     );
 
     // The arrow keys move the same highlight.
     let arrows = press(&app, &[Key::Char('z'), Key::Down, Key::Down, Key::Up]);
-    assert_eq!(
-        arrows.overlay,
-        Some(Overlay::WhichKey {
-            prefix: 'z',
-            cursor: 1
-        })
-    );
+    assert_eq!(arrows.overlay, Some(Overlay::WhichKey { cursor: 1 }));
 }
 
 #[test]
@@ -2584,6 +2578,160 @@ fn the_band_bindings_match_their_palette_entries() {
             "no palette entry matches the band binding {hint}"
         );
     }
+}
+
+#[test]
+fn q_under_a_pending_prefix_closes_the_band_without_quitting() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let band = press(&app, &[Key::Char('z')]);
+    assert_eq!(band.overlay, Some(Overlay::WhichKey { cursor: 0 }));
+    assert_eq!(band.keymap.pending, Some('z'));
+
+    let closed = press(&band, &[Key::Char('q')]);
+    assert_eq!(closed.overlay, None, "q closes the band");
+    assert!(
+        !closed.chrome.quit,
+        "q does not quit under a pending prefix"
+    );
+    assert_eq!(closed.keymap.pending, None, "the prefix is cleared");
+    assert_eq!(
+        show_ref(&closed).body.cursor_line,
+        1,
+        "q is swallowed, not typed or acted on"
+    );
+}
+
+#[test]
+fn a_pending_prefix_is_consumed_before_the_quit_check() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let band = press(&app, &[Key::Char('z')]);
+    assert_eq!(band.keymap.pending, Some('z'));
+
+    let swallowed = press(&band, &[Key::Char('q')]);
+    assert!(
+        !swallowed.chrome.quit,
+        "the first q is consumed by the pending prefix"
+    );
+
+    let quit = press(&swallowed, &[Key::Char('q')]);
+    assert!(quit.chrome.quit, "the next q quits");
+}
+
+#[test]
+fn an_unhandled_key_falls_through_a_non_modal_overlay() {
+    let mut app = two_files();
+    // Force the band open with no pending prefix. It is non-modal, so a key it
+    // does not handle falls through to the keymap.
+    app.overlay = Some(Overlay::WhichKey { cursor: 0 });
+    assert_eq!(app.keymap.pending, None);
+
+    let (next, _) = update(Msg::Key(Key::Char('?')), &app);
+    assert_eq!(next.overlay, Some(Overlay::Help));
+}
+
+#[test]
+fn ctrl_c_quits_with_a_capturing_overlay_open() {
+    let app = two_files();
+    let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
+    assert!(matches!(opened.overlay, Some(Overlay::Search(_))));
+
+    let (quit, _) = update(Msg::Key(Key::CtrlC), &opened);
+    assert!(quit.chrome.quit, "Ctrl-C quits even from a search input");
+}
+
+#[test]
+fn q_quits_from_help_and_from_the_mode_picker() {
+    let app = two_files();
+
+    let (help, _) = update(Msg::Key(Key::Char('?')), &app);
+    assert_eq!(help.overlay, Some(Overlay::Help));
+    let (quit_help, _) = update(Msg::Key(Key::Char('q')), &help);
+    assert!(quit_help.chrome.quit, "q quits from help");
+
+    let (mode, _) = update(Msg::Key(Key::Char('m')), &app);
+    assert!(matches!(mode.overlay, Some(Overlay::Mode { .. })));
+    let (quit_mode, _) = update(Msg::Key(Key::Char('q')), &mode);
+    assert!(quit_mode.chrome.quit, "q quits from the mode picker");
+}
+
+#[test]
+fn ctrl_j_and_ctrl_k_type_into_a_text_capturing_overlay() {
+    let app = two_files();
+    let (search, _) = update(Msg::Key(Key::Char('/')), &app);
+    let (j, _) = update(Msg::Key(Key::CtrlJ), &search);
+    let (jk, _) = update(Msg::Key(Key::CtrlK), &j);
+    match &jk.overlay {
+        Some(Overlay::Search(state)) => assert_eq!(state.input.text, "jk"),
+        other => panic!("expected a search overlay, got {other:?}"),
+    }
+}
+
+#[test]
+fn esc_with_no_overlay_clears_the_diagnostic_and_the_search() {
+    let mut app = show_app(vec![source_outline("a.rs", "alpha\nbeta\n")]);
+    app.diagnostic = Some(Diagnostic::new("boom".to_owned()));
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.search = Some(Search {
+            needle: "alpha".to_owned(),
+            matches: vec![SearchMatch {
+                side: SearchSide::Show,
+                line: 1,
+                start: 0,
+                end: 5,
+            }],
+            cursor: 0,
+        });
+    }
+
+    let (cleared, _) = update(Msg::Key(Key::Esc), &app);
+    assert!(cleared.diagnostic.is_none(), "Esc clears the diagnostic");
+    assert!(cleared.loaded.search().is_none(), "Esc clears the search");
+}
+
+#[test]
+fn the_band_reads_its_prefix_from_the_keymap() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let band = press(&app, &[Key::Char('z')]);
+    assert_eq!(band.keymap.pending, Some('z'));
+    assert_eq!(band.overlay, Some(Overlay::WhichKey { cursor: 0 }));
+
+    let text = buffer_text(&render(&band, 100, 20));
+    assert!(
+        text.contains("fold (z)"),
+        "the band title reads the prefix: {text}"
+    );
+}
+
+#[test]
+fn closing_the_band_clears_the_pending_prefix() {
+    // An unrelated key closes the band and drops the prefix.
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let band = press(&app, &[Key::Char('z')]);
+    let closed = press(&band, &[Key::Char('x')]);
+    assert_eq!(closed.keymap.pending, None, "an unrelated key clears it");
+
+    // A mouse event closes the band and drops the prefix.
+    let band = press(&app, &[Key::Char('z')]);
+    let (mouse_closed, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &band);
+    assert_eq!(mouse_closed.keymap.pending, None, "the mouse clears it");
+
+    // A reload closes the band and drops the prefix.
+    let band = press(&app, &[Key::Char('z')]);
+    let (reloaded, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                mode: ProjectionMode::Signatures,
+                ..show_request()
+            },
+            result: Ok(vec![nested_outline("a.rs", NESTED_SOURCE, (0, 5), (1, 4), true)].into()),
+        },
+        &band,
+    );
+    assert_eq!(reloaded.keymap.pending, None, "a reload clears it");
 }
 
 #[test]

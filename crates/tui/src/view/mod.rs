@@ -159,6 +159,7 @@ fn render_overlay(app: &App, frame: &mut Frame, area: Rect) {
                 groups: &groups,
                 visible: app.loaded.visible(),
                 matches: app.loaded.search().map_or(0, |search| search.matches.len()),
+                pending_prefix: app.keymap.pending,
             };
             overlay::render(state, &ctx, frame, area);
         }
