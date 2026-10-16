@@ -43,9 +43,9 @@ impl PathScope {
 /// A named, repository-defined group of paths. Areas are data only; this crate
 /// never reads a config file.
 ///
-/// The name is non-empty and the path list is non-empty, sorted, and
-/// deduplicated; [`Area::new`] establishes all three, so a constructed `Area`
-/// always satisfies them.
+/// The name has at least one non-whitespace character and the path list is
+/// non-empty, sorted, and deduplicated; [`Area::new`] establishes all three, so
+/// a constructed `Area` always satisfies them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Area {
     name: String,
@@ -53,14 +53,14 @@ pub struct Area {
 }
 
 impl Area {
-    /// Rejects an empty name or an empty path list, then sorts and deduplicates
-    /// the paths so the stored order is deterministic.
+    /// Rejects a whitespace-only name or an empty path list, then sorts and
+    /// deduplicates the paths so the stored order is deterministic.
     pub fn new(
         name: impl Into<String>,
         paths: impl IntoIterator<Item = RepoPath>,
     ) -> Result<Self, AreaError> {
         let name = name.into();
-        if name.is_empty() {
+        if name.trim().is_empty() {
             return Err(AreaError::EmptyName);
         }
 
@@ -207,6 +207,12 @@ mod tests {
     #[test]
     fn area_new_rejects_an_empty_name() {
         let error = Area::new("", [path("src")]).unwrap_err();
+        assert_eq!(error, AreaError::EmptyName);
+    }
+
+    #[test]
+    fn area_new_rejects_a_whitespace_only_name() {
+        let error = Area::new("  ", [path("src")]).unwrap_err();
         assert_eq!(error, AreaError::EmptyName);
     }
 

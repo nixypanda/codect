@@ -81,8 +81,6 @@ struct ConfigFile {
 }
 
 fn build_area(file: PathBuf, name: String, paths: Vec<String>) -> Result<Area, ConfigError> {
-    // Whitespace-only names are config-specific: `Area::new` rejects only a
-    // truly empty name, so the trim check stays here.
     if name.trim().is_empty() {
         return Err(ConfigError::EmptyName { file });
     }

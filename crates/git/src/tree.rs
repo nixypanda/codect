@@ -66,7 +66,7 @@ pub(crate) fn source_entries(
 
                 entries.push(SourceEntry {
                     path,
-                    blob_id: ObjectId::from_gix(&object_id),
+                    blob_id: ObjectId::from_gix(&object_id, &repository)?,
                     executable: mode.is_executable(),
                 });
             }

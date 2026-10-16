@@ -426,12 +426,15 @@ impl Engine {
             if old_text == new_text {
                 continue;
             }
-            diffs.push(match (old, new) {
-                (None, Some(new)) => FileDiff::Added { new },
-                (Some(old), None) => FileDiff::Deleted { old },
-                (Some(old), Some(new)) => FileDiff::Modified { old, new },
-                (None, None) => continue, // unreachable after the entry checks
-            });
+            if let Some(new) = new {
+                if let Some(old) = old {
+                    diffs.push(FileDiff::Modified { old, new });
+                } else {
+                    diffs.push(FileDiff::Added { new });
+                }
+            } else if let Some(old) = old {
+                diffs.push(FileDiff::Deleted { old });
+            }
         }
 
         Ok(diffs)
@@ -504,12 +507,15 @@ impl Engine {
             {
                 continue;
             }
-            files.push(match (old, new) {
-                (None, Some(new)) => FileOutlineDiff::Added { new },
-                (Some(old), None) => FileOutlineDiff::Deleted { old },
-                (Some(old), Some(new)) => FileOutlineDiff::Modified { old, new },
-                (None, None) => continue, // unreachable after the entry checks
-            });
+            if let Some(new) = new {
+                if let Some(old) = old {
+                    files.push(FileOutlineDiff::Modified { old, new });
+                } else {
+                    files.push(FileOutlineDiff::Added { new });
+                }
+            } else if let Some(old) = old {
+                files.push(FileOutlineDiff::Deleted { old });
+            }
         }
         Ok(CommitDiff {
             base_id: base.object_id,
@@ -544,12 +550,15 @@ impl Engine {
             {
                 continue;
             }
-            files.push(match (old, new) {
-                (None, Some(new)) => FileOutlineDiff::Added { new },
-                (Some(old), None) => FileOutlineDiff::Deleted { old },
-                (Some(old), Some(new)) => FileOutlineDiff::Modified { old, new },
-                (None, None) => continue, // unreachable after the entry checks
-            });
+            if let Some(new) = new {
+                if let Some(old) = old {
+                    files.push(FileOutlineDiff::Modified { old, new });
+                } else {
+                    files.push(FileOutlineDiff::Added { new });
+                }
+            } else if let Some(old) = old {
+                files.push(FileOutlineDiff::Deleted { old });
+            }
         }
         Ok(SnapshotDiff {
             base_kind: sides.base.kind(),

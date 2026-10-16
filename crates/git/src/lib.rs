@@ -95,6 +95,9 @@ pub enum GitError {
         object_id: ObjectId,
     },
 
+    #[error("repository `{repository}` uses an unsupported Git hash kind `{kind}`")]
+    UnsupportedHashKind { repository: PathBuf, kind: String },
+
     #[error("base commit {base_id} is not on target commit {target_id}'s first-parent chain")]
     NotFirstParentAncestor {
         base_id: ObjectId,

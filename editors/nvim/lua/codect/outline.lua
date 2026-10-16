@@ -65,8 +65,8 @@ end
 ---
 --- Handles `\` escapes and an unterminated string (consumes the rest of the
 --- line). `'` is treated as a string delimiter, which is right for Python
---- decorators and Rust char literals; a bare lifetime in an attribute is rare
---- enough to accept the approximation.
+--- decorators and Rust char literals; a bare lifetime is handled by
+--- `lifetime_end` before this is reached.
 local function quoted_string_end(s, i)
   local quote = s:sub(i, i)
   local j = i + 1

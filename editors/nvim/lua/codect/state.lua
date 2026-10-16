@@ -23,7 +23,7 @@ local function override_key(path, stable_key)
   return path .. "\0" .. stable_key
 end
 
---- Get (or create) the state table for a buffer.
+--- Get the state table for a buffer, or nil.
 function M.get(buf)
   return M.buffers[buf]
 end

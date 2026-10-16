@@ -23,13 +23,14 @@ pub enum HashKind {
 }
 
 impl HashKind {
-    // `gix` types must stay inside this crate. With the approved feature set
-    // (`sha1` and `sha256`) only those two kinds can occur.
-    pub(crate) fn from_gix(kind: gix::hash::Kind) -> Self {
+    pub(crate) fn from_gix(kind: gix::hash::Kind, repository: &Path) -> Result<Self, GitError> {
         match kind {
-            gix::hash::Kind::Sha1 => Self::Sha1,
-            gix::hash::Kind::Sha256 => Self::Sha256,
-            _ => Self::Sha256,
+            gix::hash::Kind::Sha1 => Ok(Self::Sha1),
+            gix::hash::Kind::Sha256 => Ok(Self::Sha256),
+            _ => Err(GitError::UnsupportedHashKind {
+                repository: repository.to_path_buf(),
+                kind: format!("{kind:?}"),
+            }),
         }
     }
 }
@@ -41,11 +42,11 @@ pub struct ObjectId {
 }
 
 impl ObjectId {
-    pub(crate) fn from_gix(id: &gix::hash::ObjectId) -> Self {
-        Self {
-            kind: HashKind::from_gix(id.kind()),
+    pub(crate) fn from_gix(id: &gix::hash::ObjectId, repository: &Path) -> Result<Self, GitError> {
+        Ok(Self {
+            kind: HashKind::from_gix(id.kind(), repository)?,
             bytes: id.as_slice().to_vec(),
-        }
+        })
     }
 
     // The length and declared [`HashKind`] must agree; a mismatch is
@@ -58,7 +59,7 @@ impl ObjectId {
             }
         })?;
 
-        if HashKind::from_gix(id.kind()) != self.kind {
+        if HashKind::from_gix(id.kind(), repository)? != self.kind {
             return Err(GitError::InvalidObjectId {
                 repository: repository.to_path_buf(),
                 object_id: self.clone(),
@@ -195,7 +196,7 @@ impl GitRepository {
             if path.language().is_some() {
                 entries.push(SourceEntry {
                     path,
-                    blob_id: ObjectId::from_gix(&entry.id),
+                    blob_id: ObjectId::from_gix(&entry.id, &self.location())?,
                     executable: entry.mode.bits() == 0o100755,
                 });
             }
@@ -252,5 +253,23 @@ impl SnapshotRepository for GitRepository {
 
     fn untracked_paths(&self) -> Result<Vec<base::RepoPath>, GitError> {
         crate::worktree::untracked_paths(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supported_hash_kinds_map_without_an_error() {
+        let repository = Path::new("/repo");
+        assert_eq!(
+            HashKind::from_gix(gix::hash::Kind::Sha1, repository).expect("sha1 is supported"),
+            HashKind::Sha1
+        );
+        assert_eq!(
+            HashKind::from_gix(gix::hash::Kind::Sha256, repository).expect("sha256 is supported"),
+            HashKind::Sha256
+        );
     }
 }
