@@ -29,6 +29,7 @@ use crate::render::layout::{
 use crate::render::metrics::{Focus, SIDE_BY_SIDE_MIN_WIDTH};
 use crate::render::text::truncate_ellipsis;
 use crate::render::theme::Theme;
+use crate::request::Request;
 use crate::route::{DiffRequest, DiffView};
 use crate::util::cache::BoundedCache;
 use crate::util::input::Key;
@@ -727,14 +728,14 @@ fn switch_view(page: &mut Diff, view: DiffView) -> Vec<OutMsg> {
     if view == DiffView::Commits
         && (engine::is_snapshot_spec(&page.base) || engine::is_snapshot_spec(&page.target))
     {
-        return vec![OutMsg::Diagnose(
+        return vec![OutMsg::Request(Request::Diagnose(
             "The commits view needs commit revisions".to_owned(),
-        )];
+        ))];
     }
     if view == DiffView::Commits && page.merge_base {
-        return vec![OutMsg::Diagnose(
+        return vec![OutMsg::Request(Request::Diagnose(
             "The commits view cannot use a merge-base base".to_owned(),
-        )];
+        ))];
     }
     page.paging = Paging::Loading;
     let mut request = page.request();
@@ -819,7 +820,7 @@ fn loaded(
         }
         Err(error) => {
             page.paging = Paging::Ready;
-            vec![OutMsg::Diagnose(error.to_string())]
+            vec![OutMsg::Request(Request::Diagnose(error.to_string()))]
         }
     }
 }
@@ -833,7 +834,7 @@ fn history_loaded(
         Ok(payload) => payload,
         Err(error) => {
             page.paging = Paging::Ready;
-            return vec![OutMsg::Diagnose(error.to_string())];
+            return vec![OutMsg::Request(Request::Diagnose(error.to_string()))];
         }
     };
     page.paging = Paging::Ready;
@@ -935,7 +936,7 @@ fn step_loaded(
             if let DiffViewState::Commits(commits) = &mut page.view {
                 commits.picker.update(commit_picker::Msg::Failed);
             }
-            vec![OutMsg::Diagnose(error.to_string())]
+            vec![OutMsg::Request(Request::Diagnose(error.to_string()))]
         }
     }
 }

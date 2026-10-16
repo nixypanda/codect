@@ -474,6 +474,44 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
 }
 
 #[test]
+fn a_refused_commit_switch_leaves_paging_ready() {
+    let app = snapshot_range_app();
+    let mut next = app.clone();
+    let mut commands = Vec::new();
+    apply_action(
+        &mut next,
+        Action::Range(RangeAction::SwitchToCommits),
+        &mut commands,
+    );
+    assert!(commands.is_empty(), "no first-parent load may be issued");
+    assert!(next.diagnostic.is_some(), "the refusal is explained");
+    assert_eq!(
+        next.loaded.paging(),
+        crate::page::Paging::Ready,
+        "the refusal returns before paging is set to Loading"
+    );
+}
+
+#[test]
+fn a_merge_base_switch_refusal_leaves_paging_ready() {
+    let app = merge_base_range_app();
+    let mut next = app.clone();
+    let mut commands = Vec::new();
+    apply_action(
+        &mut next,
+        Action::Range(RangeAction::SwitchToCommits),
+        &mut commands,
+    );
+    assert!(commands.is_empty(), "no first-parent load may be issued");
+    assert!(next.diagnostic.is_some(), "the refusal is explained");
+    assert_eq!(
+        next.loaded.paging(),
+        crate::page::Paging::Ready,
+        "the refusal returns before paging is set to Loading"
+    );
+}
+
+#[test]
 fn navigation_defers_highlighting_until_settle() {
     let app = show_app(vec![
         source_outline("a.rs", "pub fn a();\n"),

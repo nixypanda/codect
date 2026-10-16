@@ -32,6 +32,7 @@ use crate::render::icons::Icons;
 use crate::render::layout::{PaneSlot, body_layout, commit_offset, frame_areas};
 use crate::render::metrics::{Focus, MIN_HEIGHT, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH};
 use crate::render::theme::Theme;
+use crate::request::{NavigatorResize, QueryChange, Request};
 pub use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::util::input::{Key, Mouse, MouseKind};
 
@@ -319,14 +320,167 @@ fn ctx(app: &App) -> Ctx {
     }
 }
 
-fn fold(app: &mut App, outs: Vec<OutMsg>, cmds: &mut Vec<Cmd>) {
+pub(crate) fn fold(app: &mut App, outs: Vec<OutMsg>, cmds: &mut Vec<Cmd>) {
     for out in outs {
         match out {
             OutMsg::Effect(cmd) => cmds.push(cmd),
-            OutMsg::Diagnose(text) => app.diagnostic = Some(Diagnostic::new(text)),
+            OutMsg::Request(request) => apply_request(app, request, cmds),
         }
     }
 }
+
+/// The depth a request cascade may reach before the kernel gives up. The plan's
+/// section 4.7 fixes this at 16.
+const REQUEST_DEPTH_LIMIT: u8 = 16;
+
+/// Apply a kernel request and any requests its broadcast handlers produce.
+///
+/// Requests nest depth-first: a request produced while applying another is
+/// applied before that request's next sibling. The depth limit guards against
+/// a cycle; exceeding it is a bug in a debug build.
+pub(crate) fn apply_request(app: &mut App, request: Request, cmds: &mut Vec<Cmd>) {
+    apply_at(app, request, cmds, 0);
+}
+
+fn apply_at(app: &mut App, request: Request, cmds: &mut Vec<Cmd>, depth: u8) {
+    if depth >= REQUEST_DEPTH_LIMIT {
+        debug_assert!(false, "request cascade exceeded depth");
+        app.diagnostic = Some(Diagnostic::new("request depth exceeded".to_owned()));
+        return;
+    }
+    let nested = apply_one(app, request, cmds);
+    for next in nested {
+        apply_at(app, next, cmds, depth + 1);
+    }
+}
+
+/// Perform one request's kernel effect and return the requests its broadcast
+/// handlers produced, in broadcast order.
+fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>) -> Vec<Request> {
+    let mut nested = Vec::new();
+    match request {
+        Request::Quit => app.chrome.quit = true,
+        Request::Diagnose(text) => app.diagnostic = Some(Diagnostic::new(text)),
+        Request::ClearDiagnostic => app.diagnostic = None,
+        Request::SetFiles(set) => {
+            if let Some(selected) = app.loaded.selected()
+                && !set.paths.iter().any(|path| path == selected)
+            {
+                app.loaded.set_selected(None);
+            }
+            on_files_changed(app);
+        }
+        Request::Select(selection) => {
+            select(app, selection);
+            on_selection_changed(app);
+        }
+        Request::Requery(change) => {
+            let ctx = ctx(app);
+            let outs = match change {
+                QueryChange::Mode(mode) => route_switch_mode(app, mode, ctx),
+                QueryChange::Scope(selection) => route_reload_scope(app, selection, ctx),
+            };
+            split_outs(outs, cmds, &mut nested);
+        }
+        Request::QueryLoaded(_query) => on_query_changed(app),
+        Request::SetSearch(needle) => {
+            let ctx = ctx(app);
+            let outs = if needle.is_empty() {
+                route_clear_search(app, ctx)
+            } else {
+                route_set_search(app, &needle, ctx)
+            };
+            split_outs(outs, cmds, &mut nested);
+            on_search_changed(app);
+        }
+        Request::CommitSearch => {
+            let ctx = ctx(app);
+            let outs = route_scroll_current(app, ctx);
+            split_outs(outs, cmds, &mut nested);
+        }
+        Request::ClearSearch => {
+            let ctx = ctx(app);
+            let outs = route_clear_search(app, ctx);
+            split_outs(outs, cmds, &mut nested);
+            on_search_changed(app);
+        }
+        Request::Focus(focus) => app.loaded.set_focus(focus),
+        // The file tree is the only navigator, so it is always the default.
+        Request::FocusDefault => app.loaded.set_focus(Focus::Tree),
+        Request::CycleFocus { forward } => {
+            let ctx = ctx(app);
+            let outs = route_cycle_focus(app, forward, ctx);
+            split_outs(outs, cmds, &mut nested);
+        }
+        Request::ResizeNavigator(resize) => {
+            app.chrome.tree_percent = match resize {
+                NavigatorResize::Wider => {
+                    (app.chrome.tree_percent + TREE_STEP).min(TREE_MAX_PERCENT)
+                }
+                NavigatorResize::Narrower => app
+                    .chrome
+                    .tree_percent
+                    .saturating_sub(TREE_STEP)
+                    .max(TREE_MIN_PERCENT),
+                NavigatorResize::Reset => TREE_DEFAULT_PERCENT,
+            };
+        }
+        Request::CancelPrefix => {
+            if app.keymap.pending.is_some() {
+                clear_prefix(app);
+            }
+        }
+        Request::RunCommand(id) => {
+            if let Some(spec) = crate::command::commands(app)
+                .into_iter()
+                .find(|spec| spec.id == id)
+            {
+                apply_action(app, spec.run, cmds);
+            }
+        }
+    }
+    nested
+}
+
+/// Route a page's outs: effects append to `cmds` in order, requests nest.
+fn split_outs(outs: Vec<OutMsg>, cmds: &mut Vec<Cmd>, nested: &mut Vec<Request>) {
+    for out in outs {
+        match out {
+            OutMsg::Effect(cmd) => cmds.push(cmd),
+            OutMsg::Request(request) => nested.push(request),
+        }
+    }
+}
+
+/// Set the selection, mirroring the old `select_path`: clear a pending prefix,
+/// select the path, reveal it in the tree, and reset the body scroll.
+fn select(app: &mut App, selection: Option<RepoPath>) {
+    clear_prefix(app);
+    match selection {
+        Some(path) => {
+            app.loaded.set_selected(Some(path.clone()));
+            let height = tree_viewport_height(app);
+            app.tree.reveal(&path, height);
+        }
+        None => app.loaded.set_selected(None),
+    }
+    app.loaded.reset_body_scroll();
+}
+
+/// The file set changed. In 2.1 this is a seam only; task 2.2 gives the tree
+/// its selection fallback here.
+fn on_files_changed(_app: &mut App) {}
+
+/// The selection changed. In 2.1 this is a seam only; later tasks reveal the
+/// new selection in the tree here. It fires for every `Select`, even when the
+/// path is unchanged.
+fn on_selection_changed(_app: &mut App) {}
+
+/// The committed query changed. In 2.1 this is a seam only.
+fn on_query_changed(_app: &mut App) {}
+
+/// The search changed. In 2.1 this is a seam only.
+fn on_search_changed(_app: &mut App) {}
 
 fn route_show(app: &mut App, msg: show_page::Msg, ctx: Ctx) -> Vec<OutMsg> {
     match &mut app.loaded {
@@ -795,11 +949,7 @@ fn tree_apply(app: &mut App, msg: tree::Msg) {
 }
 
 fn select_path(app: &mut App, path: RepoPath) {
-    clear_prefix(app);
-    app.loaded.set_selected(Some(path.clone()));
-    let height = tree_viewport_height(app);
-    app.tree.reveal(&path, height);
-    app.loaded.reset_body_scroll();
+    select(app, Some(path));
 }
 
 fn overlay_update(app: &mut App, msg: overlay::Msg) -> Vec<overlay::OutMsg> {

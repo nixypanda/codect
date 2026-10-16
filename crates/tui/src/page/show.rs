@@ -28,6 +28,7 @@ use crate::render::empty::render_empty;
 use crate::render::highlight::{self, StyledLine};
 use crate::render::layout::Edge;
 use crate::render::theme::Theme;
+use crate::request::Request;
 use crate::route::ShowRequest;
 use crate::util::cache::BoundedCache;
 use crate::util::input::Key;
@@ -962,7 +963,7 @@ fn loaded(
         }
         Err(error) => {
             page.paging = Paging::Ready;
-            vec![OutMsg::Diagnose(error.to_string())]
+            vec![OutMsg::Request(Request::Diagnose(error.to_string()))]
         }
     }
 }

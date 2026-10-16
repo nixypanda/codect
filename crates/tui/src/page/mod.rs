@@ -23,6 +23,7 @@ use crate::component::text_input::Edit;
 use crate::render::layout::VisualRow;
 use crate::render::metrics::Focus;
 use crate::render::theme::Theme;
+use crate::request::Request;
 use crate::util::input::Key;
 
 pub(crate) mod diff;
@@ -284,7 +285,7 @@ pub struct Ctx {
 #[derive(Debug)]
 pub enum OutMsg {
     Effect(Cmd),
-    Diagnose(String),
+    Request(Request),
 }
 
 pub struct ViewCtx<'a> {
