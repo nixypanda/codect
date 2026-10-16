@@ -17,7 +17,9 @@
 
 use base::{FileDiff, ProjectionMode, RepoPath};
 
-use crate::action::{Action, CommitsAction, GlobalAction, RangeAction, ShowAction};
+use crate::action::{
+    Action, Binding, CommitsAction, GlobalAction, PrefixGroup, RangeAction, ShowAction,
+};
 use crate::api::Cmd;
 use crate::component::text_input::Edit;
 use crate::render::layout::VisualRow;
@@ -45,6 +47,55 @@ pub(crate) fn mode_label(mode: ProjectionMode) -> &'static str {
         ProjectionMode::Signatures => "signatures",
         ProjectionMode::Tests => "tests",
     }
+}
+
+const FOLD_PREFIX: char = 'z';
+
+fn fold_bindings() -> Vec<Binding> {
+    vec![
+        Binding {
+            key: 'a',
+            action: Action::Show(ShowAction::ToggleFold),
+            label: "Toggle fold",
+            hint: "za",
+        },
+        Binding {
+            key: 'o',
+            action: Action::Show(ShowAction::OpenFold),
+            label: "Open fold",
+            hint: "zo",
+        },
+        Binding {
+            key: 'c',
+            action: Action::Show(ShowAction::CloseFold),
+            label: "Close fold",
+            hint: "zc",
+        },
+        Binding {
+            key: 'O',
+            action: Action::Show(ShowAction::OpenRecursive),
+            label: "Open fold recursively",
+            hint: "zO",
+        },
+        Binding {
+            key: 'C',
+            action: Action::Show(ShowAction::CloseRecursive),
+            label: "Close fold recursively",
+            hint: "zC",
+        },
+        Binding {
+            key: 'R',
+            action: Action::Show(ShowAction::OpenAll),
+            label: "Open all folds",
+            hint: "zR",
+        },
+        Binding {
+            key: 'M',
+            action: Action::Show(ShowAction::CloseAll),
+            label: "Close all folds",
+            hint: "zM",
+        },
+    ]
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -253,23 +304,11 @@ impl Loaded {
         match self {
             Self::Show(_) => {
                 entries.push((Action::Show(ShowAction::EditRevision), "Edit revision", "r"));
-                entries.extend([
-                    (Action::Show(ShowAction::ToggleFold), "Toggle fold", "za"),
-                    (Action::Show(ShowAction::OpenFold), "Open fold", "zo"),
-                    (Action::Show(ShowAction::CloseFold), "Close fold", "zc"),
-                    (
-                        Action::Show(ShowAction::OpenRecursive),
-                        "Open fold recursively",
-                        "zO",
-                    ),
-                    (
-                        Action::Show(ShowAction::CloseRecursive),
-                        "Close fold recursively",
-                        "zC",
-                    ),
-                    (Action::Show(ShowAction::OpenAll), "Open all folds", "zR"),
-                    (Action::Show(ShowAction::CloseAll), "Close all folds", "zM"),
-                ]);
+                entries.extend(
+                    fold_bindings()
+                        .into_iter()
+                        .map(|binding| (binding.action, binding.label, binding.hint)),
+                );
             }
             Self::Diff(diff) => match &diff.view {
                 DiffViewState::Range(_) => {
@@ -326,6 +365,17 @@ impl Loaded {
             (Action::Global(GlobalAction::Quit), "Quit", "q"),
         ]);
         entries
+    }
+
+    pub fn prefix_groups(&self) -> Vec<PrefixGroup> {
+        match self {
+            Self::Show(_) => vec![PrefixGroup {
+                key: FOLD_PREFIX,
+                name: "fold",
+                bindings: fold_bindings(),
+            }],
+            Self::Diff(_) => Vec::new(),
+        }
     }
 
     pub fn settle(

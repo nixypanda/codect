@@ -1278,6 +1278,7 @@ fn the_palette_and_finder_render_their_lists() {
     app.overlay = Some(Overlay::palette(&overlay::Ctx {
         visible: app.loaded.visible(),
         entries: &app.loaded.palette_entries(),
+        groups: &app.loaded.prefix_groups(),
         mode: app.loaded.mode(),
     }));
     let text = buffer_text(&render(&app, 100, 20));
@@ -1288,6 +1289,7 @@ fn the_palette_and_finder_render_their_lists() {
     app.overlay = Some(Overlay::finder(&overlay::Ctx {
         visible: app.loaded.visible(),
         entries: &app.loaded.palette_entries(),
+        groups: &app.loaded.prefix_groups(),
         mode: app.loaded.mode(),
     }));
     let text = buffer_text(&render(&app, 100, 20));
@@ -2818,23 +2820,27 @@ fn a_bare_enter_toggles_the_fold_in_the_body() {
 }
 
 #[test]
-fn the_z_prefix_cancels_on_an_unrelated_key_and_on_esc() {
+fn the_which_key_band_cancels_on_an_unrelated_key_and_on_esc() {
     let mut app = folder_app();
     focus_content(&mut app);
 
-    let pending = press(&app, &[Key::Char('z')]);
-    assert_eq!(pending.pending, Some('z'));
+    let band = press(&app, &[Key::Char('z')]);
+    assert_eq!(
+        band.overlay,
+        Some(Overlay::which_key('z')),
+        "pressing z opens the fold band"
+    );
 
-    let cancelled = press(&pending, &[Key::Char('x')]);
-    assert_eq!(cancelled.pending, None);
+    let cancelled = press(&band, &[Key::Char('x')]);
+    assert_eq!(cancelled.overlay, None, "an unrelated key closes the band");
     assert_eq!(
         show_ref(&cancelled).body.cursor_line,
         1,
         "the unrelated key is swallowed"
     );
 
-    let escaped = press(&pending, &[Key::Esc]);
-    assert_eq!(escaped.pending, None);
+    let escaped = press(&band, &[Key::Esc]);
+    assert_eq!(escaped.overlay, None, "Esc closes the band");
     assert_eq!(show_ref(&escaped).body.cursor_line, 1);
 
     let after = press(&cancelled, &[Key::Char('j')]);
@@ -2842,36 +2848,44 @@ fn the_z_prefix_cancels_on_an_unrelated_key_and_on_esc() {
 }
 
 #[test]
-fn a_mouse_event_clears_the_z_prefix() {
+fn a_mouse_event_closes_the_which_key_band() {
     let mut app = folder_app();
     focus_content(&mut app);
     let armed = press(&app, &[Key::Char('z')]);
-    assert_eq!(armed.pending, Some('z'));
+    assert!(matches!(armed.overlay, Some(Overlay::WhichKey { .. })));
 
     let (cleared, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &armed);
-    assert_eq!(cleared.pending, None);
+    assert!(cleared.overlay.is_none(), "the mouse drops the band");
 
     let moved = press(&cleared, &[Key::Char('j')]);
     assert_eq!(
         show_ref(&moved).body.cursor_line,
         2,
-        "j was not swallowed by a stale prefix"
+        "j was not swallowed by a stale band"
     );
 }
 
 #[test]
-fn a_selection_change_clears_the_z_prefix() {
-    let mut app = show_app(vec![
-        source_outline("a.rs", "a\n"),
-        source_outline("b.rs", "b\n"),
-    ]);
+fn a_reload_closes_the_which_key_band() {
+    let mut app = folder_app();
     focus_content(&mut app);
     let armed = press(&app, &[Key::Char('z')]);
-    assert_eq!(armed.pending, Some('z'));
+    assert!(matches!(armed.overlay, Some(Overlay::WhichKey { .. })));
 
-    let mut changed = armed.clone();
-    select_path(&mut changed, RepoPath::new("b.rs").expect("valid path"));
-    assert_eq!(changed.pending, None, "a selection change drops the prefix");
+    let (reloaded, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                mode: ProjectionMode::Signatures,
+                ..show_request()
+            },
+            result: Ok(vec![nested_outline("a.rs", NESTED_SOURCE, (0, 5), (1, 4), true)].into()),
+        },
+        &armed,
+    );
+    assert!(
+        reloaded.overlay.is_none(),
+        "a reload drops the pending band"
+    );
 }
 
 #[test]
@@ -2954,6 +2968,145 @@ fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
         show_ref(&via_palette).line_count(),
         show_ref(&via_keys).line_count()
     );
+}
+
+#[test]
+fn the_which_key_band_lists_the_fold_bindings() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let opened = press(&app, &[Key::Char('z')]);
+    let buffer = render(&opened, 100, 20);
+    let text = buffer_text(&buffer);
+    assert!(
+        text.contains("fold (z)"),
+        "the band title is missing: {text}"
+    );
+    for label in [
+        "Toggle fold",
+        "Open fold",
+        "Close fold",
+        "Open fold recursively",
+        "Close fold recursively",
+        "Open all folds",
+        "Close all folds",
+    ] {
+        assert!(text.contains(label), "missing {label}: {text}");
+    }
+    // The band sits above the status row, which keeps its own hints.
+    let status = buffer_row(&buffer, buffer.area.height - 1);
+    assert!(
+        status.contains("Esc close"),
+        "the status row must keep the band hints: {status}"
+    );
+}
+
+#[test]
+fn the_band_keeps_the_header_and_status_on_a_short_terminal() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let opened = press(&app, &[Key::Char('z')]);
+    // 40 columns fits one entry column, so the seven bindings need more rows
+    // than a short terminal has; the band must stay between header and status.
+    let buffer = render(&opened, 40, 8);
+    let text = buffer_text(&buffer);
+    assert!(text.contains("fold (z)"), "the band still renders: {text}");
+    assert!(
+        text.contains("Esc close"),
+        "the status row survives: {text}"
+    );
+    assert!(
+        !buffer_row(&buffer, 0).contains("fold (z)"),
+        "the band must not cover the header"
+    );
+}
+
+#[test]
+fn the_band_keys_select_and_run_a_binding() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+
+    // The first binding is highlighted when the band opens, so Enter runs
+    // Toggle fold — the same effect as the `z a` keystrokes.
+    let via_band = press(&app, &[Key::Char('j'), Key::Char('z'), Key::Enter]);
+    let via_keys = press(&app, &[Key::Char('j'), Key::Char('z'), Key::Char('a')]);
+    assert_eq!(
+        show_ref(&via_band).line_count(),
+        6,
+        "the band's Enter ran the highlighted fold binding"
+    );
+    assert_eq!(
+        show_ref(&via_band).line_count(),
+        show_ref(&via_keys).line_count()
+    );
+    assert!(
+        via_band.overlay.is_none(),
+        "running a binding closes the band"
+    );
+
+    // Ctrl-J and Ctrl-K move the highlight without dispatching a binding.
+    let opened = press(&app, &[Key::Char('z')]);
+    assert_eq!(opened.overlay, Some(Overlay::which_key('z')));
+    let down = press(&opened, &[Key::CtrlJ]);
+    assert_eq!(
+        down.overlay,
+        Some(Overlay::WhichKey {
+            prefix: 'z',
+            cursor: 1
+        })
+    );
+    let up = press(&down, &[Key::CtrlK]);
+    assert_eq!(up.overlay, Some(Overlay::which_key('z')));
+    let clamped = press(&up, &[Key::CtrlK]);
+    assert_eq!(
+        clamped.overlay,
+        Some(Overlay::which_key('z')),
+        "the highlight clamps at the first binding"
+    );
+
+    // The arrow keys move the same highlight.
+    let arrows = press(&app, &[Key::Char('z'), Key::Down, Key::Down, Key::Up]);
+    assert_eq!(
+        arrows.overlay,
+        Some(Overlay::WhichKey {
+            prefix: 'z',
+            cursor: 1
+        })
+    );
+}
+
+#[test]
+fn ctrl_j_and_ctrl_k_keep_their_j_k_alias_outside_the_band() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+
+    // Before the band existed Ctrl-J/Ctrl-K fell through to j/k; they still do
+    // outside it.
+    let down = press(&app, &[Key::CtrlJ]);
+    assert_eq!(show_ref(&down).body.cursor_line, 2, "Ctrl-J is still `j`");
+    let up = press(&down, &[Key::CtrlK]);
+    assert_eq!(show_ref(&up).body.cursor_line, 1, "Ctrl-K is still `k`");
+}
+
+#[test]
+fn the_band_bindings_match_their_palette_entries() {
+    let app = folder_app();
+    let groups = app.loaded.prefix_groups();
+    let entries = app.loaded.palette_entries();
+    let folds = groups
+        .iter()
+        .find(|group| group.name == "fold")
+        .expect("the fold group");
+
+    for binding in &folds.bindings {
+        let hint = format!("{}{}", folds.key, binding.key);
+        assert_eq!(binding.hint, hint, "the hint must be the full keystroke");
+        assert!(
+            entries.iter().any(|(action, label, entry_hint)| {
+                *action == binding.action && *label == binding.label && *entry_hint == binding.hint
+            }),
+            "no palette entry matches the band binding {hint}"
+        );
+    }
 }
 
 #[test]

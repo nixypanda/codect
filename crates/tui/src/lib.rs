@@ -467,6 +467,8 @@ fn translate(key: KeyEvent) -> Option<Msg> {
         KeyCode::Char('c') if control => Key::CtrlC,
         KeyCode::Char('d') if control => Key::CtrlD,
         KeyCode::Char('f') if control => Key::CtrlF,
+        KeyCode::Char('j') if control => Key::CtrlJ,
+        KeyCode::Char('k') if control => Key::CtrlK,
         KeyCode::Char('p') if control => Key::CtrlP,
         KeyCode::Char('u') if control => Key::CtrlU,
         KeyCode::Char(character) => Key::Char(character),
@@ -658,6 +660,14 @@ mod tests {
         assert!(matches!(
             translate(ctrl(KeyCode::Char('u'))),
             Some(Msg::Key(Key::CtrlU))
+        ));
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('j'))),
+            Some(Msg::Key(Key::CtrlJ))
+        ));
+        assert!(matches!(
+            translate(ctrl(KeyCode::Char('k'))),
+            Some(Msg::Key(Key::CtrlK))
         ));
         assert!(matches!(
             translate(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),

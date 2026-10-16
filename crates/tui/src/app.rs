@@ -9,9 +9,8 @@
 //! run. Engine calls only ever leave this module as a [`Cmd`]. The pure `view`
 //! lives in [`crate::view`].
 //!
-//! An armed fold prefix (`z`) claims the next key and is cleared by `Esc`, an
-//! overlay or prompt opening, a mouse event, a selection or focus change, and
-//! every reload.
+//! A fold prefix (`z`) opens the which-key band; the next key runs a binding,
+//! and `Esc`, a mouse event, another overlay, or a reload closes it.
 
 use std::sync::Arc;
 
@@ -112,7 +111,6 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub loaded: Loaded,
     pub diagnostic: Option<Diagnostic>,
-    pub pending: Option<char>,
 }
 
 impl App {
@@ -190,7 +188,6 @@ impl App {
             overlay: None,
             loaded,
             diagnostic: None,
-            pending: None,
         }
     }
 
@@ -228,7 +225,7 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
     match msg {
         Msg::Key(key) => handle_key(&mut next, key, &mut cmds),
         Msg::Mouse(event) => {
-            next.pending = None;
+            clear_prefix(&mut next);
             mouse(&mut next, event, &mut cmds);
         }
         Msg::Resize { width, height } => {
@@ -251,7 +248,7 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
             if installed {
                 install_show_selection(&mut next);
                 next.diagnostic = None;
-                next.pending = None;
+                clear_prefix(&mut next);
             }
         }
         Msg::DiffLoaded { request, result } => {
@@ -261,7 +258,7 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
             if installed {
                 install_diff_selection(&mut next);
                 next.diagnostic = None;
-                next.pending = None;
+                clear_prefix(&mut next);
             }
         }
         Msg::HistoryLoaded { request, result } => {
@@ -488,20 +485,23 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         app.chrome.quit = true;
         return;
     }
+    // Ctrl-K/Ctrl-J were k/j before the band; keep that alias outside it.
+    let key = if matches!(app.overlay, Some(Overlay::WhichKey { .. })) {
+        key
+    } else {
+        match key {
+            Key::CtrlK => Key::Char('k'),
+            Key::CtrlJ => Key::Char('j'),
+            other => other,
+        }
+    };
     let capturing =
         app.overlay.as_ref().is_some_and(Overlay::captures_text) || app.loaded.prompt_active();
-    if let Some(prefix) = app.pending.take() {
-        if let Some(action) = prefix_action(prefix, key, app) {
-            apply_action(app, action, cmds);
-        }
-        return;
-    }
     if key == Key::Char('q') && !capturing {
         app.chrome.quit = true;
         return;
     }
     if app.overlay.is_some() {
-        app.pending = None;
         let outs = overlay_update(app, overlay::Msg::Key(key));
         for out in outs {
             apply_overlay_out(app, out, cmds);
@@ -509,7 +509,6 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         return;
     }
     if app.loaded.prompt_active() {
-        app.pending = None;
         let ctx = ctx(app);
         let outs = route_prompt(app, key, ctx);
         fold(app, outs, cmds);
@@ -523,8 +522,8 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         apply_action(app, Action::Show(ShowAction::ToggleFold), cmds);
         return;
     }
-    if key == Key::Char('z') && show_body_focused(app) {
-        app.pending = Some('z');
+    if let Some(prefix) = parked_prefix(app, key) {
+        app.overlay = Some(Overlay::which_key(prefix));
         return;
     }
     match key {
@@ -542,21 +541,25 @@ fn show_body_focused(app: &App) -> bool {
     matches!(app.loaded, Loaded::Show(_)) && app.loaded.focus() == Focus::Content
 }
 
-fn prefix_action(prefix: char, key: Key, app: &App) -> Option<Action> {
-    if prefix != 'z' || !matches!(app.loaded, Loaded::Show(_)) {
+fn parked_prefix(app: &App, key: Key) -> Option<char> {
+    let Key::Char(character) = key else {
+        return None;
+    };
+    // Only a `show` body carries prefixes.
+    if !show_body_focused(app) {
         return None;
     }
-    let action = match key {
-        Key::Char('a') | Key::Enter => ShowAction::ToggleFold,
-        Key::Char('o') => ShowAction::OpenFold,
-        Key::Char('c') => ShowAction::CloseFold,
-        Key::Char('O') => ShowAction::OpenRecursive,
-        Key::Char('C') => ShowAction::CloseRecursive,
-        Key::Char('R') => ShowAction::OpenAll,
-        Key::Char('M') => ShowAction::CloseAll,
-        _ => return None,
-    };
-    Some(Action::Show(action))
+    app.loaded
+        .prefix_groups()
+        .iter()
+        .any(|group| group.key == character)
+        .then_some(character)
+}
+
+fn clear_prefix(app: &mut App) {
+    if matches!(app.overlay, Some(Overlay::WhichKey { .. })) {
+        app.overlay = None;
+    }
 }
 
 fn command_for(key: Key, app: &App) -> Option<Action> {
@@ -604,7 +607,6 @@ fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>) {
             fold(app, outs, cmds);
         }
         Action::Show(action) => {
-            app.pending = None;
             let outs = route_show(app, show_page::Msg::Fold(action), ctx);
             fold(app, outs, cmds);
         }
@@ -629,7 +631,6 @@ fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>) {
 
 fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
     use GlobalAction::*;
-    app.pending = None;
     let ctx = ctx(app);
     match action {
         Quit => app.chrome.quit = true,
@@ -641,21 +642,25 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
         Mode => app.overlay = Some(Overlay::mode(app.loaded.mode())),
         Palette => {
             let entries = app.loaded.palette_entries();
+            let groups = app.loaded.prefix_groups();
             let mode = app.loaded.mode();
             let visible = app.loaded.visible();
             app.overlay = Some(Overlay::palette(&overlay::Ctx {
                 visible,
                 entries: &entries,
+                groups: &groups,
                 mode,
             }));
         }
         Finder => {
             let entries = app.loaded.palette_entries();
+            let groups = app.loaded.prefix_groups();
             let mode = app.loaded.mode();
             let visible = app.loaded.visible();
             app.overlay = Some(Overlay::finder(&overlay::Ctx {
                 visible,
                 entries: &entries,
+                groups: &groups,
                 mode,
             }));
         }
@@ -747,7 +752,7 @@ fn tree_apply(app: &mut App, msg: tree::Msg) {
 }
 
 fn select_path(app: &mut App, path: RepoPath) {
-    app.pending = None;
+    clear_prefix(app);
     app.loaded.set_selected(Some(path.clone()));
     let height = tree_viewport_height(app);
     app.tree.reveal(&path, height);
@@ -759,11 +764,13 @@ fn overlay_update(app: &mut App, msg: overlay::Msg) -> Vec<overlay::OutMsg> {
         return Vec::new();
     };
     let entries = app.loaded.palette_entries();
+    let groups = app.loaded.prefix_groups();
     let mode = app.loaded.mode();
     let visible = app.loaded.visible();
     let ctx = overlay::Ctx {
         visible,
         entries: &entries,
+        groups: &groups,
         mode,
     };
     let outs = current.update(msg, &ctx);

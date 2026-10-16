@@ -24,6 +24,8 @@ pub enum Key {
     CtrlC,
     CtrlD,
     CtrlF,
+    CtrlJ,
+    CtrlK,
     CtrlP,
     CtrlU,
 }
