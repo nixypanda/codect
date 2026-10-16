@@ -3,6 +3,10 @@
 // Thin entry point: argument parsing and exit-code mapping only. The
 // Git-aware pipeline lives in `command.rs`, and core stays Git-free
 // (TECHNICAL_DESIGN.md sections 3, 14).
+//
+// Runtime failures exit 1 with their report on stderr, leaving stdout a valid,
+// complete document or empty; a usage failure found after parsing shares
+// `clap`'s exit 2.
 
 mod args;
 mod command;
@@ -22,11 +26,6 @@ fn main() -> ExitCode {
 
     match command::run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
-        // Repository, revision, object, UTF-8, and parse failures all share
-        // exit 1 (section 14); the report goes to stderr so stdout stays a
-        // valid, complete document or empty. A usage failure discovered after
-        // parsing (for example a missing stdin `--path`) shares `clap`'s
-        // exit 2.
         Err(error) => {
             eprint!("{}", output::render_diagnostic(&error));
             if error.is_usage() {

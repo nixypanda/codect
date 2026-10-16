@@ -3,6 +3,11 @@
 //! The engine never formats a user-facing report. Every variant preserves the
 //! structured context a caller needs to build one, and the underlying error
 //! chain survives so consumers never recover context by parsing a message.
+//!
+//! A projection failure is fatal rather than a partial file, and an
+//! editor-supplied path with no language adapter is
+//! [`EngineError::UnsupportedPath`]; committed paths with unsupported
+//! extensions are simply excluded.
 
 use base::{DiagnosticContext, ProjectionError, RepoPath, SelectionError, SelectionGroup};
 use git::GitError;

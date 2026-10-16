@@ -26,6 +26,8 @@
 //   `impl` keys are not path-namespaced, so consumers key global state by
 //   `(path, stable_key)`.
 // - JSON output contains no ANSI and is unaffected by `--color`.
+//
+// Documents are pretty-printed and always end with a single newline.
 
 use base::{
     FileOutline, FileOutlineDiff, ItemKind, Language, OutlineItem, ProjectedFile, ProjectedItem,
@@ -51,8 +53,6 @@ pub fn diff_document(
             kind: diff.base_kind,
             revision: base,
             id: diff.base_id.clone(),
-            // Only the base side can be a merge base; the marker is additive
-            // and omitted when the diff compares the base exactly as requested.
             merge_base: merge_base.then_some(true),
         },
         target: SnapshotDocument {
@@ -168,10 +168,6 @@ impl Input {
     }
 }
 
-// Serializes one `codect.show.v1` document.
-//
-// The document is pretty-printed so the contract is inspectable by hand, and
-// it always ends with a single newline.
 pub fn document(
     input: Input,
     revision: Option<&str>,
@@ -312,8 +308,6 @@ fn language_name(language: Language) -> &'static str {
     }
 }
 
-// Maps every [`ItemKind`] to its wire name. There is intentionally no wildcard
-// arm, so adding a kind is a compile error rather than a silent fallback.
 fn kind_name(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::Module => "module",

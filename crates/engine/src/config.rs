@@ -5,6 +5,11 @@
 //! followed through a symlink, and only ever consulted when an area is
 //! selected. Core stays file-format-free, so the conversion from TOML to
 //! [`AreaSet`] lives here.
+//!
+//! Unknown keys are rejected rather than ignored, so a typo cannot silently
+//! drop an area. Area paths are normalized leniently: empty and `.` components
+//! are dropped, while `..` is passed to [`RepoPath`] to reject because dropping
+//! it would silently retarget the path.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -12,23 +17,16 @@ use std::path::{Path, PathBuf};
 
 use base::{Area, AreaError, AreaSet, RepoPath, RepoPathError};
 
-// The largest config that will be read. Area definitions are tiny, so a larger
-// file is far more likely a mistake or an attack than something worth parsing.
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
-// The fixed config filename at the repository root; there is deliberately no
-// flag to point at another file.
 const FILE_NAME: &str = ".codect.toml";
 
-/// The repository's areas, already validated and name-sorted.
 #[derive(Debug)]
 pub struct Config {
     areas: AreaSet,
 }
 
 impl Config {
-    /// Reads `.codect.toml` from the repository root. The file is untrusted
-    /// input, so it is size-bounded and never followed through a symlink.
     pub fn load(repo_root: &Path) -> Result<Self, ConfigError> {
         let file = repo_root.join(FILE_NAME);
 
@@ -71,8 +69,6 @@ impl Config {
     }
 }
 
-// The on-disk shape. Unknown keys are rejected so a typo cannot silently drop
-// the area it was meant to define.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
@@ -92,9 +88,6 @@ fn build_area(file: PathBuf, name: String, paths: Vec<String>) -> Result<Area, C
     Area::new(name, resolved).map_err(|source| ConfigError::from_area(&file, source))
 }
 
-// Normalizes one area path leniently: the only hard failures are being
-// absolute or escaping the repository, while stray empty and `.` components
-// are behavior the user almost certainly did not intend to be fatal.
 fn normalize_path(file: &Path, area: &str, value: &str) -> Result<RepoPath, ConfigError> {
     let invalid = |source| ConfigError::InvalidPath {
         file: file.to_path_buf(),
@@ -107,8 +100,6 @@ fn normalize_path(file: &Path, area: &str, value: &str) -> Result<RepoPath, Conf
         return Err(invalid(RepoPathError::Absolute));
     }
 
-    // `..` is left in place so `RepoPath::new` rejects it with its own error;
-    // dropping it here would silently retarget the path.
     let normalized = value
         .split('/')
         .filter(|component| !component.is_empty() && *component != ".")
@@ -121,7 +112,6 @@ fn normalize_path(file: &Path, area: &str, value: &str) -> Result<RepoPath, Conf
     RepoPath::new(normalized).map_err(invalid)
 }
 
-/// A config file that cannot supply areas.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("no `{file}` was found at the repository root")]
@@ -309,7 +299,6 @@ mod tests {
         let dir = temp();
         write_config(dir.path(), "[areas]\nfrontend = [\"src/\", \"./src\"]\n");
         let config = Config::load(dir.path()).expect("load config");
-        // Both entries normalize to `src`, which `Area::new` then deduplicates.
         assert_eq!(area_paths(&config, "frontend"), vec!["src"]);
     }
 

@@ -3,6 +3,21 @@
 //! The engine composes read-only Git snapshot reads with the pure core
 //! rendering functions. It owns no long-lived cache: each operation builds and
 //! drops its own blob and projection caches, so memory is bounded by one call.
+//!
+//! Projection is deterministic: the language adapters are consulted in a fixed
+//! order, and file lists come back in raw repository path-byte order. A
+//! reserved snapshot specifier starts with `:`, which no Git refname can
+//! contain, so a commit is never mistaken for a snapshot; with merge-base the
+//! base becomes `merge-base(BASE, TARGET)` and both sides must be commits.
+//!
+//! A worktree side is the tracked index paths unioned with untracked,
+//! non-ignored files, and membership is authoritative: a path outside that set
+//! is absent even when a file exists on disk, so an ignored file never leaks
+//! into a diff. A focused diff keeps only paths whose canonical old and new
+//! projections differ, so an implementation-only change produces nothing.
+//! [`project_source`] is the editor-facing entry point: it never touches Git,
+//! and an unsupported path is a typed [`EngineError::UnsupportedPath`] rather
+//! than a silent empty result.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -23,16 +38,11 @@ use lang_rust::RustProjector;
 use crate::config;
 use crate::error::EngineError;
 
-// ZST projectors are shared as statics so the pipeline never has to own them
-// or negotiate a borrow of a longer-lived value.
 static ELM_PROJECTOR: ElmProjector = ElmProjector;
 static HASKELL_PROJECTOR: HaskellProjector = HaskellProjector;
 static PYTHON_PROJECTOR: PythonProjector = PythonProjector;
 static RUST_PROJECTOR: RustProjector = RustProjector;
 
-// The language adapters, in a fixed order so path selection is deterministic.
-//
-// Every new language is added here once; the pipeline stays language-agnostic.
 const PROJECTORS: [&dyn LanguageProjector; 4] = [
     &ELM_PROJECTOR,
     &HASKELL_PROJECTOR,
@@ -47,31 +57,16 @@ const EMPTY_TREE_IDS: [&str; 2] = [
     "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
 ];
 
-/// Whether `spec` names a snapshot side rather than a commit.
-///
-/// The reserved `:index`, `:worktree`, and `:empty` specifiers and the
-/// canonical empty-tree object id are snapshots. Every reserved specifier
-/// starts with `:`, which a Git refname cannot contain, so a commit cannot be
-/// mistaken for one.
 pub fn is_snapshot_spec(spec: &str) -> bool {
     matches!(spec, ":index" | ":worktree" | ":empty") || EMPTY_TREE_IDS.contains(&spec)
 }
 
-/// How the base side of a focused diff is resolved.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiffBase {
-    /// Compare the base revision exactly as requested.
     Given,
-    /// Replace the base with `merge-base(BASE, TARGET)` before comparing, so
-    /// commits that only landed on the base's branch after the two diverged do
-    /// not appear in the diff.
-    ///
-    /// Both sides must be commits: the index, worktree, and empty snapshots
-    /// have no merge base.
     MergeBase,
 }
 
-/// A commit-to-commit focused comparison with immutable snapshot identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitDiff {
     pub base_id: ObjectId,
@@ -79,8 +74,6 @@ pub struct CommitDiff {
     pub files: Vec<FileOutlineDiff>,
 }
 
-/// A focused comparison whose sides may come from commits, the index, the
-/// working tree, or an empty tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotDiff {
     pub base_kind: &'static str,
@@ -90,25 +83,16 @@ pub struct SnapshotDiff {
     pub files: Vec<FileOutlineDiff>,
 }
 
-/// One resolved side of a snapshot diff.
-///
-/// The variant is the side's kind, so a side's kind, identity, and entries can
-/// never disagree: an empty side has no entries, blob-backed sides hold source
-/// entries, and a worktree side holds path membership rather than blob
-/// identity.
 enum SnapshotSide {
-    /// A named empty tree. `id` preserves the spec spelling, which may be
-    /// `:empty` or a canonical empty-tree object id.
-    Empty { id: String },
-    /// Stage-zero index blobs.
+    Empty {
+        id: String,
+    },
     Index {
         entries: BTreeMap<RepoPath, SourceEntry>,
     },
-    /// Tracked index paths unioned with untracked, non-ignored files. A member
-    /// may be absent from disk (a deletion); membership, not disk presence,
-    /// decides whether a path belongs to this side.
-    Worktree { entries: BTreeSet<RepoPath> },
-    /// A resolved commit's tree.
+    Worktree {
+        entries: BTreeSet<RepoPath>,
+    },
     Commit {
         id: ObjectId,
         entries: BTreeMap<RepoPath, SourceEntry>,
@@ -116,7 +100,6 @@ enum SnapshotSide {
 }
 
 impl SnapshotSide {
-    /// The JSON `kind` for this side.
     fn kind(&self) -> &'static str {
         match self {
             Self::Empty { .. } => "empty",
@@ -126,8 +109,6 @@ impl SnapshotSide {
         }
     }
 
-    /// The JSON `id` for this side. Named snapshots report their specifier; a
-    /// commit reports its resolved object id.
     fn id(&self) -> String {
         match self {
             Self::Empty { id } => id.clone(),
@@ -137,7 +118,6 @@ impl SnapshotSide {
         }
     }
 
-    /// The paths this side names, in raw path-byte order.
     fn paths(&self) -> Vec<&RepoPath> {
         match self {
             Self::Empty { .. } => Vec::new(),
@@ -147,16 +127,12 @@ impl SnapshotSide {
     }
 }
 
-/// The resolved sides of a snapshot diff, shared by the projection and outline
-/// comparison loops.
 struct SnapshotSides {
     base: SnapshotSide,
     target: SnapshotSide,
 }
 
 impl SnapshotSides {
-    /// The union of both sides, in raw path-byte order. Derived from the sides,
-    /// so it can never disagree with them.
     fn paths(&self) -> BTreeSet<RepoPath> {
         self.base
             .paths()
@@ -167,13 +143,6 @@ impl SnapshotSides {
     }
 }
 
-/// Projects explicit source bytes for `path`, returning the requested-mode
-/// projection plus a mode-independent outline.
-///
-/// This is the editor-facing entry point: it never touches Git and needs no
-/// repository, so a caller can project a buffer's bytes directly. An unsupported
-/// path is a typed [`EngineError::UnsupportedPath`] because the caller supplied
-/// the path as the projection context rather than as a scope.
 pub fn project_source(
     path: &RepoPath,
     bytes: &[u8],
@@ -222,14 +191,12 @@ fn source_projection_failure(error: ProjectionError) -> EngineError {
     }
 }
 
-/// A discovered repository plus the pipeline over it.
 pub struct Engine {
     repository: GitRepository,
     root: PathBuf,
 }
 
 impl Engine {
-    /// Discovers the repository that contains `start`.
     pub fn discover(start: &Path) -> Result<Self, EngineError> {
         let repository = GitRepository::discover(start)?;
         // A bare repository has no worktree, so relative paths resolve against
@@ -241,14 +208,10 @@ impl Engine {
         Ok(Self { repository, root })
     }
 
-    /// The repository root relative paths resolve against.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Resolves both endpoints once and lists the target's first-parent steps
-    /// through the base, newest first. Projection is deferred until a caller
-    /// requests a selected step with [`Self::diff_outlines`].
     pub fn first_parent_steps(
         &self,
         base_spec: &str,
@@ -259,19 +222,10 @@ impl Engine {
         Ok(self.repository.first_parent_steps(&base, &target)?)
     }
 
-    /// Reads the current `.codect.toml` area definitions.
-    ///
-    /// The engine reloads them on every call; callers decide how long to retain
-    /// the owned snapshot.
     pub fn load_areas(&self) -> Result<AreaSet, EngineError> {
         Ok(config::Config::load(&self.root)?.areas().clone())
     }
 
-    /// Projects every selected file of `revision`.
-    ///
-    /// Supported selected files are returned in raw path-byte order, including
-    /// files whose canonical projection is empty. A selection that names
-    /// nothing is rejected before any blob is read.
     pub fn show(
         &self,
         revision_spec: &str,
@@ -301,12 +255,6 @@ impl Engine {
         Ok(files)
     }
 
-    /// Projects every selected file of `revision`, pairing the requested-mode
-    /// projection with a complete, mode-independent outline.
-    ///
-    /// This is the JSON `show` path. It reads exactly the same committed blobs
-    /// as [`Engine::show`], in the same raw path-byte order, so the outline and
-    /// `stable_key` values match the text document for the same revision.
     pub fn show_outlines(
         &self,
         revision_spec: &str,
@@ -336,14 +284,6 @@ impl Engine {
         Ok(files)
     }
 
-    /// Projects every selected file of `revision`, pairing each file's decoded
-    /// source with its mode-independent [`SourceOutline::outline`].
-    ///
-    /// This mirrors [`Engine::show_outlines`] exactly — same revision
-    /// resolution, selection validation, raw path-byte order, scope filtering,
-    /// and per-file success/`None` semantics — but also returns the committed
-    /// blob's decoded UTF-8 text. The blob is read once and decoded once; the
-    /// outline and the returned source therefore come from the same bytes.
     pub fn show_source_outlines(
         &self,
         revision_spec: &str,
@@ -377,15 +317,6 @@ impl Engine {
         Ok(files)
     }
 
-    /// Compares the projections of `base_spec` and `target_spec`.
-    ///
-    /// Either side may be a commit, `:index`, `:worktree`, or `:empty`. Only
-    /// paths whose canonical old and new projections differ are returned, in
-    /// raw path-byte order. Implementation-only changes therefore do not appear
-    /// at all.
-    ///
-    /// With [`DiffBase::MergeBase`] the base side is the merge base of the two
-    /// commits, so both specs must resolve to commits.
     pub fn diff(
         &self,
         base_spec: &str,
@@ -404,9 +335,6 @@ impl Engine {
                 continue;
             }
 
-            // Skip identical index or commit blobs before reading or projecting
-            // either side. Worktree sides have no blob id and are compared by
-            // their projections.
             if let (
                 SnapshotSide::Index { entries: old } | SnapshotSide::Commit { entries: old, .. },
                 SnapshotSide::Index { entries: new } | SnapshotSide::Commit { entries: new, .. },
@@ -440,9 +368,6 @@ impl Engine {
         Ok(diffs)
     }
 
-    /// Compares committed projections and returns both panes with their outlines.
-    /// Equal projections, unsupported files, and empty added/deleted projections
-    /// are omitted, matching the text diff's focused file-list rule.
     pub fn diff_outlines(
         &self,
         base_spec: &str,
@@ -524,9 +449,6 @@ impl Engine {
         })
     }
 
-    /// Compares any two read-only snapshot sources for the JSON Diffview
-    /// contract. `:index`, `:worktree`, and `:empty` are reserved specifiers;
-    /// the canonical Git empty-tree object id is also accepted as `:empty`.
     pub fn diff_snapshot_outlines(
         &self,
         base_spec: &str,
@@ -569,8 +491,6 @@ impl Engine {
         })
     }
 
-    /// Resolves both sides as snapshots and validates the selection before any
-    /// projection. Shared by the projection and outline comparison loops.
     fn snapshot_sides(
         &self,
         base_spec: &str,
@@ -607,12 +527,6 @@ impl Engine {
         Ok(sides)
     }
 
-    /// Projects one side of a snapshot: an index or commit blob, or a worktree
-    /// member read from disk (present or absent).
-    ///
-    /// Worktree membership is authoritative: a path outside the side's member
-    /// set is absent even if a file with that path exists on disk, so an
-    /// ignored file never leaks in through the other side.
     fn snapshot_projection(
         &self,
         side: &SnapshotSide,
@@ -639,7 +553,6 @@ impl Engine {
         }
     }
 
-    /// Resolves one snapshot side from its specifier.
     fn snapshot_side(&self, spec: &str) -> Result<SnapshotSide, EngineError> {
         if spec == ":empty" || EMPTY_TREE_IDS.contains(&spec) {
             return Ok(SnapshotSide::Empty {
@@ -657,9 +570,6 @@ impl Engine {
             return Ok(SnapshotSide::Index { entries });
         }
         if spec == ":worktree" {
-            // The working tree is the tracked index paths (kept even when
-            // deleted from disk, so a deletion still projects to an absent
-            // side) unioned with the untracked, non-ignored files on disk.
             let mut entries: BTreeSet<RepoPath> = self
                 .repository
                 .index_source_entries()
@@ -680,7 +590,6 @@ impl Engine {
         self.commit_side(spec, revision)
     }
 
-    /// The commit side for an already-resolved revision, reading its tree.
     fn commit_side(&self, spec: &str, revision: Revision) -> Result<SnapshotSide, EngineError> {
         let entries = self
             .repository
@@ -695,9 +604,6 @@ impl Engine {
         })
     }
 
-    /// Resolves the base side to `merge-base(base, target)`. Both specs must be
-    /// commits; a snapshot spec fails to resolve and is reported as a revision
-    /// error.
     fn merge_base_side(
         &self,
         base_spec: &str,
@@ -707,10 +613,6 @@ impl Engine {
         self.commit_side(base_spec, base)
     }
 
-    /// Resolves the base side of a diff, applying [`DiffBase`].
-    ///
-    /// `target_spec` is required for [`DiffBase::MergeBase`] and ignored
-    /// otherwise.
     fn resolve_base(
         &self,
         base_spec: &str,
@@ -804,9 +706,6 @@ impl Engine {
         project_source(path, &bytes, mode).map(Some)
     }
 
-    // Fails when a selected group names nothing in `revision`, before any blob
-    // is read, so a mistyped path or area cannot masquerade as an empty
-    // projection. An area is satisfied by any one of its paths existing.
     fn ensure_groups(
         &self,
         revision: &Revision,
@@ -830,9 +729,6 @@ impl Engine {
         }
     }
 
-    // Fails when a selected group is absent from both revisions, before any
-    // blob is read. A path deleted by the target still belongs to the diff, so
-    // a group counts as present wherever either side names it.
     fn ensure_groups_in_diff(
         &self,
         base: &Revision,
@@ -843,8 +739,6 @@ impl Engine {
     ) -> Result<(), EngineError> {
         let mut missing = Vec::new();
         for group in groups {
-            // Short-circuiting means the target is only consulted when the base
-            // does not already satisfy the group.
             let present = self.group_in_revision(base, base_spec, group)?
                 || self.group_in_revision(target, target_spec, group)?;
             if !present {
@@ -880,10 +774,6 @@ impl Engine {
         Ok(false)
     }
 
-    // Reads, decodes, and projects one entry, reusing the caches.
-    //
-    // Returns `None` for an unsupported path, which is an exclusion rather
-    // than a failure.
     fn project_entry(
         &self,
         projectors: &[&dyn LanguageProjector],
@@ -904,16 +794,6 @@ impl Engine {
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))
     }
 
-    // Projects one entry's items in `mode`, reading the blob once and reusing
-    // the `(blob id, path, mode)` cache.
-    //
-    // The cache key includes the path because `stable_key` is path-namespaced
-    // for several languages (Python, Haskell, Elm, and Rust `mod`): those keys
-    // embed the repository path, so items projected for one path are not valid
-    // for a different path that happens to share the same blob. Blob bytes are
-    // still cached on the blob id alone, so an identical blob is read once. The
-    // path carries its derived language, so the key also distinguishes
-    // languages without a separate field.
     fn project_items_cached(
         &self,
         projector: &dyn LanguageProjector,
@@ -950,15 +830,6 @@ impl Engine {
         Ok(items)
     }
 
-    // Reads, decodes, and projects one entry in both the requested mode and the
-    // Signatures superset, assembling the file's outline.
-    //
-    // Both projections go through the shared `(blob id, path, mode)` cache, so
-    // a blob is read once and each mode is computed at most once per path and
-    // operation.
-    //
-    // Returns `None` for an unsupported path, which is an exclusion rather
-    // than a failure.
     fn project_entry_outline(
         &self,
         projectors: &[&dyn LanguageProjector],
@@ -972,16 +843,6 @@ impl Engine {
             .map(|(outline, _source)| outline))
     }
 
-    // Reads, decodes, and projects one entry, returning the file's outline
-    // paired with the decoded source it was built from.
-    //
-    // Shares the outline path's caches: the `(blob id, path, mode)` projection
-    // cache and the blob-id source cache mean a blob is read and decoded once,
-    // and the requested mode and Signatures superset are each computed at most
-    // once per path and operation.
-    //
-    // Returns `None` for an unsupported path, which is an exclusion rather
-    // than a failure.
     fn project_entry_source_outline(
         &self,
         projectors: &[&dyn LanguageProjector],
@@ -1013,18 +874,10 @@ impl Engine {
         };
         let outline = assemble_outline(&path, projection, superset)
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))?;
-        // Already decoded and cached by `project_items_cached`; this only
-        // clones the retained text.
         let source = self.read_source(caches, entry, &path, revision_spec)?;
         Ok(Some((outline, source.to_string())))
     }
 
-    // Reads and decodes one entry's blob, reusing the byte and decoded-source
-    // caches.
-    //
-    // The decoded text is path-independent (a valid UTF-8 blob is the same text
-    // at every path), so the source cache is keyed on the blob id alone; the
-    // path only supplies the invalid-UTF-8 diagnostic context.
     fn read_source(
         &self,
         caches: &mut Caches,
@@ -1065,7 +918,6 @@ impl Engine {
     }
 }
 
-// Per-operation caches; never persisted.
 #[derive(Default)]
 struct Caches {
     blobs: HashMap<ObjectId, Arc<[u8]>>,
@@ -1093,8 +945,6 @@ fn lookup_projection(
     })
 }
 
-// Reads each blob at most once per operation, sharing it via `Arc` so callers
-// can borrow the bytes while the cache stays mutable for later reads.
 fn read_blob(
     repository: &GitRepository,
     caches: &mut Caches,

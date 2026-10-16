@@ -4,6 +4,9 @@
 // styling is applied only here, never in core. Color is the only
 // environment-sensitive behavior: everything else in the document is
 // deterministic (section 10).
+//
+// JSON is emitted unstyled, and diagnostics render at a fixed width so stderr
+// is independent of the terminal.
 
 use std::fmt::Write as _;
 use std::io::{self, Write as _};
@@ -14,7 +17,6 @@ use anstyle::{AnsiColor, Style};
 use crate::args::ColorChoice;
 use crate::command::CliError;
 
-// Which framing the plain document uses, so the styler can classify lines.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DocumentKind {
     Show,
@@ -41,10 +43,6 @@ pub fn write_document(kind: DocumentKind, document: &str, color: ColorChoice) ->
     stream.flush()
 }
 
-// Writes a JSON document to stdout with no styling.
-//
-// JSON is a machine-readable document, so `--color` must never introduce ANSI
-// sequences into it; this bypasses the styler entirely.
 pub fn write_json(document: &str) -> io::Result<()> {
     let mut out = std::io::stdout().lock();
     out.write_all(document.as_bytes())?;
@@ -53,9 +51,6 @@ pub fn write_json(document: &str) -> io::Result<()> {
 
 pub fn render_diagnostic(error: &CliError) -> String {
     let mut text = String::new();
-    // A fixed width keeps stderr independent of terminal size (section 10);
-    // the default theme still detects color support, so redirected stderr
-    // stays plain.
     let handler = miette::GraphicalReportHandler::new()
         .with_width(80)
         .with_theme(miette::GraphicalTheme::default());
@@ -93,11 +88,6 @@ fn is_show_header(line: &str) -> bool {
     trimmed.starts_with("== ") && trimmed.ends_with(" ==")
 }
 
-// Colors diff lines by kind.
-//
-// The `---`/`+++` file headers share their prefixes with deletions and
-// insertions, so a small state machine marks the two lines that structurally
-// follow each `diff --codect` line as headers instead of content (section 13).
 fn style_diff(document: &str) -> String {
     let bold = Style::new().bold();
     let deletion = AnsiColor::Red.on_default();
@@ -105,7 +95,6 @@ fn style_diff(document: &str) -> String {
     let hunk = AnsiColor::Cyan.on_default();
 
     let mut styled = String::with_capacity(document.len());
-    // 0 = hunk body, 2 = the next two lines are the file header pair.
     let mut header_lines_remaining = 0u8;
 
     for line in document.split_inclusive('\n') {
