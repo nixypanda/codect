@@ -1,0 +1,50 @@
+# diff_range_narrow 60x24
+ ◆ codect  /repo          types   HEAD~1..HEAD   scope: all 
+╭ BASE · HEAD~1 ───────────────────────────────────────────╮
+│  @@ -0,0 +1,1 @@                                         │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+╭ TARGET · HEAD ───────────────────────────────────────────╮
+│  @@ -0,0 +1,1 @@                                         │
+│ +1 added                                                 │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+ added.rs +1 −0                                      ? help 
+## styles
+0: 0-9 fg=#1a1b26 bg=#7dcfff mod=BOLD 10-16 fg=#a9b1d6 bg=#16161e mod=- 17-24 fg=reset bg=#16161e mod=- 25-31 fg=#1a1b26 bg=#7dcfff mod=- 32-32 fg=reset bg=#16161e mod=- 33-46 fg=#c0caf5 bg=#292e42 mod=- 47-47 fg=reset bg=#16161e mod=- 48-59 fg=#c0caf5 bg=#292e42 mod=-
+1: 0-59 fg=#7dcfff bg=#1a1b26 mod=-
+2: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#7aa2f7 bg=#292e42 mod=BOLD 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+3: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-4 fg=#545c7e bg=#243e4a mod=- 5-57 fg=reset bg=#243e4a mod=- 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+4: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+5: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+6: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+7: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+8: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+9: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+10: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+11: 0-59 fg=#7dcfff bg=#1a1b26 mod=-
+12: 0-59 fg=#7dcfff bg=#1a1b26 mod=-
+13: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#7aa2f7 bg=#292e42 mod=BOLD 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+14: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-4 fg=#9ece6a bg=#243e4a mod=- 5-9 fg=#c0caf5 bg=#243e4a mod=- 10-57 fg=reset bg=#243e4a mod=- 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+15: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+16: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+17: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+18: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+19: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+20: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+21: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+22: 0-59 fg=#7dcfff bg=#1a1b26 mod=-
+23: 0-9 fg=#c0caf5 bg=#16161e mod=- 10-12 fg=#9ece6a bg=#16161e mod=- 13-15 fg=#f7768e bg=#16161e mod=- 16-52 fg=reset bg=#16161e mod=- 53-59 fg=#737aa2 bg=#16161e mod=-

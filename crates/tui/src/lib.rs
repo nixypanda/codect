@@ -37,6 +37,8 @@ mod action;
 mod api;
 mod app;
 mod component;
+#[cfg(test)]
+mod golden;
 mod page;
 mod render;
 mod route;

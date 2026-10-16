@@ -8,6 +8,7 @@ use base::{
     Selection, SourceOutline, SourceSpan, SupportedPath, assemble_outline,
 };
 use engine::CommitStep;
+use ratatui::style::{Color, Modifier};
 
 use crate::app::{App, DiffRequest, DiffView, LoadRequest, Msg, ShowRequest, settle, update};
 use crate::page::{Diff, DiffViewState, Loaded, Show};
@@ -133,6 +134,9 @@ pub(crate) fn nested_outline(
 
 pub(crate) const NESTED_SOURCE: &str = "impl Widget {\n    fn size(&self) -> usize {\n        let hidden = 42;\n        hidden\n    }\n}\n";
 
+pub(crate) const ATTRIBUTED_SOURCE: &str =
+    "impl Widget {\n    #[test]\n    fn tested() {\n        let hidden = 42;\n    }\n}\n";
+
 pub(crate) fn attributed_child_outline(path: &str, source: &str) -> SourceOutline {
     nested_outline(path, source, (0, 5), (2, 4), true)
 }
@@ -240,15 +244,23 @@ pub(crate) fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> Fil
 }
 
 pub(crate) fn base_app(request: LoadRequest) -> App {
+    base_app_with(request, Theme::dark(), Icons::new(IconStyle::None))
+}
+
+pub(crate) fn base_app_with(request: LoadRequest, theme: Theme, icons: Icons) -> App {
     App::new(
         "/repo".to_owned(),
         request,
         "all".to_owned(),
         100,
         30,
-        Theme::dark(),
-        Icons::new(IconStyle::None),
+        theme,
+        icons,
     )
+}
+
+pub(crate) fn step(app: &App, msg: Msg) -> App {
+    settle(update(msg, app).0)
 }
 
 pub(crate) fn show_app(files: Vec<SourceOutline>) -> App {
@@ -461,6 +473,106 @@ pub(crate) fn buffer_row(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
         .filter_map(|x| buffer.cell((x, y)))
         .map(|cell| cell.symbol())
         .collect()
+}
+
+pub(crate) fn buffer_styles(buffer: &ratatui::buffer::Buffer) -> String {
+    let mut styles = String::new();
+    for y in 0..buffer.area.height {
+        styles.push_str(&format!("{y}:"));
+        let mut x = 0;
+        while x < buffer.area.width {
+            let Some(cell) = buffer.cell((x, y)) else {
+                break;
+            };
+            let key = (cell.fg, cell.bg, cell.modifier);
+            let mut end = x;
+            while end + 1 < buffer.area.width {
+                let Some(next) = buffer.cell((end + 1, y)) else {
+                    break;
+                };
+                if (next.fg, next.bg, next.modifier) != key {
+                    break;
+                }
+                end += 1;
+            }
+            styles.push_str(&format!(
+                " {x}-{end} fg={} bg={} mod={}",
+                color_token(cell.fg),
+                color_token(cell.bg),
+                modifier_token(cell.modifier),
+            ));
+            x = end + 1;
+        }
+        styles.push('\n');
+    }
+    styles
+}
+
+pub(crate) fn golden_document(
+    name: &str,
+    width: u16,
+    height: u16,
+    buffer: &ratatui::buffer::Buffer,
+) -> String {
+    let mut document = String::new();
+    document.push_str(&format!("# {name} {width}x{height}\n"));
+    for y in 0..height {
+        document.push_str(&buffer_row(buffer, y));
+        document.push('\n');
+    }
+    document.push_str("## styles\n");
+    document.push_str(&buffer_styles(buffer));
+    document
+}
+
+fn color_token(color: Color) -> String {
+    match color {
+        Color::Reset => "reset".to_owned(),
+        Color::Rgb(red, green, blue) => format!("#{red:02x}{green:02x}{blue:02x}"),
+        Color::Indexed(index) => format!("idx:{index}"),
+        Color::Black => "black".to_owned(),
+        Color::Red => "red".to_owned(),
+        Color::Green => "green".to_owned(),
+        Color::Yellow => "yellow".to_owned(),
+        Color::Blue => "blue".to_owned(),
+        Color::Magenta => "magenta".to_owned(),
+        Color::Cyan => "cyan".to_owned(),
+        Color::Gray => "gray".to_owned(),
+        Color::DarkGray => "darkgray".to_owned(),
+        Color::LightRed => "lightred".to_owned(),
+        Color::LightGreen => "lightgreen".to_owned(),
+        Color::LightYellow => "lightyellow".to_owned(),
+        Color::LightBlue => "lightblue".to_owned(),
+        Color::LightMagenta => "lightmagenta".to_owned(),
+        Color::LightCyan => "lightcyan".to_owned(),
+        Color::White => "white".to_owned(),
+    }
+}
+
+fn modifier_token(modifier: Modifier) -> String {
+    // Every `Modifier` flag ratatui 0.30 exposes, in declaration order, so no
+    // flag is silently dropped from a golden's style dump.
+    const FLAGS: [(Modifier, &str); 9] = [
+        (Modifier::BOLD, "BOLD"),
+        (Modifier::DIM, "DIM"),
+        (Modifier::ITALIC, "ITALIC"),
+        (Modifier::UNDERLINED, "UNDERLINED"),
+        (Modifier::SLOW_BLINK, "SLOW_BLINK"),
+        (Modifier::RAPID_BLINK, "RAPID_BLINK"),
+        (Modifier::REVERSED, "REVERSED"),
+        (Modifier::HIDDEN, "HIDDEN"),
+        (Modifier::CROSSED_OUT, "CROSSED_OUT"),
+    ];
+    let present: Vec<&str> = FLAGS
+        .iter()
+        .filter(|(flag, _)| modifier.contains(*flag))
+        .map(|(_, name)| *name)
+        .collect();
+    if present.is_empty() {
+        "-".to_owned()
+    } else {
+        present.join("|")
+    }
 }
 
 pub(crate) fn row_with(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<u16> {

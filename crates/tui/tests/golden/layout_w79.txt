@@ -1,0 +1,42 @@
+# layout_w79 79x20
+ ◆ codect  /repo                                     types   HEAD   scope: all 
+╭ Files ──────────────────────────────────────────────────────────────────────╮
+│ ▌a.rs                                                                       │
+│  b.rs                                                                       │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+│                                                                             │
+╰─────────────────────────────────────────────────────────────────────────────╯
+ a.rs 1 of 1 lines                                                      ? help 
+## styles
+0: 0-9 fg=#1a1b26 bg=#7dcfff mod=BOLD 10-16 fg=#a9b1d6 bg=#16161e mod=- 17-51 fg=reset bg=#16161e mod=- 52-58 fg=#1a1b26 bg=#7dcfff mod=- 59-59 fg=reset bg=#16161e mod=- 60-65 fg=#c0caf5 bg=#292e42 mod=- 66-66 fg=reset bg=#16161e mod=- 67-78 fg=#c0caf5 bg=#292e42 mod=-
+1: 0-78 fg=#7dcfff bg=#1a1b26 mod=-
+2: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-2 fg=#7dcfff bg=#283457 mod=- 3-76 fg=#c0caf5 bg=#283457 mod=- 77-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+3: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-2 fg=reset bg=#1a1b26 mod=- 3-6 fg=#c0caf5 bg=#1a1b26 mod=- 7-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+4: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+5: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+6: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+7: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+8: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+9: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+10: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+11: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+12: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+13: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+14: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+15: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+16: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+17: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-77 fg=reset bg=#1a1b26 mod=- 78-78 fg=#7dcfff bg=#1a1b26 mod=-
+18: 0-78 fg=#7dcfff bg=#1a1b26 mod=-
+19: 0-5 fg=#c0caf5 bg=#16161e mod=- 6-18 fg=#737aa2 bg=#16161e mod=- 19-71 fg=reset bg=#16161e mod=- 72-78 fg=#737aa2 bg=#16161e mod=-

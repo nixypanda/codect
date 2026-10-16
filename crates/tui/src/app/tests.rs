@@ -6,8 +6,8 @@ use crate::page::{DiffSide, Loaded, Search, SearchMatch, SearchSide, ShowFocus};
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
 use crate::test_support::{
-    NESTED_SOURCE, area_set, assert_view_consistent, attributed_child_outline, base_app,
-    buffer_row, buffer_text, cell_x_of, click, commits_app, commits_ref, commits_request,
+    ATTRIBUTED_SOURCE, NESTED_SOURCE, area_set, assert_view_consistent, attributed_child_outline,
+    base_app, buffer_row, buffer_text, cell_x_of, click, commits_app, commits_ref, commits_request,
     declaration_less, diff_app, diff_focus_of, diff_ref, diff_request, dropped_container_outline,
     file_diff, focus_content, folder_app, item, multi_method_outline, nested_outline, press,
     render, row_with, scroll, selected, show_app, show_app_mode, show_ref, show_request,
@@ -18,9 +18,6 @@ use base::{
     Area, RepoPath, Selection, SelectionGroup, SourceOutline, SupportedPath, assemble_outline,
 };
 use ratatui::style::Color;
-
-const ATTRIBUTED_SOURCE: &str =
-    "impl Widget {\n    #[test]\n    fn tested() {\n        let hidden = 42;\n    }\n}\n";
 
 const TEST_SOURCE: &str = "#[test]\nfn decode_source() {\n    let hidden = 42;\n}\n";
 

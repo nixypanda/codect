@@ -1,0 +1,26 @@
+# show_which_key_short 100x12
+ ◆ codect  /repo                                                          types   HEAD   scope: all 
+╭ Files ─────────────────────┬ Source ─────────────────────────────────────────────────────────────╮
+│ ▏a.rs                      │ − 1 a                                                               │
+│  b.rs                      │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+╭ fold (z) ────────────────────────────────────────────────────────────────────────────────────────╮
+│a Toggle fold              o Open fold                c Close fold                                │
+│O Open fold recursively    C Close fold recursively   R Open all folds                            │
+│M Close all folds                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ a.rs 1 of 1 lines                                     ↑↓ / Ctrl-K/J choose   Enter run   Esc close 
+## styles
+0: 0-9 fg=#1a1b26 bg=#7dcfff mod=BOLD 10-16 fg=#a9b1d6 bg=#16161e mod=- 17-72 fg=reset bg=#16161e mod=- 73-79 fg=#1a1b26 bg=#7dcfff mod=- 80-80 fg=reset bg=#16161e mod=- 81-86 fg=#c0caf5 bg=#292e42 mod=- 87-87 fg=reset bg=#16161e mod=- 88-99 fg=#c0caf5 bg=#292e42 mod=-
+1: 0-28 fg=#545c7e bg=#1a1b26 mod=- 29-29 fg=#3b4261 bg=#1a1b26 mod=- 30-99 fg=#7dcfff bg=#1a1b26 mod=-
+2: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-2 fg=#737aa2 bg=#292e42 mod=- 3-27 fg=#c0caf5 bg=#292e42 mod=- 28-28 fg=reset bg=#1a1b26 mod=- 29-29 fg=#3b4261 bg=#1a1b26 mod=- 30-30 fg=reset bg=#1a1b26 mod=- 31-32 fg=#7dcfff bg=#292e42 mod=- 33-34 fg=#545c7e bg=#292e42 mod=- 35-35 fg=#c0caf5 bg=#292e42 mod=- 36-98 fg=reset bg=#1a1b26 mod=- 99-99 fg=#7dcfff bg=#1a1b26 mod=-
+3: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-2 fg=reset bg=#1a1b26 mod=- 3-6 fg=#c0caf5 bg=#1a1b26 mod=- 7-28 fg=reset bg=#1a1b26 mod=- 29-29 fg=#3b4261 bg=#1a1b26 mod=- 30-98 fg=reset bg=#1a1b26 mod=- 99-99 fg=#7dcfff bg=#1a1b26 mod=-
+4: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-28 fg=reset bg=#1a1b26 mod=- 29-29 fg=#3b4261 bg=#1a1b26 mod=- 30-98 fg=reset bg=#1a1b26 mod=- 99-99 fg=#7dcfff bg=#1a1b26 mod=-
+5: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-28 fg=reset bg=#1a1b26 mod=- 29-29 fg=#3b4261 bg=#1a1b26 mod=- 30-98 fg=reset bg=#1a1b26 mod=- 99-99 fg=#7dcfff bg=#1a1b26 mod=-
+6: 0-0 fg=#7dcfff bg=#16161e mod=- 1-10 fg=#7dcfff bg=#16161e mod=BOLD 11-99 fg=#7dcfff bg=#16161e mod=-
+7: 0-0 fg=#7dcfff bg=#16161e mod=- 1-13 fg=#c0caf5 bg=#283457 mod=- 14-27 fg=reset bg=#16161e mod=- 28-38 fg=#c0caf5 bg=#16161e mod=- 39-54 fg=reset bg=#16161e mod=- 55-66 fg=#c0caf5 bg=#16161e mod=- 67-98 fg=reset bg=#16161e mod=- 99-99 fg=#7dcfff bg=#16161e mod=-
+8: 0-0 fg=#7dcfff bg=#16161e mod=- 1-23 fg=#c0caf5 bg=#16161e mod=- 24-27 fg=reset bg=#16161e mod=- 28-51 fg=#c0caf5 bg=#16161e mod=- 52-54 fg=reset bg=#16161e mod=- 55-70 fg=#c0caf5 bg=#16161e mod=- 71-98 fg=reset bg=#16161e mod=- 99-99 fg=#7dcfff bg=#16161e mod=-
+9: 0-0 fg=#7dcfff bg=#16161e mod=- 1-17 fg=#c0caf5 bg=#16161e mod=- 18-98 fg=reset bg=#16161e mod=- 99-99 fg=#7dcfff bg=#16161e mod=-
+10: 0-99 fg=#7dcfff bg=#16161e mod=-
+11: 0-5 fg=#c0caf5 bg=#16161e mod=- 6-18 fg=#737aa2 bg=#16161e mod=- 19-54 fg=reset bg=#16161e mod=- 55-99 fg=#737aa2 bg=#16161e mod=-
