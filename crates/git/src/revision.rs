@@ -46,7 +46,7 @@ pub(crate) fn first_parent_steps(
             .unwrap_or_default();
         let subject = String::from_utf8_lossy(first_line.strip_suffix(b"\r").unwrap_or(first_line))
             .into_owned();
-        let parent_id = ObjectId::from_gix(&parent.detach());
+        let parent_id = ObjectId::from_gix(&parent.detach(), &repository)?;
         steps.push(CommitStep {
             parent_id: parent_id.clone(),
             commit_id: current,
@@ -71,7 +71,7 @@ pub(crate) fn merge_base(
 
     match repo.gix().merge_base(one_id, two_id) {
         Ok(id) => Ok(Revision {
-            object_id: ObjectId::from_gix(&id.detach()),
+            object_id: ObjectId::from_gix(&id.detach(), &repository)?,
         }),
         Err(gix::repository::merge_base::Error::NotFound { .. }) => Err(GitError::NoMergeBase {
             repository,
@@ -104,7 +104,7 @@ pub(crate) fn resolve_commit(repo: &GitRepository, spec: &str) -> Result<Revisio
 
     let commit_id = peel_to_commit(repo, &repository, spec, id)?;
     Ok(Revision {
-        object_id: ObjectId::from_gix(&commit_id),
+        object_id: ObjectId::from_gix(&commit_id, &repository)?,
     })
 }
 
@@ -116,12 +116,13 @@ fn peel_to_commit(
     spec: &str,
     id: gix::hash::ObjectId,
 ) -> Result<gix::hash::ObjectId, GitError> {
+    let object_id = ObjectId::from_gix(&id, repository)?;
     let object = repo
         .gix()
         .find_object(id)
         .map_err(|source| GitError::ObjectRead {
             repository: repository.to_path_buf(),
-            object_id: ObjectId::from_gix(&id),
+            object_id: object_id.clone(),
             source: Box::new(source),
         })?;
 
@@ -133,13 +134,13 @@ fn peel_to_commit(
                 Err(GitError::NotPeelable {
                     repository: repository.to_path_buf(),
                     revision: spec.to_owned(),
-                    object_id: ObjectId::from_gix(&id),
+                    object_id: object_id.clone(),
                     source: Box::new(source),
                 })
             } else {
                 Err(GitError::ObjectRead {
                     repository: repository.to_path_buf(),
-                    object_id: ObjectId::from_gix(&id),
+                    object_id,
                     source: Box::new(source),
                 })
             }

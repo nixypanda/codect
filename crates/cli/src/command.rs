@@ -731,7 +731,8 @@ fn git_context(error: &GitError) -> DiagnosticContext {
         | GitError::InvalidRepoPath { repository, .. }
         | GitError::InvalidObjectId { repository, .. }
         | GitError::NoMergeBase { repository, .. }
-        | GitError::MergeBase { repository, .. } => DiagnosticContext {
+        | GitError::MergeBase { repository, .. }
+        | GitError::UnsupportedHashKind { repository, .. } => DiagnosticContext {
             repository: Some(repository.clone()),
             ..DiagnosticContext::default()
         },
@@ -767,6 +768,7 @@ fn git_message(error: &GitError) -> &'static str {
         GitError::MergeBase { .. } => "a merge base could not be computed",
         GitError::IndexRead { .. } => "the Git index could not be read",
         GitError::UntrackedTraversal { .. } => "untracked files could not be enumerated",
+        GitError::UnsupportedHashKind { .. } => "the repository uses an unsupported Git hash kind",
     }
 }
 

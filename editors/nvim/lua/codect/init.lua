@@ -2,6 +2,10 @@
 
 local M = {}
 
+--- Modes `:CodectShow` can project. `:CodectFold` also accepts `full`, but a
+--- default of `full` would make a no-argument `:CodectShow` fail.
+local SHOW_MODES = { types = true, signatures = true }
+
 M.defaults = {
   -- Mode used when :CodectShow/:CodectFold is called without an argument.
   default_mode = "signatures",
@@ -81,10 +85,8 @@ end
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
 
-  -- `:CodectShow` and `:CodectFold` only accept types|signatures, so a default
-  -- of `full` would break both commands.
   local default_mode = M.config.default_mode
-  if default_mode ~= "types" and default_mode ~= "signatures" then
+  if not SHOW_MODES[default_mode] then
     vim.notify(
       string.format(
         "Codect: default_mode must be `types` or `signatures`, got %s; using %q",

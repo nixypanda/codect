@@ -166,8 +166,6 @@ impl<'a> Renderer<'a> {
         out
     }
 
-    // One element of a declaration header: either flattened tokens, a
-    // recursively rendered type, or a bracketed list that is allowed to wrap.
     // Renders the declaration prefix up to the first child in `stop_kinds`,
     // dropping statement terminators that the caller re-emits.
     //
@@ -537,6 +535,8 @@ impl<'a> Renderer<'a> {
     }
 }
 
+// One element of a declaration header: either flattened tokens, a recursively
+// rendered type, or a bracketed list that is allowed to wrap.
 enum Elem {
     Token(String),
     Type {
