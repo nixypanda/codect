@@ -15,7 +15,7 @@ use crate::page::Scope;
 /// The file set, selection, committed query, and search the shell owns for the
 /// active session.
 #[derive(Clone, Debug)]
-pub(crate) struct Workspace {
+pub struct Workspace {
     pub query: Query,
     pub files: FileSet,
     pub selected: Option<RepoPath>,
@@ -24,14 +24,14 @@ pub(crate) struct Workspace {
 
 /// The committed projection query: the mode and scope the active view loaded.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Query {
+pub struct Query {
     pub mode: ProjectionMode,
     pub scope: Scope,
 }
 
 /// The files the active view loaded and the tree's presentation of them.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct FileSet {
+pub struct FileSet {
     /// Raw path byte order, as loaded.
     pub paths: Arc<[RepoPath]>,
     /// The change badge each path shows in the tree.
@@ -42,14 +42,14 @@ pub(crate) struct FileSet {
 
 /// The tree's empty state: a title and a detail line.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct EmptyText {
+pub struct EmptyText {
     pub title: &'static str,
     pub detail: &'static str,
 }
 
 /// The tree tone for a changed file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BadgeTone {
+pub enum BadgeTone {
     Added,
     Modified,
     Deleted,
@@ -70,7 +70,7 @@ pub(crate) const NO_CHANGES: EmptyText = EmptyText {
 /// The committed search: the needle, its matches in view order, and the cursor
 /// that names the current match.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Search {
+pub struct Search {
     pub needle: String,
     pub matches: Vec<SearchMatch>,
     pub cursor: usize,
@@ -78,7 +78,7 @@ pub(crate) struct Search {
 
 /// One search hit: the pane it belongs to and its byte range on a 1-based line.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SearchMatch {
+pub struct SearchMatch {
     pub pane: SearchPane,
     pub line: usize,
     pub start: usize,
@@ -88,7 +88,7 @@ pub(crate) struct SearchMatch {
 /// The pane a search match belongs to. Temporary until task 3.1 replaces it with
 /// a `PaneId`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SearchPane {
+pub enum SearchPane {
     Source,
     Old,
     New,

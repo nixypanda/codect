@@ -485,10 +485,10 @@ fn select(app: &mut App, selection: Option<RepoPath>) {
 /// falls back to the nearest visible file.
 fn on_files_changed(app: &mut App) -> Vec<Request> {
     let hint = app.tree.cursor;
-    let height = tree_viewport_height(app);
     app.tree.sync(&app.workspace.files.paths);
     match app.workspace.selected.clone() {
         Some(path) => {
+            let height = tree_viewport_height(app);
             app.tree.reveal(&path, height);
             Vec::new()
         }
