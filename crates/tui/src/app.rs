@@ -27,9 +27,11 @@ use crate::page::{
     Commits, Ctx, Diff, DiffSide, DiffViewState, Loaded, OutMsg, Paging, Range, Scope, Show,
     ShowBody, ShowFocus, diff as diff_page, show as show_page,
 };
-use crate::render::block::pane_block;
+use crate::plugin::{
+    COMMITS_PANE, DIFF_BAND_FOCUS, NEW_PANE, OLD_PANE, SOURCE_PANE, TREE_FOCUS, TREE_PANE,
+};
 use crate::render::icons::Icons;
-use crate::render::layout::{PaneSlot, body_layout, commit_offset, frame_areas};
+use crate::render::layout::{body_layout, commit_offset, frame_areas};
 use crate::render::metrics::{Focus, MIN_HEIGHT, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH};
 use crate::render::theme::Theme;
 use crate::request::{NavigatorResize, QueryChange, Request};
@@ -1055,92 +1057,70 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
         return;
     }
 
-    let is_diff = matches!(app.loaded, Loaded::Diff(_));
-    let has_commits =
-        matches!(&app.loaded, Loaded::Diff(diff) if matches!(diff.view, DiffViewState::Commits(_)));
+    let panes = app.loaded.panes();
     let (_, content, _) = frame_areas(app.size.width, app.size.height);
     let layout = body_layout(
         content,
         app.chrome.tree_percent,
-        is_diff,
-        has_commits,
-        app.loaded.focus(),
+        &panes,
+        app.loaded.focus_key(),
+        &app.chrome.theme,
     );
     let point = Position {
         x: event.column,
         y: event.row,
     };
-    let Some(slot) = layout.slots.iter().find(|slot| slot.outer.contains(point)) else {
+    let Some(slot) = layout
+        .slots
+        .iter()
+        .find(|slot| slot.geometry.outer.contains(point))
+    else {
         return;
     };
-    let inner = pane_block("", false, &app.chrome.theme, slot.edge).inner(slot.outer);
+    let inner = slot.geometry.inner;
     let ctx = ctx(app);
 
-    match slot.pane {
-        PaneSlot::Commits => {
-            app.loaded.set_focus(Focus::Commits);
-            let msg = match event.kind {
-                MouseKind::Click => {
-                    if !inner.contains(point) {
-                        return;
-                    }
-                    commit_click_index(app, inner, event.row).map(commit_picker::Msg::Select)
+    if slot.pane == COMMITS_PANE {
+        app.loaded.set_focus(Focus::Commits);
+        let msg = match event.kind {
+            MouseKind::Click => {
+                if !inner.contains(point) {
+                    return;
                 }
-                MouseKind::ScrollUp => Some(commit_picker::Msg::Move(-MOUSE_SCROLL_STEP)),
-                MouseKind::ScrollDown => Some(commit_picker::Msg::Move(MOUSE_SCROLL_STEP)),
-            };
-            if let Some(msg) = msg {
-                let outs = route_diff(app, diff_page::Msg::Commit(msg), ctx);
-                fold(app, outs, cmds);
+                commit_click_index(app, inner, event.row).map(commit_picker::Msg::Select)
             }
+            MouseKind::ScrollUp => Some(commit_picker::Msg::Move(-MOUSE_SCROLL_STEP)),
+            MouseKind::ScrollDown => Some(commit_picker::Msg::Move(MOUSE_SCROLL_STEP)),
+        };
+        if let Some(msg) = msg {
+            let outs = route_diff(app, diff_page::Msg::Commit(msg), ctx);
+            fold(app, outs, cmds);
         }
-        PaneSlot::Tree => {
-            app.loaded.set_focus(Focus::Tree);
-            match event.kind {
-                MouseKind::Click => {
-                    let index = app.tree.scroll + usize::from(event.row.saturating_sub(inner.y));
-                    if index < app.tree.rows.len() {
-                        tree_apply(app, tree::Msg::Click(index), cmds, 0);
-                    }
-                }
-                MouseKind::ScrollUp => {
-                    tree_apply(app, tree::Msg::Scroll(-MOUSE_SCROLL_STEP), cmds, 0)
-                }
-                MouseKind::ScrollDown => {
-                    tree_apply(app, tree::Msg::Scroll(MOUSE_SCROLL_STEP), cmds, 0)
+    } else if slot.pane == TREE_PANE {
+        app.loaded.set_focus(Focus::Tree);
+        match event.kind {
+            MouseKind::Click => {
+                let index = app.tree.scroll + usize::from(event.row.saturating_sub(inner.y));
+                if index < app.tree.rows.len() {
+                    tree_apply(app, tree::Msg::Click(index), cmds, 0);
                 }
             }
+            MouseKind::ScrollUp => tree_apply(app, tree::Msg::Scroll(-MOUSE_SCROLL_STEP), cmds, 0),
+            MouseKind::ScrollDown => tree_apply(app, tree::Msg::Scroll(MOUSE_SCROLL_STEP), cmds, 0),
         }
-        PaneSlot::Show => {
-            app.loaded.set_focus(Focus::Content);
-            match event.kind {
-                MouseKind::Click => {
-                    if inner.contains(point)
-                        && let Loaded::Show(show) = &mut app.loaded
-                    {
-                        let row = show.body.scroll as usize
-                            + usize::from(event.row.saturating_sub(inner.y));
-                        if row < show.line_count() {
-                            let marker = event.column - inner.x < show_page::MARKER_CLICK_WIDTH;
-                            let outs = show_page::update(
-                                show_page::Msg::BodyClick { row, marker },
-                                show,
-                                &app.workspace,
-                                &ctx,
-                            );
-                            fold(app, outs, cmds);
-                        }
-                    }
-                }
-                MouseKind::ScrollUp | MouseKind::ScrollDown => {
-                    let delta = if event.kind == MouseKind::ScrollUp {
-                        -MOUSE_SCROLL_STEP
-                    } else {
-                        MOUSE_SCROLL_STEP
-                    };
-                    if let Loaded::Show(show) = &mut app.loaded {
+    } else if slot.pane == SOURCE_PANE {
+        app.loaded.set_focus(Focus::Content);
+        match event.kind {
+            MouseKind::Click => {
+                if inner.contains(point)
+                    && let Loaded::Show(show) = &mut app.loaded
+                {
+                    let row =
+                        show.body.scroll as usize + usize::from(event.row.saturating_sub(inner.y));
+                    if row < show.line_count() {
+                        let marker = event.column - inner.x < show_page::MARKER_CLICK_WIDTH;
                         let outs = show_page::update(
-                            show_page::Msg::Scroll(delta),
+                            show_page::Msg::BodyClick { row, marker },
                             show,
                             &app.workspace,
                             &ctx,
@@ -1149,42 +1129,51 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
                     }
                 }
             }
-        }
-        PaneSlot::Old | PaneSlot::New => {
-            app.loaded.set_focus(Focus::Content);
-            let delta = match event.kind {
-                MouseKind::ScrollUp => -MOUSE_SCROLL_STEP,
-                MouseKind::ScrollDown => MOUSE_SCROLL_STEP,
-                MouseKind::Click => 0,
-            };
-            if delta != 0
-                && let Loaded::Diff(diff) = &mut app.loaded
-            {
-                let outs =
-                    diff_page::update(diff_page::Msg::Scroll(delta), diff, &app.workspace, &ctx);
-                fold(app, outs, cmds);
+            MouseKind::ScrollUp | MouseKind::ScrollDown => {
+                let delta = if event.kind == MouseKind::ScrollUp {
+                    -MOUSE_SCROLL_STEP
+                } else {
+                    MOUSE_SCROLL_STEP
+                };
+                if let Loaded::Show(show) = &mut app.loaded {
+                    let outs = show_page::update(
+                        show_page::Msg::Scroll(delta),
+                        show,
+                        &app.workspace,
+                        &ctx,
+                    );
+                    fold(app, outs, cmds);
+                }
             }
+        }
+    } else if slot.pane == OLD_PANE || slot.pane == NEW_PANE {
+        app.loaded.set_focus(Focus::Content);
+        let delta = match event.kind {
+            MouseKind::ScrollUp => -MOUSE_SCROLL_STEP,
+            MouseKind::ScrollDown => MOUSE_SCROLL_STEP,
+            MouseKind::Click => 0,
+        };
+        if delta != 0
+            && let Loaded::Diff(diff) = &mut app.loaded
+        {
+            let outs = diff_page::update(diff_page::Msg::Scroll(delta), diff, &app.workspace, &ctx);
+            fold(app, outs, cmds);
         }
     }
 }
 
 fn tree_inner(app: &App) -> Option<Rect> {
     let (_, content, _) = frame_areas(app.size.width, app.size.height);
-    let is_diff = matches!(app.loaded, Loaded::Diff(_));
-    let has_commits =
-        matches!(&app.loaded, Loaded::Diff(diff) if matches!(diff.view, DiffViewState::Commits(_)));
+    let panes = app.loaded.panes();
     let layout = body_layout(
         content,
         app.chrome.tree_percent,
-        is_diff,
-        has_commits,
-        Focus::Tree,
+        &panes,
+        Some(TREE_FOCUS),
+        &app.chrome.theme,
     );
-    let slot = layout
-        .slots
-        .iter()
-        .find(|slot| slot.pane == PaneSlot::Tree)?;
-    Some(pane_block("", false, &app.chrome.theme, slot.edge).inner(slot.outer))
+    let slot = layout.slots.iter().find(|slot| slot.pane == TREE_PANE)?;
+    Some(slot.geometry.inner)
 }
 
 fn tree_viewport_height(app: &App) -> usize {
@@ -1193,12 +1182,16 @@ fn tree_viewport_height(app: &App) -> usize {
 
 fn commits_inner(app: &App) -> Option<Rect> {
     let (_, content, _) = frame_areas(app.size.width, app.size.height);
-    let layout = body_layout(content, app.chrome.tree_percent, true, true, Focus::Commits);
-    let slot = layout
-        .slots
-        .iter()
-        .find(|slot| slot.pane == PaneSlot::Commits)?;
-    Some(pane_block("", false, &app.chrome.theme, slot.edge).inner(slot.outer))
+    let panes = app.loaded.panes();
+    let layout = body_layout(
+        content,
+        app.chrome.tree_percent,
+        &panes,
+        Some(DIFF_BAND_FOCUS),
+        &app.chrome.theme,
+    );
+    let slot = layout.slots.iter().find(|slot| slot.pane == COMMITS_PANE)?;
+    Some(slot.geometry.inner)
 }
 
 fn commit_click_index(app: &App, inner: Rect, row: u16) -> Option<usize> {

@@ -20,7 +20,11 @@ use base::{ProjectionMode, RepoPath};
 use crate::action::{Action, GlobalAction, PrefixGroup};
 use crate::api::Cmd;
 use crate::component::text_input::Edit;
-use crate::render::layout::VisualRow;
+use crate::plugin::{
+    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FocusKey, NEW_PANE, OLD_PANE, SOURCE_FOCUS,
+    SOURCE_PANE, TREE_FOCUS, TREE_PANE,
+};
+use crate::render::layout::{PaneSpec, Placement, VisualRow};
 use crate::render::metrics::Focus;
 use crate::render::theme::Theme;
 use crate::request::Request;
@@ -29,8 +33,43 @@ use crate::util::input::Key;
 pub(crate) mod diff;
 pub(crate) mod show;
 
-pub(crate) use diff::{Commits, CommitsFocus, Diff, DiffSide, DiffViewState, Range};
+pub(crate) use diff::{Commits, Diff, DiffSide, DiffViewState, Range};
 pub(crate) use show::{Show, ShowBody, ShowFocus};
+
+const TREE_SPEC: PaneSpec = PaneSpec {
+    id: TREE_PANE,
+    placement: Placement::Navigator,
+    focus: TREE_FOCUS,
+};
+const SOURCE_SPEC: PaneSpec = PaneSpec {
+    id: SOURCE_PANE,
+    placement: Placement::Body,
+    focus: SOURCE_FOCUS,
+};
+const OLD_SPEC: PaneSpec = PaneSpec {
+    id: OLD_PANE,
+    placement: Placement::Body,
+    focus: DIFF_BODY_FOCUS,
+};
+const NEW_SPEC: PaneSpec = PaneSpec {
+    id: NEW_PANE,
+    placement: Placement::Body,
+    focus: DIFF_BODY_FOCUS,
+};
+const COMMITS_SPEC: PaneSpec = PaneSpec {
+    id: COMMITS_PANE,
+    placement: Placement::Band,
+    focus: DIFF_BAND_FOCUS,
+};
+
+/// The tree and the two diff sides, plus the commits band when one is shown.
+pub(crate) fn diff_panes(has_commits: bool) -> Vec<PaneSpec> {
+    let mut panes = vec![TREE_SPEC, OLD_SPEC, NEW_SPEC];
+    if has_commits {
+        panes.push(COMMITS_SPEC);
+    }
+    panes
+}
 
 pub(crate) fn available_modes() -> [ProjectionMode; 3] {
     [
@@ -120,6 +159,27 @@ impl Loaded {
                 };
             }
             Self::Diff(diff) => diff.set_focus(focus),
+        }
+    }
+
+    /// The panes the loaded kind shows, in registration order: the tree first,
+    /// then the view's body panes and its band.
+    pub(crate) fn panes(&self) -> Vec<PaneSpec> {
+        match self {
+            Self::Show(_) => vec![TREE_SPEC, SOURCE_SPEC],
+            Self::Diff(diff) => diff_panes(matches!(diff.view, DiffViewState::Commits(_))),
+        }
+    }
+
+    /// The focus key the loaded kind's focus names.
+    pub(crate) fn focus_key(&self) -> Option<FocusKey> {
+        match self.focus() {
+            Focus::Tree => Some(TREE_FOCUS),
+            Focus::Content => Some(match self {
+                Self::Show(_) => SOURCE_FOCUS,
+                Self::Diff(_) => DIFF_BODY_FOCUS,
+            }),
+            Focus::Commits => Some(DIFF_BAND_FOCUS),
         }
     }
 

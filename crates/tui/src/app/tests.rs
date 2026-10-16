@@ -3,6 +3,7 @@ use crate::component::overlay::Overlay;
 use crate::component::text_input::TextInput;
 use crate::page::show::{ShowHighlights, VisibleRow};
 use crate::page::{DiffSide, Loaded, ShowFocus};
+use crate::plugin::{COMMITS_PANE, NEW_PANE, OLD_PANE, SOURCE_PANE, TREE_PANE};
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
 use crate::test_support::{
@@ -3475,6 +3476,84 @@ fn responsive_boundaries_pick_the_right_layout() {
     assert!(!buffer_text(&render(&app, 40, 8)).contains("terminal too small"));
     assert!(buffer_text(&render(&app, 39, 8)).contains("terminal too small"));
     assert!(buffer_text(&render(&app, 100, 7)).contains("terminal too small"));
+}
+
+#[test]
+fn loaded_panes_lists_the_tree_then_the_view_bodies() {
+    let ids = |app: &App| -> Vec<crate::plugin::PaneId> {
+        app.loaded.panes().iter().map(|spec| spec.id).collect()
+    };
+
+    let show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
+    assert_eq!(ids(&show), vec![TREE_PANE, SOURCE_PANE]);
+
+    let range = diff_app(vec![file_diff("a.rs", Some("x\n"), Some("y\n"))]);
+    assert_eq!(ids(&range), vec![TREE_PANE, OLD_PANE, NEW_PANE]);
+
+    let commits = commits_app(3);
+    assert_eq!(
+        ids(&commits),
+        vec![TREE_PANE, OLD_PANE, NEW_PANE, COMMITS_PANE]
+    );
+}
+
+#[test]
+fn loaded_focus_key_maps_each_focus() {
+    use crate::plugin::{DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, SOURCE_FOCUS, TREE_FOCUS};
+
+    let mut show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
+    assert_eq!(show.loaded.focus_key(), Some(TREE_FOCUS));
+    show.loaded.set_focus(Focus::Content);
+    assert_eq!(show.loaded.focus_key(), Some(SOURCE_FOCUS));
+
+    let mut range = diff_app(vec![file_diff("a.rs", Some("x\n"), Some("y\n"))]);
+    range.loaded.set_focus(Focus::Tree);
+    assert_eq!(range.loaded.focus_key(), Some(TREE_FOCUS));
+    range.loaded.set_focus(Focus::Content);
+    assert_eq!(range.loaded.focus_key(), Some(DIFF_BODY_FOCUS));
+
+    let mut commits = commits_app(3);
+    commits.loaded.set_focus(Focus::Commits);
+    assert_eq!(commits.loaded.focus_key(), Some(DIFF_BAND_FOCUS));
+    commits.loaded.set_focus(Focus::Content);
+    assert_eq!(commits.loaded.focus_key(), Some(DIFF_BODY_FOCUS));
+    commits.loaded.set_focus(Focus::Tree);
+    assert_eq!(commits.loaded.focus_key(), Some(TREE_FOCUS));
+}
+
+#[test]
+fn body_visible_truth_table() {
+    let at = |app: &mut App, width: u16, focus: Focus| {
+        app.size = Size { width, height: 8 };
+        app.loaded.set_focus(focus);
+    };
+
+    let mut show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
+    at(&mut show, 40, Focus::Tree);
+    assert!(!body_is_visible(&show), "narrow tree focus hides the body");
+    at(&mut show, 40, Focus::Content);
+    assert!(body_is_visible(&show), "narrow body focus shows the body");
+    at(&mut show, 80, Focus::Tree);
+    assert!(body_is_visible(&show), "wide always shows the body");
+    at(&mut show, 80, Focus::Content);
+    assert!(body_is_visible(&show));
+
+    let mut commits = commits_app(3);
+    at(&mut commits, 40, Focus::Commits);
+    assert!(
+        body_is_visible(&commits),
+        "the band focus keeps the body visible"
+    );
+    at(&mut commits, 80, Focus::Commits);
+    assert!(body_is_visible(&commits));
+
+    at(&mut show, 39, Focus::Content);
+    assert!(!body_is_visible(&show), "too narrow is never visible");
+    show.size = Size {
+        width: 80,
+        height: 7,
+    };
+    assert!(!body_is_visible(&show), "too short is never visible");
 }
 
 #[test]

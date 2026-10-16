@@ -16,15 +16,14 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::Block;
 
-use crate::app::{App, layout_focus};
+use crate::app::App;
 use crate::component::{RenderCtx, commit_picker, overlay, tree};
 use crate::page::diff::Side;
-use crate::page::{
-    CommitsFocus, DiffViewState, Loaded, ViewCtx, diff as diff_page, show as show_page,
-};
+use crate::page::{DiffViewState, Loaded, ViewCtx, diff as diff_page, show as show_page};
+use crate::plugin::{COMMITS_PANE, NEW_PANE, OLD_PANE, SOURCE_PANE, TREE_PANE};
 use crate::render::block::render_divider;
-use crate::render::layout::{PaneSlot, body_layout, frame_areas};
-use crate::render::metrics::{Focus, MIN_HEIGHT, SINGLE_PANE_MIN_WIDTH};
+use crate::render::layout::{body_layout, frame_areas};
+use crate::render::metrics::{MIN_HEIGHT, SINGLE_PANE_MIN_WIDTH};
 
 pub(crate) fn view(app: &App, frame: &mut Frame) {
     let area = frame.area();
@@ -50,20 +49,15 @@ pub(crate) fn view(app: &App, frame: &mut Frame) {
 }
 
 fn render_body(app: &App, frame: &mut Frame, content: Rect) {
-    let is_diff = matches!(app.loaded, Loaded::Diff(_));
-    let has_commits = matches!(
-        &app.loaded,
-        Loaded::Diff(diff) if matches!(diff.view, DiffViewState::Commits(_))
-    );
-    let focus = layout_focus(app);
+    let panes = app.loaded.panes();
+    let focus = app.loaded.focus_key();
     let layout = body_layout(
         content,
         app.chrome.tree_percent,
-        is_diff,
-        has_commits,
+        &panes,
         focus,
+        &app.chrome.theme,
     );
-    let diff_focused = matches!(&app.loaded, Loaded::Diff(diff) if diff.focus_is_diff());
     let ctx = RenderCtx {
         theme: &app.chrome.theme,
         icons: &app.chrome.icons,
@@ -77,71 +71,46 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
     };
 
     for slot in &layout.slots {
-        match slot.pane {
-            PaneSlot::Commits => {
-                if let Loaded::Diff(diff) = &app.loaded
-                    && let DiffViewState::Commits(commits) = &diff.view
-                {
-                    let focused = commits.focus == CommitsFocus::Commits;
-                    commit_picker::render(
-                        &commits.picker,
-                        &ctx,
-                        frame,
-                        slot.outer,
-                        focused,
-                        slot.edge,
-                    );
-                }
+        let focused = focus == Some(slot.focus);
+        let outer = slot.geometry.outer;
+        let edge = slot.geometry.edge;
+        if slot.pane == TREE_PANE {
+            tree::render(&app.tree, &ctx, frame, outer, focused, edge);
+        } else if slot.pane == SOURCE_PANE {
+            if let Loaded::Show(show) = &app.loaded {
+                show_page::view(show, &app.workspace, &vctx, frame, outer, focused, edge);
             }
-            PaneSlot::Tree => tree::render(
-                &app.tree,
-                &ctx,
-                frame,
-                slot.outer,
-                focus == Focus::Tree,
-                slot.edge,
-            ),
-            PaneSlot::Show => {
-                if let Loaded::Show(show) = &app.loaded {
-                    show_page::view(
-                        show,
-                        &app.workspace,
-                        &vctx,
-                        frame,
-                        slot.outer,
-                        focus == Focus::Content,
-                        slot.edge,
-                    );
-                }
+        } else if slot.pane == OLD_PANE {
+            if let Loaded::Diff(diff) = &app.loaded {
+                diff_page::view(
+                    diff,
+                    &app.workspace,
+                    &vctx,
+                    frame,
+                    outer,
+                    Side::Old,
+                    focused,
+                    edge,
+                );
             }
-            PaneSlot::Old => {
-                if let Loaded::Diff(diff) = &app.loaded {
-                    diff_page::view(
-                        diff,
-                        &app.workspace,
-                        &vctx,
-                        frame,
-                        slot.outer,
-                        Side::Old,
-                        diff_focused,
-                        slot.edge,
-                    );
-                }
+        } else if slot.pane == NEW_PANE {
+            if let Loaded::Diff(diff) = &app.loaded {
+                diff_page::view(
+                    diff,
+                    &app.workspace,
+                    &vctx,
+                    frame,
+                    outer,
+                    Side::New,
+                    focused,
+                    edge,
+                );
             }
-            PaneSlot::New => {
-                if let Loaded::Diff(diff) = &app.loaded {
-                    diff_page::view(
-                        diff,
-                        &app.workspace,
-                        &vctx,
-                        frame,
-                        slot.outer,
-                        Side::New,
-                        diff_focused,
-                        slot.edge,
-                    );
-                }
-            }
+        } else if slot.pane == COMMITS_PANE
+            && let Loaded::Diff(diff) = &app.loaded
+            && let DiffViewState::Commits(commits) = &diff.view
+        {
+            commit_picker::render(&commits.picker, &ctx, frame, outer, focused, edge);
         }
     }
 

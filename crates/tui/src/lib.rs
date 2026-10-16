@@ -41,6 +41,7 @@ mod component;
 #[cfg(test)]
 mod golden;
 mod page;
+mod plugin;
 mod render;
 mod request;
 mod route;

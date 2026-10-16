@@ -20,14 +20,15 @@ use crate::action::GlobalAction;
 use crate::api::{Cmd, HistoryPayload};
 use crate::component::commit_picker::{self, CommitPicker};
 use crate::component::text_input::TextInput;
+use crate::plugin::{DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE};
 use crate::render::block::pane_block;
 use crate::render::empty::render_empty;
 use crate::render::highlight::{self, Run, StyledLine};
 use crate::render::layout::{
-    Edge, VisualRow, VisualRowKind, commit_offset, frame_areas, gutter_width, layout_diff,
-    split_with_dividers,
+    Edge, PaneSpec, VisualRow, VisualRowKind, body_layout, commit_offset, frame_areas,
+    gutter_width, layout_diff,
 };
-use crate::render::metrics::{Focus, SIDE_BY_SIDE_MIN_WIDTH};
+use crate::render::metrics::Focus;
 use crate::render::text::truncate_ellipsis;
 use crate::render::theme::Theme;
 use crate::request::{QueryChange, Request};
@@ -40,7 +41,8 @@ use crate::workspace::{
 };
 
 use super::{
-    Ctx, OutMsg, Paging, Scope, ViewCtx, page_step, scroll_by, scroll_offset_to, text_edit,
+    Ctx, OutMsg, Paging, Scope, ViewCtx, diff_panes, page_step, scroll_by, scroll_offset_to,
+    text_edit,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -242,7 +244,8 @@ impl Diff {
             return Vec::new();
         };
         let (_, content, _) = frame_areas(width, height);
-        let (old_width, new_width) = self.side_widths(width, content, tree_percent, active, theme);
+        let panes = diff_panes(matches!(self.view, DiffViewState::Commits(_)));
+        let (old_width, new_width) = side_widths(content, tree_percent, &panes, active, theme);
         let empty = DiffHighlight::default();
         let highlights = self.active_highlight(selected).unwrap_or(&empty);
         layout_diff(
@@ -253,32 +256,6 @@ impl Diff {
             &highlights.new,
             theme,
         )
-    }
-
-    fn side_widths(
-        &self,
-        width: u16,
-        content: Rect,
-        tree_percent: u16,
-        diff: &FileDiff,
-        theme: &Theme,
-    ) -> (usize, usize) {
-        let gutter = gutter_width(diff);
-        if width >= SIDE_BY_SIDE_MIN_WIDTH {
-            let rest = 100 - tree_percent;
-            let side = rest / 2;
-            let (columns, _) = split_with_dividers(content, &[tree_percent, side, rest - side]);
-            let old_inner = pane_block("", false, theme, Edge::Middle).inner(columns[1]);
-            let new_inner = pane_block("", false, theme, Edge::Right).inner(columns[2]);
-            (
-                (old_inner.width as usize).saturating_sub(gutter),
-                (new_inner.width as usize).saturating_sub(gutter),
-            )
-        } else {
-            let inner = pane_block("", false, theme, Edge::Solo).inner(content);
-            let width = (inner.width as usize).saturating_sub(gutter);
-            (width, width)
-        }
     }
 
     pub fn visual_row_for(&self, pane: SearchPane, line: usize) -> Option<usize> {
@@ -322,6 +299,31 @@ impl Diff {
     }
 }
 
+/// The wrapped width of each diff side, taken from the body layout so the rows
+/// wrap exactly where the panes draw. The body focus is forced so both sides
+/// exist even on a narrow terminal focused elsewhere.
+fn side_widths(
+    content: Rect,
+    tree_percent: u16,
+    panes: &[PaneSpec],
+    diff: &FileDiff,
+    theme: &Theme,
+) -> (usize, usize) {
+    let gutter = gutter_width(diff);
+    let layout = body_layout(content, tree_percent, panes, Some(DIFF_BODY_FOCUS), theme);
+    let width = |pane| {
+        layout
+            .slots
+            .iter()
+            .find(|slot| slot.pane == pane)
+            .map_or(0, |slot| slot.geometry.inner.width)
+    };
+    (
+        (width(OLD_PANE) as usize).saturating_sub(gutter),
+        (width(NEW_PANE) as usize).saturating_sub(gutter),
+    )
+}
+
 impl Diff {
     pub fn diffs(&self) -> &[FileDiff] {
         match &self.view {
@@ -335,6 +337,7 @@ impl Diff {
         self.diffs().iter().find(|diff| diff.path() == path)
     }
 
+    #[cfg(test)]
     pub fn focus_is_diff(&self) -> bool {
         match &self.view {
             DiffViewState::Range(range) => range.focus == RangeFocus::Diff,
@@ -1150,7 +1153,62 @@ fn line_background(kind: DiffRowKind, side: Side, theme: &Theme) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::layout::split_with_dividers;
+    use crate::render::metrics::SIDE_BY_SIDE_MIN_WIDTH;
     use crate::render::theme::{Capability, Flavor};
+    use crate::test_support::file_diff;
+
+    /// The production formula `side_widths` replaced. Kept only so the sweep
+    /// test can compare the layout-derived widths against it.
+    fn legacy_side_widths(
+        width: u16,
+        content: Rect,
+        tree_percent: u16,
+        diff: &FileDiff,
+        theme: &Theme,
+    ) -> (usize, usize) {
+        let gutter = gutter_width(diff);
+        if width >= SIDE_BY_SIDE_MIN_WIDTH {
+            let rest = 100 - tree_percent;
+            let side = rest / 2;
+            let (columns, _) = split_with_dividers(content, &[tree_percent, side, rest - side]);
+            let old_inner = pane_block("", false, theme, Edge::Middle).inner(columns[1]);
+            let new_inner = pane_block("", false, theme, Edge::Right).inner(columns[2]);
+            (
+                (old_inner.width as usize).saturating_sub(gutter),
+                (new_inner.width as usize).saturating_sub(gutter),
+            )
+        } else {
+            let inner = pane_block("", false, theme, Edge::Solo).inner(content);
+            let width = (inner.width as usize).saturating_sub(gutter);
+            (width, width)
+        }
+    }
+
+    #[test]
+    fn layout_side_widths_match_the_legacy_formula_across_a_width_sweep() {
+        let theme = Theme::dark();
+        let small = file_diff("a.rs", Some("x\n"), Some("y\n"));
+        let lines: String = (0..120).map(|index| format!("line {index}\n")).collect();
+        let changed = lines.replace("line 0", "changed");
+        let large = file_diff("b.rs", Some(&lines), Some(&changed));
+        assert_ne!(
+            gutter_width(&small),
+            gutter_width(&large),
+            "the sweep needs at least two distinct gutters"
+        );
+
+        for diff in [&small, &large] {
+            for width in 40u16..=200 {
+                let (_, content, _) = frame_areas(width, 30);
+                let legacy = legacy_side_widths(width, content, 30, diff, &theme);
+                let range = side_widths(content, 30, &diff_panes(false), diff, &theme);
+                let commits = side_widths(content, 30, &diff_panes(true), diff, &theme);
+                assert_eq!(range, legacy, "range widths at width {width}");
+                assert_eq!(commits, legacy, "commits widths at width {width}");
+            }
+        }
+    }
 
     #[test]
     fn pane_titles_identify_sides_and_fit_narrow_borders() {
