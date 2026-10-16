@@ -79,5 +79,4 @@ vim.api.nvim_create_autocmd("User", {
   end,
 })
 
--- Install default autocmds immediately so commands work without setup().
 require("codect").setup()

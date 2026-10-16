@@ -13,7 +13,6 @@ local repo = vim.fn.fnamemodify(root, ":h:h")
 vim.opt.runtimepath:prepend(root)
 vim.cmd("cd " .. vim.fn.fnameescape(repo))
 
--- Resolve a default binary so the suite runs without CODECT_BIN.
 if vim.env.CODECT_BIN == nil or vim.env.CODECT_BIN == "" then
   for _, candidate in ipairs({ "target/debug/codect", "target/release/codect" }) do
     local path = repo .. "/" .. candidate
@@ -31,7 +30,6 @@ if not binary then
 end
 print("codect binary: " .. binary)
 
--- Load the plugin so commands/keymaps are registered, then configure it.
 vim.cmd("runtime! plugin/codect.lua")
 require("codect").setup({})
 

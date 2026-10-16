@@ -5,6 +5,10 @@
 -- applied explicitly with `:foldclose` so a declaration's state is independent
 -- of its nesting depth, which lets the plugin keep containers open while
 -- folding signatures, and honour sticky per-declaration overrides.
+--
+-- Apply folds ancestor-first and read each fold's real open/closed state back
+-- from `foldclosed()`, so a re-apply neither re-closes a fold (which escalates)
+-- nor leaves a should-be-open fold closed.
 
 local state = require("codect.state")
 local outline = require("codect.outline")
@@ -14,7 +18,6 @@ local M = {}
 local FOLDEXPR = "v:lua.require'codect.folds'.foldexpr(v:lnum)"
 local FOLDTEXT = "v:lua.require'codect.folds'.foldtext()"
 
---- The innermost declaration whose fold region contains `line`.
 function M.item_at(st, line)
   local best = nil
   for _, item in ipairs(st.items or {}) do
@@ -27,11 +30,6 @@ function M.item_at(st, line)
   return best
 end
 
---- Build the line -> fold-level map for the buffer's current state.
----
---- Lines inside a declaration get the deepest enclosing declaration's level.
---- A declaration's first line is marked `>N` so adjacent siblings still form
---- separate folds. Lines outside every declaration return 0.
 function M.compute_linemap(st)
   local line_count = vim.api.nvim_buf_line_count(st.buf)
   local map = {}
@@ -64,7 +62,6 @@ function M.compute_linemap(st)
   return map
 end
 
---- Recompute the fold map and apply open/closed state.
 function M.apply(buf)
   local st = state.get(buf)
   if not st then
@@ -75,15 +72,12 @@ function M.apply(buf)
 
   local win = vim.fn.bufwinid(buf)
   if win == -1 then
-    -- Not displayed: the fold map is ready and folds resolve when shown.
     return
   end
 
   M.apply_window(st, win)
 end
 
---- Window id -> the window-local fold options we replaced, so they can be
---- restored when the buffer leaves the window.
 local saved_window_options = {}
 
 local MANAGED_OPTIONS = {
@@ -95,9 +89,6 @@ local MANAGED_OPTIONS = {
   "foldlevel",
 }
 
---- Remember the window-local fold options we are about to replace. Idempotent:
---- the first call for a window wins, so re-applying does not overwrite the
---- saved originals with our own values.
 local function save_window_options(win)
   if saved_window_options[win] then
     return
@@ -109,11 +100,6 @@ local function save_window_options(win)
   saved_window_options[win] = saved
 end
 
---- Restore the window-local fold options replaced by `apply_window`.
----
---- Called when an Codect buffer leaves its window so `foldmethod`, `foldexpr`,
---- `foldtext`, `foldminlines`, and `foldlevel` do not leak into the next
---- buffer shown in that window.
 function M.restore_window(win)
   local saved = saved_window_options[win]
   if not saved then
@@ -128,10 +114,8 @@ function M.restore_window(win)
   end
 end
 
---- Apply window-local fold options and open/closed state in a window.
 function M.apply_window(st, win)
   vim.api.nvim_win_call(win, function()
-    -- Remember the options we replace so they can be restored on leave.
     save_window_options(win)
 
     if require("codect").config.manage_fold_options ~= false then
@@ -168,11 +152,6 @@ function M.apply_window(st, win)
       return a.fold_start < b.fold_start
     end)
 
-    -- Apply ancestor-first, reading each fold's actual state back from
-    -- `foldclosed()` instead of assuming everything starts open. That keeps
-    -- the apply idempotent: an already-closed fold is not closed again (which
-    -- would escalate and collapse its container), and a fold that should be
-    -- open but is closed is opened.
     local effective_closed = {}
     for _, item in ipairs(order) do
       local first = math.max(item.fold_start or 0, 1)
@@ -190,7 +169,6 @@ function M.apply_window(st, win)
         end
 
         if ancestor_closed then
-          -- Hidden inside a closed ancestor; leave it alone.
           effective_closed[item.key] = true
         elseif state.is_closed(st, item) then
           effective_closed[item.key] = true
@@ -206,7 +184,6 @@ function M.apply_window(st, win)
   end)
 end
 
---- Ensure the window-local fold options are set for a displayed buffer.
 function M.attach_window(buf)
   local st = state.get(buf)
   if not st then
@@ -215,7 +192,6 @@ function M.attach_window(buf)
   M.apply_window(st, vim.api.nvim_get_current_win())
 end
 
---- `foldexpr` implementation. Reads the cached map for the current buffer.
 function M.foldexpr(lnum)
   local st = state.get(vim.api.nvim_get_current_buf())
   if not st or not st.linemap then
@@ -228,8 +204,6 @@ function M.foldexpr(lnum)
   return value
 end
 
---- `foldtext` implementation. Renders the closed-fold fragment for the
---- declaration whose fold starts at `v:foldstart`.
 function M.foldtext()
   local st = state.get(vim.api.nvim_get_current_buf())
   if not st then
@@ -253,8 +227,6 @@ local function set_descendants(st, item, open)
   end
 end
 
---- User fold actions. `action` is one of:
----   "toggle" | "open" | "close" | "open_recursive" | "close_recursive"
 function M.user_action(action)
   local buf = vim.api.nvim_get_current_buf()
   local st = state.get(buf)
@@ -286,7 +258,6 @@ function M.user_action(action)
   M.apply(buf)
 end
 
---- Open (or close) a declaration by stable key, e.g. from the outline picker.
 function M.set_open(buf, item, open)
   local st = state.get(buf)
   if not st then
@@ -296,7 +267,6 @@ function M.set_open(buf, item, open)
   M.apply(buf)
 end
 
---- Cycle fold depth: types -> signatures -> full -> types. Returns the new mode.
 function M.next_mode(mode)
   if mode == "types" then
     return "signatures"

@@ -3,11 +3,12 @@
 --
 -- The document's `outline` is complete regardless of mode, so this module only
 -- needs structure: parent links, nesting depth, a fold start, and an end line.
+--
+-- Block openers are matched longest-first (`{-#` before `{-`, `#![` before
+-- `#[`) because the closer of the former also matches the latter.
 
 local M = {}
 
---- Declaration kinds that render as signatures: closed by default in every
---- non-full mode.
 local SIGNATURE_KINDS = {
   ["function"] = true,
   method = true,
@@ -23,7 +24,6 @@ function M.is_signature_kind(kind)
   return SIGNATURE_KINDS[kind] == true
 end
 
---- First line of a (possibly multi-line) canonical fragment, trimmed.
 function M.first_line(text)
   if type(text) ~= "string" then
     return ""
@@ -61,12 +61,6 @@ local function count_plain(s, needle)
   return n
 end
 
---- The index just past a quoted string starting at `i`, or nil.
----
---- Handles `\` escapes and an unterminated string (consumes the rest of the
---- line). `'` is treated as a string delimiter, which is right for Python
---- decorators and Rust char literals; a bare lifetime is handled by
---- `lifetime_end` before this is reached.
 local function quoted_string_end(s, i)
   local quote = s:sub(i, i)
   local j = i + 1
@@ -83,10 +77,6 @@ local function quoted_string_end(s, i)
   return #s + 1
 end
 
---- The index just past a raw/byte string starting at `i`, or nil.
----
---- Recognizes `r"…"`, `r#"…"#`, `br"…"`, `br#"…"#`, and `rb…` forms. The
---- closing quote must be followed by the same number of `#` characters.
 local function raw_string_end(s, i)
   local rest = s:sub(i)
   local prefix, hashes, quote = rest:match("^(br)(#*)([\"'])")
@@ -108,8 +98,6 @@ local function raw_string_end(s, i)
   return #s + 1
 end
 
---- The index just past a Rust lifetime starting at `i` (`'a`, `'static`), or
---- nil when the `'` opens a char literal. A lifetime has no closing quote.
 local function lifetime_end(s, i)
   local ident = s:sub(i + 1):match("^[%a_][%w_]*")
   if ident and s:sub(i + 1 + #ident, i + 1 + #ident) ~= "'" then
@@ -118,12 +106,6 @@ local function lifetime_end(s, i)
   return nil
 end
 
---- Replace the contents of string literals with spaces.
----
---- Delimiter counting (`[`/`]`, `(`/`)`) must ignore brackets inside strings:
---- `#[doc = "a ] b"]` has one `[` and one `]`, not one and two. Raw/byte
---- string prefixes are blanked too; they are never delimiters. A Rust lifetime
---- (`'a`) is copied verbatim rather than treated as a char literal.
 local function strip_strings(s)
   local out = {}
   local i = 1
@@ -158,7 +140,6 @@ local function strip_strings(s)
   return table.concat(out)
 end
 
---- A single-line comment. `#[` / `#![` are Rust attributes, not comments.
 local function is_line_comment(s)
   if starts_with(s, "///") or starts_with(s, "//!") or starts_with(s, "//") then
     return true
@@ -179,8 +160,6 @@ local function is_line_comment(s)
   return false
 end
 
---- Block annotations: opener, closer. `{-#` must precede `{-`, and `#![` must
---- precede `#[`, because the closer of the former also matches the latter.
 local BLOCK_SPECS = {
   { open = "/*", close = "*/" },
   { open = "{-#", close = "#-}" },
@@ -189,12 +168,6 @@ local BLOCK_SPECS = {
   { open = "#[", close = "]" },
 }
 
---- The line that opens a block annotation ending at `last`, or nil.
----
---- Scans upward and tracks nesting depth (string-aware), so a balanced inner
---- block (`/* inner */`) is skipped and the outermost opener is returned. Blank
---- lines inside the already-open block are tolerated; a blank line between
---- separate annotation runs still ends the search.
 local function find_block_start(lines, last, spec)
   local depth = 0
   for i = last, 1, -1 do
@@ -214,18 +187,10 @@ local function find_block_start(lines, last, spec)
       end
       return nil
     end
-    -- depth > 0: inside the block. A blank line here is interior, not a
-    -- separator between annotation runs.
   end
   return nil
 end
 
---- The line that opens a `@decorator` ending at `last`, including
---- parenthesized/continued forms, or nil.
----
---- Blank lines inside the parentheses are tolerated (a continued decorator may
---- group its arguments); the search still stops at a blank line between
---- separate runs.
 local function find_decorator_start(lines, last)
   local depth = 0
   for i = last, 1, -1 do
@@ -242,12 +207,6 @@ local function find_decorator_start(lines, last)
   return nil
 end
 
---- Classify an annotation block by its opening line.
----
---- `trailing` comments belong to the declaration above when they directly
---- follow it (`//`, `#`, `--`, `/*`, `{-`). `forward` forms attach to the
---- declaration below and may cross into the preceding declaration's span
---- (`///`, `//!`, `/**`, `/*!`, `{-|`, `{-#`, `#[`, `#![`, `@…`).
 local function annotation_form(s)
   if starts_with(s, "///") or starts_with(s, "//!") then
     return "forward"
@@ -279,9 +238,6 @@ local function annotation_form(s)
   return nil
 end
 
---- The start line of a complete leading annotation block ending at `last`,
---- plus its form ("forward" or "trailing"), or nil when `last` is not the
---- final line of one.
 local function annotation_start(lines, last)
   local raw = lines[last]
   if is_blank(raw) then
@@ -315,17 +271,6 @@ local function annotation_start(lines, last)
   return nil
 end
 
---- Extend a fold start upward over complete leading annotations.
----
---- `start_line` is 1-based and comes from the outline span, which excludes
---- attributes/decorators/doc comments. `lines` is the buffer's full line list
---- and `is_boundary` answers whether a line belongs to a different (non-
---- ancestor) declaration, which ends a leading run. Returns the 1-based start.
----
---- A trailing comment form that directly follows another declaration belongs to
---- that declaration and stops the run. A forward-attaching form (`///`, `#[`,
---- `@…`, `/**`, `{-|`, …) belongs to the declaration below and may cross into
---- the preceding declaration's span.
 function M.fold_start(lines, start_line, is_boundary)
   local line = start_line
   while line > 1 do
@@ -341,15 +286,6 @@ function M.fold_start(lines, start_line, is_boundary)
   return line
 end
 
---- Build the fold tree from an `codect.show.v1` file entry.
----
---- Returns `{ list = items, by_key = map }`. Each item gains:
----   * `key`, `parent`, `kind`, `name`, `signature`
----   * `fold_start` (1-based, extended over annotations)
----   * `end_line` (1-based)
----   * `level` (1-based nesting depth, capped at 20)
----   * `children` (direct children in outline order)
----   * `depth`
 function M.build(file_entry, buf)
   local list = {}
   local by_key = {}
@@ -369,7 +305,6 @@ function M.build(file_entry, buf)
     by_key[item.key] = item
   end
 
-  -- Nesting depth via parent links. A missing parent is treated as top level.
   local function depth_of(item, seen)
     if item.depth then
       return item.depth
@@ -412,9 +347,6 @@ function M.build(file_entry, buf)
     return span ~= nil and span.start_line <= line and line <= span.end_line
   end
 
-  -- A line is a declaration boundary when it belongs to a different, non-
-  -- ancestor declaration. A leading run must not cross one: a comment that
-  -- directly follows another declaration belongs to that declaration.
   local function is_boundary(item, line)
     for _, other in ipairs(list) do
       if other ~= item and span_contains(other.span, line) and not is_ancestor(item, other.key) then

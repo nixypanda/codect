@@ -46,7 +46,6 @@ function H.state()
   return require("codect.state").get(vim.api.nvim_get_current_buf())
 end
 
---- Open the fixture in a clean buffer and clear its sticky overrides.
 function H.open_fixture()
   vim.cmd("silent! %bwipeout!")
   require("codect.state").clear_overrides(H.fixture_rel)
@@ -54,7 +53,6 @@ function H.open_fixture()
   return vim.api.nvim_get_current_buf()
 end
 
---- Open an arbitrary repository-relative file in a clean buffer.
 function H.open_path(rel)
   vim.cmd("silent! %bwipeout!")
   require("codect.state").clear_overrides(rel)
@@ -62,7 +60,6 @@ function H.open_path(rel)
   return vim.api.nvim_get_current_buf()
 end
 
---- A fold-state fingerprint: every line's closed-fold start and fold text.
 function H.snapshot()
   local count = vim.api.nvim_buf_line_count(0)
   local lines = {}
@@ -72,7 +69,6 @@ function H.snapshot()
   return table.concat(lines, "\n")
 end
 
---- The declaration whose fold starts at `line`.
 function H.item_at(line)
   local st = H.state()
   for _, item in ipairs(st.items or {}) do
@@ -98,7 +94,6 @@ function H.item_by_key(key)
   return st.by_key and st.by_key[key] or nil
 end
 
---- Lines that begin a closed fold.
 function H.closed_starts()
   local starts = {}
   local last = vim.api.nvim_buf_line_count(0)
@@ -114,7 +109,6 @@ function H.fold_text(item)
   return vim.fn.foldtextresult(item.fold_start)
 end
 
---- Run `fn` with vim.notify captured. Returns the list of messages.
 function H.capture_notify(fn)
   local messages = {}
   local original = vim.notify
@@ -129,7 +123,6 @@ function H.capture_notify(fn)
   return messages
 end
 
---- Write an executable stub and point the plugin at it. Returns a restore fn.
 function H.with_stub_binary(body)
   local path = vim.fn.tempname() .. ".sh"
   local file = assert(io.open(path, "w"))
@@ -146,7 +139,6 @@ function H.with_stub_binary(body)
   end
 end
 
---- A stub that records that it ran by creating `marker`, then exits 0.
 function H.with_marker_binary(marker)
   return H.with_stub_binary(string.format("printf called > %s", vim.fn.shellescape(marker)))
 end

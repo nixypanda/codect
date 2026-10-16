@@ -4,7 +4,6 @@ local P = "editors/nvim/tests/fixtures/sample.rs::"
 local WIDGET = P .. "type::Widget"
 local NEW = "impl Widget::method::new"
 
---- One fixture per language, covering containers, dropped members, and modes.
 local MODE_FIXTURES = {
   "fixtures/rust/nested-modules/input.rs",
   "fixtures/rust/implementations/input.rs",
@@ -36,13 +35,11 @@ return function(H)
     local marker = vim.fn.tempname()
     vim.fn.delete(marker)
 
-    -- Cached: same content and mode, so the CLI must not run.
     local restore = H.with_marker_binary(marker)
     vim.cmd("CodectFold signatures")
     restore()
     H.falsy(vim.fn.filereadable(marker) == 1, "cached :CodectFold must not call the CLI")
 
-    -- Uncached: a different mode must be fetched, proving the marker works.
     vim.fn.delete(marker)
     local restore_uncached = H.with_marker_binary(marker)
     H.capture_notify(function()
@@ -104,7 +101,6 @@ return function(H)
     H.eq(vim.fn.foldlevel(impl.fold_start), impl.level)
     H.eq(vim.fn.foldlevel(method.fold_start), method.level)
 
-    -- The container is open, the method inside it is closed: a genuine nested fold.
     H.falsy(vim.fn.foldclosed(impl.fold_start) == impl.fold_start, "impl stays open")
     H.eq(vim.fn.foldclosed(method.fold_start), method.fold_start, "method is closed")
   end)
@@ -133,8 +129,6 @@ return function(H)
     vim.cmd("CodectShow types")
     H.eq(H.state().path, a, "state records the projected path")
 
-    -- Identical bytes at a different path: the cache must miss and refetch so
-    -- `st.path`, `st.root`, and `st.file_entry` track the new target.
     vim.cmd("file " .. vim.fn.fnameescape(b))
     vim.cmd("CodectFold types")
     H.eq(H.state().path, b, "path is refreshed when the buffer's file changes")

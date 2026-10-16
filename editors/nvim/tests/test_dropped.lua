@@ -46,8 +46,6 @@ return function(H)
     local new = H.item_by_key(NEW)
     H.truthy(new)
     H.falsy(new.retained, "method is dropped in types")
-    -- The inherent impl is closed, so the method is inside a closed fold and
-    -- its own text is not directly visible.
     local impl = H.item_by_key("impl Widget")
     H.eq(vim.fn.foldclosed(impl.fold_start), impl.fold_start, "inherent impl is folded")
     H.contains(H.fold_text(impl), "hidden in types")

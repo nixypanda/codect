@@ -1,4 +1,9 @@
 -- codect.view: :CodectShow / :CodectFold / :CodectOutline and refresh wiring.
+--
+-- Auto-fold state is module-level (it survives `setup()` re-invocation) but
+-- session-scoped, `enable` accepts only `types`/`signatures` while `full` is the
+-- local unfold target, and a failed `(path, hash, mode)` is remembered so a
+-- re-entered unchanged buffer does not repeat the CLI call.
 
 local cli = require("codect.cli")
 local folds = require("codect.folds")
@@ -8,28 +13,10 @@ local M = {}
 
 local VALID_MODES = { types = true, signatures = true, full = true }
 
---- Modes global auto-fold accepts. `full` is deliberately excluded: it is the
---- "unfold" target `disable()` uses, not a fold depth to auto-apply.
 local AUTO_MODES = { types = true, signatures = true }
 
---- Leaf members that are declarations but are not useful ]f/[f targets.
 local NAV_SKIP = { field = true, variant = true }
 
---- Global auto-fold state. Module-level so it survives `setup()` re-invocation
---- (setup only replaces `config` and re-registers autocmds), but session-scoped:
---- nothing here is written to disk, so it does not survive a Neovim restart.
----
----   * `enabled`   the toggle.
----   * `mode`      the depth auto-fold currently applies.
----   * `last_mode` the last depth an enable accepted, reused when a later
----                 `enable()`/`toggle()` omits its argument.
----   * `warned`    throttles genuine failures to one warning per enable session.
----   * `folded`    buffers auto-fold folded, so `disable()` can unfold exactly
----                 those and leave explicitly folded buffers alone.
----   * `failed`    buffers whose last auto-fold attempt failed non-fatally,
----                 keyed by buffer: `{ path, hash, mode }`. A re-entry with the
----                 same path, content hash, and mode is a no-op instead of
----                 another `git rev-parse` plus synchronous CLI call.
 local auto = {
   enabled = false,
   mode = nil,
@@ -48,10 +35,6 @@ local function fail(message)
   return nil
 end
 
---- Resolve the buffer's file to a repository root and repo-relative path.
----
---- Returns `{ root, path, abs }`, or nil plus a clear error for a non-file
---- buffer, an unnamed buffer, or a file outside a Git repository.
 function M.resolve_target(buf)
   buf = buf or vim.api.nvim_get_current_buf()
 
@@ -97,7 +80,6 @@ function M.resolve_target(buf)
   return { root = root, path = abs:sub(#prefix + 1), abs = abs }
 end
 
---- Exact buffer bytes. An empty buffer has no content, not a lone newline.
 function M.buffer_source(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   if #lines == 0 then
@@ -122,15 +104,6 @@ local function find_file(doc, path)
   return nil
 end
 
---- Ensure an authoritative document for the buffer's current content and mode.
----
---- Reuses the cached document when it was projected from the same bytes and
---- mode; otherwise fetches one from the CLI. This is what makes
---- `:CodectFold <mode>` mode-correct: it never folds from a stale or absent
---- document. Returns the buffer state, or nil plus an error string.
----
---- `target`, `hash`, and `source` may be supplied by a caller that already
---- resolved them (auto-fold does, to avoid a second `git rev-parse`).
 function M.ensure(buf, mode, target, hash, source)
   if not target then
     local target_err
@@ -172,7 +145,6 @@ function M.ensure(buf, mode, target, hash, source)
   return st
 end
 
---- Project the current buffer and fold it to `mode`.
 function M.show(mode)
   local buf = vim.api.nvim_get_current_buf()
   mode = mode or config().default_mode or "signatures"
@@ -188,10 +160,6 @@ function M.show(mode)
   return st
 end
 
---- Re-fold the current buffer to `mode`.
----
---- Fetches an authoritative document for the current bytes and mode when it is
---- not cached, and reuses the cache otherwise. `full` needs no document.
 function M.fold(mode)
   local buf = vim.api.nvim_get_current_buf()
   mode = mode or config().default_mode or "signatures"
@@ -216,12 +184,6 @@ function M.fold(mode)
   return st
 end
 
---- Resolve and validate the mode for an auto-fold request.
----
---- An explicit `mode` wins; otherwise the last mode an enable accepted is
---- reused so a re-enable after `disable()` returns to the mode that was just
---- active; the configured `default_mode` is the fallback only before the first
---- enable of the session.
 local function resolve_auto_mode(mode)
   mode = mode or auto.last_mode or config().default_mode or "signatures"
   if not AUTO_MODES[mode] then
@@ -230,9 +192,6 @@ local function resolve_auto_mode(mode)
   return mode
 end
 
---- Errors that mean a genuine setup failure rather than a file the backend
---- simply cannot project. Only these warrant a (single) warning; an unsupported
---- language or an ineligible buffer is skipped silently.
 local AUTO_FATAL_ERRORS = {
   "binary not found",
   "failed to run",
@@ -253,7 +212,6 @@ local function is_fatal_auto_error(err)
   return false
 end
 
---- Warn at most once per enable session about a genuine auto-fold failure.
 local function warn_auto(err)
   if auto.warned then
     return
@@ -262,18 +220,6 @@ local function warn_auto(err)
   vim.notify("Codect: auto-fold is unavailable: " .. err, vim.log.levels.WARN)
 end
 
---- Fold `buf` to the active auto-fold mode, if it is not already folded there.
----
---- This is the shared body of `enable` and the BufReadPost/BufWinEnter
---- autocmds. Ineligible buffers (not a file, unnamed, a directory, outside a
---- Git repository) and languages the CLI rejects are skipped without an error;
---- a genuine failure (missing binary, schema mismatch) warns at most once.
----
---- A non-fatal failure is remembered per `(path, content hash, mode)` so
---- re-entering an unchanged buffer does not repeat the `git rev-parse` and
---- synchronous CLI call; the memory is dropped when the content changes, the
---- buffer is wiped, or an enable starts a new session. On success the buffer is
---- recorded as auto-folded so `disable()` unfolds exactly what it folded.
 function M.auto_fold(buf)
   if not auto.enabled then
     return
@@ -313,12 +259,6 @@ function M.auto_fold(buf)
   auto.warned = false
 end
 
---- Turn global auto-fold on and fold the current buffer to `mode`.
----
---- `mode` defaults to the last mode an enable accepted (so disabling and
---- re-enabling returns to the same depth), then `config().default_mode`. It
---- must be `types` or `signatures`. Other already-open buffers fold when next
---- entered; newly opened files fold on BufReadPost.
 function M.enable(mode)
   local resolved, err = resolve_auto_mode(mode)
   if not resolved then
@@ -329,7 +269,6 @@ function M.enable(mode)
   auto.mode = resolved
   auto.last_mode = resolved
   auto.warned = false
-  -- A fresh enable retries buffers that failed before.
   auto.failed = {}
 
   M.auto_fold(vim.api.nvim_get_current_buf())
@@ -338,14 +277,6 @@ function M.enable(mode)
   return true
 end
 
---- Turn global auto-fold off and unfold every buffer it folded.
----
---- Only buffers auto-fold actually folded (recorded in `auto.folded`) are
---- unfolded. An explicitly folded buffer (`:CodectShow`/`:CodectFold`) keeps its
---- folds only while auto-fold has not also folded it: auto-fold re-folds a
---- buffer to the active mode on entry, and once that happens the buffer counts
---- as auto-folded and is unfolded here too. Unfolding is local (`full`): no CLI
---- call is made.
 function M.disable()
   auto.enabled = false
   auto.warned = false
@@ -363,9 +294,6 @@ function M.disable()
   return true
 end
 
---- Toggle global auto-fold. Enables with `mode` (or the remembered/default
---- mode) when off; returns whether auto-fold is on afterwards (`enable` can
---- reject an invalid mode).
 function M.toggle(mode)
   if auto.enabled then
     M.disable()
@@ -374,12 +302,10 @@ function M.toggle(mode)
   return M.enable(mode) == true
 end
 
---- Is global auto-fold on?
 function M.is_enabled()
   return auto.enabled
 end
 
---- Cycle fold depth: types -> signatures -> full -> types.
 function M.cycle()
   local buf = vim.api.nvim_get_current_buf()
   local st = state.get(buf)
@@ -391,11 +317,6 @@ function M.cycle()
   return M.show(next_mode)
 end
 
---- Refresh an active buffer: re-project only when its bytes changed.
----
---- `full` is a local unfold target, not a CLI mode (`codect show` only accepts
---- `types`/`signatures`), so it never calls the binary: it just recomputes the
---- local fold state. This covers buffers edited after `disable()`.
 function M.refresh(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   local st = state.get(buf)
@@ -444,7 +365,6 @@ end
 
 local generations = {}
 
---- Debounce a refresh so the CLI is never invoked per keystroke.
 function M.schedule_refresh(buf)
   generations[buf] = (generations[buf] or 0) + 1
   local generation = generations[buf]
@@ -459,7 +379,6 @@ function M.schedule_refresh(buf)
   end, delay)
 end
 
---- Move to the next/previous declaration. `direction` is 1 or -1.
 function M.goto_declaration(direction)
   local buf = vim.api.nvim_get_current_buf()
   local st = state.get(buf)
@@ -506,7 +425,6 @@ function M.goto_declaration(direction)
   vim.cmd("normal! zv")
 end
 
---- Declaration picker using `vim.ui.select` (no plugin dependencies).
 function M.outline()
   local buf = vim.api.nvim_get_current_buf()
   local st = state.get(buf)
@@ -552,7 +470,6 @@ function M.outline()
   end)
 end
 
---- Register refresh and window autocmds.
 function M.setup_autocmds()
   local group = vim.api.nvim_create_augroup("Codect", { clear = true })
 
@@ -610,8 +527,6 @@ function M.setup_autocmds()
     desc = "Codect: drop per-buffer state and sticky overrides",
   })
 
-  -- Auto-fold: fold a freshly read file buffer to the active mode. Deferred so
-  -- opening a file is never blocked by the synchronous CLI call.
   vim.api.nvim_create_autocmd("BufReadPost", {
     group = group,
     callback = function(event)
@@ -628,9 +543,6 @@ function M.setup_autocmds()
     desc = "Codect: auto-fold a newly opened file when auto-fold is enabled",
   })
 
-  -- Auto-fold: cover buffers that were already open when auto-fold was enabled
-  -- and only now enter a window. `auto_fold` is idempotent, so a buffer already
-  -- folded to the active mode is left alone.
   vim.api.nvim_create_autocmd("BufWinEnter", {
     group = group,
     callback = function(event)
