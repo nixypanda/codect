@@ -8,6 +8,10 @@
 //! rejects duplicate keys and a dangling, self-referential, or cyclic parent
 //! chain. Stable keys never embed byte offsets, and repository paths sort by raw
 //! bytes.
+//!
+//! Git paths are byte strings, not guaranteed UTF-8 operating-system paths, so
+//! [`RepoPath`] owns the raw bytes and is never converted to a
+//! [`std::path::PathBuf`] merely to inspect a committed tree.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;

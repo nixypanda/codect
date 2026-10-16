@@ -7,6 +7,9 @@
 //
 // JSON is emitted unstyled, and diagnostics render at a fixed width so stderr
 // is independent of the terminal.
+//
+// In the diff styler the `---`/`+++` file headers collide with the deletion and
+// insertion prefixes, so they are recognized by position, not by prefix.
 
 use std::fmt::Write as _;
 use std::io::{self, Write as _};

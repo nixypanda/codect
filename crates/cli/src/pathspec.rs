@@ -13,6 +13,9 @@
 //
 // Repository paths use `/` on every platform, so components are compared as
 // raw bytes rather than through the host's path semantics.
+//
+// Committed non-UTF-8 paths stay targetable on Unix; elsewhere the conversion
+// is best-effort and a missing UTF-8 form is reported rather than guessed.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};

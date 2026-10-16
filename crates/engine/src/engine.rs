@@ -18,6 +18,11 @@
 //! [`project_source`] is the editor-facing entry point: it never touches Git,
 //! and an unsupported path is a typed [`EngineError::UnsupportedPath`] rather
 //! than a silent empty result.
+//!
+//! Projections are cached per operation under `(blob id, path, mode)`. The path
+//! is part of the key because several languages namespace `stable_key` by
+//! repository path, so items projected for one path are invalid for a different
+//! path that shares a blob.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};

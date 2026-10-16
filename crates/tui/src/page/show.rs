@@ -5,6 +5,10 @@
 //! filter (which can hide the cursor's line) anchors it to the nearest visible
 //! row; both body offsets are clamped to the projection before the cursor is
 //! revealed.
+//!
+//! In `tests` mode a dropped region's whole subtree is skipped. That is safe
+//! because a container that holds a test is itself retained, so a dropped
+//! container can have no retained descendant.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;

@@ -37,6 +37,11 @@
 //! Block annotation openers are tried closest-first (`{-#` before `{-`, `#![`
 //! before `#[`) because the shorter opener's closer also matches the longer
 //! opener's.
+//!
+//! A leading annotation block attaches either forward (doc comments, attributes,
+//! decorators) or as a trailing comment owned by the declaration above. A
+//! trailing form directly after another declaration stops the run, so a
+//! collapsed row never swallows the previous declaration's trailing comment.
 
 use std::collections::{HashMap, HashSet};
 
