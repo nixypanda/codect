@@ -40,6 +40,8 @@ mod component;
 mod page;
 mod render;
 mod route;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod util;
 mod view;
 

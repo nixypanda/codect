@@ -1,0 +1,548 @@
+//! Shared test builders for the TUI.
+//!
+//! `#[cfg(test)]` only. The helpers are `pub(crate)` so `app::tests` and future
+//! golden frames construct the same fixtures from one place.
+
+use base::{
+    Area, AreaSet, FileDiff, ItemKind, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath,
+    Selection, SourceOutline, SourceSpan, SupportedPath, assemble_outline,
+};
+use engine::CommitStep;
+
+use crate::app::{App, DiffRequest, DiffView, LoadRequest, Msg, ShowRequest, settle, update};
+use crate::page::{Diff, DiffViewState, Loaded, Show};
+use crate::render::icons::{IconStyle, Icons};
+use crate::render::metrics::Focus;
+use crate::render::theme::Theme;
+use crate::util::input::{Key, Mouse, MouseKind};
+use crate::view::view;
+
+pub(crate) fn item(text: &str) -> ProjectedItem {
+    ProjectedItem {
+        stable_key: "item".to_owned(),
+        parent_key: None,
+        kind: ItemKind::Function,
+        name: "item".to_owned(),
+        span: SourceSpan::new(0, 0, 0, 0, 0, 0),
+        canonical_text: text.to_owned(),
+    }
+}
+
+pub(crate) fn supported(path: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(path).expect("valid path")).expect("test path is supported")
+}
+
+pub(crate) fn projected_file(path: &str, text: &str) -> ProjectedFile {
+    let path = supported(path);
+    if text.is_empty() {
+        return ProjectedFile::try_new(path, Vec::new()).expect("valid fixture");
+    }
+    ProjectedFile::try_new(path, vec![item(text)]).expect("valid fixture")
+}
+
+pub(crate) fn source_outline(path: &str, source: &str) -> SourceOutline {
+    source_outline_with(path, source, source)
+}
+
+pub(crate) fn source_outline_with(
+    path: &str,
+    source: &str,
+    projection_text: &str,
+) -> SourceOutline {
+    let supported = supported(path);
+    let span = whole_span(source);
+    let items = |text: &str| -> Vec<ProjectedItem> {
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ProjectedItem {
+                kind: ItemKind::Module,
+                span,
+                ..item(text)
+            }]
+        }
+    };
+    let outline =
+        assemble_outline(&supported, items(projection_text), items(source)).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+pub(crate) fn whole_span(source: &str) -> SourceSpan {
+    let end_line = source.matches('\n').count();
+    let end_column = source
+        .lines()
+        .next_back()
+        .map_or(0, |line| line.chars().count());
+    SourceSpan::new(0, source.len(), 0, 0, end_line, end_column)
+}
+
+pub(crate) fn item_at(
+    key: &str,
+    parent: Option<&str>,
+    kind: ItemKind,
+    start_line: usize,
+    end_line: usize,
+) -> ProjectedItem {
+    ProjectedItem {
+        stable_key: key.to_owned(),
+        parent_key: parent.map(str::to_owned),
+        kind,
+        name: key.to_owned(),
+        span: SourceSpan::new(0, 0, start_line, 0, end_line, 0),
+        canonical_text: format!("{key};"),
+    }
+}
+
+pub(crate) fn nested_outline(
+    path: &str,
+    source: &str,
+    container: (usize, usize),
+    child: (usize, usize),
+    child_retained: bool,
+) -> SourceOutline {
+    let supported = supported(path);
+    let container = item_at(
+        "impl Widget",
+        None,
+        ItemKind::TraitImplementation,
+        container.0,
+        container.1,
+    );
+    let child = item_at(
+        "impl Widget::size",
+        Some("impl Widget"),
+        ItemKind::Method,
+        child.0,
+        child.1,
+    );
+    let superset = vec![container.clone(), child.clone()];
+    let projection = if child_retained {
+        superset.clone()
+    } else {
+        vec![container]
+    };
+    let outline = assemble_outline(&supported, projection, superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+pub(crate) const NESTED_SOURCE: &str = "impl Widget {\n    fn size(&self) -> usize {\n        let hidden = 42;\n        hidden\n    }\n}\n";
+
+pub(crate) fn attributed_child_outline(path: &str, source: &str) -> SourceOutline {
+    nested_outline(path, source, (0, 5), (2, 4), true)
+}
+
+pub(crate) fn test_function_outline(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let function = item_at("fn::decode_source", None, ItemKind::Function, 1, 3);
+    let superset = vec![function.clone()];
+    let outline = assemble_outline(&supported, superset.clone(), superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+pub(crate) fn dropped_container_outline(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let container = item_at("impl Widget", None, ItemKind::TraitImplementation, 0, 5);
+    let child = item_at(
+        "impl Widget::size",
+        Some("impl Widget"),
+        ItemKind::Method,
+        1,
+        4,
+    );
+    let superset = vec![container, child];
+    let outline = assemble_outline(&supported, Vec::new(), superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+pub(crate) const TESTS_FILTER_SOURCE: &str = "\
+pub enum Dropped {\n    A,\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    fn helper() {}\n\n    #[test]\n    fn checks() {\n        let hidden = 1;\n    }\n}\n\n#[test]\nfn top_level() {\n    assert!(true);\n}\n";
+
+pub(crate) fn tests_filter_outline() -> SourceOutline {
+    let path = supported("a.rs");
+    let dropped = item_at("Dropped", None, ItemKind::Type, 0, 2);
+    let module = item_at("mod tests", None, ItemKind::Module, 5, 14);
+    let helper = item_at(
+        "mod tests::helper",
+        Some("mod tests"),
+        ItemKind::Function,
+        8,
+        8,
+    );
+    let checks = item_at(
+        "mod tests::checks",
+        Some("mod tests"),
+        ItemKind::Function,
+        11,
+        13,
+    );
+    let top_level = item_at("top_level", None, ItemKind::Function, 17, 19);
+    let projection = vec![module.clone(), checks.clone(), top_level.clone()];
+    let superset = vec![dropped, module, helper, checks, top_level];
+    let outline = assemble_outline(&path, projection, superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TESTS_FILTER_SOURCE.to_owned(),
+    }
+}
+
+pub(crate) fn show_request() -> ShowRequest {
+    ShowRequest {
+        revision: "HEAD".to_owned(),
+        mode: ProjectionMode::Types,
+        selection: Selection::all(),
+    }
+}
+
+pub(crate) fn diff_request() -> DiffRequest {
+    DiffRequest {
+        base: "HEAD~1".to_owned(),
+        target: "HEAD".to_owned(),
+        mode: ProjectionMode::Types,
+        selection: Selection::all(),
+        view: DiffView::Range,
+        merge_base: false,
+    }
+}
+
+pub(crate) fn commits_request() -> DiffRequest {
+    DiffRequest {
+        view: DiffView::Commits,
+        ..diff_request()
+    }
+}
+
+pub(crate) fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
+    match (old, new) {
+        (None, Some(text)) => FileDiff::Added {
+            new: projected_file(path, text),
+        },
+        (Some(text), None) => FileDiff::Deleted {
+            old: projected_file(path, text),
+        },
+        (Some(old_text), Some(new_text)) => FileDiff::Modified {
+            old: projected_file(path, old_text),
+            new: projected_file(path, new_text),
+        },
+        (None, None) => panic!("a test diff needs at least one side"),
+    }
+}
+
+pub(crate) fn base_app(request: LoadRequest) -> App {
+    App::new(
+        "/repo".to_owned(),
+        request,
+        "all".to_owned(),
+        100,
+        30,
+        Theme::dark(),
+        Icons::new(IconStyle::None),
+    )
+}
+
+pub(crate) fn show_app(files: Vec<SourceOutline>) -> App {
+    show_app_mode(files, ProjectionMode::Types)
+}
+
+pub(crate) fn show_app_mode(files: Vec<SourceOutline>, mode: ProjectionMode) -> App {
+    let app = base_app(LoadRequest::Show {
+        revision: "HEAD".to_owned(),
+        mode,
+        selection: Selection::all(),
+    });
+    let (next, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                revision: "HEAD".to_owned(),
+                mode,
+                selection: Selection::all(),
+            },
+            result: Ok(files.into()),
+        },
+        &app,
+    );
+    settle(next)
+}
+
+pub(crate) fn diff_app(diffs: Vec<FileDiff>) -> App {
+    let app = base_app(LoadRequest::Diff {
+        base: "HEAD~1".to_owned(),
+        target: "HEAD".to_owned(),
+        mode: ProjectionMode::Types,
+        selection: Selection::all(),
+        view: DiffView::Range,
+        merge_base: false,
+    });
+    let (next, _) = update(
+        Msg::DiffLoaded {
+            request: diff_request(),
+            result: Ok(diffs.into()),
+        },
+        &app,
+    );
+    settle(next)
+}
+
+pub(crate) fn commit_steps(count: usize) -> Vec<CommitStep> {
+    use git::{HashKind, ObjectId};
+    (0..count)
+        .map(|index| CommitStep {
+            parent_id: ObjectId {
+                kind: HashKind::Sha1,
+                bytes: vec![index as u8; 20],
+            },
+            commit_id: ObjectId {
+                kind: HashKind::Sha1,
+                bytes: vec![(index + 1) as u8; 20],
+            },
+            subject: format!("Commit subject {index}"),
+        })
+        .collect()
+}
+
+pub(crate) fn commits_app(count: usize) -> App {
+    let app = base_app(LoadRequest::Diff {
+        base: "HEAD~1".to_owned(),
+        target: "HEAD".to_owned(),
+        mode: ProjectionMode::Types,
+        selection: Selection::all(),
+        view: DiffView::Commits,
+        merge_base: false,
+    });
+    let (next, _) = update(
+        Msg::HistoryLoaded {
+            request: commits_request(),
+            result: Ok((
+                commit_steps(count).into(),
+                vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into(),
+            )),
+        },
+        &app,
+    );
+    settle(next)
+}
+
+pub(crate) fn show_ref(app: &App) -> &Show {
+    match &app.loaded {
+        Loaded::Show(show) => show,
+        _ => panic!("expected a show"),
+    }
+}
+
+pub(crate) fn diff_ref(app: &App) -> &Diff {
+    match &app.loaded {
+        Loaded::Diff(diff) => diff,
+        _ => panic!("expected a diff"),
+    }
+}
+
+pub(crate) fn commits_ref(app: &App) -> &crate::component::commit_picker::CommitPicker {
+    match &app.loaded {
+        Loaded::Diff(diff) => match &diff.view {
+            DiffViewState::Commits(commits) => &commits.picker,
+            _ => panic!("expected commits"),
+        },
+        _ => panic!("expected a diff"),
+    }
+}
+
+pub(crate) fn selected(app: &App) -> Option<String> {
+    app.loaded.selected().map(ToString::to_string)
+}
+
+pub(crate) fn diff_focus_of(app: &App) -> Focus {
+    app.loaded.focus()
+}
+
+pub(crate) fn focus_content(app: &mut App) {
+    app.loaded.set_focus(Focus::Content);
+}
+
+pub(crate) fn press(app: &App, keys: &[Key]) -> App {
+    let mut current = app.clone();
+    for &key in keys {
+        let (next, _) = update(Msg::Key(key), &current);
+        current = settle(next);
+    }
+    current
+}
+
+pub(crate) fn two_files() -> App {
+    show_app(vec![
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+    ])
+}
+
+pub(crate) const TWO_FUNCTION_SOURCE: &str = "fn a() {\n    one\n}\nfn b() {\n    two\n}\n";
+
+pub(crate) fn two_function_outline(path: &str) -> SourceOutline {
+    let supported = supported(path);
+    let a = item_at("fn::a", None, ItemKind::Function, 0, 2);
+    let b = item_at("fn::b", None, ItemKind::Function, 3, 5);
+    let superset = vec![a.clone(), b.clone()];
+    let outline = assemble_outline(&supported, superset.clone(), superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TWO_FUNCTION_SOURCE.to_owned(),
+    }
+}
+
+pub(crate) fn declaration_less(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let outline = assemble_outline(&supported, Vec::new(), Vec::new()).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+pub(crate) fn area_set() -> AreaSet {
+    AreaSet::new([
+        Area::new("core", [RepoPath::new("src/core").unwrap()]).unwrap(),
+        Area::new("web", [RepoPath::new("src/web").unwrap()]).unwrap(),
+    ])
+    .unwrap()
+}
+
+pub(crate) fn click(column: u16, row: u16) -> Mouse {
+    Mouse {
+        column,
+        row,
+        kind: MouseKind::Click,
+    }
+}
+
+pub(crate) fn scroll(column: u16, row: u16, up: bool) -> Mouse {
+    Mouse {
+        column,
+        row,
+        kind: if up {
+            MouseKind::ScrollUp
+        } else {
+            MouseKind::ScrollDown
+        },
+    }
+}
+
+pub(crate) fn render(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+    terminal.draw(|frame| view(app, frame)).expect("draw");
+    terminal.backend().buffer().clone()
+}
+
+pub(crate) fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+    let mut text = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            if let Some(cell) = buffer.cell((x, y)) {
+                text.push_str(cell.symbol());
+            }
+        }
+        text.push('\n');
+    }
+    text
+}
+
+pub(crate) fn buffer_row(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
+    (0..buffer.area.width)
+        .filter_map(|x| buffer.cell((x, y)))
+        .map(|cell| cell.symbol())
+        .collect()
+}
+
+pub(crate) fn row_with(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<u16> {
+    (0..buffer.area.height).find(|&y| buffer_row(buffer, y).contains(needle))
+}
+
+pub(crate) fn cell_x_of(buffer: &ratatui::buffer::Buffer, y: u16, needle: &str) -> Option<u16> {
+    let cells: Vec<&str> = (0..buffer.area.width)
+        .filter_map(|x| buffer.cell((x, y)))
+        .map(|cell| cell.symbol())
+        .collect();
+    let joined = cells.concat();
+    let byte = joined.find(needle)?;
+    let mut offset = 0;
+    for (index, symbol) in cells.iter().enumerate() {
+        if offset == byte {
+            return Some(index as u16);
+        }
+        offset += symbol.len();
+    }
+    None
+}
+
+pub(crate) fn folder_app() -> App {
+    show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )])
+}
+
+pub(crate) fn assert_view_consistent(show: &Show, height: u16) {
+    let count = show.line_count();
+    assert!(count > 0, "the projection must not be empty");
+    assert!(
+        (show.body.scroll as usize) < count,
+        "scroll {} must be below line_count {}",
+        show.body.scroll,
+        count
+    );
+    let max_h = show.max_line_width().saturating_sub(1) as u16;
+    assert!(
+        show.body.hscroll <= max_h,
+        "hscroll {} must be <= max_line_width-1 {}",
+        show.body.hscroll,
+        max_h
+    );
+    let viewport = height.saturating_sub(4) as usize;
+    assert!(viewport > 0, "the test viewport must be non-empty");
+    if let Some(row) = show.cursor_row() {
+        assert!(
+            row >= show.body.scroll as usize && row < show.body.scroll as usize + viewport,
+            "cursor row {row} must be inside [{}..{})",
+            show.body.scroll,
+            show.body.scroll as usize + viewport
+        );
+    }
+}
+
+pub(crate) fn multi_method_outline(path: &str, methods: usize) -> SourceOutline {
+    let supported = supported(path);
+    let mut source = String::from("impl Widget {\n");
+    for index in 0..methods {
+        source.push_str(&format!("    fn m{index}(&self) {{}}\n"));
+    }
+    source.push_str("}\n");
+    let last = methods + 1;
+    let container = item_at("impl Widget", None, ItemKind::TraitImplementation, 0, last);
+    let superset: Vec<ProjectedItem> = std::iter::once(container)
+        .chain((0..methods).map(|index| {
+            let line = index + 1;
+            item_at(
+                &format!("impl Widget::m{index}"),
+                Some("impl Widget"),
+                ItemKind::Method,
+                line,
+                line,
+            )
+        }))
+        .collect();
+    let outline = assemble_outline(&supported, superset.clone(), superset).expect("valid fixture");
+    SourceOutline { outline, source }
+}
