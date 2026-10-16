@@ -21,7 +21,8 @@ use engine::{DiffBase, Engine};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 use tui::bench::{
-    Key, Model, Msg, diff_model, history_model, render_to_buffer, settle, show_model, update,
+    Key, Model, Msg, diff_model, history_model, render_to_buffer, set_body_scroll, settle,
+    show_model, update,
 };
 
 /// The pinned range for the diff frames, matching the CLI showcase (PR #16).
@@ -30,6 +31,10 @@ const RANGE_TARGET: &str = "4e09c9c";
 /// A pinned, stable first-parent range for the commits picker.
 const COMMITS_BASE: &str = "4e09c9c";
 const COMMITS_TARGET: &str = "19decfa";
+/// The show frame opens on `crates/base/src/diagnostic.rs`; scroll far enough
+/// that its collapsed regions — the headline `⋯ N lines hidden in types` fold
+/// rows — are in the 40-row viewport (the first starts at source line 63).
+const SHOW_FOLD_SCROLL: u16 = 40;
 
 fn main() -> ExitCode {
     let args = match Args::parse() {
@@ -63,9 +68,11 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or_else(|| "repo".to_owned());
 
-    let files = engine.show("HEAD", ProjectionMode::Types, &selection)?;
-    let mut show = show_model(files, width, height);
+    let files = engine.show_source_outlines("HEAD", ProjectionMode::Types, &selection)?;
+    let mut show = show_model(ProjectionMode::Types, files, width, height);
     show.root = root.clone();
+    // Scroll onto a fold so the showcase frames the source explorer's headline.
+    set_body_scroll(&mut show, SHOW_FOLD_SCROLL);
     render("tui-show", &show, &args.out, width, height)?;
 
     // The command palette is a global overlay; `update` opens it purely.

@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use base::{AreaSet, FileDiff, ProjectedFile, ProjectionMode, RepoPath, Selection};
+use base::{AreaSet, FileDiff, ProjectionMode, RepoPath, Selection, SourceOutline};
 use engine::EngineError;
 use ratatui::layout::{Position, Rect};
 
@@ -95,7 +95,7 @@ pub enum Msg {
     /// A `show` projection effect finished.
     ShowLoaded {
         request: ShowRequest,
-        result: Result<Arc<[ProjectedFile]>, Box<EngineError>>,
+        result: Result<Arc<[SourceOutline]>, Box<EngineError>>,
     },
     /// A `diff` range effect finished.
     DiffLoaded {
@@ -127,6 +127,10 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub loaded: Loaded,
     pub diagnostic: Option<Diagnostic>,
+    /// A pending key prefix (currently only `z` for folds). Reset on `Esc`, an
+    /// overlay or prompt opening, a mouse event, a selection or focus change,
+    /// and every reload.
+    pub pending: Option<char>,
 }
 
 impl App {
@@ -159,10 +163,14 @@ impl App {
                 body: ShowBody {
                     scroll: 0,
                     hscroll: 0,
+                    cursor_line: 1,
                 },
                 paging: Paging::Loading,
                 search: None,
                 highlight: Default::default(),
+                folds: Default::default(),
+                fold_state: Default::default(),
+                visible_rows: Default::default(),
                 prompt: None,
             }),
             LoadRequest::Diff {
@@ -201,6 +209,7 @@ impl App {
             overlay: None,
             loaded,
             diagnostic: None,
+            pending: None,
         }
     }
 
@@ -244,10 +253,15 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
 
     match msg {
         Msg::Key(key) => handle_key(&mut next, key, &mut cmds),
-        Msg::Mouse(event) => mouse(&mut next, event, &mut cmds),
+        Msg::Mouse(event) => {
+            // A mouse event can change the focused pane; drop any armed key
+            // prefix so it cannot swallow the next key.
+            next.pending = None;
+            mouse(&mut next, event, &mut cmds);
+        }
         Msg::Resize { width, height } => {
             next.size = Size { width, height };
-            next.loaded.clamp_scroll();
+            next.loaded.clamp_scroll(height);
         }
         Msg::Tick => {
             next.chrome.spinner = next.chrome.spinner.wrapping_add(1);
@@ -265,6 +279,7 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
             if installed {
                 install_show_selection(&mut next);
                 next.diagnostic = None;
+                next.pending = None;
             }
         }
         Msg::DiffLoaded { request, result } => {
@@ -274,6 +289,7 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
             if installed {
                 install_diff_selection(&mut next);
                 next.diagnostic = None;
+                next.pending = None;
             }
         }
         Msg::HistoryLoaded { request, result } => {
@@ -450,7 +466,11 @@ fn install_show_selection(app: &mut App) {
     show.body = ShowBody {
         scroll: 0,
         hscroll: 0,
+        cursor_line: 1,
     };
+    // `ensure_visible_rows` anchors the cursor onto the first visible row, which
+    // in `tests` mode need not be line 1.
+    show.ensure_visible_rows();
 }
 
 fn install_diff_selection(app: &mut App) {
@@ -505,11 +525,20 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     }
     let capturing =
         app.overlay.as_ref().is_some_and(Overlay::captures_text) || app.loaded.prompt_active();
+    // A pending prefix claims the next key: it selects a fold action or, for any
+    // other key including `Esc`, is simply cancelled.
+    if let Some(prefix) = app.pending.take() {
+        if let Some(action) = prefix_action(prefix, key, app) {
+            apply_action(app, action, cmds);
+        }
+        return;
+    }
     if key == Key::Char('q') && !capturing {
         app.chrome.quit = true;
         return;
     }
     if app.overlay.is_some() {
+        app.pending = None;
         let outs = overlay_update(app, overlay::Msg::Key(key));
         for out in outs {
             apply_overlay_out(app, out, cmds);
@@ -517,6 +546,7 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         return;
     }
     if app.loaded.prompt_active() {
+        app.pending = None;
         let ctx = ctx(app);
         let outs = route_prompt(app, key, ctx);
         fold(app, outs, cmds);
@@ -524,6 +554,17 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     }
     if let Some(action) = command_for(key, app) {
         apply_action(app, action, cmds);
+        return;
+    }
+    // A bare `Enter` in the source body toggles the fold at the cursor, as the
+    // help and docs advertise. The tree's `Enter` (open a file or a directory)
+    // is reached through `focus_key`, so this only fires over the body.
+    if key == Key::Enter && show_body_focused(app) {
+        apply_action(app, Action::Show(ShowAction::ToggleFold), cmds);
+        return;
+    }
+    if key == Key::Char('z') && show_body_focused(app) {
+        app.pending = Some('z');
         return;
     }
     match key {
@@ -535,6 +576,30 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         }
         _ => focus_key(app, key, cmds),
     }
+}
+
+/// Whether the show body owns the keys: a `show` is loaded and the body is the
+/// focused pane.
+fn show_body_focused(app: &App) -> bool {
+    matches!(app.loaded, Loaded::Show(_)) && app.loaded.focus() == Focus::Content
+}
+
+/// The action a pending prefix's second key selects, or `None` to cancel.
+fn prefix_action(prefix: char, key: Key, app: &App) -> Option<Action> {
+    if prefix != 'z' || !matches!(app.loaded, Loaded::Show(_)) {
+        return None;
+    }
+    let action = match key {
+        Key::Char('a') | Key::Enter => ShowAction::ToggleFold,
+        Key::Char('o') => ShowAction::OpenFold,
+        Key::Char('c') => ShowAction::CloseFold,
+        Key::Char('O') => ShowAction::OpenRecursive,
+        Key::Char('C') => ShowAction::CloseRecursive,
+        Key::Char('R') => ShowAction::OpenAll,
+        Key::Char('M') => ShowAction::CloseAll,
+        _ => return None,
+    };
+    Some(Action::Show(action))
 }
 
 fn command_for(key: Key, app: &App) -> Option<Action> {
@@ -550,8 +615,8 @@ fn command_for(key: Key, app: &App) -> Option<Action> {
         Key::Char('\\') => TreeReset,
         Key::Tab => NextPane,
         Key::BackTab => PreviousPane,
-        Key::Char('g') => Top,
-        Key::Char('G') => Bottom,
+        Key::Char('g') | Key::Home => Top,
+        Key::Char('G') | Key::End => Bottom,
         Key::Char('n') => NextMatch,
         Key::Char('N') => PreviousMatch,
         Key::CtrlP => Palette,
@@ -581,6 +646,11 @@ fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>) {
             let outs = route_show(app, show_page::Msg::EditRevision, ctx);
             fold(app, outs, cmds);
         }
+        Action::Show(action) => {
+            app.pending = None;
+            let outs = route_show(app, show_page::Msg::Fold(action), ctx);
+            fold(app, outs, cmds);
+        }
         Action::Range(RangeAction::EditBase) => {
             let outs = route_diff(app, diff_page::Msg::EditSide(DiffSide::Base), ctx);
             fold(app, outs, cmds);
@@ -602,6 +672,7 @@ fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>) {
 
 fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
     use GlobalAction::*;
+    app.pending = None;
     let ctx = ctx(app);
     match action {
         Quit => app.chrome.quit = true,
@@ -718,6 +789,9 @@ fn tree_apply(app: &mut App, msg: tree::Msg) {
 }
 
 fn select_path(app: &mut App, path: RepoPath) {
+    // Selecting a file moves the tree cursor; drop any armed key prefix so it
+    // cannot swallow the next key.
+    app.pending = None;
     app.loaded.set_selected(Some(path.clone()));
     app.tree.reveal(&path);
     app.loaded.reset_body_scroll();

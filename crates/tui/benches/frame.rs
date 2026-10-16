@@ -31,7 +31,7 @@ use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use base::{FileDiff, Language, ProjectedFile};
+use base::{FileDiff, Language, ProjectionMode, SourceOutline};
 use criterion::measurement::WallTime;
 use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
@@ -77,9 +77,10 @@ fn long_rust(lines: usize) -> String {
 
 fn show_two_files(width: u16, height: u16) -> Model {
     bench::show_model(
+        ProjectionMode::Types,
         vec![
-            bench::projected("src/Main.elm", &elm_source()),
-            bench::projected("src/lib.rs", &rust_source()),
+            bench::source_outline("src/Main.elm", &elm_source()),
+            bench::source_outline("src/lib.rs", &rust_source()),
         ],
         width,
         height,
@@ -88,7 +89,8 @@ fn show_two_files(width: u16, height: u16) -> Model {
 
 fn show_long_file(width: u16, height: u16) -> Model {
     bench::show_model(
-        vec![bench::projected("src/lib.rs", &long_rust(4000))],
+        ProjectionMode::Types,
+        vec![bench::source_outline("src/lib.rs", &long_rust(4000))],
         width,
         height,
     )
@@ -102,10 +104,10 @@ fn many_files(count: usize, width: u16, height: u16) -> Model {
     let files = (0..count)
         .map(|index| {
             let path = format!("src/file_{index:03}.rs");
-            bench::projected(&path, &long_rust(20))
+            bench::source_outline(&path, &long_rust(20))
         })
         .collect();
-    bench::show_model(files, width, height)
+    bench::show_model(ProjectionMode::Types, files, width, height)
 }
 
 fn diff_one_large(width: u16, height: u16) -> Model {
@@ -140,11 +142,11 @@ fn diff_many(count: usize, width: u16, height: u16) -> Model {
     bench::diff_model(many_diffs(count), width, height)
 }
 
-fn show_files(count: usize) -> Vec<ProjectedFile> {
+fn show_files(count: usize) -> Vec<SourceOutline> {
     (0..count)
         .map(|index| {
             let path = format!("src/file_{index:03}.rs");
-            bench::projected(&path, &long_rust(20))
+            bench::source_outline(&path, &long_rust(20))
         })
         .collect()
 }
@@ -329,7 +331,7 @@ fn update_benchmarks(c: &mut Criterion) {
     });
 
     let files_300 = show_files(300);
-    let empty = bench::show_model(Vec::new(), WIDE.0, WIDE.1);
+    let empty = bench::show_model(ProjectionMode::Types, Vec::new(), WIDE.0, WIDE.1);
     group.bench_function("load_show_300_files", |b| {
         b.iter_batched(
             || files_300.clone(),

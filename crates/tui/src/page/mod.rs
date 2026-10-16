@@ -214,33 +214,17 @@ impl Loaded {
         }
     }
 
-    /// The largest vertical scroll offset the body can take.
-    pub fn max_scroll(&self) -> u16 {
-        let count = match self {
-            Self::Show(show) => show.line_count(),
-            Self::Diff(diff) => diff.rows().len(),
-        };
-        count.saturating_sub(1) as u16
-    }
-
-    /// The largest horizontal scroll offset the body can take.
-    pub fn max_hscroll(&self) -> u16 {
-        match self {
-            Self::Show(show) => show.max_line_width().saturating_sub(1) as u16,
-            Self::Diff(_) => 0,
-        }
-    }
-
-    /// Clamps both scroll offsets after the terminal changed size.
-    pub fn clamp_scroll(&mut self) {
-        let max = self.max_scroll();
-        let max_h = self.max_hscroll();
+    /// Clamps both scroll offsets after the terminal changed size and scrolls a
+    /// now-out-of-view cursor row back into view.
+    pub fn clamp_scroll(&mut self, height: u16) {
         match self {
             Self::Show(show) => {
-                show.body.scroll = show.body.scroll.min(max);
-                show.body.hscroll = show.body.hscroll.min(max_h);
+                show.ensure_visible_rows();
+                show.reanchor_cursor();
+                show.clamp_view(height);
             }
             Self::Diff(diff) => {
+                let max = diff.rows().len().saturating_sub(1) as u16;
                 let current = diff.body_scroll();
                 diff.set_body_scroll(current.min(max));
             }
@@ -248,13 +232,20 @@ impl Loaded {
     }
 
     /// Resets the body to the top after the selection changed.
+    ///
+    /// The cursor starts at line 1, but the `tests`-mode filter may hide that
+    /// line, so the projection is rebuilt and the cursor anchored onto the first
+    /// visible row, matching the show install path; otherwise the body would
+    /// draw no cursor until the first `j`/`k`.
     pub fn reset_body_scroll(&mut self) {
         match self {
             Self::Show(show) => {
                 show.body = ShowBody {
                     scroll: 0,
                     hscroll: 0,
-                }
+                    cursor_line: 1,
+                };
+                show.ensure_visible_rows();
             }
             Self::Diff(diff) => diff.set_body_scroll(0),
         }
@@ -278,14 +269,31 @@ impl Loaded {
         let mut entries = vec![
             (
                 Action::Global(GlobalAction::Mode),
-                "Switch Types / Signatures",
+                "Switch types / signatures / tests",
                 "m",
             ),
             (Action::Global(GlobalAction::Scope), "Change scope", "s"),
         ];
         match self {
             Self::Show(_) => {
-                entries.push((Action::Show(ShowAction::EditRevision), "Edit revision", "r"))
+                entries.push((Action::Show(ShowAction::EditRevision), "Edit revision", "r"));
+                entries.extend([
+                    (Action::Show(ShowAction::ToggleFold), "Toggle fold", "za"),
+                    (Action::Show(ShowAction::OpenFold), "Open fold", "zo"),
+                    (Action::Show(ShowAction::CloseFold), "Close fold", "zc"),
+                    (
+                        Action::Show(ShowAction::OpenRecursive),
+                        "Open fold recursively",
+                        "zO",
+                    ),
+                    (
+                        Action::Show(ShowAction::CloseRecursive),
+                        "Close fold recursively",
+                        "zC",
+                    ),
+                    (Action::Show(ShowAction::OpenAll), "Open all folds", "zR"),
+                    (Action::Show(ShowAction::CloseAll), "Close all folds", "zM"),
+                ]);
             }
             Self::Diff(diff) => match &diff.view {
                 DiffViewState::Range(_) => {
@@ -359,6 +367,7 @@ impl Loaded {
     ) {
         match self {
             Self::Show(show) => {
+                show.ensure_visible_rows();
                 if visible_body {
                     show.ensure_highlight(theme);
                 }

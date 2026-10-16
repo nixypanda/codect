@@ -27,8 +27,9 @@ RENDER_SIZE = 1800
 # (frame file stem, page title, command shown in the window bar, caption)
 FRAMES = [
     ("tui-show", "Terminal frontend — show", "codect tui show --mode types",
-     "A file tree beside the canonical projection. `m` switches Types/Signatures, "
-     "`s` changes scope, and the projection is searchable with `/`."),
+     "A source explorer: the real source with mode-driven folds. `j`/`k` move the body "
+     "cursor; `za`/`zo`/`zc`/`zO`/`zC`/`zR`/`zM` and `Enter` fold; `m` switches "
+     "types/signatures/tests; `/` searches."),
     ("tui-diff-range", "Terminal frontend — diff range", "codect tui diff range --mode types",
      "A side-by-side projection diff with full-width hunk bands and brighter "
      "intra-line emphasis on the bytes that changed."),

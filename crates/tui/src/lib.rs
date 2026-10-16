@@ -246,7 +246,7 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
     match cmd {
         Cmd::Show(request) => {
             let result = engine
-                .show(&request.revision, request.mode, &request.selection)
+                .show_source_outlines(&request.revision, request.mode, &request.selection)
                 .map(Arc::from)
                 .map_err(Box::new);
             Msg::ShowLoaded { request, result }

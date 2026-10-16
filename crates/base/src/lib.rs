@@ -6,6 +6,7 @@
 pub mod diagnostic;
 pub mod diff;
 pub mod doc;
+pub mod fold;
 pub mod keys;
 pub mod language;
 pub mod model;
@@ -19,13 +20,14 @@ pub use diagnostic::{
 };
 pub use diff::{AlignedRow, DiffLine, DiffRowKind, FileDiff, aligned_rows, unified_hunks};
 pub use doc::Doc;
+pub use fold::{FoldRegion, fold_regions, fold_start};
 pub use keys::KeyAllocator;
 pub use language::{LanguageProjector, ProjectionInput};
 pub use model::{
     ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath, SourceSpan,
     SupportedPath,
 };
-pub use outline::{FileOutline, FileOutlineDiff, OutlineItem, assemble_outline};
+pub use outline::{FileOutline, FileOutlineDiff, OutlineItem, SourceOutline, assemble_outline};
 pub use path::{Area, AreaError, AreaSet, PathScope, PathSelection};
 pub use render::{
     LINE_WIDTH, diff_document, project_all, select_projector, show_document, sort_files,

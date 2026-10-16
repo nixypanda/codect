@@ -15,7 +15,7 @@
 
 use base::{
     FileDiff, ItemKind, Language, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath,
-    Selection, SourceSpan, SupportedPath,
+    Selection, SourceOutline, SourceSpan, SupportedPath, assemble_outline,
 };
 use engine::CommitStep;
 use ratatui::Terminal;
@@ -109,6 +109,60 @@ pub fn projected(path: &str, text: &str) -> ProjectedFile {
     ProjectedFile::try_new(path, items).expect("valid benchmark projection")
 }
 
+/// A [`SourceOutline`] whose real source is `source`, built the way the engine
+/// builds one: a `FileOutline` from [`assemble_outline`] paired with the decoded
+/// source. The requested-mode projection equals the source, so the file is
+/// visible in the tree.
+///
+/// One top-level item's `SourceSpan` covers the whole source. The kind is an
+/// open container (`Module`), so the whole synthetic file renders rather than
+/// collapsing to one fold row; that keeps the long-file benchmarks measuring the
+/// body they intend to.
+pub fn source_outline(path: &str, source: &str) -> SourceOutline {
+    source_outline_with(path, source, source)
+}
+
+/// A [`SourceOutline`] whose requested-mode projection is `projection_text` and
+/// whose real source is `source`.
+///
+/// `source` is independent of `projection_text`, so a caller can prove the body
+/// renders source rather than the projection.
+pub fn source_outline_with(path: &str, source: &str, projection_text: &str) -> SourceOutline {
+    let path = SupportedPath::new(RepoPath::new(path).expect("benchmark path is valid"))
+        .expect("benchmark path has a supported extension");
+    let span = whole_span(source);
+    let items = |text: &str| -> Vec<ProjectedItem> {
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ProjectedItem {
+                stable_key: "item".to_owned(),
+                parent_key: None,
+                kind: ItemKind::Module,
+                name: "item".to_owned(),
+                span,
+                canonical_text: text.to_owned(),
+            }]
+        }
+    };
+    let outline = assemble_outline(&path, items(projection_text), items(source))
+        .expect("valid benchmark outline");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+/// A zero-based span covering all of `source`, for the fixture's top-level item.
+fn whole_span(source: &str) -> SourceSpan {
+    let end_line = source.matches('\n').count();
+    let end_column = source
+        .lines()
+        .next_back()
+        .map_or(0, |line| line.chars().count());
+    SourceSpan::new(0, source.len(), 0, 0, end_line, end_column)
+}
+
 /// A one-path diff with the given old and new projections.
 pub fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
     match (old, new) {
@@ -138,10 +192,15 @@ fn base(request: LoadRequest, width: u16, height: u16) -> App {
     )
 }
 
-/// A model showing `files`, installed and settled through the real runtime
-/// paths so highlighting and the derived cache are populated as at runtime.
-pub fn show_model(files: Vec<ProjectedFile>, width: u16, height: u16) -> App {
-    let request = show_request();
+/// A model showing `files` in `mode`, installed and settled through the real
+/// runtime paths so highlighting and the derived cache are populated as at
+/// runtime.
+pub fn show_model(mode: ProjectionMode, files: Vec<SourceOutline>, width: u16, height: u16) -> App {
+    let request = ShowRequest {
+        revision: "HEAD".to_owned(),
+        mode,
+        selection: Selection::all(),
+    };
     let model = base(
         LoadRequest::Show {
             revision: request.revision.clone(),
@@ -212,7 +271,7 @@ pub fn history_model(steps: Vec<CommitStep>, diffs: Vec<FileDiff>, width: u16, h
 
 /// Applies a completed `show` projection, as the runtime does on
 /// `Msg::ShowLoaded`.
-pub fn load_show(files: Vec<ProjectedFile>, model: &App) -> App {
+pub fn load_show(files: Vec<SourceOutline>, model: &App) -> App {
     let request = match &model.loaded {
         Loaded::Show(show) => ShowRequest {
             revision: show.revision.clone(),

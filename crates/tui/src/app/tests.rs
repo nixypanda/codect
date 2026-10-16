@@ -1,14 +1,14 @@
 use super::*;
 use crate::component::overlay::Overlay;
 use crate::component::text_input::TextInput;
-use crate::page::show::ShowHighlights;
+use crate::page::show::{ShowHighlights, VisibleRow};
 use crate::page::{DiffSide, DiffViewState, Loaded, Search, SearchMatch, SearchSide, ShowFocus};
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
 use crate::view::view;
 use base::{
-    Area, AreaSet, ItemKind, ProjectedItem, RepoPath, Selection, SelectionGroup, SourceSpan,
-    SupportedPath,
+    Area, AreaSet, ItemKind, ProjectedFile, ProjectedItem, RepoPath, Selection, SelectionGroup,
+    SourceOutline, SourceSpan, SupportedPath, assemble_outline,
 };
 use engine::CommitStep;
 use ratatui::style::Color;
@@ -24,13 +24,230 @@ fn item(text: &str) -> ProjectedItem {
     }
 }
 
-fn projected(path: &str, text: &str) -> ProjectedFile {
-    let path = SupportedPath::new(RepoPath::new(path).expect("valid path"))
-        .expect("test path is supported");
+fn supported(path: &str) -> SupportedPath {
+    SupportedPath::new(RepoPath::new(path).expect("valid path")).expect("test path is supported")
+}
+
+fn projected_file(path: &str, text: &str) -> ProjectedFile {
+    let path = supported(path);
     if text.is_empty() {
         return ProjectedFile::try_new(path, Vec::new()).expect("valid fixture");
     }
     ProjectedFile::try_new(path, vec![item(text)]).expect("valid fixture")
+}
+
+/// A `SourceOutline` whose real source is `source`, built through
+/// `assemble_outline` so its outline is well-formed. The projection text equals
+/// the source, so the tree shows the file.
+fn source_outline(path: &str, source: &str) -> SourceOutline {
+    source_outline_with(path, source, source)
+}
+
+/// A `SourceOutline` whose requested-mode projection is `projection_text` and
+/// whose real source is `source`; the outline superset comes from `source`.
+fn source_outline_with(path: &str, source: &str, projection_text: &str) -> SourceOutline {
+    let supported = supported(path);
+    let span = whole_span(source);
+    let items = |text: &str| -> Vec<ProjectedItem> {
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            // A whole-file fixture is an open container, so every source line
+            // renders unless a fold test nests a signature under it.
+            vec![ProjectedItem {
+                kind: ItemKind::Module,
+                span,
+                ..item(text)
+            }]
+        }
+    };
+    let outline =
+        assemble_outline(&supported, items(projection_text), items(source)).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+/// A zero-based span covering all of `source`.
+fn whole_span(source: &str) -> SourceSpan {
+    let end_line = source.matches('\n').count();
+    let end_column = source
+        .lines()
+        .next_back()
+        .map_or(0, |line| line.chars().count());
+    SourceSpan::new(0, source.len(), 0, 0, end_line, end_column)
+}
+
+/// A projected item with zero-based inclusive `start_line`/`end_line`.
+fn item_at(
+    key: &str,
+    parent: Option<&str>,
+    kind: ItemKind,
+    start_line: usize,
+    end_line: usize,
+) -> ProjectedItem {
+    ProjectedItem {
+        stable_key: key.to_owned(),
+        parent_key: parent.map(str::to_owned),
+        kind,
+        name: key.to_owned(),
+        span: SourceSpan::new(0, 0, start_line, 0, end_line, 0),
+        canonical_text: format!("{key};"),
+    }
+}
+
+/// A file whose source is `source`: one open container declaration
+/// (`TraitImplementation`) holding one folded signature child (`Method`), each
+/// spanning real source lines.
+///
+/// `child_retained` marks the child as kept by the requested mode, so the fold
+/// row is not `dropped`.
+fn nested_outline(
+    path: &str,
+    source: &str,
+    container: (usize, usize),
+    child: (usize, usize),
+    child_retained: bool,
+) -> SourceOutline {
+    let supported = supported(path);
+    let container = item_at(
+        "impl Widget",
+        None,
+        ItemKind::TraitImplementation,
+        container.0,
+        container.1,
+    );
+    let child = item_at(
+        "impl Widget::size",
+        Some("impl Widget"),
+        ItemKind::Method,
+        child.0,
+        child.1,
+    );
+    let superset = vec![container.clone(), child.clone()];
+    let projection = if child_retained {
+        superset.clone()
+    } else {
+        vec![container]
+    };
+    let outline = assemble_outline(&supported, projection, superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+/// A container with a folded signature whose body is three hidden lines.
+const NESTED_SOURCE: &str = "impl Widget {\n    fn size(&self) -> usize {\n        let hidden = 42;\n        hidden\n    }\n}\n";
+
+/// A container whose folded method has a `#[test]` attribute directly above its
+/// `fn` line, so the fold start extends over the attribute.
+const ATTRIBUTED_SOURCE: &str =
+    "impl Widget {\n    #[test]\n    fn tested() {\n        let hidden = 42;\n    }\n}\n";
+
+/// A file whose source is `source`: one open container (`TraitImplementation`)
+/// holding one retained, folded method whose span starts on its `fn` line, with
+/// `#[test]` directly above it.
+fn attributed_child_outline(path: &str, source: &str) -> SourceOutline {
+    nested_outline(path, source, (0, 5), (2, 4), true)
+}
+
+/// A top-level test function whose `#[test]` attribute sits directly above its
+/// `fn` line; the requested mode retains the function.
+const TEST_SOURCE: &str = "#[test]\nfn decode_source() {\n    let hidden = 42;\n}\n";
+
+fn test_function_outline(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let function = item_at("fn::decode_source", None, ItemKind::Function, 1, 3);
+    let superset = vec![function.clone()];
+    let outline = assemble_outline(&supported, superset.clone(), superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+/// A file whose single top-level container (`TraitImplementation`) is dropped by
+/// the requested mode, so the whole declaration folds to one row even though a
+/// container would otherwise default open.
+fn dropped_container_outline(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let container = item_at("impl Widget", None, ItemKind::TraitImplementation, 0, 5);
+    let child = item_at(
+        "impl Widget::size",
+        Some("impl Widget"),
+        ItemKind::Method,
+        1,
+        4,
+    );
+    let superset = vec![container, child];
+    // The requested-mode projection is empty: the outline is kept as the
+    // superset, but neither declaration is retained.
+    let outline = assemble_outline(&supported, Vec::new(), superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+/// A file exercising the `tests`-mode filter. Line layout:
+///
+/// ```text
+///  1 pub enum Dropped {        // dropped by the mode
+///  2     A,
+///  3 }
+///  4
+///  5 #[cfg(test)]
+///  6 mod tests {               // retained container, open
+///  7     use super::*;
+///  8
+///  9     fn helper() {}         // dropped by the mode, inside the container
+/// 10
+/// 11     #[test]
+/// 12     fn checks() {          // retained, folded
+/// 13         let hidden = 1;
+/// 14     }
+/// 15 }
+/// 16
+/// 17 #[test]
+/// 18 fn top_level() {          // retained, folded
+/// 19     assert!(true);
+/// 20 }
+/// ```
+const TESTS_FILTER_SOURCE: &str = "\
+pub enum Dropped {\n    A,\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    fn helper() {}\n\n    #[test]\n    fn checks() {\n        let hidden = 1;\n    }\n}\n\n#[test]\nfn top_level() {\n    assert!(true);\n}\n";
+
+/// [`TESTS_FILTER_SOURCE`] as a `SourceOutline`. The requested-mode projection
+/// retains `mod tests` and its `checks` test plus the top-level `top_level`
+/// test; the `Dropped` enum and the `helper` function are located only through
+/// the Signatures superset, so the mode drops them.
+fn tests_filter_outline() -> SourceOutline {
+    let path = supported("a.rs");
+    let dropped = item_at("Dropped", None, ItemKind::Type, 0, 2);
+    let module = item_at("mod tests", None, ItemKind::Module, 5, 14);
+    let helper = item_at(
+        "mod tests::helper",
+        Some("mod tests"),
+        ItemKind::Function,
+        8,
+        8,
+    );
+    let checks = item_at(
+        "mod tests::checks",
+        Some("mod tests"),
+        ItemKind::Function,
+        11,
+        13,
+    );
+    let top_level = item_at("top_level", None, ItemKind::Function, 17, 19);
+    let projection = vec![module.clone(), checks.clone(), top_level.clone()];
+    let superset = vec![dropped, module, helper, checks, top_level];
+    let outline = assemble_outline(&path, projection, superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TESTS_FILTER_SOURCE.to_owned(),
+    }
 }
 
 fn show_request() -> ShowRequest {
@@ -62,14 +279,14 @@ fn commits_request() -> DiffRequest {
 fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
     match (old, new) {
         (None, Some(text)) => FileDiff::Added {
-            new: projected(path, text),
+            new: projected_file(path, text),
         },
         (Some(text), None) => FileDiff::Deleted {
-            old: projected(path, text),
+            old: projected_file(path, text),
         },
         (Some(old_text), Some(new_text)) => FileDiff::Modified {
-            old: projected(path, old_text),
-            new: projected(path, new_text),
+            old: projected_file(path, old_text),
+            new: projected_file(path, new_text),
         },
         (None, None) => panic!("a test diff needs at least one side"),
     }
@@ -87,15 +304,25 @@ fn base_app(request: LoadRequest) -> App {
     )
 }
 
-fn show_app(files: Vec<ProjectedFile>) -> App {
+fn show_app(files: Vec<SourceOutline>) -> App {
+    show_app_mode(files, ProjectionMode::Types)
+}
+
+/// Like [`show_app`] but with an explicit projection mode, so a test can open a
+/// mode that retains a declaration the default `types` mode would drop.
+fn show_app_mode(files: Vec<SourceOutline>, mode: ProjectionMode) -> App {
     let app = base_app(LoadRequest::Show {
         revision: "HEAD".to_owned(),
-        mode: ProjectionMode::Types,
+        mode,
         selection: Selection::all(),
     });
     let (next, _) = update(
         Msg::ShowLoaded {
-            request: show_request(),
+            request: ShowRequest {
+                revision: "HEAD".to_owned(),
+                mode,
+                selection: Selection::all(),
+            },
             result: Ok(files.into()),
         },
         &app,
@@ -197,8 +424,22 @@ fn focus_content(app: &mut App) {
     app.loaded.set_focus(Focus::Content);
 }
 
+/// Sends a key sequence through `update`, settling between keys exactly as the
+/// runtime does per input batch.
+fn press(app: &App, keys: &[Key]) -> App {
+    let mut current = app.clone();
+    for &key in keys {
+        let (next, _) = update(Msg::Key(key), &current);
+        current = settle(next);
+    }
+    current
+}
+
 fn two_files() -> App {
-    show_app(vec![projected("a.rs", "a\n"), projected("b.rs", "b\n")])
+    show_app(vec![
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+    ])
 }
 
 // -----------------------------------------------------------------------
@@ -214,22 +455,22 @@ fn a_loaded_result_installs_files_and_preserves_the_selection() {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
-            result: Ok(vec![projected("a.rs", "A\n"), projected("b.rs", "B\n")].into()),
+            result: Ok(vec![source_outline("a.rs", "A\n"), source_outline("b.rs", "B\n")].into()),
         },
         &app,
     );
 
     assert_eq!(next.loaded.mode(), ProjectionMode::Signatures);
     assert_eq!(selected(&next).as_deref(), Some("a.rs"));
-    assert_eq!(show_ref(&next).active_text(), Some("A\n"));
+    assert_eq!(show_ref(&next).active_source(), Some("A\n"));
 }
 
 #[test]
 fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
     let mut app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("b.rs", "b\n"),
-        projected("c.rs", "c\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+        source_outline("c.rs", "c\n"),
     ]);
     app.tree.cursor = app
         .tree
@@ -241,7 +482,7 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
     let (next, _) = update(
         Msg::ShowLoaded {
             request: show_request(),
-            result: Ok(vec![projected("a.rs", "a\n"), projected("c.rs", "c\n")].into()),
+            result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("c.rs", "c\n")].into()),
         },
         &app,
     );
@@ -276,15 +517,60 @@ fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
 }
 
 #[test]
-fn empty_projections_are_hidden_from_the_tree() {
-    let app = show_app(vec![projected("empty.rs", ""), projected("full.rs", "x\n")]);
+fn empty_projections_are_still_explorable_in_the_tree() {
+    let app = show_app(vec![
+        source_outline_with("empty.rs", "// comment only\n", ""),
+        source_outline("full.rs", "x\n"),
+    ]);
     let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, vec!["full.rs"]);
+    assert_eq!(labels, vec!["empty.rs", "full.rs"]);
     assert!(
-        !app.loaded
+        app.loaded
             .visible()
-            .contains(&RepoPath::new("empty.rs").unwrap())
+            .contains(&RepoPath::new("empty.rs").unwrap()),
+        "a file with an empty projection must still appear in the tree"
     );
+}
+
+/// A `SourceOutline` with no declarations at all: an empty outline over real
+/// source, as the engine builds for a file of only imports and comments.
+fn declaration_less(path: &str, source: &str) -> SourceOutline {
+    let supported = supported(path);
+    let outline = assemble_outline(&supported, Vec::new(), Vec::new()).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: source.to_owned(),
+    }
+}
+
+#[test]
+fn a_declaration_less_file_is_visible_and_renders_its_full_source() {
+    let source = "// only a comment\nuse std::fmt;\n";
+    let app = show_app(vec![
+        declaration_less("comments.rs", source),
+        source_outline("full.rs", "x\n"),
+    ]);
+
+    assert!(
+        app.loaded
+            .visible()
+            .contains(&RepoPath::new("comments.rs").unwrap()),
+        "a declaration-less file must appear in the tree"
+    );
+    let show = show_ref(&app);
+    assert_eq!(show.active_source(), Some(source));
+    assert_eq!(show.line_count(), 2, "no fold rows");
+    assert!(
+        show.visible_rows()
+            .iter()
+            .all(|row| matches!(row, VisibleRow::Source { .. })),
+        "a declaration-less file has no folds: {:?}",
+        show.visible_rows()
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("only a comment"), "{text}");
+    assert!(text.contains("use std::fmt;"), "{text}");
 }
 
 #[test]
@@ -300,9 +586,9 @@ fn a_diff_tree_contains_only_changed_paths() {
 #[test]
 fn tree_rows_follow_raw_path_order_and_are_nested() {
     let app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("src/lib.rs", "l\n"),
-        projected("src/main.rs", "m\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("src/lib.rs", "l\n"),
+        source_outline("src/main.rs", "m\n"),
     ]);
     let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, vec!["a.rs", "src", "lib.rs", "main.rs"]);
@@ -314,9 +600,9 @@ fn tree_rows_follow_raw_path_order_and_are_nested() {
 #[test]
 fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
     let mut app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("src/lib.rs", "l\n"),
-        projected("src/main.rs", "m\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("src/lib.rs", "l\n"),
+        source_outline("src/main.rs", "m\n"),
     ]);
     app.tree.cursor = 1;
     assert!(matches!(
@@ -353,8 +639,8 @@ fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
 #[test]
 fn left_on_a_directory_row_folds_it() {
     let mut app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("src/lib.rs", "l\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("src/lib.rs", "l\n"),
     ]);
     app.tree.cursor = 1;
     let (folded, _) = update(Msg::Key(Key::Left), &app);
@@ -642,8 +928,8 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
 #[test]
 fn navigation_defers_highlighting_until_settle() {
     let app = show_app(vec![
-        projected("a.rs", "pub fn a();\n"),
-        projected("b.rs", "pub fn b();\n"),
+        source_outline("a.rs", "pub fn a();\n"),
+        source_outline("b.rs", "pub fn b();\n"),
     ]);
     // Force a fresh selection that has not been highlighted.
     let mut fresh = app.clone();
@@ -664,7 +950,7 @@ fn navigation_defers_highlighting_until_settle() {
 
 #[test]
 fn settle_skips_highlighting_when_the_body_is_hidden() {
-    let mut app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let mut app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     app.size = Size {
         width: 60,
         height: 30,
@@ -798,7 +1084,7 @@ fn tree_resize_keys_step_clamp_and_reset() {
 
 #[test]
 fn a_wider_tree_still_leaves_a_usable_body() {
-    let mut app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let mut app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     app.chrome.tree_percent = TREE_MAX_PERCENT;
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("Files"), "{text}");
@@ -1002,7 +1288,7 @@ fn literal_path_entry_builds_a_path_selection() {
 
 #[test]
 fn search_finds_matches_and_steps_them() {
-    let app = show_app(vec![projected("a.rs", "alpha\nbeta\nalpha again\n")]);
+    let app = show_app(vec![source_outline("a.rs", "alpha\nbeta\nalpha again\n")]);
     let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
     assert!(matches!(opened.overlay, Some(Overlay::Search(_))));
 
@@ -1024,8 +1310,8 @@ fn search_finds_matches_and_steps_them() {
 #[test]
 fn switching_files_recomputes_a_committed_search() {
     let mut app = show_app(vec![
-        projected("a.rs", "alpha\n"),
-        projected("b.rs", "beta\nalpha\n"),
+        source_outline("a.rs", "alpha\n"),
+        source_outline("b.rs", "beta\nalpha\n"),
     ]);
     if let Loaded::Show(show) = &mut app.loaded {
         show.search = Some(Search {
@@ -1071,7 +1357,7 @@ fn the_palette_and_finder_render_their_lists() {
     }));
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("commands"), "{text}");
-    assert!(text.contains("Switch Types"), "{text}");
+    assert!(text.contains("Switch types"), "{text}");
 
     let mut app = two_files();
     app.overlay = Some(Overlay::finder(&overlay::Ctx {
@@ -1113,34 +1399,38 @@ const TREE_Y: u16 = 2;
 const CONTENT_X: u16 = 50;
 
 #[test]
-fn page_keys_move_the_cursor_in_the_tree_and_scroll_the_body() {
+fn page_keys_move_the_cursor_in_the_tree_and_the_body_cursor() {
     let app = show_app(vec![
-        projected("a.rs", "one\ntwo\nthree\nfour\nfive\n"),
-        projected("b.rs", "x\n"),
+        source_outline("a.rs", "one\ntwo\nthree\nfour\nfive\n"),
+        source_outline("b.rs", "x\n"),
     ]);
     let (down, _) = update(Msg::Key(Key::PageDown), &app);
     assert!(down.tree.cursor > app.tree.cursor);
 
     let mut body = app.clone();
     focus_content(&mut body);
-    let (scrolled, _) = update(Msg::Key(Key::PageDown), &body);
-    assert!(show_ref(&scrolled).body.scroll > 0);
+    let (moved, _) = update(Msg::Key(Key::PageDown), &body);
+    assert_eq!(
+        show_ref(&moved).body.cursor_line,
+        5,
+        "PageDown moves the body cursor to the last visible row"
+    );
 }
 
 #[test]
-fn body_scrolling_is_clamped_to_the_content() {
-    let mut app = show_app(vec![projected("a.rs", "one\ntwo\nthree\n")]);
+fn the_body_cursor_is_clamped_to_the_content() {
+    let mut app = show_app(vec![source_outline("a.rs", "one\ntwo\nthree\n")]);
     focus_content(&mut app);
     for _ in 0..10 {
         let (next, _) = update(Msg::Key(Key::Char('j')), &app);
         app = next;
     }
-    assert_eq!(show_ref(&app).body.scroll, 2);
+    assert_eq!(show_ref(&app).body.cursor_line, 3);
     for _ in 0..10 {
         let (next, _) = update(Msg::Key(Key::Char('k')), &app);
         app = next;
     }
-    assert_eq!(show_ref(&app).body.scroll, 0);
+    assert_eq!(show_ref(&app).body.cursor_line, 1);
 }
 
 #[test]
@@ -1155,8 +1445,8 @@ fn clicking_a_file_selects_it() {
 #[test]
 fn clicking_a_directory_folds_it() {
     let app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("src/lib.rs", "l\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("src/lib.rs", "l\n"),
     ]);
     let (folded, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     let labels: Vec<&str> = folded
@@ -1171,9 +1461,9 @@ fn clicking_a_directory_folds_it() {
 #[test]
 fn the_wheel_moves_the_tree_cursor_and_selects_as_it_passes() {
     let app = show_app(vec![
-        projected("a.rs", "a\n"),
-        projected("b.rs", "b\n"),
-        projected("c.rs", "c\n"),
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+        source_outline("c.rs", "c\n"),
     ]);
     let (moved, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
     assert_eq!(
@@ -1185,12 +1475,21 @@ fn the_wheel_moves_the_tree_cursor_and_selects_as_it_passes() {
 
 #[test]
 fn the_wheel_scrolls_the_content_and_focuses_it() {
-    let app = show_app(vec![projected("a.rs", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n")]);
+    let app = show_app(vec![source_outline(
+        "a.rs",
+        "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+    )]);
     let (down, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &app);
     assert!(matches!(down.loaded, Loaded::Show(ref show) if show.focus == ShowFocus::Body));
     assert_eq!(show_ref(&down).body.scroll, 3);
+    assert_eq!(
+        show_ref(&down).body.cursor_line,
+        1,
+        "the wheel scrolls the viewport without moving the cursor"
+    );
     let (up, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, true)), &down);
     assert_eq!(show_ref(&up).body.scroll, 0);
+    assert_eq!(show_ref(&up).body.cursor_line, 1);
 }
 
 #[test]
@@ -1237,7 +1536,7 @@ fn a_click_on_the_header_or_a_divider_does_nothing() {
 
 #[test]
 fn the_status_bar_shows_mode_scope_and_hints() {
-    let app = show_app(vec![projected("a.rs", "x\n")]);
+    let app = show_app(vec![source_outline("a.rs", "x\n")]);
     let buffer = render(&app, 120, 20);
     let header = buffer_row(&buffer, 0);
     let footer = buffer_row(&buffer, 19);
@@ -1246,13 +1545,28 @@ fn the_status_bar_shows_mode_scope_and_hints() {
     assert!(header.contains("scope:"), "{header}");
     assert!(!header.contains("a.rs"), "{header}");
     assert!(footer.contains("a.rs"), "{footer}");
-    assert!(footer.contains("1 lines"), "{footer}");
+    assert!(footer.contains("1 of 1 lines"), "{footer}");
     assert!(footer.contains("help"), "{footer}");
 }
 
 #[test]
+fn the_status_bar_counts_visible_rows_against_source_lines() {
+    // The nested fixture folds the child's three-line body into one row, so
+    // three of the six source lines are visible rows.
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let text = buffer_text(&render(&app, 120, 20));
+    assert!(text.contains("3 of 6 lines"), "{text}");
+}
+
+#[test]
 fn narrow_chrome_keeps_context_and_the_selected_path() {
-    let app = show_app(vec![projected("src/very/deep/file.rs", "x\n")]);
+    let app = show_app(vec![source_outline("src/very/deep/file.rs", "x\n")]);
     let buffer = render(&app, 60, 20);
     let header = buffer_row(&buffer, 0);
     let footer = buffer_row(&buffer, 19);
@@ -1307,7 +1621,7 @@ fn a_load_marks_the_model_busy_until_it_completes() {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
-            result: Ok(vec![projected("a.rs", "a\n"), projected("b.rs", "b\n")].into()),
+            result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("b.rs", "b\n")].into()),
         },
         &loading,
     );
@@ -1360,12 +1674,1279 @@ fn buffer_row(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
         .collect()
 }
 
+/// The first row index containing `needle`, if any.
+fn row_with(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<u16> {
+    (0..buffer.area.height).find(|&y| buffer_row(buffer, y).contains(needle))
+}
+
+/// The cell column where `needle` starts on row `y`, if any.
+fn cell_x_of(buffer: &ratatui::buffer::Buffer, y: u16, needle: &str) -> Option<u16> {
+    let cells: Vec<&str> = (0..buffer.area.width)
+        .filter_map(|x| buffer.cell((x, y)))
+        .map(|cell| cell.symbol())
+        .collect();
+    let joined = cells.concat();
+    let byte = joined.find(needle)?;
+    let mut offset = 0;
+    for (index, symbol) in cells.iter().enumerate() {
+        if offset == byte {
+            return Some(index as u16);
+        }
+        offset += symbol.len();
+    }
+    None
+}
+
 #[test]
-fn a_wide_terminal_shows_the_tree_and_the_projection() {
-    let app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+fn a_wide_terminal_shows_the_tree_and_the_source() {
+    let app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("Files"), "tree pane missing: {text}");
+    assert!(
+        text.contains(" Source "),
+        "source pane title missing: {text}"
+    );
     assert!(text.contains("pub fn a();"), "body missing: {text}");
+}
+
+#[test]
+fn the_body_shows_the_files_real_source_and_counts_its_lines() {
+    let app = show_app(vec![source_outline("a.rs", "alpha\nbeta\n")]);
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("alpha"), "missing alpha: {text}");
+    assert!(text.contains("beta"), "missing beta: {text}");
+    assert_eq!(show_ref(&app).active_source(), Some("alpha\nbeta\n"));
+    assert_eq!(show_ref(&app).line_count(), 2);
+}
+
+#[test]
+fn the_body_renders_the_source_not_the_canonical_projection() {
+    // The projection text (what the old body rendered) differs from the real
+    // source, so the body can only pass by rendering `source`.
+    let file = source_outline_with("a.rs", "real source line\n", "PROJECTED\n");
+    let app = show_app(vec![file]);
+    assert_eq!(show_ref(&app).active_source(), Some("real source line\n"));
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("real source line"), "source missing: {text}");
+    assert!(
+        !text.contains("PROJECTED"),
+        "the canonical projection must not be rendered: {text}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Folding
+// -----------------------------------------------------------------------
+
+#[test]
+fn a_folded_signature_child_hides_its_body_and_counts_as_one_row() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let show = show_ref(&app);
+
+    assert_eq!(show.source_line_count(), 6);
+    assert_eq!(
+        show.line_count(),
+        3,
+        "container line, fold row, close brace"
+    );
+    assert_eq!(show.line_count(), show.visible_rows().len());
+    assert_eq!(
+        show.visible_rows(),
+        &[
+            VisibleRow::Source { line: 1 },
+            VisibleRow::Fold {
+                line: 2,
+                summary_line: 2,
+                region_index: 1,
+                hidden: 3,
+                dropped: false,
+            },
+            VisibleRow::Source { line: 6 },
+        ]
+    );
+}
+
+#[test]
+fn a_collapsed_attributed_signature_summarizes_the_declaration_line() {
+    let app = show_app(vec![attributed_child_outline("a.rs", ATTRIBUTED_SOURCE)]);
+    let show = show_ref(&app);
+
+    // The hidden block starts on `#[test]` (line 2), but the row summarizes and
+    // renders the `fn` line (line 3), while still hiding three lines.
+    assert_eq!(
+        show.visible_rows()[1],
+        VisibleRow::Fold {
+            line: 2,
+            summary_line: 3,
+            region_index: 1,
+            hidden: 3,
+            dropped: false,
+        }
+    );
+    assert_eq!(
+        show.visible_rows()[1].source_line(),
+        3,
+        "the rendered line is the declaration's own line"
+    );
+
+    let buffer = render(&app, 100, 20);
+    let row = row_with(&buffer, "fn tested()").expect("the declaration line is rendered");
+    let text = buffer_row(&buffer, row);
+    assert!(
+        !text.contains("#[test]"),
+        "the attribute must not summarize the fold: {text}"
+    );
+    assert!(
+        text.contains("fn tested() {"),
+        "the signature line is the summary: {text}"
+    );
+    assert!(
+        text.contains("3     fn tested()"),
+        "the gutter shows the declaration line: {text}"
+    );
+    assert!(
+        text.contains("⋯ 3 lines"),
+        "the hidden count is unchanged: {text}"
+    );
+}
+
+#[test]
+fn a_collapsed_test_function_in_signatures_mode_shows_its_signature_line() {
+    // The user's report: in signatures/tests mode a retained `#[test]`
+    // function's fold row must show the `fn` line, not `#[test]`.
+    let app = show_app_mode(
+        vec![test_function_outline("a.rs", TEST_SOURCE)],
+        ProjectionMode::Signatures,
+    );
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.visible_rows()[0],
+        VisibleRow::Fold {
+            line: 1,
+            summary_line: 2,
+            region_index: 0,
+            hidden: 3,
+            dropped: false,
+        }
+    );
+
+    let buffer = render(&app, 100, 20);
+    let row = row_with(&buffer, "fn decode_source()").expect("the declaration line is rendered");
+    let text = buffer_row(&buffer, row);
+    assert!(
+        !text.contains("#[test]"),
+        "the attribute must not summarize the fold: {text}"
+    );
+    assert!(
+        text.contains("fn decode_source() {"),
+        "the test's signature line is the summary: {text}"
+    );
+    assert!(
+        text.contains("2 fn decode_source()"),
+        "the gutter shows the declaration line: {text}"
+    );
+}
+
+#[test]
+fn the_fold_suffix_widens_the_horizontal_scroll_range() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let show = show_ref(&app);
+
+    let fold_line = NESTED_SOURCE.lines().nth(1).expect("the folded signature");
+    let expected = fold_line.chars().count() + "  ⋯ 3 lines".chars().count();
+    assert_eq!(
+        show.max_line_width(),
+        expected,
+        "max width must include the fold suffix"
+    );
+}
+
+#[test]
+fn a_dropped_declaration_folds_and_marks_the_row_dropped() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        false,
+    )]);
+    let show = show_ref(&app);
+
+    let fold = show
+        .visible_rows()
+        .iter()
+        .find_map(|row| match row {
+            VisibleRow::Fold {
+                line,
+                hidden,
+                dropped,
+                ..
+            } => Some((*line, *hidden, *dropped)),
+            VisibleRow::Source { .. } => None,
+        })
+        .expect("a fold row for the dropped child");
+    assert_eq!(fold, (2, 3, true), "the child is dropped by the mode");
+}
+
+#[test]
+fn a_dropped_container_folds_to_one_row_tagged_hidden_in_mode() {
+    // The requested mode drops the container, so the body must not render as
+    // source: the whole declaration is one fold row marked `hidden in types`.
+    let app = show_app(vec![dropped_container_outline("a.rs", NESTED_SOURCE)]);
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.line_count(),
+        1,
+        "a dropped container is one fold row, not an open body"
+    );
+    assert_eq!(
+        show.visible_rows(),
+        &[VisibleRow::Fold {
+            line: 1,
+            summary_line: 1,
+            region_index: 0,
+            hidden: 5,
+            dropped: true,
+        }]
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(
+        text.contains("hidden in types"),
+        "the dropped tag is missing: {text}"
+    );
+    assert!(
+        !text.contains("let hidden"),
+        "the dropped body must be absent: {text}"
+    );
+    assert!(
+        !text.contains("42"),
+        "the dropped body must be absent: {text}"
+    );
+}
+
+#[test]
+fn is_open_honors_default_open_and_a_sticky_override() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let Loaded::Show(show) = &mut app.loaded else {
+        panic!("expected a show");
+    };
+    show.ensure_visible_rows();
+    let regions = show
+        .folds
+        .regions(&path)
+        .expect("fold regions are cached")
+        .to_vec();
+
+    assert!(
+        show.fold_state.is_open(&path, &regions[0]),
+        "a container is open by default"
+    );
+    assert!(
+        !show.fold_state.is_open(&path, &regions[1]),
+        "a method is folded by default"
+    );
+
+    show.fold_state.set(&path, &regions[1].stable_key, true);
+    assert!(
+        show.fold_state.is_open(&path, &regions[1]),
+        "the override wins over default_open"
+    );
+    show.ensure_visible_rows();
+    assert_eq!(
+        show.line_count(),
+        6,
+        "opening the child reveals every source line"
+    );
+}
+
+#[test]
+fn a_collapsed_container_hides_a_nested_collapse_entirely() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let Loaded::Show(show) = &mut app.loaded else {
+        panic!("expected a show");
+    };
+    show.fold_state.set(&path, "impl Widget", false);
+    show.ensure_visible_rows();
+
+    assert_eq!(show.visible_rows().len(), 1, "only the outer fold row");
+    assert_eq!(
+        show.visible_rows(),
+        &[VisibleRow::Fold {
+            line: 1,
+            summary_line: 1,
+            region_index: 0,
+            hidden: 5,
+            dropped: false,
+        }]
+    );
+}
+
+#[test]
+fn a_single_line_region_folds_with_zero_hidden_lines() {
+    let source = "trait Greeter {\n    fn hello(&self);\n}\n";
+    let app = show_app(vec![nested_outline("a.rs", source, (0, 2), (1, 1), true)]);
+    let show = show_ref(&app);
+
+    assert_eq!(show.line_count(), 3);
+    assert_eq!(
+        show.visible_rows()[1],
+        VisibleRow::Fold {
+            line: 2,
+            summary_line: 2,
+            region_index: 1,
+            hidden: 0,
+            dropped: false,
+        }
+    );
+}
+
+#[test]
+fn a_match_inside_a_fold_resolves_to_the_fold_row() {
+    let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
+    let mut app = show_app(vec![nested_outline("a.rs", source, (0, 5), (1, 4), true)]);
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.set_search("needle");
+    }
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.search.as_ref().expect("search").matches.len(),
+        2,
+        "both matches are in the hidden body"
+    );
+    assert_eq!(show.visible_row_for_source_line(1), Some(0));
+    assert_eq!(show.visible_row_for_source_line(2), Some(1), "fold row");
+    assert_eq!(show.visible_row_for_source_line(3), Some(1), "hidden body");
+    assert_eq!(show.visible_row_for_source_line(4), Some(1), "hidden body");
+    assert_eq!(show.visible_row_for_source_line(6), Some(2));
+    assert_eq!(show.visible_row_for_source_line(7), None);
+}
+
+#[test]
+fn stepping_to_a_match_inside_a_fold_opens_the_enclosing_regions() {
+    let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
+    let mut app = show_app(vec![nested_outline("a.rs", source, (0, 5), (1, 4), true)]);
+    focus_content(&mut app);
+    // Fold everything so the matched text sits behind both a collapsed container
+    // and a collapsed signature.
+    let folded = press(&app, &[Key::Char('z'), Key::Char('M')]);
+    assert_eq!(show_ref(&folded).line_count(), 1, "everything is folded");
+    let mut searching = folded;
+    if let Loaded::Show(show) = &mut searching.loaded {
+        show.set_search("needle");
+    }
+
+    let (stepped, _) = update(Msg::Key(Key::Char('n')), &searching);
+    let show = show_ref(&stepped);
+    let search = show.search.as_ref().expect("search");
+    let matched = search.matches[search.cursor].line;
+    assert!(
+        matched == 3 || matched == 4,
+        "the match is in the folded body: {matched}"
+    );
+    assert_eq!(show.line_count(), 6, "every enclosing region opened");
+    assert_eq!(
+        show.visible_row_for_source_line(matched),
+        Some(matched - 1),
+        "the matched line is now a real source row"
+    );
+    let row = show.visible_row_for_source_line(matched).expect("a row");
+    let viewport = stepped.size.height as usize - 4;
+    assert!(
+        row >= show.body.scroll as usize && row < show.body.scroll as usize + viewport,
+        "the matched row is scrolled into view: row {row}, scroll {}",
+        show.body.scroll
+    );
+    assert!(
+        !show.search_ranges(matched).is_empty(),
+        "the match stays highlighted after the rows changed"
+    );
+
+    // The auto-open writes ordinary overrides, so `zM` can close it again.
+    let closed = press(&stepped, &[Key::Char('z'), Key::Char('M')]);
+    assert_eq!(
+        show_ref(&closed).line_count(),
+        1,
+        "an explicit zM closes the auto-opened regions"
+    );
+}
+
+#[test]
+fn stepping_to_a_match_moves_the_cursor_to_the_match_row() {
+    let mut lines: Vec<String> = (1..=30).map(|n| format!("line {n}")).collect();
+    lines[24] = "the needle line".to_owned();
+    let source = lines.join("\n") + "\n";
+    let mut app = show_app(vec![source_outline("a.rs", &source)]);
+    app.size.height = 8;
+    focus_content(&mut app);
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.set_search("needle");
+    }
+
+    let (stepped, _) = update(Msg::Key(Key::Char('n')), &app);
+    let stepped = settle(stepped);
+    let show = show_ref(&stepped);
+    let search = show.search.as_ref().expect("search");
+    let matched = search.matches[search.cursor].line;
+    assert_eq!(matched, 25, "the needle is on line 25");
+    assert_eq!(
+        show.body.cursor_line, matched,
+        "stepping moves the cursor onto the match"
+    );
+    assert_view_consistent(show, 8);
+
+    // `j` continues from the match rather than snapping the viewport back to a
+    // stale cursor.
+    let advanced = press(&stepped, &[Key::Char('j')]);
+    let advanced = show_ref(&advanced);
+    assert_eq!(advanced.body.cursor_line, matched + 1);
+    assert_view_consistent(advanced, 8);
+}
+
+#[test]
+fn the_folded_body_renders_the_signature_and_hides_the_body() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )]);
+    let text = buffer_text(&render(&app, 100, 20));
+
+    assert!(text.contains("impl Widget {"), "{text}");
+    assert!(text.contains("fn size(&self) -> usize {"), "{text}");
+    assert!(text.contains("⋯ 3 lines"), "fold suffix missing: {text}");
+    assert!(
+        !text.contains("42"),
+        "the hidden body must be absent: {text}"
+    );
+    assert!(
+        !text.contains("let hidden"),
+        "the hidden body must be absent: {text}"
+    );
+}
+
+#[test]
+fn a_dropped_declaration_renders_the_hidden_in_mode_tag() {
+    let app = show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        false,
+    )]);
+    let text = buffer_text(&render(&app, 100, 20));
+
+    assert!(
+        text.contains("hidden in types"),
+        "the dropped tag is missing: {text}"
+    );
+    assert!(
+        !text.contains("42"),
+        "the hidden body must be absent: {text}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Tests mode: a filter over the outline
+// -----------------------------------------------------------------------
+
+#[test]
+fn tests_mode_removes_dropped_declarations_entirely() {
+    let app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    let show = show_ref(&app);
+
+    // The dropped top-level enum and the dropped helper inside `mod tests` are
+    // gone: no row and no lines.
+    for hidden in [1, 2, 3, 4, 9] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "line {hidden} must have no visible row: {:?}",
+            show.visible_rows()
+        );
+    }
+    assert!(
+        !show
+            .visible_rows()
+            .iter()
+            .any(|row| matches!(row, VisibleRow::Fold { dropped: true, .. })),
+        "tests mode must not emit a `hidden in tests` marker row: {:?}",
+        show.visible_rows()
+    );
+
+    // The retained container and its body show as source; the retained tests
+    // fold to their signature rows.
+    assert_eq!(show.visible_row_for_source_line(5), Some(0));
+    assert_eq!(show.visible_row_for_source_line(6), Some(1));
+    assert_eq!(show.visible_row_for_source_line(7), Some(2));
+    assert_eq!(
+        show.visible_row_for_source_line(12),
+        Some(5),
+        "a line inside a collapsed retained test maps to its fold row"
+    );
+    assert_eq!(
+        show.visible_rows()[5],
+        VisibleRow::Fold {
+            line: 11,
+            summary_line: 12,
+            region_index: 3,
+            hidden: 3,
+            dropped: false,
+        }
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("mod tests {"), "{text}");
+    assert!(text.contains("use super::*;"), "{text}");
+    assert!(text.contains("fn checks() {"), "{text}");
+    assert!(text.contains("fn top_level() {"), "{text}");
+    assert!(
+        !text.contains("pub enum Dropped"),
+        "the dropped declaration leaked: {text}"
+    );
+    assert!(
+        !text.contains("fn helper"),
+        "the dropped helper leaked: {text}"
+    );
+    assert!(
+        !text.contains("let hidden"),
+        "the hidden body leaked: {text}"
+    );
+    assert!(
+        !text.contains("assert!(true)"),
+        "the hidden body leaked: {text}"
+    );
+    assert!(
+        !text.contains("hidden in tests"),
+        "a marker row leaked: {text}"
+    );
+}
+
+#[test]
+fn tests_mode_with_no_retained_declarations_renders_the_empty_state() {
+    let app = show_app_mode(
+        vec![dropped_container_outline("a.rs", NESTED_SOURCE)],
+        ProjectionMode::Tests,
+    );
+    assert_eq!(
+        show_ref(&app).line_count(),
+        0,
+        "a file with nothing retained has no rows"
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("No test declarations"), "{text}");
+    assert!(text.contains("Nothing retained in this mode."), "{text}");
+}
+
+#[test]
+fn tests_mode_selection_anchors_the_cursor_to_a_visible_row() {
+    let mut app = show_app_mode(
+        vec![tests_filter_outline(), source_outline("z.rs", "x\n")],
+        ProjectionMode::Tests,
+    );
+
+    // A fresh load already anchors: line 1 of `a.rs` is not retained, so the
+    // cursor lands on the first visible row (line 5) rather than staying at 1.
+    assert_eq!(
+        show_ref(&app).body.cursor_line,
+        5,
+        "install_show_selection anchors the cursor"
+    );
+    assert_eq!(show_ref(&app).cursor_row(), Some(0), "the cursor is drawn");
+
+    // Selecting another file resets the body to line 1; selecting the filtered
+    // file back must anchor again instead of leaving the cursor on hidden line 1.
+    select_path(&mut app, RepoPath::new("z.rs").expect("valid path"));
+    assert_eq!(show_ref(&app).body.cursor_line, 1);
+    select_path(&mut app, RepoPath::new("a.rs").expect("valid path"));
+    let mut app = settle(app);
+
+    let show = show_ref(&app);
+    assert_eq!(
+        show.body.cursor_line, 5,
+        "a tree selection anchors onto the first visible row"
+    );
+    assert_eq!(show.cursor_row(), Some(0), "the cursor is drawn");
+    assert!(show.visible_row_for_source_line(5).is_some());
+
+    // `j`/`k` still step between visible rows from the anchored cursor.
+    focus_content(&mut app);
+    let down = press(&app, &[Key::Char('j')]);
+    assert_eq!(show_ref(&down).body.cursor_line, 6);
+    assert_eq!(show_ref(&down).cursor_row(), Some(1));
+    let up = press(&down, &[Key::Char('k')]);
+    assert_eq!(show_ref(&up).body.cursor_line, 5);
+    assert_eq!(show_ref(&up).cursor_row(), Some(0));
+}
+
+#[test]
+fn visible_row_for_source_line_reports_gaps_in_tests_mode() {
+    let app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.visible_row_for_source_line(1),
+        None,
+        "a line in a dropped declaration has no row"
+    );
+    assert_eq!(
+        show.visible_row_for_source_line(9),
+        None,
+        "a dropped helper inside a retained container has no row"
+    );
+    assert_eq!(
+        show.visible_row_for_source_line(16),
+        None,
+        "a blank line outside every retained region has no row"
+    );
+    assert_eq!(
+        show.visible_row_for_source_line(6),
+        Some(1),
+        "a line in the retained container maps to its source row"
+    );
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(13)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Fold { line: 11, .. })
+        ),
+        "a line inside a collapsed retained test maps to its fold row"
+    );
+}
+
+#[test]
+fn tests_mode_exclusion_survives_open_all() {
+    let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    focus_content(&mut app);
+    // `zR` opens every region, but an excluded declaration has no fold state to
+    // open: it must stay removed.
+    let opened = press(&app, &[Key::Char('z'), Key::Char('R')]);
+    let show = show_ref(&opened);
+    for hidden in [1, 2, 3, 4, 9] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "line {hidden} must stay hidden after zR"
+        );
+    }
+    assert!(
+        !show
+            .visible_rows()
+            .iter()
+            .any(|row| matches!(row, VisibleRow::Fold { dropped: true, .. }))
+    );
+}
+
+#[test]
+fn types_mode_keeps_marker_rows_for_dropped_declarations() {
+    let app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Types);
+    let show = show_ref(&app);
+
+    let dropped: Vec<usize> = show
+        .visible_rows()
+        .iter()
+        .filter_map(|row| match row {
+            VisibleRow::Fold {
+                line,
+                dropped: true,
+                ..
+            } => Some(*line),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dropped,
+        vec![1, 9],
+        "types mode still marks dropped declarations: {:?}",
+        show.visible_rows()
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("pub enum Dropped"), "{text}");
+    assert!(text.contains("hidden in types"), "{text}");
+}
+
+#[test]
+fn tests_mode_search_ignores_hidden_dropped_matches_and_reveals_retained_ones() {
+    let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    focus_content(&mut app);
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.set_search("hidden");
+    }
+    let show = show_ref(&app);
+    let matches = &show.search.as_ref().expect("search").matches;
+    assert_eq!(
+        matches.len(),
+        1,
+        "only the visible `let hidden` line matches"
+    );
+    assert_eq!(matches[0].line, 13);
+
+    // Stepping opens the collapsed retained test and lands the cursor on it.
+    let stepped = press(&app, &[Key::Char('n')]);
+    let show = show_ref(&stepped);
+    assert_eq!(show.body.cursor_line, 13, "the cursor reaches the match");
+    assert!(
+        show.visible_row_for_source_line(13).is_some(),
+        "the match's line is now a visible source row"
+    );
+
+    // A match that lives only in a dropped declaration is not counted and is
+    // skipped by stepping.
+    let mut dropped = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    if let Loaded::Show(show) = &mut dropped.loaded {
+        show.set_search("Dropped");
+    }
+    assert!(
+        show_ref(&dropped)
+            .search
+            .as_ref()
+            .expect("search")
+            .matches
+            .is_empty(),
+        "a match inside a dropped declaration must not be counted"
+    );
+    let before = show_ref(&dropped).body.cursor_line;
+    let stepped = press(&dropped, &[Key::Char('n')]);
+    assert_eq!(
+        show_ref(&stepped).body.cursor_line,
+        before,
+        "stepping does nothing when no visible match exists"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Interactive folding
+// -----------------------------------------------------------------------
+
+/// A container with one folded child, both retained.
+fn folder_app() -> App {
+    show_app(vec![nested_outline(
+        "a.rs",
+        NESTED_SOURCE,
+        (0, 5),
+        (1, 4),
+        true,
+    )])
+}
+
+#[test]
+fn the_body_cursor_moves_and_stays_in_view() {
+    let source: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+    let mut app = show_app(vec![source_outline("a.rs", &source)]);
+    app.size.height = 6;
+    focus_content(&mut app);
+    assert_eq!(show_ref(&app).body.cursor_line, 1);
+
+    let viewport = app.size.height as usize - 4;
+    for _ in 0..5 {
+        app = press(&app, &[Key::Char('j')]);
+    }
+    let show = show_ref(&app);
+    let cursor = show.body.cursor_line;
+    let row = show.visible_row_for_source_line(cursor).expect("a row");
+    assert_eq!(cursor, 6, "j moves one visible row");
+    assert!(show.body.scroll > 0, "the cursor stays in view");
+    assert!(
+        row >= show.body.scroll as usize && row < show.body.scroll as usize + viewport,
+        "the cursor row is within the viewport"
+    );
+
+    let down = press(&app, &[Key::Char('G')]);
+    assert_eq!(show_ref(&down).body.cursor_line, 20);
+    assert!(show_ref(&down).body.scroll > 0, "G scrolls the last row in");
+
+    let up = press(&down, &[Key::Char('g')]);
+    assert_eq!(show_ref(&up).body.cursor_line, 1);
+    assert_eq!(show_ref(&up).body.scroll, 0);
+
+    let end = press(&up, &[Key::End]);
+    assert_eq!(show_ref(&end).body.cursor_line, 20);
+    assert_eq!(show_ref(&press(&end, &[Key::Home])).body.cursor_line, 1);
+}
+
+#[test]
+fn za_toggles_the_fold_at_the_cursor() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    assert_eq!(show_ref(&app).line_count(), 3);
+
+    // Move onto the folded child declaration, then toggle it open and shut.
+    let app = press(&app, &[Key::Char('j')]);
+    assert_eq!(show_ref(&app).body.cursor_line, 2);
+
+    let expanded = press(&app, &[Key::Char('z'), Key::Char('a')]);
+    assert_eq!(show_ref(&expanded).line_count(), 6, "the body rows appear");
+    assert_eq!(show_ref(&expanded).body.cursor_line, 2);
+
+    let collapsed = press(&expanded, &[Key::Char('z'), Key::Char('a')]);
+    assert_eq!(
+        show_ref(&collapsed).line_count(),
+        3,
+        "the fold closes again"
+    );
+}
+
+#[test]
+fn za_at_the_container_start_folds_the_container() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    // `Enter` is an alias for toggle.
+    let toggled = press(&app, &[Key::Char('z'), Key::Enter]);
+    assert_eq!(show_ref(&toggled).line_count(), 1);
+    assert_eq!(show_ref(&toggled).body.cursor_line, 1);
+}
+
+#[test]
+fn zc_closes_the_enclosing_container_from_a_line_inside_it() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let last = press(&app, &[Key::Char('G')]);
+    assert_eq!(show_ref(&last).body.cursor_line, 6);
+
+    let closed = press(&last, &[Key::Char('z'), Key::Char('c')]);
+    assert_eq!(show_ref(&closed).line_count(), 1, "the container folds");
+    assert_eq!(show_ref(&closed).body.cursor_line, 1, "the cursor snaps in");
+}
+
+#[test]
+fn zc_closes_the_innermost_enclosing_region() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    // Open the child, then sit on a body line inside it.
+    let open = press(&app, &[Key::Char('j'), Key::Char('z'), Key::Char('o')]);
+    assert_eq!(show_ref(&open).line_count(), 6);
+    let inside = press(&open, &[Key::Char('j')]);
+    assert_eq!(show_ref(&inside).body.cursor_line, 3);
+
+    let closed = press(&inside, &[Key::Char('z'), Key::Char('c')]);
+    assert_eq!(show_ref(&closed).line_count(), 3, "only the child folds");
+    assert_eq!(
+        show_ref(&closed).visible_rows()[1],
+        VisibleRow::Fold {
+            line: 2,
+            summary_line: 2,
+            region_index: 1,
+            hidden: 3,
+            dropped: false,
+        }
+    );
+}
+
+#[test]
+fn z_open_recursive_and_close_recursive_set_descendants() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let closed = press(&app, &[Key::Char('z'), Key::Char('C')]);
+    assert_eq!(show_ref(&closed).line_count(), 1, "zC closes the subtree");
+
+    let opened = press(&closed, &[Key::Char('z'), Key::Char('O')]);
+    assert_eq!(
+        show_ref(&opened).line_count(),
+        6,
+        "zO opens the region and its descendants"
+    );
+}
+
+#[test]
+fn z_open_all_and_close_all_set_every_region() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let closed = press(&app, &[Key::Char('z'), Key::Char('M')]);
+    assert_eq!(show_ref(&closed).line_count(), 1, "zM closes everything");
+
+    let opened = press(&closed, &[Key::Char('z'), Key::Char('R')]);
+    assert_eq!(show_ref(&opened).line_count(), 6, "zR opens everything");
+}
+
+/// Asserts both body offsets are within the current projection and the cursor
+/// row sits inside a `viewport(height)`-row window.
+fn assert_view_consistent(show: &Show, height: u16) {
+    let count = show.line_count();
+    assert!(count > 0, "the projection must not be empty");
+    assert!(
+        (show.body.scroll as usize) < count,
+        "scroll {} must be below line_count {}",
+        show.body.scroll,
+        count
+    );
+    let max_h = show.max_line_width().saturating_sub(1) as u16;
+    assert!(
+        show.body.hscroll <= max_h,
+        "hscroll {} must be <= max_line_width-1 {}",
+        show.body.hscroll,
+        max_h
+    );
+    let viewport = height.saturating_sub(4) as usize;
+    assert!(viewport > 0, "the test viewport must be non-empty");
+    if let Some(row) = show.cursor_row() {
+        assert!(
+            row >= show.body.scroll as usize && row < show.body.scroll as usize + viewport,
+            "cursor row {row} must be inside [{}..{})",
+            show.body.scroll,
+            show.body.scroll as usize + viewport
+        );
+    }
+}
+
+/// A container with `methods` one-line folded methods, so the projection is
+/// taller than a small viewport while still containing fold regions.
+fn multi_method_outline(path: &str, methods: usize) -> SourceOutline {
+    let supported = supported(path);
+    let mut source = String::from("impl Widget {\n");
+    for index in 0..methods {
+        source.push_str(&format!("    fn m{index}(&self) {{}}\n"));
+    }
+    source.push_str("}\n");
+    let last = methods + 1;
+    let container = item_at("impl Widget", None, ItemKind::TraitImplementation, 0, last);
+    let superset: Vec<ProjectedItem> = std::iter::once(container)
+        .chain((0..methods).map(|index| {
+            let line = index + 1;
+            item_at(
+                &format!("impl Widget::m{index}"),
+                Some("impl Widget"),
+                ItemKind::Method,
+                line,
+                line,
+            )
+        }))
+        .collect();
+    let outline = assemble_outline(&supported, superset.clone(), superset).expect("valid fixture");
+    SourceOutline { outline, source }
+}
+
+#[test]
+fn shrinking_fold_actions_clamp_the_scroll_and_keep_the_cursor_in_view() {
+    let focus = |height: u16| {
+        let mut app = folder_app();
+        app.size.height = height;
+        focus_content(&mut app);
+        app
+    };
+    // `G` scrolls to the bottom of a two-row viewport; a shrinking fold then
+    // leaves `scroll` past the new row count unless it is clamped.
+    for (name, keys) in [
+        ("zc", [Key::Char('z'), Key::Char('c')].as_slice()),
+        ("zC", [Key::Char('z'), Key::Char('C')].as_slice()),
+        ("zM", [Key::Char('z'), Key::Char('M')].as_slice()),
+    ] {
+        let bottom = press(&focus(6), &[Key::Char('G')]);
+        assert!(show_ref(&bottom).body.scroll > 0, "{name}: G scrolled");
+        let folded = press(&bottom, keys);
+        assert_eq!(
+            show_ref(&folded).line_count(),
+            1,
+            "{name}: everything folds"
+        );
+        assert_view_consistent(show_ref(&folded), 6);
+    }
+
+    // A widening action must keep the cursor row in view too.
+    let bottom = press(&focus(6), &[Key::Char('G')]);
+    let opened = press(&bottom, &[Key::Char('z'), Key::Char('R')]);
+    assert_eq!(show_ref(&opened).line_count(), 6, "zR opens everything");
+    assert_view_consistent(show_ref(&opened), 6);
+}
+
+#[test]
+fn fold_all_after_a_bottom_jump_leaves_source_rows_to_draw() {
+    // The exact blank-pane reproduction: jump to the bottom of a tall
+    // projection, fold everything, and the pane must still draw the one row
+    // rather than starting its draw past the end.
+    let mut app = show_app(vec![multi_method_outline("a.rs", 6)]);
+    app.size.height = 8;
+    focus_content(&mut app);
+    let bottom = press(&app, &[Key::Char('G')]);
+    assert!(
+        show_ref(&bottom).body.scroll > 0,
+        "G scrolled the tall body"
+    );
+
+    let folded = press(&bottom, &[Key::Char('z'), Key::Char('M')]);
+    let show = show_ref(&folded);
+    assert_eq!(show.line_count(), 1, "everything folds to one row");
+    assert_eq!(show.body.scroll, 0, "the scroll is clamped back to zero");
+    assert_view_consistent(show, 8);
+
+    let text = buffer_text(&render(&folded, 100, 8));
+    assert!(
+        text.contains("impl Widget {"),
+        "the pane must not be blank: {text}"
+    );
+}
+
+#[test]
+fn a_fold_action_clamps_hscroll_into_range() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    // Pan to the widest the fold row's suffix allows.
+    let mut wide = app;
+    for _ in 0..128 {
+        wide = press(&wide, &[Key::Char('l')]);
+    }
+    let before = show_ref(&wide).body.hscroll;
+    assert!(before > 0, "the body panned right");
+    assert_eq!(
+        before as usize,
+        show_ref(&wide).max_line_width() - 1,
+        "panning stops at the widest visible row"
+    );
+
+    // Opening the region drops the fold suffix and narrows the projection.
+    let opened = press(&wide, &[Key::Char('z'), Key::Char('R')]);
+    assert!(
+        show_ref(&opened).body.hscroll < before,
+        "hscroll must shrink with the projection"
+    );
+    assert_view_consistent(show_ref(&opened), wide.size.height);
+}
+
+#[test]
+fn a_resize_scrolls_the_cursor_back_into_view() {
+    let source: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+    let mut app = show_app(vec![source_outline("a.rs", &source)]);
+    app.size.height = 20;
+    focus_content(&mut app);
+    let bottom = press(&app, &[Key::Char('G')]);
+    assert_eq!(show_ref(&bottom).body.cursor_line, 30);
+
+    let (resized, _) = update(
+        Msg::Resize {
+            width: 100,
+            height: 6,
+        },
+        &bottom,
+    );
+    let resized = settle(resized);
+    let show = show_ref(&resized);
+    assert_eq!(
+        show.body.cursor_line, 30,
+        "the resize keeps the cursor on its line"
+    );
+    assert_view_consistent(show, 6);
+}
+
+#[test]
+fn a_bare_enter_toggles_the_fold_in_the_body() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    // Move onto the folded child, then toggle it with a bare Enter.
+    let app = press(&app, &[Key::Char('j')]);
+    assert_eq!(show_ref(&app).body.cursor_line, 2);
+    assert_eq!(show_ref(&app).line_count(), 3);
+
+    let expanded = press(&app, &[Key::Enter]);
+    assert_eq!(show_ref(&expanded).line_count(), 6, "Enter opens the fold");
+
+    let collapsed = press(&expanded, &[Key::Enter]);
+    assert_eq!(
+        show_ref(&collapsed).line_count(),
+        3,
+        "Enter closes it again"
+    );
+}
+
+#[test]
+fn the_z_prefix_cancels_on_an_unrelated_key_and_on_esc() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+
+    let pending = press(&app, &[Key::Char('z')]);
+    assert_eq!(pending.pending, Some('z'));
+
+    let cancelled = press(&pending, &[Key::Char('x')]);
+    assert_eq!(cancelled.pending, None);
+    assert_eq!(
+        show_ref(&cancelled).body.cursor_line,
+        1,
+        "the unrelated key is swallowed"
+    );
+
+    let escaped = press(&pending, &[Key::Esc]);
+    assert_eq!(escaped.pending, None);
+    assert_eq!(show_ref(&escaped).body.cursor_line, 1);
+
+    // A real key after a cancelled prefix behaves normally.
+    let after = press(&cancelled, &[Key::Char('j')]);
+    assert_eq!(show_ref(&after).body.cursor_line, 2);
+}
+
+#[test]
+fn a_mouse_event_clears_the_z_prefix() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let armed = press(&app, &[Key::Char('z')]);
+    assert_eq!(armed.pending, Some('z'));
+
+    // A wheel over the body changes focus; the armed prefix must not swallow
+    // the next key.
+    let (cleared, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &armed);
+    assert_eq!(cleared.pending, None);
+
+    let moved = press(&cleared, &[Key::Char('j')]);
+    assert_eq!(
+        show_ref(&moved).body.cursor_line,
+        2,
+        "j was not swallowed by a stale prefix"
+    );
+}
+
+#[test]
+fn a_selection_change_clears_the_z_prefix() {
+    let mut app = show_app(vec![
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+    ]);
+    focus_content(&mut app);
+    let armed = press(&app, &[Key::Char('z')]);
+    assert_eq!(armed.pending, Some('z'));
+
+    let mut changed = armed.clone();
+    select_path(&mut changed, RepoPath::new("b.rs").expect("valid path"));
+    assert_eq!(changed.pending, None, "a selection change drops the prefix");
+}
+
+#[test]
+fn a_fold_override_survives_a_reload_and_a_selection_change() {
+    let files = || {
+        vec![
+            nested_outline("a.rs", NESTED_SOURCE, (0, 5), (1, 4), true),
+            source_outline("b.rs", "x\n"),
+        ]
+    };
+    let mut app = show_app(files());
+    focus_content(&mut app);
+    let opened = press(&app, &[Key::Char('j'), Key::Char('z'), Key::Char('a')]);
+    assert_eq!(show_ref(&opened).line_count(), 6);
+
+    let (reloaded, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                mode: ProjectionMode::Signatures,
+                ..show_request()
+            },
+            result: Ok(files().into()),
+        },
+        &opened,
+    );
+    let reloaded = settle(reloaded);
+    assert_eq!(selected(&reloaded).as_deref(), Some("a.rs"));
+    assert_eq!(
+        show_ref(&reloaded).line_count(),
+        6,
+        "the override is sticky across a mode reload"
+    );
+
+    let mut tree = reloaded;
+    tree.loaded.set_focus(Focus::Tree);
+    let down = press(&tree, &[Key::Char('j')]);
+    assert_eq!(selected(&down).as_deref(), Some("b.rs"));
+    let up = press(&down, &[Key::Char('k')]);
+    assert_eq!(selected(&up).as_deref(), Some("a.rs"));
+    assert_eq!(
+        show_ref(&up).line_count(),
+        6,
+        "the override is sticky across a selection change"
+    );
+}
+
+#[test]
+fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
+    let app = folder_app();
+    let entries = app.loaded.palette_entries();
+    for (action, hint) in [
+        (ShowAction::ToggleFold, "za"),
+        (ShowAction::OpenFold, "zo"),
+        (ShowAction::CloseFold, "zc"),
+        (ShowAction::OpenRecursive, "zO"),
+        (ShowAction::CloseRecursive, "zC"),
+        (ShowAction::OpenAll, "zR"),
+        (ShowAction::CloseAll, "zM"),
+    ] {
+        assert!(
+            entries
+                .iter()
+                .any(|(entry, _, key)| *entry == Action::Show(action) && *key == hint),
+            "missing palette entry for {hint}"
+        );
+    }
+
+    let mut focused = app.clone();
+    focus_content(&mut focused);
+    let mut cmds = Vec::new();
+    let mut via_palette = focused.clone();
+    apply_action(
+        &mut via_palette,
+        Action::Show(ShowAction::CloseAll),
+        &mut cmds,
+    );
+    let via_keys = press(&focused, &[Key::Char('z'), Key::Char('M')]);
+    assert_eq!(show_ref(&via_palette).line_count(), 1);
+    assert_eq!(
+        show_ref(&via_palette).line_count(),
+        show_ref(&via_keys).line_count()
+    );
+}
+
+#[test]
+fn the_focused_body_draws_the_cursor_row() {
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let theme = &app.chrome.theme;
+    let cursor_bg = theme.color(theme.palette.surface_alt);
+
+    let buffer = render(&app, 100, 20);
+    let row = row_with(&buffer, "impl Widget {").expect("the cursor row");
+    let x = cell_x_of(&buffer, row, "impl Widget {").expect("the source cell");
+    assert_eq!(
+        buffer.cell((x, row)).map(|cell| cell.bg),
+        Some(cursor_bg),
+        "the cursor row carries a distinct background"
+    );
+
+    let unfocused = folder_app();
+    let buffer = render(&unfocused, 100, 20);
+    let row = row_with(&buffer, "impl Widget {").expect("the cursor row");
+    let x = cell_x_of(&buffer, row, "impl Widget {").expect("the source cell");
+    assert_ne!(
+        buffer.cell((x, row)).map(|cell| cell.bg),
+        Some(cursor_bg),
+        "an unfocused body draws no cursor"
+    );
 }
 
 #[test]
@@ -1401,8 +2982,8 @@ fn the_tree_keeps_a_quiet_selected_row_when_the_body_has_focus() {
 fn nerd_icons_render_and_leave_labels_intact() {
     let build = || {
         show_app(vec![
-            projected("src/main.rs", "x\n"),
-            projected("src/Main.elm", "y\n"),
+            source_outline("src/main.rs", "x\n"),
+            source_outline("src/Main.elm", "y\n"),
         ])
     };
     let plain = build();
@@ -1448,7 +3029,7 @@ fn a_narrow_diff_stacks_old_over_new_when_focused() {
 
 #[test]
 fn a_narrow_terminal_shows_only_the_focused_pane() {
-    let app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     let tree = buffer_text(&render(&app, 60, 20));
     assert!(tree.contains("Files"));
     assert!(!tree.contains("pub fn a();"), "body must be hidden: {tree}");
@@ -1469,13 +3050,10 @@ fn a_tiny_terminal_shows_a_message_instead_of_a_frame() {
 
 #[test]
 fn an_empty_result_renders_a_clear_empty_state() {
-    let app = show_app(vec![projected("empty.rs", "")]);
+    let app = show_app(Vec::new());
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("No files"), "{text}");
-    assert!(
-        text.contains("No projected file content in this scope."),
-        "{text}"
-    );
+    assert!(text.contains("No source files in this scope."), "{text}");
 }
 
 #[test]
@@ -1489,7 +3067,7 @@ fn a_diff_with_no_rows_renders_a_clear_empty_state() {
 #[test]
 fn a_long_line_is_clipped_and_never_overwrites_the_tree() {
     let long = "x".repeat(300);
-    let app = show_app(vec![projected("a.rs", &format!("{long}\n"))]);
+    let app = show_app(vec![source_outline("a.rs", &format!("{long}\n"))]);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("Files"), "the tree must survive: {text}");
     assert!(!text.contains(&long), "the long line must be clipped");
@@ -1498,7 +3076,7 @@ fn a_long_line_is_clipped_and_never_overwrites_the_tree() {
 
 #[test]
 fn responsive_boundaries_pick_the_right_layout() {
-    let app = show_app(vec![projected("a.rs", "pub fn a();\n")]);
+    let app = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     let wide = buffer_text(&render(&app, 80, 20));
     assert!(wide.contains("Files") && wide.contains("pub fn a();"));
 
@@ -1512,7 +3090,7 @@ fn responsive_boundaries_pick_the_right_layout() {
 
 #[test]
 fn horizontal_scroll_shifts_the_visible_columns() {
-    let mut app = show_app(vec![projected("a.rs", "abcdef\n")]);
+    let mut app = show_app(vec![source_outline("a.rs", "abcdef\n")]);
     focus_content(&mut app);
     assert!(buffer_text(&render(&app, 100, 20)).contains("abcdef"));
 
@@ -1530,7 +3108,7 @@ fn the_show_pane_carries_syntax_colors() {
     if !crate::render::theme::colors_enabled() {
         return;
     }
-    let app = show_app(vec![projected("a.rs", "pub struct User;\n")]);
+    let app = show_app(vec![source_outline("a.rs", "pub struct User;\n")]);
     let buffer = render(&app, 100, 20);
     let colored = (0..buffer.area.height).any(|y| {
         (0..buffer.area.width).any(|x| {
@@ -1547,7 +3125,12 @@ fn non_utf8_path_components_render_escaped() {
     let path =
         SupportedPath::new(RepoPath::new(b"src/\xFF/lib.rs".as_slice()).expect("valid path"))
             .expect("supported path");
-    let file = ProjectedFile::try_new(path, vec![item("x\n")]).expect("valid fixture");
+    let outline =
+        assemble_outline(&path, vec![item("x\n")], vec![item("x\n")]).expect("valid fixture");
+    let file = SourceOutline {
+        outline,
+        source: "x\n".to_owned(),
+    };
     let app = show_app(vec![file]);
     let labels: Vec<String> = app.tree.rows.iter().map(|row| row.label.clone()).collect();
     assert!(labels.iter().any(|label| label == "src"), "{labels:?}");
@@ -1574,9 +3157,17 @@ fn a_long_diff_line_is_wrapped_inside_its_pane() {
 fn the_help_overlay_lists_the_keys() {
     let mut app = two_files();
     app.overlay = Some(Overlay::Help);
-    let text = buffer_text(&render(&app, 100, 20));
+    let text = buffer_text(&render(&app, 100, 32));
     assert!(text.contains("help"), "{text}");
     assert!(text.contains("quit"), "{text}");
+    assert!(text.contains("Fold"), "the fold section is missing: {text}");
+    for key in ["Enter / za", "zo / zc", "zO / zC", "zR / zM"] {
+        assert!(text.contains(key), "missing fold key {key}: {text}");
+    }
+    assert!(
+        text.contains("wheel"),
+        "the popup must fit every line: {text}"
+    );
 }
 
 #[test]
