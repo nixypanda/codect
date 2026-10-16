@@ -25,15 +25,10 @@ use tui::bench::{
     show_model, update,
 };
 
-/// The pinned range for the diff frames, matching the CLI showcase (PR #16).
 const RANGE_BASE: &str = "4e09c9c^";
 const RANGE_TARGET: &str = "4e09c9c";
-/// A pinned, stable first-parent range for the commits picker.
 const COMMITS_BASE: &str = "4e09c9c";
 const COMMITS_TARGET: &str = "19decfa";
-/// The show frame opens on `crates/base/src/diagnostic.rs`; scroll far enough
-/// that its collapsed regions — the headline `⋯ N lines hidden in types` fold
-/// rows — are in the 40-row viewport (the first starts at source line 63).
 const SHOW_FOLD_SCROLL: u16 = 40;
 
 fn main() -> ExitCode {
@@ -56,7 +51,6 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let engine = Engine::discover(Path::new("."))?;
     let selection = Selection::all();
     let (width, height) = (args.width, args.height);
-    // The bench façade labels the header `/repo`; use the real repository name.
     let root = engine
         .root()
         .canonicalize()
@@ -71,11 +65,9 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let files = engine.show_source_outlines("HEAD", ProjectionMode::Types, &selection)?;
     let mut show = show_model(ProjectionMode::Types, files, width, height);
     show.root = root.clone();
-    // Scroll onto a fold so the showcase frames the source explorer's headline.
     set_body_scroll(&mut show, SHOW_FOLD_SCROLL);
     render("tui-show", &show, &args.out, width, height)?;
 
-    // The command palette is a global overlay; `update` opens it purely.
     let (palette, _) = update(Msg::Key(Key::CtrlP), &show);
     render("tui-overlay", &settle(palette), &args.out, width, height)?;
 
@@ -109,17 +101,11 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Renders `model` and writes `<out>/<name>.ansi`.
 fn render(name: &str, model: &Model, out: &Path, width: u16, height: u16) -> io::Result<()> {
     let buffer = render_to_buffer(model, width, height);
     fs::write(out.join(format!("{name}.ansi")), buffer_to_ansi(&buffer))
 }
 
-/// Serializes a composed frame to ANSI SGR, one line per buffer row.
-///
-/// Ratatui already holds the final grid, so this is a cell walk, not a terminal
-/// emulator. A wide glyph's continuation cell has an empty symbol and is
-/// skipped, which keeps the two-column glyph aligned.
 fn buffer_to_ansi(buffer: &Buffer) -> String {
     let width = buffer.area.width as usize;
     if width == 0 {

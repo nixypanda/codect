@@ -41,12 +41,7 @@ use tui::bench::{self, Key, Model, Msg};
 const WIDE: (u16, u16) = (140, 40);
 const MEDIUM: (u16, u16) = (100, 30);
 const NARROW: (u16, u16) = (60, 20);
-// Below the minimum size, so the "terminal too small" view draws.
 const TINY: (u16, u16) = (30, 6);
-
-// ---------------------------------------------------------------------------
-// Fixtures and scenarios
-// ---------------------------------------------------------------------------
 
 fn fixture(relative: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -63,8 +58,6 @@ fn elm_source() -> String {
     fixture("elm/normal-module/input.elm")
 }
 
-// Repeats the Rust fixture until it has at least `lines` lines, so a long file
-// still highlights like real Rust rather than one repeated word.
 fn long_rust(lines: usize) -> String {
     let base = rust_source();
     let base_lines = base.lines().count().max(1);
@@ -127,7 +120,6 @@ fn large_diff() -> FileDiff {
     bench::file_diff("src/lib.rs", Some(&old), Some(&new))
 }
 
-// Many focused diffs, so moving the selection recomputes highlight and layout.
 fn many_diffs(count: usize) -> Vec<FileDiff> {
     (0..count)
         .map(|index| {
@@ -159,10 +151,6 @@ fn type_text(model: &Model, text: &str) -> Model {
     text.chars()
         .fold(model.clone(), |next, ch| press(&next, Key::Char(ch)))
 }
-
-// ---------------------------------------------------------------------------
-// Frame benchmarks
-// ---------------------------------------------------------------------------
 
 fn bench_warm(
     group: &mut BenchmarkGroup<'_, WallTime>,
@@ -295,10 +283,6 @@ fn cold_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
-// ---------------------------------------------------------------------------
-// update (highlighting and diff layout)
-// ---------------------------------------------------------------------------
-
 fn update_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("update");
     configure(&mut group);
@@ -353,10 +337,6 @@ fn update_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
-// ---------------------------------------------------------------------------
-// Tree scrolling
-// ---------------------------------------------------------------------------
-
 const SCROLL_SIZES: [usize; 4] = [1, 10, 100, 300];
 
 fn scroll_benchmarks(c: &mut Criterion) {
@@ -368,9 +348,6 @@ fn scroll_benchmarks(c: &mut Criterion) {
     let model = show_large_tree(WIDE.0, WIDE.1);
 
     for n in SCROLL_SIZES {
-        // Pure message handling: how much work `update` does per row as the
-        // cursor passes over the tree. Highlighting is deferred to `settle`, so
-        // this is now cheap regardless of how many rows are crossed.
         group.bench_with_input(BenchmarkId::new("updates_only", n), &n, |b, &n| {
             b.iter_batched(
                 || model.clone(),
@@ -400,8 +377,6 @@ fn scroll_benchmarks(c: &mut Criterion) {
             );
         });
 
-        // The previous runtime: settle and draw after every single row. This
-        // reproduces the pre-coalescing cost for comparison.
         group.bench_with_input(BenchmarkId::new("per_step", n), &n, |b, &n| {
             let mut terminal = bench::terminal(WIDE.0, WIDE.1);
             b.iter_batched(
@@ -422,15 +397,9 @@ fn scroll_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
-// ---------------------------------------------------------------------------
-// Per-part seams
-// ---------------------------------------------------------------------------
-
 fn parts_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("parts");
     configure(&mut group);
-    // A 4000-line highlight is hundreds of milliseconds per iteration, so the
-    // group needs a longer window than a frame.
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(20);
 

@@ -1,17 +1,15 @@
 //! A small bounded cache used for derived, pure, per-path work.
+//!
+//! Entries are evicted by insertion order rather than true recency, because
+//! `view` reads them without `&mut self` and for navigation the insertion order
+//! is the access order.
 
 use std::collections::{BTreeMap, VecDeque};
 
 use base::RepoPath;
 
-/// How many entries a [`BoundedCache`] retains before the oldest is dropped.
 pub(crate) const CAP: usize = 32;
 
-/// A small insertion-ordered map that evicts its oldest entry past a cap.
-///
-/// Eviction is by insertion order rather than true recency: entries are read
-/// without `&mut self` from `view`, and for navigation the insertion order is
-/// the access order.
 #[derive(Clone)]
 pub struct BoundedCache<V> {
     entries: BTreeMap<RepoPath, V>,

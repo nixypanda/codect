@@ -12,11 +12,8 @@ use engine::CommitStep;
 
 use crate::route::{DiffRequest, ShowRequest};
 
-/// A commits-view effect payload: the steps and the first step's diff.
 pub type HistoryPayload = (Arc<[CommitStep]>, Arc<[FileDiff]>);
 
-/// An effect the runtime must interpret. I/O is data, never a side effect of
-/// `update`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Cmd {
     Show(ShowRequest),

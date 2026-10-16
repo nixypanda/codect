@@ -14,6 +14,10 @@
 //!   an [`Engine`] and a fully-built [`Selection`].
 //! - Engine calls are effects: they are described by a [`app::Cmd`] and only
 //!   ever run here, never inside `update` or `view`.
+//!
+//! The terminal is restored on every exit path — a normal return, an error, or a
+//! panic — through `Session`'s drop and the panic hook, and each burst of input
+//! is folded into one batch so it costs a single settle and a single frame.
 
 use std::io::{IsTerminal, Stdout};
 use std::sync::{Arc, Once};
@@ -51,52 +55,31 @@ use render::theme::Theme;
 use util::input::{Key, Mouse, MouseKind};
 use view::view;
 
-// How long the driver waits for input before emitting a tick, which drives the
-// spinner and lets a diagnostic expire without another keypress.
 const TICK_INTERVAL: Duration = Duration::from_millis(150);
 
 const MAX_INPUT_BATCH: usize = 256;
 
-// The longest a batch may spend draining. Bounds how long a continuous stream
-// of events can delay drawing.
 const INPUT_BATCH_BUDGET: Duration = Duration::from_millis(8);
 
-/// Everything `run` needs beyond the engine, built by the caller.
-///
-/// The command line owns `argv` conversion and constructs the initial
-/// selection, so the frontend never parses an argument or resolves an area.
 #[derive(Clone, Debug)]
 pub struct TuiOptions {
-    /// The projection to open with; `m` re-runs it in the other mode.
     pub request: LoadRequest,
-    /// A short label for the initial scope, shown in the status bar.
     pub scope_label: String,
-    /// Whether the file tree draws Nerd Font icons.
     pub icons: IconStyle,
 }
 
-/// A failure that prevents the frontend from starting or continuing.
 #[derive(Debug, thiserror::Error)]
 pub enum TuiError {
-    /// Standard input or output is not a terminal, so no control sequence may
-    /// be emitted.
     #[error("standard input and standard output must be terminals")]
     NotATerminal,
 
-    /// The terminal could not be set up, read, or drawn.
     #[error("the terminal could not be used")]
     Terminal(#[source] std::io::Error),
 
-    /// The initial projection could not be produced. The terminal is restored
-    /// before this reaches the caller.
     #[error(transparent)]
     Engine(#[from] EngineError),
 }
 
-/// Runs the terminal frontend until the user quits.
-///
-/// Verifies the terminal before emitting any control sequence; a non-terminal
-/// invocation returns [`TuiError::NotATerminal`] without touching the screen.
 pub fn run(engine: Engine, options: TuiOptions) -> Result<(), TuiError> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(TuiError::NotATerminal);
@@ -109,10 +92,6 @@ pub fn run(engine: Engine, options: TuiOptions) -> Result<(), TuiError> {
     run_with(engine, options, theme, CrosstermDriver::default())
 }
 
-// The imperative seam: terminal lifecycle, event reading, and effect
-// interpretation. Generic over the driver so tests can inject one.
-//
-// The theme is resolved by the caller so tests never touch the terminal.
 fn run_with<D: Driver>(
     engine: Engine,
     options: TuiOptions,
@@ -134,9 +113,6 @@ fn run_with<D: Driver>(
         Icons::new(options.icons),
     );
 
-    // The initial projection is the startup effect. Unlike a later reload, a
-    // failure here is fatal: there is no previous screen to keep.
-    // Draw the busy state first so the spinner is visible while it runs.
     session.driver().draw(&model)?;
     let startup = interpret(&engine, request_into_cmd(request));
     match startup {
@@ -154,23 +130,18 @@ fn run_with<D: Driver>(
         }
     }
 
-    // The frame is redrawn only when something changed or is animating.
     let mut dirty = true;
     loop {
         if dirty {
-            // Selection-dependent work runs once per frame, on the final state.
             model = settle(model);
             session.driver().draw(&model)?;
         }
         let msg = session.driver().read_msg()?;
-        // An idle tick has nothing to animate, so it neither updates nor redraws.
         if matches!(msg, Msg::Tick) && !model.is_busy() && model.diagnostic.is_none() {
             dirty = false;
             continue;
         }
 
-        // Fold every event already queued into one batch, so a burst of tree
-        // navigation costs one settle and one frame instead of one per row.
         let mut batch = vec![msg];
         let deadline = Instant::now() + INPUT_BATCH_BUDGET;
         while batch.len() < MAX_INPUT_BATCH && Instant::now() < deadline {
@@ -190,7 +161,6 @@ fn run_with<D: Driver>(
         coalesce_commit_loads(&mut next, &mut cmds);
         next = settle(next);
         if !cmds.is_empty() {
-            // Draw the busy state before a blocking effect runs.
             session.driver().draw(&next)?;
         }
         let mut index = 0;
@@ -209,7 +179,6 @@ fn run_with<D: Driver>(
         }
     }
 
-    // `Session`'s drop restores the terminal, on this path and on any error.
     Ok(())
 }
 
@@ -312,21 +281,14 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
 }
 
 trait Driver {
-    // Stages terminal setup. On failure, the steps that succeeded are undone
-    // by [`Driver::teardown`].
     fn setup(&mut self) -> Result<(), TuiError>;
-    // Undoes exactly the steps that succeeded, in reverse order. Best-effort.
     fn teardown(&mut self);
     fn size(&mut self) -> Result<(u16, u16), TuiError>;
     fn draw(&mut self, model: &App) -> Result<(), TuiError>;
     fn read_msg(&mut self) -> Result<Msg, TuiError>;
-    // A message for an event that is already available, or `None` when the
-    // input queue is empty. Never blocks.
     fn try_read_msg(&mut self) -> Result<Option<Msg>, TuiError>;
 }
 
-// Owns a driver and guarantees its teardown on drop, whether the runtime
-// returns normally, returns an error, or unwinds.
 struct Session<D: Driver> {
     driver: D,
     attempted: bool,
@@ -341,7 +303,6 @@ impl<D: Driver> Session<D> {
     }
 
     fn setup(&mut self) -> Result<(), TuiError> {
-        // Marked before the attempt so a partial setup is still cleaned up.
         self.attempted = true;
         self.driver.setup()
     }
@@ -451,7 +412,6 @@ impl Driver for CrosstermDriver {
 
     fn read_msg(&mut self) -> Result<Msg, TuiError> {
         loop {
-            // Wait for an event, or emit a tick so the view can animate.
             if !event::poll(TICK_INTERVAL).map_err(TuiError::Terminal)? {
                 return Ok(Msg::Tick);
             }
@@ -529,8 +489,6 @@ fn translate(key: KeyEvent) -> Option<Msg> {
     Some(Msg::Key(key))
 }
 
-// Translates a terminal mouse event, dropping motion, drag, release, and
-// non-left buttons so they never reach the core.
 fn translate_mouse(mouse: MouseEvent) -> Option<Msg> {
     use crossterm::event::{MouseButton, MouseEventKind};
 
@@ -547,8 +505,6 @@ fn translate_mouse(mouse: MouseEvent) -> Option<Msg> {
     }))
 }
 
-// Installs a panic hook that restores the terminal before the panic message
-// is printed, so a crash does not leave the alternate screen active.
 fn install_panic_hook() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
@@ -560,7 +516,6 @@ fn install_panic_hook() {
     });
 }
 
-// Best-effort terminal restoration that never panics.
 fn restore_terminal() {
     let mut stdout = std::io::stdout();
     let _ = execute!(stdout, MouseCaptured(false));
@@ -618,7 +573,6 @@ mod tests {
 
         fn teardown(&mut self) {
             let mut log = self.log.borrow_mut();
-            // Undo in reverse order, matching the real driver.
             if log.setup.contains(&"mouse") {
                 log.teardown.push("mouse_off");
             }
@@ -805,8 +759,6 @@ mod tests {
         };
         run_with(engine, options, Theme::dark(), driver).expect("run");
 
-        // One frame for the initial busy state and one for the whole burst. The
-        // old one-message-per-frame loop would have drawn once per event.
         assert_eq!(log.borrow().draws, 2);
     }
 
@@ -818,7 +770,6 @@ mod tests {
         let driver = MockDriver::new(None, log.clone(), VecDeque::new());
 
         let options = TuiOptions {
-            // There is no such revision in an empty repository.
             request: LoadRequest::Show {
                 revision: "no-such-revision".to_owned(),
                 mode: ProjectionMode::Types,

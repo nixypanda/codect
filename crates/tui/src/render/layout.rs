@@ -5,6 +5,13 @@
 //! Everything here is pure. It reads no terminal and no model behaviour; the
 //! values it needs are passed in, including [`Focus`] and the responsive width
 //! constants it shares with the shell from [`crate::render::metrics`].
+//!
+//! The layout tiles its area exactly: adjacent panes share one divider rather
+//! than doubling it, and the commits band is pinned to the bottom, capped, and
+//! keeps a minimum strip above it. `body_layout` is the single source of truth
+//! shared with mouse hit-testing, so a click or wheel maps to the pane that was
+//! drawn, and each wrapped diff side keeps its own width with the shorter side
+//! padded with blank rows so later rows stay aligned.
 
 use base::{AlignedRow, DiffRowKind, FileDiff};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -13,8 +20,6 @@ use crate::render::highlight::{self, Run, StyledLine};
 use crate::render::metrics::{Focus, SIDE_BY_SIDE_MIN_WIDTH};
 use crate::render::theme::Theme;
 
-// Splits a terminal of `width` × `height` into header, content, and status.
-// Pure, so `update` and `view` agree on where the content body sits.
 pub(crate) fn frame_areas(width: u16, height: u16) -> (Rect, Rect, Rect) {
     let area = Rect::new(0, 0, width, height);
     let chunks = Layout::vertical([
@@ -26,8 +31,6 @@ pub(crate) fn frame_areas(width: u16, height: u16) -> (Rect, Rect, Rect) {
     (chunks[0], chunks[1], chunks[2])
 }
 
-// Where a column sits among its neighbours, which decides which borders it
-// draws so adjacent panes share a single divider instead of doubling it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Edge {
     Solo,
@@ -36,11 +39,6 @@ pub(crate) enum Edge {
     Right,
 }
 
-// Splits `area` into content columns separated by single-column dividers.
-//
-// `weights` are relative widths. Returns `(columns, dividers)`, where
-// `dividers` has one fewer entry than `columns`. When there is not enough room
-// for every divider, they are dropped and the columns share the space.
 pub(crate) fn split_with_dividers(area: Rect, weights: &[u16]) -> (Vec<Rect>, Vec<Rect>) {
     let count = weights.len();
     if count == 0 {
@@ -52,7 +50,6 @@ pub(crate) fn split_with_dividers(area: Rect, weights: &[u16]) -> (Vec<Rect>, Ve
 
     let total_weight: u32 = weights.iter().map(|&w| u32::from(w.max(1))).sum();
     let divider_count = count - 1;
-    // Drop dividers if the area is too narrow to keep every column non-empty.
     let dividers = if area.width as usize > divider_count + count {
         divider_count
     } else {
@@ -118,15 +115,10 @@ pub(crate) struct BodyLayout {
     pub dividers: Vec<Rect>,
 }
 
-// The commit picker's band height cap, including its top and bottom borders.
 const COMMITS_BAND_MAX_HEIGHT: u16 = 9;
 
-// The fewest rows kept above the band for the tree and diff panes.
 const BODY_MIN_HEIGHT: u16 = 3;
 
-// Splits the body into a top strip and a bottom commits band. The band is
-// pinned to the bottom, capped at [`COMMITS_BAND_MAX_HEIGHT`], and never grows
-// past the rows left over after reserving [`BODY_MIN_HEIGHT`] for the top.
 fn split_commits_band(content: Rect) -> (Rect, Rect) {
     let band_height = content
         .height
@@ -144,16 +136,6 @@ fn split_commits_band(content: Rect) -> (Rect, Rect) {
     (top, band)
 }
 
-// The body panes for the current size, content, and focus.
-//
-// Shared by `view::render_body` and mouse hit-testing, so a click or wheel maps
-// to exactly the pane that was drawn. In a commits diff the picker is a
-// full-width band pinned to the bottom of the body, capped at
-// [`COMMITS_BAND_MAX_HEIGHT`] rows with at least [`BODY_MIN_HEIGHT`] rows kept
-// above it. Below [`SIDE_BY_SIDE_MIN_WIDTH`] the top strip shows only the
-// focused pane; a focused diff stacks old over new. When the tree is focused in
-// a narrow terminal every pane is hidden except the tree, and the band stays
-// pinned underneath.
 pub(crate) fn body_layout(
     content: Rect,
     tree_percent: u16,
@@ -164,9 +146,6 @@ pub(crate) fn body_layout(
     if content.width < SIDE_BY_SIDE_MIN_WIDTH {
         if is_diff && has_commits {
             let (top, band) = split_commits_band(content);
-            // On the shortest bodies the strip is too small to give both
-            // stacked diff sides a bordered box; the split still tiles and a
-            // focused diff just shows one side's border without content rows.
             let mut slots = match focus {
                 Focus::Tree => vec![Slot {
                     pane: PaneSlot::Tree,
@@ -252,8 +231,6 @@ pub(crate) fn body_layout(
     };
 
     if is_diff && has_commits {
-        // The band takes the bottom; the columns tile only the strip above it,
-        // so the dividers never cross into the picker.
         let (top, band) = split_commits_band(content);
         let (columns, dividers) = split_with_dividers(top, &weights);
         let last = panes.len() - 1;
@@ -303,7 +280,6 @@ pub(crate) fn commit_offset(cursor: usize, scroll: usize, len: usize, height: us
     }
 }
 
-// The border edge a column draws, so adjacent panes share one divider.
 fn edge_for(index: usize, last: usize) -> Edge {
     match (index, last) {
         (0, 0) => Edge::Solo,
@@ -342,21 +318,13 @@ pub(crate) fn window_offset(cursor: usize, len: usize, height: usize) -> usize {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Wrapped diff layout
-// ---------------------------------------------------------------------------
-
-/// The kind of a rendered diff row: either an aligned diff row or a synthetic
-/// hunk header inserted where context was collapsed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VisualRowKind {
     Diff(DiffRowKind),
     Hunk,
-    /// A gap between hunks: a count of unchanged rows that were collapsed.
     Collapse(usize),
 }
 
-/// One visual row of a wrapped side-by-side diff.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VisualRow {
     pub kind: VisualRowKind,
@@ -367,15 +335,8 @@ pub struct VisualRow {
     pub continuation: bool,
 }
 
-// Context lines kept around each change, matching the core diff engine.
 const CONTEXT_RADIUS: usize = 3;
 
-// Wraps one logical aligned row into visual rows for both panes.
-//
-// Each side wraps independently to its own content width; the row occupies the
-// greater height and the shorter side is padded with blank rows so later rows
-// stay aligned. Only the first visual row carries line numbers. Changed rows
-// also get delta-style intra-line emphasis on the bytes that differ.
 pub(crate) fn layout_diff(
     diff: &FileDiff,
     old_width: usize,
@@ -477,10 +438,6 @@ fn collapse_row(hidden: usize) -> VisualRow {
     }
 }
 
-// The inclusive index ranges of aligned rows to display, one per hunk.
-//
-// Each change pulls in [`CONTEXT_RADIUS`] rows of surrounding context; ranges
-// that touch or overlap merge, and the gaps between them become hunk headers.
 fn context_windows(rows: &[AlignedRow<'_>]) -> Vec<(usize, usize)> {
     let changes: Vec<usize> = rows
         .iter()
@@ -579,7 +536,6 @@ mod tests {
         assert_eq!(layout.slots[1].pane, PaneSlot::Show);
         assert_eq!(layout.slots[1].edge, Edge::Right);
         assert_eq!(layout.dividers.len(), 1);
-        // The two panes and the divider tile the content with no overlap.
         assert_eq!(
             layout.slots[0].outer.width + 1 + layout.slots[1].outer.width,
             content().width
@@ -608,7 +564,6 @@ mod tests {
         let body = body_layout(narrow, 30, false, false, Focus::Content);
         assert_eq!(body.slots[0].pane, PaneSlot::Show);
 
-        // A focused diff stacks old over new, tiling the content vertically.
         let diff = body_layout(narrow, 30, true, false, Focus::Content);
         let panes: Vec<PaneSlot> = diff.slots.iter().map(|slot| slot.pane).collect();
         assert_eq!(panes, vec![PaneSlot::Old, PaneSlot::New]);
@@ -617,8 +572,6 @@ mod tests {
 
     #[test]
     fn commits_form_a_bottom_band_and_adapt_to_height() {
-        // The picker is a full-width band pinned to the bottom; the columns tile
-        // only the strip above it, and the dividers never cross into the band.
         let wide = body_layout(content(), 30, true, true, Focus::Commits);
         let panes: Vec<_> = wide.slots.iter().map(|slot| slot.pane).collect();
         assert_eq!(
@@ -643,7 +596,6 @@ mod tests {
             assert_eq!(divider.height, content().height - 9);
         }
 
-        // A short body keeps three rows above the band and three rows of band.
         let short = body_layout(Rect::new(0, 1, 100, 6), 30, true, true, Focus::Commits);
         let panes: Vec<_> = short.slots.iter().map(|slot| slot.pane).collect();
         assert_eq!(
@@ -660,8 +612,6 @@ mod tests {
             assert_eq!(slot.outer.height, 3);
         }
 
-        // Narrow: the band stays pinned and the focused pane fills the strip
-        // above; a focused commit list shows the diff it selects.
         let narrow = Rect::new(0, 1, 60, 20);
         let commits = body_layout(narrow, 30, true, true, Focus::Commits);
         let panes: Vec<_> = commits.slots.iter().map(|slot| slot.pane).collect();
@@ -672,7 +622,6 @@ mod tests {
         assert_eq!(band.outer.y, narrow.y + narrow.height - band.outer.height);
         assert_eq!(band.outer.y + band.outer.height, narrow.y + narrow.height);
 
-        // The two diff sides tile the strip and abut the band directly.
         let old = &commits.slots[0];
         let new = &commits.slots[1];
         assert_eq!(old.outer.y, narrow.y);
@@ -687,8 +636,6 @@ mod tests {
 
     #[test]
     fn commits_band_spans_the_width_across_the_responsive_boundary() {
-        // Width 80 is the first side-by-side layout; 79 stacks the diff instead.
-        // The band is full width at the bottom either way.
         for width in [80u16, 79] {
             let content = Rect::new(0, 1, width, 20);
             let layout = body_layout(content, 30, true, true, Focus::Commits);
@@ -702,9 +649,6 @@ mod tests {
             assert_eq!(band.outer.y + band.outer.height, content.y + content.height);
         }
 
-        // At the minimum body height the band keeps the bottom three rows and
-        // the strip above still tiles, even though the two stacked diff sides
-        // are squeezed into the remaining rows.
         let tiny = Rect::new(0, 1, 79, 6);
         let layout = body_layout(tiny, 30, true, true, Focus::Commits);
         let band = layout
@@ -714,8 +658,6 @@ mod tests {
             .expect("a commits band");
         assert_eq!(band.outer.height, 3);
         assert_eq!(band.outer.y, tiny.y + tiny.height - 3);
-        // The stacked sides start at the top and abut the band, so the strip is
-        // exactly the rows above the band rather than an overlapping band.
         let old = layout
             .slots
             .iter()

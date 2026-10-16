@@ -37,7 +37,6 @@ pub(crate) fn pane_block(title: &str, focused: bool, theme: &Theme, edge: Edge) 
         .title(title.to_owned())
 }
 
-/// The bordered block every popup (overlay or prompt) is drawn on.
 pub(crate) fn popup_block(title: &str, theme: &Theme) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
@@ -50,7 +49,6 @@ pub(crate) fn popup_block(title: &str, theme: &Theme) -> Block<'static> {
         ))
 }
 
-/// Dims everything behind a popup so the popup reads as a layer above it.
 pub(crate) fn scrim(frame: &mut Frame, area: Rect) {
     frame
         .buffer_mut()

@@ -12,16 +12,12 @@
 
 use base::{Language, RepoPath};
 
-/// How the file tree decorates rows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IconStyle {
-    /// No icons; the tree stays readable on any font.
     None,
-    /// Nerd Font folder and file-type glyphs. Requires a Nerd Font.
     Nerd,
 }
 
-// The resolved glyph set. Stored on the model so `view` stays pure.
 #[derive(Clone, Copy, Debug)]
 pub struct Icons {
     style: IconStyle,
@@ -32,8 +28,6 @@ impl Icons {
         Self { style }
     }
 
-    // The glyph drawn before a directory label. The `▾`/`▸` chevron still
-    // carries the open/closed state, so this glyph is static.
     pub fn folder(&self) -> &'static str {
         match self.style {
             IconStyle::None => "",
@@ -55,7 +49,6 @@ impl Icons {
     }
 }
 
-// Every Nerd glyph the tree can draw, for the width invariant test.
 #[cfg(test)]
 const NERD_GLYPHS: [&str; 6] = [
     "\u{f07b}", "\u{e7a8}", "\u{e62c}", "\u{e777}", "\u{e73c}", "\u{f15b}",
