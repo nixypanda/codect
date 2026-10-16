@@ -12,16 +12,11 @@
 
 export type TreeKind = "dir" | "file";
 
-/** One visible row of the file tree. */
 export interface TreeRow {
-  /** Indentation depth, 0 for a top-level entry. */
   depth: number;
-  /** The final path component (the row label). */
   label: string;
-  /** The repo-relative path (directory path for directories). */
   path: string;
   kind: TreeKind;
-  /** Directories only: whether the directory is expanded. */
   expanded: boolean;
 }
 
@@ -36,12 +31,6 @@ function makeNode(name: string, path: string, kind: TreeKind): Node {
   return { name, path, kind, children: new Map() };
 }
 
-/**
- * Flatten repo-relative file paths into visible tree rows.
- *
- * @param paths - file paths, e.g. `show.files[].path`.
- * @param collapsed - directory paths whose subtrees are folded.
- */
 export function buildTreeRows(
   paths: readonly string[],
   collapsed: ReadonlySet<string>
@@ -93,7 +82,6 @@ export function buildTreeRows(
   return rows;
 }
 
-/** Natural, case-insensitive order for sibling names (the Workspace files look). */
 const nameCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",

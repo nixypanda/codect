@@ -4,7 +4,6 @@
  * globals and node: built-in modules.
  */
 
-// Minimal Node.js child_process stub
 declare module "node:child_process" {
   export interface ExecFileException extends Error {
     code?: string | number;
@@ -19,7 +18,6 @@ declare module "node:child_process" {
   ): void;
 }
 
-// Minimal process global
 declare const process: {
   env: Record<string, string | undefined>;
   execArgv: string[];

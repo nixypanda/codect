@@ -6,7 +6,6 @@
 
 import { useEffect, useState } from "react";
 
-/** Trailing debounce. The first render returns `value` immediately. */
 export function useDebounced<T>(value: T, delayMs = 250): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {

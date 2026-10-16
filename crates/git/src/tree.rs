@@ -1,4 +1,8 @@
 //! Commit tree traversal and blob reads.
+//!
+//! Traversal is iterative, so an adversarially deep tree cannot overflow the
+//! call stack, and only tree and blob entries contribute; symlinks and git
+//! links are ignored.
 
 use bstr::BString;
 
@@ -26,10 +30,6 @@ pub(crate) fn source_entries(
         source: Box::new(source),
     })?;
 
-    // Iterative traversal: the work list holds `(tree, prefix)` pairs, so the
-    // depth is bounded by available memory rather than the call stack. Git
-    // tree nesting is shallow in practice, and an adversarial tree cannot
-    // overflow the stack here.
     let mut entries = Vec::new();
     let mut stack = vec![(tree, Vec::new())];
 
@@ -70,8 +70,6 @@ pub(crate) fn source_entries(
                     executable: mode.is_executable(),
                 });
             }
-            // Symlinks, git links/submodules, and any other entry kind are
-            // ignored without descending.
         }
     }
 
@@ -103,8 +101,6 @@ pub(crate) fn path_exists(
         source: Box::new(source),
     })?;
 
-    // Each component is looked up in exactly one tree level, so a shared prefix
-    // such as `src2` never satisfies `src` the way a textual prefix would.
     let components: Vec<&[u8]> = path.as_bytes().split(|&byte| byte == b'/').collect();
     for (index, component) in components.iter().enumerate() {
         let mut child = None;
@@ -125,13 +121,10 @@ pub(crate) fn path_exists(
         };
 
         if index + 1 == components.len() {
-            // Only tree and blob entries can hold projectable sources; a
-            // symlink or git link names a path but never contributes one.
             return Ok(mode.is_tree() || mode.is_blob());
         }
 
         if !mode.is_tree() {
-            // A blob has no children, so the remaining components cannot exist.
             return Ok(false);
         }
 
@@ -144,7 +137,6 @@ pub(crate) fn path_exists(
             })?;
     }
 
-    // `RepoPath` rejects empty input, so every path has at least one component.
     Ok(false)
 }
 

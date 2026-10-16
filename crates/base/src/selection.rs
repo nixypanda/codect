@@ -15,8 +15,6 @@ use std::borrow::Cow;
 use crate::model::RepoPath;
 use crate::path::{Area, AreaSet, PathScope, PathSelection};
 
-/// One user-visible unit of selection. A literal path is its own group; a named
-/// area is one group however many paths it defines.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SelectionGroup {
     Path(RepoPath),
@@ -24,7 +22,6 @@ pub enum SelectionGroup {
 }
 
 impl SelectionGroup {
-    /// The diagnostic key for this group: `path` or `area`.
     pub fn kind_label(&self) -> &'static str {
         match self {
             Self::Path(_) => "path",
@@ -32,8 +29,6 @@ impl SelectionGroup {
         }
     }
 
-    /// The label the user wrote on the command line. A literal path's label is
-    /// its escaped display form; an area's is its name.
     pub fn label(&self) -> Cow<'_, str> {
         match self {
             Self::Path(path) => Cow::Owned(path.to_string()),
@@ -41,7 +36,6 @@ impl SelectionGroup {
         }
     }
 
-    /// The repository paths this group contributes to the scope.
     pub fn paths(&self) -> &[RepoPath] {
         match self {
             Self::Path(path) => std::slice::from_ref(path),
@@ -50,7 +44,6 @@ impl SelectionGroup {
     }
 }
 
-/// A normalized scope plus the groups it was built from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Selection {
     scope: PathScope,
@@ -58,7 +51,6 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// Everything: a match-all scope with no existence checks.
     pub fn all() -> Self {
         Self {
             scope: PathScope::match_all(),
@@ -66,9 +58,6 @@ impl Selection {
         }
     }
 
-    /// Builds a selection from its groups. The scope is the union of every
-    /// group's paths, so an empty group list selects everything. Every group is
-    /// non-empty by construction, so this cannot fail.
     pub fn new(groups: Vec<SelectionGroup>) -> Self {
         let scope = PathScope::from_paths(
             groups
@@ -78,13 +67,6 @@ impl Selection {
         Self { scope, groups }
     }
 
-    /// Resolves a raw [`PathSelection`] against the repository's areas in one
-    /// step, recording one group per literal path or named area.
-    ///
-    /// `All` (and an empty literal list) selects everything. Literal paths are
-    /// sorted and deduplicated, matching the scope they produce, and each keeps
-    /// its escaped display form as its diagnostic label. A named area must
-    /// exist; it is non-empty by construction.
     pub fn resolve(selection: &PathSelection, areas: &AreaSet) -> Result<Self, SelectionError> {
         match selection {
             PathSelection::All => Ok(Self::all()),
@@ -117,7 +99,6 @@ impl Selection {
     }
 }
 
-/// A selection that cannot be constructed or resolved.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SelectionError {
     #[error("no area named `{name}` is defined")]

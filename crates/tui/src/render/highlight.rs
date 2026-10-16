@@ -8,6 +8,9 @@
 // Syntax grammars come from `two-face` (bat's syntax bundle). Token colors use
 // Tokyo Night night/day colors so the code agrees with the rest of the UI.
 // Diff backgrounds and intra-line emphasis come from the semantic palette.
+//
+// Tabs expand to four columns and runs are never split mid-code-point, so the
+// styled lines stay aligned with the plain-text helpers.
 
 use std::sync::OnceLock;
 
@@ -25,7 +28,6 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::render::theme::{Capability, Flavor, Rgb, Theme};
 
-// Columns a tab expands to, matching the projection renderer.
 const TAB_WIDTH: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,13 +176,6 @@ fn plain_line(line: &str) -> StyledLine {
     }]
 }
 
-// Highlights `text` into one [`StyledLine`] per source line.
-//
-// The result has exactly `text.lines().count()` entries, so a caller can index
-// it by one-based source line number minus one. The `theme` selects the syntax
-// flavor and resolves token colors for the terminal's capability. When color is
-// disabled, or a line fails to highlight, a single default-styled run is
-// produced.
 pub fn highlight(text: &str, language: Language, theme: &Theme) -> Vec<StyledLine> {
     if !theme.colors_enabled() {
         return text.lines().map(plain_line).collect();
@@ -227,11 +222,6 @@ pub fn highlight(text: &str, language: Language, theme: &Theme) -> Vec<StyledLin
 
 pub type Emphasis = Vec<(usize, usize)>;
 
-// The byte ranges that differ between two aligned lines, as a common
-// prefix/suffix trim. This is delta's intra-line emphasis: the unchanged edges
-// stay at the line background, the changed middle gets a brighter one.
-//
-// Returns `(old_ranges, new_ranges)`; both are empty when the texts are equal.
 pub fn emphasis_ranges(old: &str, new: &str) -> (Emphasis, Emphasis) {
     if old == new {
         return (Vec::new(), Vec::new());
@@ -276,8 +266,6 @@ pub fn emphasis_ranges(old: &str, new: &str) -> (Emphasis, Emphasis) {
     (old_ranges, new_ranges)
 }
 
-// Recolors the byte ranges `ranges` with `background`, splitting runs as
-// needed. Ranges are assumed to be on character boundaries.
 pub fn apply_emphasis(runs: &[Run], ranges: &[(usize, usize)], background: Color) -> StyledLine {
     if ranges.is_empty() {
         return runs.to_vec();
@@ -315,9 +303,6 @@ pub fn apply_emphasis(runs: &[Run], ranges: &[(usize, usize)], background: Color
     out
 }
 
-// Splits styled runs into display-width segments, expanding tabs.
-//
-// The result has at least one segment, so callers can always index `[0]`.
 pub fn wrap_runs(runs: &[Run], width: usize) -> Vec<StyledLine> {
     if width == 0 {
         return vec![Vec::new()];
@@ -373,11 +358,6 @@ fn wrap_push(
     *cells += character_width;
 }
 
-// A display-width slice of one styled line, expanding tabs.
-//
-// Mirrors the plain-text clipping rules: never split a code point, drop a wide
-// character that straddles the cut whole, and keep combining marks with their
-// base.
 pub fn clip_runs(runs: &[Run], skip: usize, width: usize) -> StyledLine {
     if width == 0 {
         return Vec::new();
@@ -473,7 +453,6 @@ mod tests {
         );
         assert_eq!(lines.len(), 3, "one styled line per source line");
 
-        // `pub` is a keyword and must not be default-styled.
         let keyword = &lines[0][0];
         assert!(
             keyword.style.fg.is_some(),

@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-/// Allocates unique stable keys within one projected file.
 #[derive(Debug, Default)]
 pub struct KeyAllocator {
     counts: HashMap<String, usize>,
@@ -20,8 +19,6 @@ impl KeyAllocator {
         Self::default()
     }
 
-    /// Returns `base` the first time it is seen, and `base~N` for later
-    /// collisions, where `N` counts from one in source order.
     pub fn unique(&mut self, base: String) -> String {
         match self.counts.entry(base.clone()) {
             Entry::Vacant(entry) => {

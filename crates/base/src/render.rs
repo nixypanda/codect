@@ -5,25 +5,19 @@
 //! [`ProjectedFile`] values and never on repository or Tree-sitter types. The
 //! Git-aware pipeline that supplies those projections lives in the CLI
 //! (TECHNICAL_DESIGN.md section 3).
+//!
+//! [`project_all`] is all-or-nothing: one file's projection failure aborts the
+//! whole call, and callers must supply projectors in a fixed order so selection
+//! is deterministic. A diff block is emitted only when a path's canonical text
+//! differs, so a body-only change yields empty output.
 
 use crate::diagnostic::ProjectionError;
 use crate::diff::unified_hunks;
 use crate::language::{LanguageProjector, ProjectionInput};
 use crate::model::{ProjectedFile, ProjectionMode, RepoPath, SupportedPath};
 
-/// The canonical maximum display width of a rendered line.
-///
-/// Language renderers wrap a declaration list or arrow chain only when its flat
-/// form would exceed this budget. The value is a compile-time constant, never a
-/// terminal measurement, so output stays deterministic and identical regardless
-/// of where it is displayed (TECHNICAL_DESIGN.md section 10).
 pub const LINE_WIDTH: usize = 80;
 
-/// Selects the projector that claims `path`, or `None` for an unsupported path.
-///
-/// Exclusions (unsupported extensions, for example) are silent, not errors
-/// (TECHNICAL_DESIGN.md section 15). Callers must supply projectors in a fixed
-/// order so selection does not depend on iteration order.
 pub fn select_projector<'a>(
     projectors: &'a [&'a dyn LanguageProjector],
     path: &RepoPath,
@@ -34,19 +28,10 @@ pub fn select_projector<'a>(
         .find(|projector| projector.supports_path(path))
 }
 
-/// Orders projected files by raw repository path bytes.
-///
-/// [`RepoPath`] already implements [`Ord`] over its raw bytes, which keeps
-/// output deterministic even for paths that are not valid UTF-8 (section 5.1).
 pub fn sort_files(files: &mut [ProjectedFile]) {
     files.sort_by(|left, right| left.path().cmp(right.path()));
 }
 
-/// Projects caller-supplied `(path, source)` pairs, skipping unsupported paths.
-///
-/// A [`ProjectionError`] aborts the whole call: a supported file that fails to
-/// project must never yield a partial result (section 9). The returned files are
-/// in raw path byte order.
 pub fn project_all<'a, I>(
     projectors: &[&dyn LanguageProjector],
     mode: ProjectionMode,
@@ -72,16 +57,6 @@ where
     Ok(files)
 }
 
-/// Renders the `show` document (section 10.1):
-///
-/// ```text
-/// == src/User.elm ==
-/// <canonical projection>
-/// ```
-///
-/// Files are ordered by raw path bytes and separated by exactly one blank line.
-/// A document for zero files is empty; otherwise it ends with exactly one
-/// trailing newline. Paths use [`RepoPath`]'s escaped `Display`.
 pub fn show_document(files: &[ProjectedFile]) -> String {
     let mut ordered: Vec<&ProjectedFile> = files.iter().collect();
     ordered.sort_by(|left, right| left.path().cmp(right.path()));
@@ -99,22 +74,6 @@ pub fn show_document(files: &[ProjectedFile]) -> String {
     document
 }
 
-/// Renders the `diff` document (section 10.1):
-///
-/// ```text
-/// diff --codect a/src/User.elm b/src/User.elm
-/// --- a/src/User.elm
-/// +++ b/src/User.elm
-/// <unified hunks>
-/// ```
-///
-/// `old` and `new` are the two projections. A path present on only one side is
-/// an added or deleted file and uses `/dev/null` for the absent `---`/`+++`
-/// side; the `diff --codect` line keeps `a/` and `b/` labels, matching Git. Only
-/// paths whose canonical text differs emit a block, so an all-equal comparison
-/// (including a body-only change) produces empty output (section 7.2). Blocks
-/// are concatenated in raw path byte order with no blank line between them, and
-/// a non-empty document ends with exactly one trailing newline.
 pub fn diff_document(old: &[ProjectedFile], new: &[ProjectedFile]) -> String {
     let mut paths: Vec<&RepoPath> = old
         .iter()
@@ -168,8 +127,6 @@ mod tests {
 
     fn projected(path: &str, text: &str) -> ProjectedFile {
         let path = SupportedPath::new(RepoPath::new(path).unwrap()).unwrap();
-        // An item whose fragment is empty still yields a bare "\n" canonical
-        // text, so an empty projection is modeled with no items.
         if text.is_empty() {
             return ProjectedFile::try_new(path, Vec::new()).expect("valid fixture");
         }
@@ -285,8 +242,6 @@ mod tests {
 
     #[test]
     fn diff_document_treats_an_empty_projection_as_absent_content() {
-        // A deleted file that projected to empty text is equal to its absent
-        // counterpart, so it emits nothing.
         let old = vec![projected("empty.rs", "")];
         assert_eq!(diff_document(&old, &[]), "");
     }

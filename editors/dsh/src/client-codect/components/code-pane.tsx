@@ -17,7 +17,6 @@ export interface CodePaneProps {
   labels: CodeLabels;
 }
 
-/** Content lines, matching the output cards' terminator rule (no phantom last line). */
 export function textToLines(text: string): { number: number; text: string }[] {
   if (text === "") return [];
   const body = text.endsWith("\n") ? text.slice(0, -1) : text;

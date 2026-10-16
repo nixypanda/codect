@@ -8,10 +8,6 @@
 
 import { z } from "zod";
 
-// ---------------------------------------------------------------------------
-// Parameter schemas
-// ---------------------------------------------------------------------------
-
 const ShowParams = z.object({
   root: z.string(),
   revision: z.string().optional(),
@@ -28,10 +24,6 @@ const DiffParams = z.object({
   paths: z.array(z.string()).optional(),
   areas: z.array(z.string()).optional(),
 });
-
-// ---------------------------------------------------------------------------
-// Result schemas
-// ---------------------------------------------------------------------------
 
 const ShowResult = z.object({
   schema: z.literal("codect.show.v1"),
@@ -104,10 +96,6 @@ const DiffResult = z.object({
     })
   ),
 });
-
-// ---------------------------------------------------------------------------
-// TYPERT export
-// ---------------------------------------------------------------------------
 
 export const TYPERT = {
   package: "@nixypanda/dsh-codect",

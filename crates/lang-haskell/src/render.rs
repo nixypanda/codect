@@ -143,7 +143,6 @@ impl<'a> Renderer<'a> {
             lines.push(Doc::Indent(Box::new(Doc::Concat(body))));
         } else if let Some(constructors) = self.field(node, "constructors") {
             let members = self.constructor_texts(constructors);
-            // A single record constructor reads as a record definition.
             if let Some(record) = self.single_record(constructors) {
                 let ctor_name = self
                     .field_text(record, "name")
@@ -180,7 +179,6 @@ impl<'a> Renderer<'a> {
             lines.push(Doc::Text(header));
         }
 
-        // `deriving` clauses are one per line, indented with the body.
         let mut cursor = node.walk();
         let deriving: Vec<Node<'_>> = node
             .children_by_field_name("deriving", &mut cursor)
@@ -314,15 +312,11 @@ impl<'a> Renderer<'a> {
             return Doc::Text(format!("{names} ::"));
         };
         if matches!(type_node.kind(), node::FUNCTION | node::CONTEXT) {
-            // Arrow chains (and a leading context) already break at their own
-            // `->`/`=>` structure, so keep the type on the `::` line.
             return Doc::Concat(vec![
                 Doc::Text(format!("{names} :: ")),
                 self.type_doc(type_node),
             ]);
         }
-        // A single non-arrow atom cannot break internally in the common case,
-        // so allow it to move to an indented line after `::`.
         Doc::Concat(vec![
             Doc::Text(format!("{names} ::")),
             Doc::Group(Box::new(Doc::Indent(Box::new(Doc::Concat(vec![
@@ -545,7 +539,6 @@ impl<'a> Renderer<'a> {
         self.field_text(node, field::NAME)
     }
 
-    // The names declared by a signature, for pairing with definitions.
     pub(crate) fn signature_names(&self, node: Node<'_>) -> Vec<String> {
         if let Some(names) = self.field(node, "names") {
             let mut out = Vec::new();
@@ -573,8 +566,6 @@ fn join_lines(lines: Vec<Doc>) -> Doc {
     Doc::Concat(parts)
 }
 
-// Spacing is a function of the two adjacent leaf tokens, never of source
-// whitespace.
 pub(crate) fn join(tokens: &[String]) -> String {
     let mut text = String::new();
     for (index, token) in tokens.iter().enumerate() {

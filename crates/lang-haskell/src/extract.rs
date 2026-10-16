@@ -5,6 +5,9 @@
 //! are dropped, and only top-level and class/instance-level declarations are
 //! considered. Type declarations, classes, and instances appear in both modes;
 //! signatures, foreign imports, and pattern-synonym signatures are signatures.
+//! A signature supersedes its definition regardless of source order, and Tests
+//! mode retains nothing because a test's name is a string literal inside a body
+//! that is never projected.
 
 use std::collections::HashSet;
 
@@ -33,9 +36,6 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
     let tree = syntax::parse(input.source, input.path)?;
     let root = tree.root_node();
 
-    // Test detection is not implemented for Haskell: a test's name is a string
-    // literal inside a body, which is never projected. Retaining nothing keeps
-    // an empty projection meaning "no tests retained", as in Rust and Python.
     match input.mode {
         ProjectionMode::Types | ProjectionMode::Signatures => {}
         ProjectionMode::Tests => {
@@ -118,9 +118,6 @@ impl Builder<'_> {
                 .collect()
         };
 
-        // Definitions paired with an explicit signature are represented by the
-        // signature alone; collect signature names up front so a definition can
-        // be skipped regardless of source order.
         let mut signed: HashSet<String> = HashSet::new();
         for node in &nodes {
             if node.kind() == node::SIGNATURE {
@@ -268,8 +265,6 @@ impl Builder<'_> {
         )
     }
 
-    // A `type` synonym, whose right-hand side wraps through the renderer's
-    // recursive type document.
     fn type_synonym_decl(&mut self, node: Node<'_>, prefixes: Vec<String>) -> Built {
         let name = self.name_of(node);
         let key = self.unique(format!("{}::alias::{name}", self.renderer.path()));
@@ -358,9 +353,6 @@ impl Builder<'_> {
         let Some(declarations) = self.renderer.field(node, "declarations") else {
             return Ok(Vec::new());
         };
-        // A class or instance method that also has an explicit signature is
-        // represented by the signature alone; its definition only contributes a
-        // head when no signature exists.
         let mut signed: HashSet<String> = HashSet::new();
         {
             let mut cursor = declarations.walk();
@@ -504,8 +496,6 @@ fn with_prefix(prefixes: Vec<String>, doc: Doc) -> Doc {
     Doc::Concat(parts)
 }
 
-// A class or instance block: a header and an indented member list. The `where`
-// keyword is only emitted when a member is actually shown.
 fn container_doc(header: String, members: Vec<Doc>) -> Doc {
     if members.is_empty() {
         return Doc::Text(header);

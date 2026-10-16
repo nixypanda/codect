@@ -6,7 +6,6 @@
 //! loaded; the others are scoped to a variant and only offered by that variant's
 //! palette.
 
-/// A semantic command valid in every content kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GlobalAction {
     Quit,
@@ -29,27 +28,18 @@ pub enum GlobalAction {
     PreviousPane,
 }
 
-/// A semantic command valid only while a `show` projection is loaded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShowAction {
     EditRevision,
-    /// Toggle the region under the cursor.
     ToggleFold,
-    /// Open the region under the cursor.
     OpenFold,
-    /// Close the region under the cursor.
     CloseFold,
-    /// Open the region under the cursor and every descendant.
     OpenRecursive,
-    /// Close the region under the cursor and every descendant.
     CloseRecursive,
-    /// Open every region of the active file.
     OpenAll,
-    /// Close every region of the active file.
     CloseAll,
 }
 
-/// A semantic command valid only in the `diff` range view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RangeAction {
     EditBase,
@@ -57,13 +47,11 @@ pub enum RangeAction {
     SwitchToCommits,
 }
 
-/// A semantic command valid only in the `diff` commits view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommitsAction {
     SwitchToRange,
 }
 
-/// A semantic command produced by a key or the command palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Global(GlobalAction),

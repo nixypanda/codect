@@ -6,14 +6,8 @@
 
 local M = {}
 
---- The schema this plugin understands. A different value (or major version)
---- is a fatal, explicit mismatch.
 M.SCHEMA = "codect.show.v1"
 
---- Resolve the `codect` executable.
----
---- Order: `vim.g.codect_binary`, the `CODECT_BIN` environment variable, then
---- `codect` on `PATH`. Returns the path, or nil when nothing is found.
 function M.resolve_binary()
   local override = vim.g.codect_binary
   if type(override) == "string" and override ~= "" then
@@ -33,10 +27,6 @@ function M.resolve_binary()
   return nil
 end
 
---- Validate the document's `schema` field.
----
---- Returns nil when the schema is the expected exact value, or a human-readable
---- error string otherwise. A different major version is called out explicitly.
 function M.check_schema(doc)
   if type(doc) ~= "table" then
     return "codect returned a non-object JSON document"
@@ -60,17 +50,6 @@ function M.check_schema(doc)
   return string.format("unexpected codect schema %q (plugin expects %s)", doc.schema, M.SCHEMA)
 end
 
---- Project `source` through `codect show --format json --stdin`.
----
---- opts:
----   * binary  (string?)  explicit executable; resolved when omitted
----   * root    (string)   repository root used as the subprocess cwd
----   * path    (string)   repository-relative path of the buffer's file
----   * mode    ("types"|"signatures")
----   * source  (string)   exact buffer bytes
----   * timeout (number?)  milliseconds, default 15000
----
---- Returns the decoded document, or nil plus a clear error string.
 function M.show(opts)
   local binary = opts.binary or M.resolve_binary()
   if not binary then
@@ -122,7 +101,6 @@ function M.show(opts)
   return doc
 end
 
---- Run `codect --version` and return the trimmed output, or nil.
 function M.version(binary)
   binary = binary or M.resolve_binary()
   if not binary then

@@ -19,8 +19,6 @@ pub fn colors_enabled() -> bool {
     std::env::var_os("NO_COLOR").is_none()
 }
 
-// The environment variable that pins the flavor. Unset, empty, or `auto` asks
-// the terminal for its background color.
 const FLAVOR_ENV: &str = "CODECT_THEME";
 
 // The longest the startup background query waits before falling back to dark.
@@ -57,8 +55,6 @@ pub enum Flavor {
     Light,
 }
 
-// The semantic colors of one flavor. Views never name a raw color; they name a
-// role from this palette.
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
     pub bg: Rgb,
@@ -195,10 +191,6 @@ impl Theme {
         }
     }
 
-    // Detects the theme from the environment and the terminal: `CODECT_THEME`
-    // pins the flavor, and `NO_COLOR`/`COLORTERM`/`TERM` choose the capability.
-    // Called once by the runtime before the event reader starts; `view` stays
-    // pure by reading the theme off the model.
     pub fn detect() -> Self {
         Self::new(detect_flavor(), detect_capability())
     }
@@ -219,13 +211,6 @@ impl Theme {
         Style::default().fg(self.color(fg)).bg(self.color(bg))
     }
 
-    // The palette ink that stays legible on a filled background.
-    //
-    // Chips, badges, and cursors fill a cell with a palette color and then draw
-    // text on it. `palette.bg` is a good ink in the dark flavor because it is
-    // near-black, but in the light flavor it is near-white and vanishes on light
-    // fills such as `surface_alt`. Choosing whichever of `text` or `bg` contrasts
-    // more with the fill keeps both flavors legible.
     pub fn ink(&self, fill: Rgb) -> Rgb {
         let fill = relative_luminance(fill);
         let text = contrast_ratio(fill, relative_luminance(self.palette.text));
@@ -242,22 +227,12 @@ impl Theme {
     }
 }
 
-// The flavor the frontend draws with.
-//
-// `CODECT_THEME=dark` and `CODECT_THEME=light` are explicit and skip the query.
-// Any other value (or an unset variable) asks the terminal for its background
-// color and falls back to dark when the terminal does not answer.
 pub fn detect_flavor() -> Flavor {
     explicit_flavor(std::env::var(FLAVOR_ENV).ok().as_deref())
         .or_else(query_flavor)
         .unwrap_or(Flavor::Dark)
 }
 
-// The explicit flavor named by `CODECT_THEME`, if it names one.
-//
-// `auto`, an empty value, and an unset variable all defer to
-// [`query_flavor`]; so does any unrecognized value, which keeps a typo from
-// forcing a wrong palette.
 fn explicit_flavor(value: Option<&str>) -> Option<Flavor> {
     match value {
         Some("light") => Some(Flavor::Light),
@@ -434,14 +409,12 @@ mod tests {
         assert_eq!(explicit_flavor(None), None);
         assert_eq!(explicit_flavor(Some("")), None);
         assert_eq!(explicit_flavor(Some("auto")), None);
-        // A typo must not force the wrong palette.
         assert_eq!(explicit_flavor(Some("daerk")), None);
     }
 
     #[test]
     fn ink_contrasts_with_the_fill() {
         let dark = Theme::dark();
-        // A bright fill takes the dark ink; a dark fill takes the light ink.
         assert_eq!(dark.ink(dark.palette.accent), dark.palette.bg);
         assert_eq!(dark.ink(dark.palette.bg), dark.palette.text);
 
@@ -453,8 +426,6 @@ mod tests {
     #[test]
     fn light_ink_keeps_contrast_on_every_chip_fill() {
         let light = Theme::new(Flavor::Light, Capability::TrueColor);
-        // The old chip ink was `palette.bg` (near-white), which vanished on the
-        // pale `surface_alt` fill; that one must now take the dark ink.
         assert_eq!(light.ink(light.palette.surface_alt), light.palette.text);
         for fill in [
             light.palette.surface_alt,

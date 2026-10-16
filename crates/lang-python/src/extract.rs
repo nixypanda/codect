@@ -4,7 +4,9 @@
 //! is the file module context, only module- and class-level declarations are
 //! considered, and function and method bodies are never inspected. Decorators
 //! are preserved because they can change a declaration's meaning, while
-//! docstrings, comments, imports, and initializers are omitted.
+//! docstrings, comments, imports, and initializers are omitted. Tests mode
+//! retains only classes and functions whose declared name begins with `test_`,
+//! the pytest and unittest convention.
 
 use base::{
     ItemKind, KeyAllocator, ProjectedFile, ProjectedItem, ProjectionError, ProjectionInput,
@@ -75,8 +77,6 @@ impl Builder<'_> {
                 let definition = node
                     .child_by_field_name(field::DEFINITION)
                     .ok_or_else(|| self.missing(node, "decorated definition has no definition"))?;
-                // Unwrapped first so a decorated test is judged on the function it
-                // decorates, not on the `decorated_definition` node.
                 if !self.keeps_member(definition) {
                     return Ok(None);
                 }
@@ -99,8 +99,6 @@ impl Builder<'_> {
                 }
                 self.function_decl(node, Vec::new(), container_key, scope, depth)
             }
-            // Type aliases, assignments, and enum members are not tests, so the
-            // filter drops them before they reach their builders.
             node::TYPE_ALIAS_STATEMENT => match self.mode {
                 ProjectionMode::Types | ProjectionMode::Signatures => {
                     Ok(Some(self.type_alias(node, container_key, scope, depth)?))
@@ -164,8 +162,6 @@ impl Builder<'_> {
         let superclasses = node.child_by_field_name(field::SUPERCLASSES);
         if let Some(parameters) = type_parameters {
             let list = self.renderer.node_bracket_list(parameters, "[", "]");
-            // The last list is the primary break point; an earlier list stays
-            // grouped so it remains inline when it fits on its own.
             header.push(if superclasses.is_some() {
                 Doc::Group(Box::new(list))
             } else {
@@ -182,8 +178,6 @@ impl Builder<'_> {
             Some(body) => self.members(body, &key, Scope::Class { enum_like }, depth + 1)?,
             None => Vec::new(),
         };
-        // Dropped because `container_doc` would otherwise render `class Foo: ...`
-        // for every class in the file.
         if members.is_empty() {
             match self.mode {
                 ProjectionMode::Types | ProjectionMode::Signatures => {}
@@ -205,10 +199,6 @@ impl Builder<'_> {
         )))
     }
 
-    /// A class passes because whether it is a test container is decided by its
-    /// members; `class_decl` drops one that retains none. The `test_` prefix
-    /// covers both pytest and unittest convention. The mode match is exhaustive
-    /// so a new mode decides whether it filters.
     fn keeps_member(&self, node: Node<'_>) -> bool {
         match self.mode {
             ProjectionMode::Types | ProjectionMode::Signatures => true,
@@ -256,8 +246,6 @@ impl Builder<'_> {
         let parameters = node.child_by_field_name("parameters");
         if let Some(type_parameters) = type_parameters {
             let list = self.renderer.node_bracket_list(type_parameters, "[", "]");
-            // The parameter list is the primary break point; type parameters
-            // stay grouped so they remain inline when they fit on their own.
             header.push(if parameters.is_some() {
                 Doc::Group(Box::new(list))
             } else {
@@ -274,8 +262,6 @@ impl Builder<'_> {
         }
         header.push(Doc::Text(": ...".to_owned()));
 
-        // Group the whole header so the parameter list breaks when the header,
-        // including the return type, does not fit (not just the list alone).
         let doc = signature_doc(decorators, Doc::Group(Box::new(Doc::Concat(header))));
         let parent = nested_parent(container_key, scope);
         let item_kind = if is_method {
@@ -386,8 +372,6 @@ impl Builder<'_> {
             } else {
                 (ItemKind::Value, "value")
             };
-            // A module-level value with a declared type is a signature, not a
-            // type declaration.
             if !in_class {
                 match self.mode {
                     ProjectionMode::Types => return Ok(None),
@@ -422,9 +406,6 @@ impl Builder<'_> {
             )));
         }
 
-        // A bare assignment has no declared type. An enum member defines the
-        // type's shape and appears in both modes; any other value is a
-        // signature and appears only in Signatures mode.
         let enum_member = matches!(scope, Scope::Class { enum_like: true });
         if !enum_member {
             match self.mode {

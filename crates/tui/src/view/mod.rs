@@ -5,6 +5,10 @@
 // the tree and commits picker from [`crate::component`], and the show and diff
 // bodies from their page. Every module here is presentation-only: it reads the
 // model and writes to the frame, and performs no I/O.
+//
+// The whole canvas is painted with the palette background before any pane is
+// drawn, so a terminal whose background differs from the palette never shows
+// through the panes, gutters, or the too-small notice.
 
 pub(crate) mod chrome;
 
@@ -25,9 +29,6 @@ use crate::render::metrics::{Focus, MIN_HEIGHT, SINGLE_PANE_MIN_WIDTH};
 pub(crate) fn view(app: &App, frame: &mut Frame) {
     let area = frame.area();
 
-    // The palette owns every cell: paint the whole canvas before drawing so a
-    // terminal whose background differs from the palette never shows through
-    // the panes, gutters, or the too-small notice.
     frame.render_widget(
         Block::default().style(app.chrome.theme.bg(app.chrome.theme.palette.bg)),
         area,
@@ -48,7 +49,6 @@ pub(crate) fn view(app: &App, frame: &mut Frame) {
     render_overlay(app, frame, area);
 }
 
-// Renders the body panes from the same layout mouse hit-testing uses.
 fn render_body(app: &App, frame: &mut Frame, content: Rect) {
     let is_diff = matches!(app.loaded, Loaded::Diff(_));
     let has_commits = matches!(
@@ -147,9 +147,6 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
     }
 }
 
-// Draws the active overlay, or the loaded projection's revision prompt when no
-// overlay is open. The overlay state owns its keys; the prompt belongs to the
-// page, so the two are drawn from different places.
 fn render_overlay(app: &App, frame: &mut Frame, area: Rect) {
     match &app.overlay {
         Some(state) => {

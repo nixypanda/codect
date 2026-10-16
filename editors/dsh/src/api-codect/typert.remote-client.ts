@@ -14,10 +14,6 @@
  * @deepseek-ai/dsh-typert-generator from the Host FaceModel.
  */
 
-/**
- * A strict JSON codec placeholder. The Client never calls `create`; a
- * pass-through schema keeps a future materialization harmless.
- */
 function jsonCodec(typeSymbol: string) {
   return {
     mode: "strict" as const,
@@ -28,10 +24,6 @@ function jsonCodec(typeSymbol: string) {
     }),
   };
 }
-
-// ---------------------------------------------------------------------------
-// Remote contribution
-// ---------------------------------------------------------------------------
 
 export const TYPERT_REMOTE = {
   package: "@nixypanda/dsh-codect",

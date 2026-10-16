@@ -56,8 +56,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    // The declared lower-case or module name. Qualified names are rebuilt from
-    // identifiers and dots so spacing and comments cannot survive.
     pub(crate) fn qualified_name(&self, node: Node<'_>) -> Result<String, ProjectionError> {
         let mut out = String::new();
         let mut cursor = node.walk();
@@ -83,8 +81,6 @@ impl<'a> Renderer<'a> {
         self.source_text(name)
     }
 
-    // Returns the module's declared name and whether the module is a port
-    // module, which is the only module kind the MVP distinguishes.
     pub(crate) fn module_name_and_port(
         &self,
         node: Node<'_>,
@@ -118,8 +114,6 @@ impl<'a> Renderer<'a> {
         Ok(text(format!("{prefix}{name}")))
     }
 
-    // A custom type: `type Name params` followed by one indented line per
-    // constructor, matching the canonical form in TECHNICAL_DESIGN.md 11.2.
     pub(crate) fn type_declaration(&self, node: Node<'_>) -> Result<Doc, ProjectionError> {
         let name = self.field_name(node)?;
         let parameters = self.parameters(node, field::TYPE_NAME)?;
@@ -151,8 +145,6 @@ impl<'a> Renderer<'a> {
         Ok(Doc::Concat(parts))
     }
 
-    // A type alias. A record right-hand side uses the block form from
-    // TECHNICAL_DESIGN.md 11.2; every other alias stays a single line.
     pub(crate) fn type_alias(&self, node: Node<'_>) -> Result<Doc, ProjectionError> {
         let name = self.field_name(node)?;
         let parameters = self.parameters(node, field::TYPE_VARIABLE)?;
@@ -189,8 +181,6 @@ impl<'a> Renderer<'a> {
         ]))
     }
 
-    // The declared surface for an unannotated top-level declaration. The MVP
-    // never infers a type (PRODUCT.md, "Missing Elm type annotations").
     pub(crate) fn missing_annotation(&self, name: &str) -> Doc {
         text(format!("{name} : <missing type annotation>"))
     }
@@ -333,8 +323,6 @@ impl<'a> Renderer<'a> {
             parts.push(self.type_atom(child)?);
         }
 
-        // An arrow chain breaks before each `->` only when it does not fit the
-        // line budget (TECHNICAL_DESIGN.md 11.3).
         let mut parts = parts.into_iter();
         let Some(first) = parts.next() else {
             return Ok(text(""));

@@ -47,8 +47,6 @@ pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
             .map(|span| UnicodeWidthStr::width(span.content.as_ref()) + 1)
             .sum::<usize>()
     };
-    // Leave a useful piece of the repository visible before dropping scope,
-    // then revisions, on narrow terminals.
     while shown > 0 && brand_width + context_width(shown) + 10 > area_width {
         shown -= 1;
     }
@@ -281,7 +279,6 @@ fn chip(label: &str, background: Rgb, theme: &Theme) -> Span<'static> {
     )
 }
 
-// Keeps the tail of a path so the deepest directory stays visible.
 fn clip_tail(text: &str, width: usize) -> String {
     let text_width = UnicodeWidthStr::width(text);
     if text_width <= width {

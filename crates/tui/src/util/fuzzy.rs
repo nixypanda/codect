@@ -2,18 +2,12 @@
 // file finder. It returns the matched byte offsets so the view can highlight
 // them. Pure and allocation-light; no external dependency.
 
-// A successful match: a higher score is a better match, and `positions` are the
-// byte offsets of the matched characters in the haystack.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Match {
     pub score: i32,
     pub positions: Vec<usize>,
 }
 
-// Matches `needle` as a subsequence of `haystack`, case-insensitively.
-//
-// Consecutive matches and matches at word boundaries score higher, so
-// `scp` prefers `src/core/paths.rs` over an arbitrary scattered match.
 pub fn fuzzy(needle: &str, haystack: &str) -> Option<Match> {
     let needle: Vec<char> = needle.chars().flat_map(char::to_lowercase).collect();
     if needle.is_empty() {
@@ -47,7 +41,6 @@ pub fn fuzzy(needle: &str, haystack: &str) -> Option<Match> {
         if at_boundary {
             score += 10;
         }
-        // A shorter haystack is a tighter match.
         score -= (hay.len() / 16) as i32;
         previous = Some(index);
         matched += 1;

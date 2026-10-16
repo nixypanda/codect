@@ -18,11 +18,8 @@ import { diffChanges } from "../src/client-codect/declaration-diff.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// codect repo root: editors/dsh/test → ../../.. = codect root
 const codectRoot = join(__dirname, "../../..");
 
-// Required so the suite always exercises the binary under test instead of
-// whatever `codect` happens to be on PATH.
 const CODECT = process.env.CODECT_BIN;
 if (!CODECT) {
   throw new Error(
@@ -41,10 +38,6 @@ function runCodect(args, cwd) {
   return JSON.parse(output);
 }
 
-/**
- * A repository with one modified, one deleted, and one added Rust file between
- * its two commits.
- */
 function makeFixtureRepo() {
   const dir = mkdtempSync(join(tmpdir(), "codect-dsh-"));
   const git = (...args) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
@@ -70,13 +63,6 @@ function makeFixtureRepo() {
 const fixture = makeFixtureRepo();
 after(() => rmSync(fixture, { recursive: true, force: true }));
 
-/**
- * A repository whose index and worktree diverge from HEAD:
- * - `src/tracked.rs` is committed, changed and staged, then changed again, so
- *   `:index` and `:worktree` disagree.
- * - `src/untracked.rs` is never added, so only `:worktree` sees it.
- * - `src/ignored.rs` matches `.gitignore`, so `:worktree` must exclude it.
- */
 function makeSnapshotRepo() {
   const dir = mkdtempSync(join(tmpdir(), "codect-dsh-snap-"));
   const git = (...args) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
@@ -103,11 +89,6 @@ function makeSnapshotRepo() {
 const snapshotFixture = makeSnapshotRepo();
 after(() => rmSync(snapshotFixture, { recursive: true, force: true }));
 
-/**
- * Older codect binaries predate untracked-`:worktree` support. Probe the binary
- * once (using the snapshot fixture) so the two worktree snapshot tests skip
- * with a clear reason rather than failing on a stale PATH binary.
- */
 let worktreeSupport;
 function worktreeUnsupportedReason() {
   if (worktreeSupport === undefined) {
@@ -170,14 +151,12 @@ test("codect diff returns the side-based codect.diff.v1 document", () => {
     assert.ok(["added", "deleted", "modified"].includes(file.status));
     assert.equal(file.equal, false);
     statuses.add(file.status);
-    // A changed file carries base/target sides with projection + outline (or null).
     for (const side of [file.base, file.target]) {
       if (side === null) continue;
       assert.ok(typeof side.snapshot_id === "string");
       assert.ok(typeof side.projection.text === "string");
       assert.ok(Array.isArray(side.projection.items));
       assert.ok(Array.isArray(side.outline));
-      // `items` is not part of a diff file itself.
     }
     assert.ok(!("items" in file), "diff files do not carry a top-level items array");
   }
@@ -244,7 +223,6 @@ test(
     const byPath = new Map(doc.files.map((f) => [f.path, f]));
     assert.equal(byPath.get("src/tracked.rs")?.status, "modified");
     assert.equal(byPath.get("src/untracked.rs")?.status, "added");
-    // `:worktree` honors the ignore stack: an ignored untracked file never leaks in.
     assert.equal(byPath.has("src/ignored.rs"), false);
   }
 );
@@ -260,7 +238,6 @@ test("codect diff :index :worktree isolates unstaged changes", () => {
 
   const tracked = doc.files.find((f) => f.path === "src/tracked.rs");
   assert.equal(tracked?.status, "modified");
-  // The staged side carries the first edit, the worktree side the second.
   assert.ok(tracked.base.projection.text.includes("i64"));
   assert.ok(tracked.target.projection.text.includes("u64"));
 });

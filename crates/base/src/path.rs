@@ -6,8 +6,6 @@
 
 use crate::model::RepoPath;
 
-/// A normalized set of repository path prefixes. Empty means "match every
-/// path", so the absence of a selection is represented without a separate case.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PathScope {
     paths: Vec<RepoPath>,
@@ -33,19 +31,11 @@ impl PathScope {
         &self.paths
     }
 
-    /// An empty scope matches everything rather than nothing, so callers never
-    /// need a second "no selection" branch.
     pub fn matches(&self, path: &RepoPath) -> bool {
         self.paths.is_empty() || self.paths.iter().any(|prefix| path.is_within(prefix))
     }
 }
 
-/// A named, repository-defined group of paths. Areas are data only; this crate
-/// never reads a config file.
-///
-/// The name has at least one non-whitespace character and the path list is
-/// non-empty, sorted, and deduplicated; [`Area::new`] establishes all three, so
-/// a constructed `Area` always satisfies them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Area {
     name: String,
@@ -53,8 +43,6 @@ pub struct Area {
 }
 
 impl Area {
-    /// Rejects a whitespace-only name or an empty path list, then sorts and
-    /// deduplicates the paths so the stored order is deterministic.
     pub fn new(
         name: impl Into<String>,
         paths: impl IntoIterator<Item = RepoPath>,
@@ -83,19 +71,16 @@ impl Area {
     }
 }
 
-/// A lookup of areas by name, sorted by name for deterministic iteration.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AreaSet {
     areas: Vec<Area>,
 }
 
 impl AreaSet {
-    /// Rejects duplicate names so resolution is deterministic.
     pub fn new(areas: impl IntoIterator<Item = Area>) -> Result<Self, AreaError> {
         let mut areas: Vec<Area> = areas.into_iter().collect();
         areas.sort_by(|left, right| left.name.cmp(&right.name));
 
-        // Adjacent comparison is enough because the sort groups equal names.
         for pair in areas.windows(2) {
             if pair[0].name == pair[1].name {
                 return Err(AreaError::DuplicateName {
@@ -119,8 +104,6 @@ impl AreaSet {
     }
 }
 
-/// How the caller asked to narrow a projection. The variants make "named areas"
-/// and "literal paths" mutually exclusive by construction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PathSelection {
     All,
@@ -128,11 +111,6 @@ pub enum PathSelection {
     Areas(Vec<String>),
 }
 
-// Resolution of a `PathSelection` into a concrete scope lives in
-// [`crate::selection::Selection::resolve`], which validates areas and records
-// the groups an unsatisfied selection needs. `path.rs` stays data-only.
-
-/// A rejected area definition.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum AreaError {
     #[error("area name is empty")]

@@ -12,9 +12,6 @@ use tree_sitter::Node;
 
 use crate::syntax::{self, field, node};
 
-// One leaf token with explicit glue flags. `glue_before` and `glue_after`
-// suppress the default space on that side, which is how `keyword=value` is
-// written without spaces while `name: T = default` keeps them.
 #[derive(Clone, Debug)]
 struct Tok {
     text: String,
@@ -50,7 +47,6 @@ impl<'a> Renderer<'a> {
         Self { path, source }
     }
 
-    // The path and its derived language, for building a [`ProjectionError`].
     pub(crate) fn supported_path(&self) -> &SupportedPath {
         self.path
     }
@@ -134,16 +130,9 @@ impl<'a> Renderer<'a> {
         join(&tokens)
     }
 
-    // A decorator, with a breakable argument list when its expression is a
-    // call. A bare decorator (`@property`) or any other expression stays flat.
-    //
     // The `decorator` node has no fields; its first named child is the
     // expression. When that expression is a `call`, the call's `arguments`
-    // (`argument_list`) named children are the items, rendered through
-    // [`Renderer::bracket_list`] so a long decorator breaks one argument per
-    // indented line with a trailing comma while a short one stays inline. Each
-    // item is a [`Renderer::value_doc`] so a collection argument breaks at its
-    // own column once the decorator itself has broken.
+    // (`argument_list`) named children are the items.
     pub(crate) fn decorator_doc(&self, node: Node<'_>) -> Doc {
         let mut cursor = node.walk();
         let expression = node.named_children(&mut cursor).next();
@@ -177,18 +166,6 @@ impl<'a> Renderer<'a> {
         self.bracket_list(items, "(", ")")
     }
 
-    // A bracketed list body: inline while the enclosing [`Doc::Group`] fits,
-    // one item per indented line when it breaks.
-    //
-    // `open`/`close` are the delimiters (`()` for parameters, `[]` for type
-    // parameters). The trailing comma is emitted only when the group breaks, so
-    // appending an item changes exactly one line. This is deliberately ungrouped
-    // so the caller can group the whole declaration header, letting the fit
-    // check see the return type and other trailing text.
-    //
-    // Items are [`Doc`]s so a nested list re-decides at its own column after the
-    // outer list breaks. The last item carries a [`Doc::Reserve`] for the
-    // trailing comma that lands on its line.
     pub(crate) fn bracket_list(&self, items: Vec<Doc>, open: &str, close: &str) -> Doc {
         if items.is_empty() {
             return Doc::Text(format!("{open}{close}"));
@@ -216,9 +193,6 @@ impl<'a> Renderer<'a> {
         ])
     }
 
-    // [`Renderer::bracket_list`] over a node's named children rendered as flat
-    // text, for lists whose items have no internal break points (superclasses,
-    // type parameters).
     pub(crate) fn node_bracket_list(&self, node: Node<'_>, open: &str, close: &str) -> Doc {
         let mut items = Vec::new();
         let mut cursor = node.walk();
@@ -228,14 +202,6 @@ impl<'a> Renderer<'a> {
         self.bracket_list(items, open, close)
     }
 
-    // The expression-position counterpart of [`Renderer::type_doc`]. Only the
-    // bracketed kinds decorators and defaults use are modeled, so an unmodeled
-    // expression cannot regress and stays byte-identical to
-    // [`Renderer::node_text`].
-    //
-    // Rebuilding a list normalizes a dangling trailing comma away, keeping the
-    // projection invariant under that formatting-only edit, as parameter lists
-    // already are.
     pub(crate) fn value_doc(&self, node: Node<'_>) -> Doc {
         match node.kind() {
             node::LIST => self.grouped_bracket_doc(node, "[", "]"),
@@ -330,7 +296,6 @@ impl<'a> Renderer<'a> {
         ])
     }
 
-    // The equals stays glued, as in [`Renderer::push_tokens`].
     fn keyword_argument_doc(&self, node: Node<'_>) -> Doc {
         let (Some(name), Some(value)) = (
             node.child_by_field_name(field::NAME),
@@ -354,8 +319,6 @@ impl<'a> Renderer<'a> {
         Doc::Concat(vec![Doc::Text(star.to_owned()), self.value_doc(*only)])
     }
 
-    // [`Renderer::bracket_list`] over a delimited node's named children,
-    // grouped so it re-decides at its own column.
     fn grouped_bracket_doc(&self, node: Node<'_>, open: &str, close: &str) -> Doc {
         let Some(items) = self.bracketed_items(node, open, close) else {
             return Doc::Text(self.node_text(node));
@@ -364,8 +327,6 @@ impl<'a> Renderer<'a> {
         Doc::Group(Box::new(self.bracket_list(items, open, close)))
     }
 
-    // The named children between `open` and `close`, or `None` when the node is
-    // not delimited by them.
     fn bracketed_items<'t>(
         &self,
         node: Node<'t>,
@@ -394,9 +355,6 @@ impl<'a> Renderer<'a> {
         children.len() >= 3 && self.slice(children[children.len() - 2]) == ","
     }
 
-    // A function's parameter list, with each parameter rendered by
-    // [`Renderer::parameter_doc`] so a long parameter type can break once the
-    // parameter list itself breaks.
     pub(crate) fn parameters_doc(&self, node: Node<'_>) -> Doc {
         let mut items = Vec::new();
         let mut cursor = node.walk();
@@ -406,13 +364,6 @@ impl<'a> Renderer<'a> {
         self.bracket_list(items, "(", ")")
     }
 
-    // A parameter, keeping its declared type and its default as nested [`Doc`]s.
-    //
-    // Only a parameter that declares a `type` or a `value` field is split; a
-    // splat pattern (`*args: T`, `**kwargs: T`), whose type hangs off a wrapper
-    // node, stays flat. The tokens between the split points are rendered
-    // separately with the boundary space restored, which is what keeps the flat
-    // form byte-identical to [`Renderer::node_text`].
     fn parameter_doc(&self, node: Node<'_>) -> Doc {
         let mut breakables: Vec<(Node<'_>, bool)> = Vec::new();
         for (name, is_type) in [(field::TYPE, true), (field::VALUE, false)] {
@@ -424,8 +375,6 @@ impl<'a> Renderer<'a> {
             return Doc::Text(self.node_text(node));
         }
 
-        // A split point that contributes no tokens of its own would silently
-        // drop out of the flat form.
         let mut nested_tokens: Vec<Vec<Tok>> = Vec::new();
         for (child, _) in &breakables {
             let mut tokens = Vec::new();
@@ -480,14 +429,6 @@ impl<'a> Renderer<'a> {
         Doc::Concat(docs)
     }
 
-    // A recursive type [`Doc`].
-    //
-    // Only the node kinds that appear in Python type positions are handled:
-    // the `type` wrapper, `generic_type` subscripts, and `binary_operator`
-    // unions. Every other kind falls back to flat text, so an unmodeled type
-    // cannot regress and always renders byte-identically to
-    // [`Renderer::node_text`].
-    //
     // This grammar (tree-sitter-python 0.25) represents annotations with a
     // `type` wrapper around a `generic_type` (`list[int]`) rather than a
     // `subscript`; a bare `subscript` in an expression position is left flat.
@@ -507,12 +448,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    // A subscript type such as `dict[str, int]` or `tuple[A, B]`.
-    //
-    // The value (`dict`, `tuple`, or a dotted attribute) stays flat and each
-    // bracketed argument group becomes a breakable list whose items are
-    // recursively typed. The whole node is grouped so it re-decides at its own
-    // column after an enclosing parameter list breaks.
     fn generic_type_doc(&self, node: Node<'_>) -> Doc {
         let mut cursor = node.walk();
         let mut named = node.named_children(&mut cursor);
@@ -583,8 +518,6 @@ impl<'a> Renderer<'a> {
     }
 }
 
-// Spacing is a function of the two adjacent leaf tokens, never of source
-// whitespace.
 fn join(tokens: &[Tok]) -> String {
     let mut text = String::new();
     let mut previous: Option<&Tok> = None;
@@ -602,9 +535,6 @@ fn join(tokens: &[Tok]) -> String {
     text
 }
 
-// The flat text of the tokens between two split points, with the boundary space
-// restored so it matches what [`join`] would produce. `previous` and `next` are
-// the split points on either side, either of which may be absent.
 fn join_segment(segment: &[Tok], previous: Option<&[Tok]>, next: &[Tok]) -> String {
     let mut text = String::new();
     if let (Some(left), Some(right)) = (previous.and_then(<[Tok]>::last), segment.first())
@@ -749,7 +679,6 @@ mod tests {
     fn list_breaks_one_item_per_line_over_the_budget() {
         let first = "x".repeat(40);
         let second = "y".repeat(40);
-        // Flat width is 1 + 40 + 1 + 1 + 40 + 1 = 84, over LINE_WIDTH.
         let items = vec![first.clone(), second.clone()];
         assert_eq!(
             render(&list(&items), 0),
@@ -770,8 +699,6 @@ mod tests {
 
     #[test]
     fn flat_width_counts_display_columns_not_bytes() {
-        // Each CJK character is two columns wide. Forty of them overflow the
-        // budget even though the byte length is not what decides.
         let wide = "名".repeat(40);
         let items = vec![wide.clone(), wide.clone()];
         let rendered = render(&list(&items), 0);
@@ -782,7 +709,6 @@ mod tests {
         decorator_doc_and_text(source).0
     }
 
-    // The decorator's doc and the flat text it must reproduce whenever it fits.
     fn decorator_doc_and_text(source: &str) -> (Doc, String) {
         let path = supported(b"fixtures/python/decorators/input.py");
         let tree = syntax::parse(source, &path).expect("decorated source parses");
@@ -944,8 +870,6 @@ mod tests {
         );
     }
 
-    // Every line a broken decorator produces, including the one its trailing
-    // comma lands on, must fit the budget.
     #[test]
     fn a_broken_decorator_never_exceeds_the_line_width() {
         for (source, indent) in [
@@ -969,15 +893,12 @@ mod tests {
         }
     }
 
-    // The enclosing list's comma lands on the value's last line, so the value
-    // is charged it and breaks rather than overflowing by one column.
     #[test]
     fn a_nested_collection_breaks_when_the_trailing_comma_would_overflow() {
         let doc = decorator_doc_for(concat!(
             "@cache(**{\"key_one\": \"value_one\", \"key_two\": \"value_two\", \"key_three\": \"value\"})\n",
             "def f(): ...\n",
         ));
-        // At depth one the extra columns are what push it over.
         assert_eq!(
             render(&doc, 1),
             concat!(
@@ -1006,8 +927,6 @@ mod tests {
         }
     }
 
-    // A dangling trailing comma is a formatting choice, so the projection
-    // normalizes it away.
     #[test]
     fn a_dangling_trailing_comma_in_an_argument_is_normalized_away() {
         for (source, expected) in [
@@ -1035,7 +954,6 @@ mod tests {
         );
     }
 
-    // A slice's colon has no place in a comma-separated rebuild.
     #[test]
     fn a_sliced_subscript_argument_stays_flat() {
         for (source, expected) in [
@@ -1066,8 +984,6 @@ mod tests {
         );
     }
 
-    // `@deco(x for x in y)` satisfies the call's `arguments` field but has no
-    // comma-separated items, so breaking it would emit invalid Python.
     #[test]
     fn a_generator_expression_argument_stays_flat() {
         for source in [

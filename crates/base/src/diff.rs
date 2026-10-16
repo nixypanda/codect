@@ -2,25 +2,23 @@
 //!
 //! The diff engine compares projection text rather than syntax trees; output is
 //! plain and deterministic, with ANSI styling applied only in the CLI.
+//!
+//! [`aligned_rows`] and [`unified_hunks`] share one patience configuration and
+//! line tokenization, so they always agree on changed lines, and equal texts
+//! produce no output.
 
 use similar::{Algorithm, DiffOp, DiffableStr, TextDiff};
 
 use crate::model::{ProjectedFile, RepoPath};
 
-/// One projected file comparison between two revisions.
-///
-/// The variant says which sides exist, so a comparison with neither side, or a
-/// path that disagrees with a present side, is not representable. The comparison
-/// carries no Git identity; the engine pairs it with the snapshot it came from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FileDiff {
-    /// Only the new side is present.
-    Added { new: ProjectedFile },
-    /// Only the old side is present.
-    Deleted { old: ProjectedFile },
-    /// Both sides are present. They may still be textually equal; the engine
-    /// omits equal projections before constructing a diff, so `Modified` never
-    /// means "no visible change" (its focused file-list policy, not core).
+    Added {
+        new: ProjectedFile,
+    },
+    Deleted {
+        old: ProjectedFile,
+    },
     Modified {
         old: ProjectedFile,
         new: ProjectedFile,
@@ -28,10 +26,6 @@ pub enum FileDiff {
 }
 
 impl FileDiff {
-    /// The compared file's path.
-    ///
-    /// It is taken from a present side, so it can never disagree with the
-    /// variant. A future variant with two paths (a rename) must revisit this.
     pub fn path(&self) -> &RepoPath {
         match self {
             Self::Added { new } => new.path(),
@@ -41,52 +35,34 @@ impl FileDiff {
     }
 }
 
-// Context lines emitted around each change. Three is the conventional default
-// and keeps focused diffs readable without depending on terminal width
-// (TECHNICAL_DESIGN.md section 13).
 const CONTEXT_RADIUS: usize = 3;
 
-/// How one aligned row relates the two sides.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiffRowKind {
-    /// Both sides are present and identical.
     Equal,
-    /// Only the new side is present.
     Add,
-    /// Only the old side is present.
     Delete,
-    /// Both sides are present and differ.
     Change,
 }
 
-/// One side of an [`AlignedRow`].
-///
-/// `number` is the one-based source line number and `text` is the line without
-/// its terminator, which is what a display consumer wants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DiffLine<'a> {
     pub number: usize,
     pub text: &'a str,
 }
 
-/// One ordered row of a side-by-side alignment of two projection texts.
-///
-/// Each variant carries exactly the sides that exist, so a row cannot claim a
-/// side it does not have. A row without an old side is an addition, and a row
-/// without a new side is a deletion, rather than an empty line; that is what
-/// lets a caller render added and deleted files cleanly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AlignedRow<'a> {
-    /// Both sides are present and identical.
     Equal {
         old: DiffLine<'a>,
         new: DiffLine<'a>,
     },
-    /// Only the new side is present.
-    Add { new: DiffLine<'a> },
-    /// Only the old side is present.
-    Delete { old: DiffLine<'a> },
-    /// Both sides are present and differ.
+    Add {
+        new: DiffLine<'a>,
+    },
+    Delete {
+        old: DiffLine<'a>,
+    },
     Change {
         old: DiffLine<'a>,
         new: DiffLine<'a>,
@@ -94,10 +70,6 @@ pub enum AlignedRow<'a> {
 }
 
 impl AlignedRow<'_> {
-    /// The row's [`DiffRowKind`].
-    ///
-    /// The kind is derived from the variant rather than stored beside it, so it
-    /// can never contradict which sides are present.
     pub fn kind(&self) -> DiffRowKind {
         match self {
             Self::Equal { .. } => DiffRowKind::Equal,
@@ -108,16 +80,6 @@ impl AlignedRow<'_> {
     }
 }
 
-/// Aligns two canonical projection texts into ordered rows.
-///
-/// The alignment shares [`unified_hunks`]'s patience-diff configuration and
-/// line tokenization, so the two always identify the same changed lines. A
-/// replacement pairs as many old and new lines as it can into
-/// [`AlignedRow::Change`] rows and emits the remainder as [`AlignedRow::Delete`]
-/// or [`AlignedRow::Add`].
-///
-/// Empty text is treated as zero lines, matching the core invariant that a
-/// projection with no items has empty canonical text.
 pub fn aligned_rows<'a>(old: &'a str, new: &'a str) -> Vec<AlignedRow<'a>> {
     let old_lines = old.tokenize_lines();
     let new_lines = new.tokenize_lines();
@@ -194,16 +156,6 @@ fn line<'a>(lines: &[&'a str], index: usize) -> DiffLine<'a> {
     }
 }
 
-/// The unified hunks comparing two canonical projection texts.
-///
-/// Returns an empty string when the texts are equal, so a caller can treat
-/// "empty" as "no focused change" (TECHNICAL_DESIGN.md section 7.2). Hunks use
-/// the standard `@@ -a,b +c,d @@` header and `-`, `+`, and space prefixes. File
-/// headers and the trailing newline of the enclosing document belong to
-/// [`crate::render`].
-///
-/// An empty string is treated as zero lines, matching the core invariant that a
-/// projection with no items has empty canonical text.
 pub fn unified_hunks(old: &str, new: &str) -> String {
     let diff = TextDiff::configure()
         .algorithm(Algorithm::Patience)
@@ -297,9 +249,6 @@ mod tests {
 
     #[test]
     fn distant_changes_split_into_hunks_with_three_context_lines() {
-        // Changes on line 2 and line 12 leave more than six unchanged lines
-        // between them, so patience must split the result into two hunks and
-        // each hunk must keep exactly three context lines (section 13).
         let old: String = (1..=20).map(|n| format!("line {n}\n")).collect();
         let mut new_lines: Vec<String> = (1..=20).map(|n| format!("line {n}\n")).collect();
         new_lines[1] = "CHANGED 2\n".to_owned();

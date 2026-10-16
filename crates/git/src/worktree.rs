@@ -58,8 +58,6 @@ pub(crate) fn untracked_paths(repo: &GitRepository) -> Result<Vec<RepoPath>, Git
         })?;
         let entry = item.entry;
 
-        // Only untracked regular files: directories, symlinks, submodules, and
-        // untrackable special files never contribute a projection.
         if entry.status != gix::dir::entry::Status::Untracked
             || entry.disk_kind != Some(gix::dir::entry::Kind::File)
         {

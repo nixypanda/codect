@@ -53,7 +53,6 @@ function writeBool(key: string, value: boolean): void {
   try {
     globalThis.localStorage?.setItem(key, String(value));
   } catch {
-    // Persisting view state is best-effort.
   }
 }
 
@@ -72,7 +71,6 @@ function writeCollapsed(collapsed: Set<string>): void {
   try {
     globalThis.localStorage?.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]));
   } catch {
-    // Persisting folds is best-effort.
   }
 }
 

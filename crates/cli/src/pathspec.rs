@@ -10,17 +10,18 @@
 // components needs no filesystem call and cannot disagree with them. Calling
 // `canonicalize` would additionally resolve symlinks, which Git does not, and
 // would reject paths that do not exist on disk but do exist in a revision.
+//
+// Repository paths use `/` on every platform, so components are compared as
+// raw bytes rather than through the host's path semantics.
+//
+// Committed non-UTF-8 paths stay targetable on Unix; elsewhere the conversion
+// is best-effort and a missing UTF-8 form is reported rather than guessed.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use base::{PathSelection, RepoPath, RepoPathError};
 
-// Resolves command-line path arguments into a selection relative to
-// `repo_root`.
-//
-// An empty argument list, and any argument that resolves to the repository
-// root itself, both select everything: the root subsumes every other argument.
 pub fn build_selection(
     paths: &[OsString],
     cwd: &Path,
@@ -38,8 +39,6 @@ pub fn build_selection(
         let display = path.to_string_lossy().into_owned();
         let bytes = path_arg_bytes(path)?;
 
-        // An absolute argument replaces the working directory; a relative one
-        // extends it. Either way `..` may only climb within the repository.
         let mut components = if bytes.first() == Some(&b'/') {
             Vec::new()
         } else {
@@ -81,8 +80,6 @@ pub enum PathArgError {
     #[error("path `{path}` is outside repository `{repository}`")]
     OutsideRepository { path: String, repository: PathBuf },
 
-    // Only constructible where `OsStr` is not already raw bytes, but kept in
-    // the fixed error surface so callers never see a platform difference.
     #[cfg_attr(unix, allow(dead_code))]
     #[error("path `{path}` is not valid UTF-8")]
     NonUtf8 { path: String },
@@ -102,8 +99,6 @@ fn outside(path: String, repository: &Path) -> PathArgError {
     }
 }
 
-// Repository paths use `/` on every platform, so components are compared as
-// bytes rather than through the host's path semantics.
 fn path_bytes(path: &Path) -> Vec<u8> {
     let os = path.as_os_str();
     #[cfg(unix)]
@@ -117,8 +112,6 @@ fn path_bytes(path: &Path) -> Vec<u8> {
     }
 }
 
-// Keeps committed non-UTF-8 paths targetable on Unix; elsewhere the conversion
-// is best-effort and a missing UTF-8 form is reported rather than guessed.
 fn path_arg_bytes(value: &OsStr) -> Result<Vec<u8>, PathArgError> {
     #[cfg(unix)]
     {

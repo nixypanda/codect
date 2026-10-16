@@ -31,9 +31,6 @@ fn is_atomic_literal(kind: &str) -> bool {
     )
 }
 
-// Spacing is a function of the two adjacent leaf tokens, never of source
-// whitespace. Optional trailing commas before a closing angle bracket or at
-// the end of a fragment are dropped, because they carry no meaning.
 pub(crate) fn join(tokens: &[String]) -> String {
     let mut text = String::new();
     let mut previous: Option<&str> = None;
@@ -100,10 +97,6 @@ fn last_or_empty(tokens: &[String]) -> &str {
     tokens.last().map(String::as_str).unwrap_or("")
 }
 
-// Canonical renderer for Rust declarations.
-//
-// Holds the source and its path so declaration fragments are rebuilt from the
-// parsed tree, never from raw source slices (except atomic literals).
 pub(crate) struct Renderer<'a> {
     path: &'a SupportedPath,
     source: &'a str,
@@ -166,14 +159,6 @@ impl<'a> Renderer<'a> {
         out
     }
 
-    // Renders the declaration prefix up to the first child in `stop_kinds`,
-    // dropping statement terminators that the caller re-emits.
-    //
-    // Parameter and type-parameter lists become groups that wrap at
-    // [`LINE_WIDTH`]; every other token keeps the fixed spacing rules, so a
-    // header that fits is byte-for-byte the old flat output. The caller groups
-    // it together with whatever shares its first line, so the fit check counts
-    // the terminator or opening brace too.
     pub(crate) fn header(&self, node: Node<'_>, stop_kinds: &[&str]) -> Doc {
         let elements = self.header_elements(node, stop_kinds);
         elements_doc(&elements)
@@ -231,9 +216,6 @@ impl<'a> Renderer<'a> {
         Elem::List { items, open, close }
     }
 
-    // A named parameter's document: its pattern, `: `, and its recursively
-    // rendered type. A parameter type can therefore break inside an already-broken
-    // parameter list. Anything else (notably `self`) is rendered flat.
     fn parameter_doc(&self, node: Node<'_>) -> Doc {
         match self.field(node, field::TYPE) {
             Some(ty) => self.prefix_then_type(node, ty),
@@ -241,10 +223,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    // A recursive type document. Only the node kinds below are rebuilt; every
-    // other kind falls back to the flat token rendering, so an unrecognized type
-    // cannot change its flat output. Each bracket list is grouped so it re-decides
-    // its own fit after an enclosing list breaks.
     pub(crate) fn type_doc(&self, node: Node<'_>) -> Doc {
         match node.kind() {
             node::GENERIC_TYPE => {
@@ -380,11 +358,6 @@ impl<'a> Renderer<'a> {
         Some(items)
     }
 
-    // An attribute as a document. A multi-argument attribute whose flat form does
-    // not fit wraps one argument per indented line with a trailing comma; anything
-    // else is the flat token rendering, byte-identical to before. The `#[` attaches
-    // to the path and `]` to the closing `)` through literal text, never
-    // [`needs_space`].
     pub(crate) fn attribute_doc(&self, attribute_item: Node<'_>) -> Doc {
         // Extraction passes the `attribute_item`, whose only named child is the
         // `attribute` carrying the path and the argument token tree.
@@ -424,10 +397,6 @@ impl<'a> Renderer<'a> {
         out
     }
 
-    // A named field's document: everything before the declared type (visibility,
-    // name, and `:`), then the recursively rendered type. The flat rendering is
-    // byte-identical to the previous `node_text(field)`, but a long type can now
-    // break.
     pub(crate) fn field_doc(&self, node: Node<'_>) -> Doc {
         match self.field(node, field::TYPE) {
             Some(ty) => self.prefix_then_type(node, ty),
@@ -435,9 +404,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    // Everything before `ty` (its sibling tokens are rendered with [`join`]), then
-    // a space when required, then the recursively rendered type. This keeps the
-    // prefix byte-identical to [`node_text`] while letting `ty` break.
     fn prefix_then_type(&self, node: Node<'_>, ty: Node<'_>) -> Doc {
         let mut prefix = Vec::new();
         let mut cursor = node.walk();
@@ -456,8 +422,6 @@ impl<'a> Renderer<'a> {
         Doc::Concat(parts)
     }
 
-    // A variant body as an ungrouped document. A struct-like variant's field list
-    // is a brace list the caller can group with the trailing comma.
     pub(crate) fn variant_doc(&self, variant: Node<'_>) -> Doc {
         let name = self
             .field(variant, field::NAME)
@@ -535,8 +499,6 @@ impl<'a> Renderer<'a> {
     }
 }
 
-// One element of a declaration header: either flattened tokens, a recursively
-// rendered type, or a bracketed list that is allowed to wrap.
 enum Elem {
     Token(String),
     Type {
@@ -552,10 +514,6 @@ enum Elem {
 }
 
 fn elements_doc(elements: &[Elem]) -> Doc {
-    // The last list is the primary break point: it stays ungrouped so the
-    // enclosing header group's fit check includes any trailing return type.
-    // Earlier lists (generics before parameters) stay grouped so they re-decide
-    // and remain inline when they fit on their own.
     let primary = elements
         .iter()
         .rposition(|element| matches!(element, Elem::List { .. }));
@@ -611,10 +569,6 @@ fn elements_doc(elements: &[Elem]) -> Doc {
     Doc::Concat(parts)
 }
 
-// A bracketed list body: inline while the enclosing [`Doc::Group`] fits, one
-// item per indented line when it breaks. The trailing comma is emitted only
-// when broken, so appending an item changes exactly one line. This is
-// deliberately ungrouped so the caller can group the whole header.
 fn bracket_list(items: &[Doc], open: &str, close: &str) -> Doc {
     if items.is_empty() {
         return Doc::Text(format!("{open}{close}"));
@@ -654,11 +608,6 @@ fn brace_list(fields: &[Doc]) -> Doc {
     ])
 }
 
-// A unit or tuple struct terminator, or any declaration that ends in `;`.
-//
-// Without a `where` clause the header shares its line with the `;`, so both
-// form one group. With a clause the header sits alone and the `;` follows the
-// clause on its own line.
 pub(crate) fn signature_doc(header: Doc, where_clause: Option<String>) -> Doc {
     match where_clause {
         None => Doc::Group(Box::new(Doc::Concat(vec![
@@ -674,8 +623,6 @@ pub(crate) fn signature_doc(header: Doc, where_clause: Option<String>) -> Doc {
     }
 }
 
-// A brace-delimited container. A `where` clause pushes the opening brace onto
-// its own line, matching the canonical examples in section 12.2.
 pub(crate) fn container_doc(header: Doc, where_clause: Option<String>, members: Vec<Doc>) -> Doc {
     if members.is_empty() {
         return match where_clause {
@@ -814,8 +761,6 @@ mod tests {
 
     #[test]
     fn a_header_group_counts_a_trailing_return_type() {
-        // The list alone fits, but the whole header (with the return type) does
-        // not, so the list must break.
         let items = vec![Doc::Text("a: i32".to_owned())];
         let head = Doc::Group(Box::new(Doc::Concat(vec![
             Doc::Text("pub fn f".to_owned()),
@@ -829,9 +774,6 @@ mod tests {
         );
     }
 
-    // Parses a source whose first item carries the attribute under test and
-    // returns the attribute's document and its flat token rendering. The node
-    // is the `attribute_item`, exactly what extraction passes in.
     fn attribute_pair(source: &str) -> (Doc, String) {
         let path = supported("src/lib.rs");
         let tree = syntax::parse(source, &path).expect("the source parses");
@@ -874,8 +816,6 @@ mod tests {
         assert_eq!(flat, "fn(A) -> B");
         assert_eq!(render(&doc, 0), flat);
 
-        // The `Fn(...) -> ...` form is the `trait` of a `dyn` type; render that
-        // inner `function_type` directly.
         let source = "type X = dyn Fn(A) -> B;";
         let path = supported("src/lib.rs");
         let tree = syntax::parse(source, &path).expect("the source parses");
@@ -929,8 +869,6 @@ mod tests {
 
     #[test]
     fn long_multi_argument_attribute_wraps_with_a_trailing_comma() {
-        // Flat this attribute is 79 columns, so at depth 1 (four-space indent)
-        // it no longer fits and must break.
         let source = "#[command(after_help = FOCUSED_DIFF_HELP, after_long_help = FOCUSED_DIFF_HELP)]\nstruct S;";
         let (doc, _) = attribute_pair(source);
         assert_eq!(

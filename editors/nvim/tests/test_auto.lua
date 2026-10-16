@@ -5,7 +5,6 @@ local state = require("codect.state")
 
 local OTHER = "editors/nvim/tests/fixtures/one_liners.rs"
 
---- Wait for `buf` to be folded to `mode`; returns true on success.
 local function wait_folded(buf, mode)
   return vim.wait(5000, function()
     local st = state.get(buf)
@@ -13,7 +12,6 @@ local function wait_folded(buf, mode)
   end, 20)
 end
 
---- Pump scheduled events for `ms` without waiting for a condition.
 local function pump(ms)
   vim.wait(ms, function()
     return false
@@ -128,7 +126,6 @@ return function(H)
     H.eq(#messages, 1, "only the enabled notification, no error")
     H.contains(messages[1], "auto-fold enabled")
 
-    -- The toggle is not broken: an eligible buffer still folds afterwards.
     H.open_fixture()
     local buf = vim.api.nvim_get_current_buf()
     H.truthy(wait_folded(buf, "types"), "an eligible buffer still folds after a skip")
@@ -298,7 +295,6 @@ return function(H)
       error(err)
     end
 
-    -- The toggle recovers once git is available again.
     H.open_fixture()
     local buf = vim.api.nvim_get_current_buf()
     H.truthy(wait_folded(buf, "types"), "an eligible buffer folds once git returns")

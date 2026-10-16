@@ -14,7 +14,6 @@ export interface OutlineViewProps {
   onJump: (line: number) => void;
 }
 
-/** First non-empty line of a possibly multi-line canonical fragment. */
 export function firstLine(text: string): string {
   const line = text.split("\n", 1)[0] ?? "";
   return line.trim();

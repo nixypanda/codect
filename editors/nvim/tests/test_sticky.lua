@@ -19,13 +19,11 @@ return function(H)
     local buf = vim.api.nvim_get_current_buf()
 
     local new = H.item_by_key(NEW)
-    -- The method is hidden under the closed inherent impl; open the impl first.
     local impl = H.item_by_key("impl Widget")
     put_cursor(impl.fold_start)
     folds.user_action("open")
     H.falsy(vim.fn.foldclosed(impl.fold_start) == impl.fold_start, "impl opened")
 
-    -- Edit the buffer so a refresh really re-projects.
     vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "// sticky edit" })
     view.refresh(buf)
 
@@ -33,7 +31,6 @@ return function(H)
     H.falsy(vim.fn.foldclosed(impl_after.fold_start) == impl_after.fold_start, "impl stays open after refresh")
     H.eq(state.get_override(H.state().path, impl_after.key), true, "override recorded as open")
 
-    -- The method can now be opened on its own and must stay open too.
     put_cursor(new.fold_start)
     folds.user_action("open")
     view.refresh(buf)

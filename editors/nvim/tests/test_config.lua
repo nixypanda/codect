@@ -75,8 +75,6 @@ return function(H)
     codect.setup({ manage_fold_options = false })
 
     H.open_fixture()
-    -- The user owns the fold setup; this mirrors configuring the plugin's
-    -- foldexpr by hand and starting from a fully-closed window.
     vim.wo.foldmethod = "expr"
     vim.wo.foldexpr = "v:lua.require'codect.folds'.foldexpr(v:lnum)"
     vim.wo.foldenable = true
@@ -89,7 +87,6 @@ return function(H)
     H.falsy(vim.fn.foldclosed(widget.fold_start) == widget.fold_start, "retained struct is open")
     H.eq(vim.fn.foldclosed(make.fold_start), make.fold_start, "dropped function is closed")
 
-    -- A repeated apply must not escalate and collapse the retained container.
     vim.cmd("CodectFold types")
     H.falsy(
       vim.fn.foldclosed(widget.fold_start) == widget.fold_start,
@@ -109,7 +106,6 @@ return function(H)
     H.eq(vim.wo.foldmethod, "expr", "the plugin owns the options while the buffer is shown")
     H.eq(vim.wo.foldminlines, 0, "foldminlines is zeroed while the buffer is shown")
 
-    -- Switch this window to a buffer the plugin does not own.
     vim.cmd("enew")
     H.eq(vim.wo.foldmethod, "manual", "foldmethod is restored on leave")
     H.eq(vim.wo.foldminlines, 7, "foldminlines is restored on leave")

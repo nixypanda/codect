@@ -7,6 +7,9 @@
  * Pattern follows dsh-client-ui-sidebar-files/lib/client.js:
  *   window.__ModuleLoader__.load({ id, factory(require) { ... } })
  *   No top-level imports — uses require() inside the factory.
+ *
+ * `codectFace` unwraps the Remote result envelope: throw `error` when
+ * `ok === false`, otherwise return `value`.
  */
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
@@ -21,10 +24,6 @@ const { codeLabels } = require("./labels");
 const { ensureStyles } = require("./styles");
 const { fileAddressFor } = require("./address");
 const { TYPERT_REMOTE } = require("../api-codect/typert.remote-client");
-
-// ---------------------------------------------------------------------------
-// Locale namespace
-// ---------------------------------------------------------------------------
 
 const NS = "codect";
 
@@ -76,10 +75,6 @@ const LOCALE_EN: Record<string, string> = {
   "codect.shortcut.noSession": "No active session",
 };
 
-// ---------------------------------------------------------------------------
-// Codect face (Remote client)
-// ---------------------------------------------------------------------------
-
 /**
  * Wrap the `remote.codect` namespace service in the small face the views use.
  * The caller must pass the namespace obtained from a context that injected
@@ -100,10 +95,6 @@ function codectFace(codect: any) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Optional client services
-// ---------------------------------------------------------------------------
-
 /**
  * Read a client service without declaring an injection requirement.
  *
@@ -120,15 +111,6 @@ function optionalService(ctx: any, name: string): any {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Apply — register everything
-// ---------------------------------------------------------------------------
-
-/**
- * Services the client context must carry before `apply` runs. The codect
- * namespace itself is mounted by `apply` (see TYPERT_REMOTE below), so only the
- * `remote` service it mounts onto is required here.
- */
 const inject = [
   "slots",
   "locale",
@@ -138,19 +120,14 @@ const inject = [
 ];
 
 /**
- * The sidebar tab body receives a session-scoped props bag from the sidebar
- * service (see dsh-client-ui-sidebar-files). Derive the workspace root from the
- * session's cwd. The body of a `sidebar.right.pane.tab` slot is guaranteed the
- * `useSessions` and `sessionId` props, so the hook is always called.
+ * The body of a `sidebar.right.pane.tab` slot is guaranteed the `useSessions`
+ * and `sessionId` props, so the hook is always called.
  */
 function useRoot(props: any): string | undefined {
   return props.useSessions((sessions: any) => sessions?.byId?.[props.sessionId]?.cwd);
 }
 
 /**
- * Register the two tab types, their bodies and titles, the dictionaries, and
- * the shortcuts that open each tab in the right sidebar.
- *
  * This is the ModuleLoader `apply` entry: it is called with the client root
  * context once the injected services are present.
  */
@@ -171,8 +148,6 @@ function apply(ctx: any) {
     };
   });
 
-  // Mount the Client FaceModel contribution to install the `remote.codect`
-  // namespace before anything injects it.
   if (ctx.remote && typeof ctx.remote.$mount === "function") {
     ctx.effect(
       () => ctx.remote.$mount(TYPERT_REMOTE),
@@ -195,7 +170,6 @@ function apply(ctx: any) {
     };
   }
 
-  // Register shortcuts that open each tab from the keyboard.
   ctx.inject(["shortcuts"], (shortcutsCtx: any) => {
     shortcutsCtx.register({
       id: "codect.show",
@@ -228,12 +202,10 @@ function apply(ctx: any) {
     });
   });
 
-  // Register tab types.
   ctx.effect(() => ctx.sidebarRightTabs.register(showDefinition(t)), "codect: show type");
 
   ctx.effect(() => ctx.sidebarRightTabs.register(diffDefinition(t)), "codect: diff type");
 
-  // Register dictionaries.
   ctx.effect(() => ctx.locale.register(NS, { en: LOCALE_EN }), "codect: dictionaries");
 
   // The bodies call the Remote namespace, so obtain it through an inject scope:
@@ -241,11 +213,6 @@ function apply(ctx: any) {
   ctx.inject(["remote.codect"], (scoped: any) => {
     const codect = codectFace(scoped.remote.codect);
 
-    /**
-     * Build the navigation callback for a sidebar body. It opens the real
-     * source file at the declaration line, in the tab's own pane when the
-     * framework exposes `useTabInfo().tab.actions`, else in the active pane.
-     */
     function navigateFrom(
       props: any,
       tabActions: any,
@@ -333,7 +300,6 @@ function apply(ctx: any) {
     );
   });
 
-  // Register tab titles.
   ctx.effect(
     () =>
       ctx.slots.inject("sidebar.right.pane.tab.title", () =>

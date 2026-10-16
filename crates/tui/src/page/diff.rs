@@ -1,5 +1,8 @@
 //! The `diff` page: a base/target range compared directly, or the first-parent
 //! steps of a commits view, each with its own scroll, search, and highlighting.
+//!
+//! The wrapped rows are cached and keyed on a generation counter plus the layout
+//! inputs, so any change to the diffs must bump the generation.
 
 use std::sync::Arc;
 
@@ -36,28 +39,24 @@ use super::{
     text_edit,
 };
 
-/// Which side of a diff a prompt edits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiffSide {
     Base,
     Target,
 }
 
-/// The base- or target-revision editor, which only exists on a diff.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiffPrompt {
     pub side: DiffSide,
     pub input: TextInput,
 }
 
-/// The panes `Tab` cycles in a diff range.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RangeFocus {
     Tree,
     Diff,
 }
 
-/// The panes `Tab` cycles in a diff's commits view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommitsFocus {
     Commits,
@@ -65,21 +64,17 @@ pub enum CommitsFocus {
     Diff,
 }
 
-/// The body scroll offset of a diff. Diff panes always wrap, so there is no
-/// horizontal offset to represent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DiffBody {
     pub scroll: u16,
 }
 
-/// Syntax-highlighted lines for the selected diff, one side at a time.
 #[derive(Clone, Default)]
 pub struct DiffHighlight {
     pub old: Vec<StyledLine>,
     pub new: Vec<StyledLine>,
 }
 
-/// Bounded, per-path syntax highlighting for a diff.
 #[derive(Clone, Debug, Default)]
 pub struct DiffHighlights {
     cache: BoundedCache<Arc<DiffHighlight>>,
@@ -103,30 +98,23 @@ impl DiffHighlights {
     }
 }
 
-/// A loaded `diff` projection.
 #[derive(Clone, Debug)]
 pub struct Diff {
     pub base: String,
     pub target: String,
     pub mode: ProjectionMode,
     pub scope: Scope,
-    /// Compare the merge base of `base` and `target` against `target`.
     pub merge_base: bool,
     pub visible: Arc<[RepoPath]>,
     pub selected: Option<RepoPath>,
     pub search: Option<Search>,
     pub paging: Paging,
-    /// The base- or target-revision editor, which only exists on a diff.
     pub prompt: Option<DiffPrompt>,
     pub view: DiffViewState,
-    /// Bumped whenever the diffs change, invalidating [`Self::rows`].
     generation: u64,
-    /// The wrapped visual rows of the active diff, cached so a frame or a
-    /// scroll key does not recompute them.
     rows: Arc<DiffRows>,
 }
 
-/// The inputs a cached diff layout depends on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RowsKey {
     generation: u64,
@@ -142,14 +130,12 @@ struct DiffRows {
     rows: Vec<VisualRow>,
 }
 
-/// A diff's two views: the endpoint range, or the first-parent steps.
 #[derive(Clone, Debug)]
 pub enum DiffViewState {
     Range(Range),
     Commits(Commits),
 }
 
-/// The endpoint range: `base..target`, compared directly.
 #[derive(Clone, Debug)]
 pub struct Range {
     pub focus: RangeFocus,
@@ -158,7 +144,6 @@ pub struct Range {
     pub highlight: DiffHighlights,
 }
 
-/// The commits view: one step's diff shown above a full-width picker band.
 #[derive(Clone, Debug)]
 pub struct Commits {
     pub focus: CommitsFocus,
@@ -192,7 +177,6 @@ impl Commits {
 }
 
 impl Diff {
-    /// A diff with no diffs yet, still loading.
     pub fn new(
         base: String,
         target: String,
@@ -218,17 +202,14 @@ impl Diff {
         }
     }
 
-    /// Marks the diffs changed, so [`Self::refresh_rows`] recomputes.
     pub fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// The wrapped visual rows of the active diff.
     pub fn rows(&self) -> &[VisualRow] {
         self.rows.rows.as_slice()
     }
 
-    /// Recomputes the wrapped rows when the layout inputs changed.
     pub fn refresh_rows(&mut self, width: u16, height: u16, tree_percent: u16, theme: &Theme) {
         let key = RowsKey {
             generation: self.generation,
@@ -247,7 +228,6 @@ impl Diff {
         });
     }
 
-    /// The wrapped rows recomputed without the cache.
     pub fn compute_rows(
         &self,
         width: u16,
@@ -298,7 +278,6 @@ impl Diff {
         }
     }
 
-    /// The visual row index of a search match, if the diff is laid out.
     pub fn visual_row_for(&self, side: SearchSide, line: usize) -> Option<usize> {
         self.rows().iter().position(|row| match side {
             SearchSide::Old => row.old_number == Some(line),
@@ -307,7 +286,6 @@ impl Diff {
         })
     }
 
-    /// The focus, normalized for layout.
     pub(crate) fn focus(&self) -> Focus {
         match &self.view {
             DiffViewState::Range(range) => match range.focus {
@@ -322,7 +300,6 @@ impl Diff {
         }
     }
 
-    /// Moves focus to the pane a hit test selected.
     pub(crate) fn set_focus(&mut self, focus: Focus) {
         match &mut self.view {
             DiffViewState::Range(range) => {
@@ -343,7 +320,6 @@ impl Diff {
 }
 
 impl Diff {
-    /// The diffs of the current view.
     pub fn diffs(&self) -> &[FileDiff] {
         match &self.view {
             DiffViewState::Range(range) => &range.diffs,
@@ -351,7 +327,6 @@ impl Diff {
         }
     }
 
-    /// The diff currently shown, if a file is selected.
     pub fn active_diff(&self) -> Option<&FileDiff> {
         let path = self.selected.as_ref()?;
         self.diffs().iter().find(|diff| diff.path() == path)
@@ -378,7 +353,6 @@ impl Diff {
         }
     }
 
-    /// The revisions the visible diff compares, as short labels.
     pub fn revisions(&self) -> (String, String) {
         if let DiffViewState::Commits(commits) = &self.view
             && let Some(step) = commits.picker.steps_slice().get(commits.picker.cursor())
@@ -393,7 +367,6 @@ impl Diff {
         (self.base.clone(), self.target.clone())
     }
 
-    /// The search ranges on one line of one diff side.
     pub fn search_ranges(&self, side: SearchSide, line: usize) -> Vec<(usize, usize, bool)> {
         search_ranges(self.search.as_ref(), side, line)
     }
@@ -435,7 +408,6 @@ impl Diff {
         matches
     }
 
-    /// Recomputes the committed search for the current selection.
     pub fn set_search(&mut self, needle: &str) {
         if needle.is_empty() {
             self.search = None;
@@ -448,7 +420,6 @@ impl Diff {
         });
     }
 
-    /// Recomputes a committed search after the selection changed.
     pub fn resync_search(&mut self) {
         let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
             return;
@@ -460,7 +431,6 @@ impl Diff {
         }
     }
 
-    /// Computes and caches highlighting for the selected diff when missing.
     pub fn ensure_highlight(&mut self, theme: &Theme) {
         let Some(path) = self.selected.clone() else {
             return;
@@ -498,7 +468,6 @@ impl Diff {
         }
     }
 
-    /// The current view's highlight for the selected diff, if computed.
     pub fn active_highlight(&self) -> Option<&DiffHighlight> {
         let path = self.selected.as_ref()?;
         match &self.view {
@@ -528,51 +497,28 @@ fn diff_highlight(
     }
 }
 
-/// Builds a diff scope's visible paths from its diffs.
 pub fn diff_visible(diffs: &[FileDiff]) -> Vec<RepoPath> {
     diffs.iter().map(|diff| diff.path().clone()).collect()
 }
 
-// ---------------------------------------------------------------------------
-// Update
-// ---------------------------------------------------------------------------
-
-/// A message the `diff` page understands.
 #[derive(Debug)]
 pub enum Msg {
-    /// A key that is not a semantic action, routed while a diff pane has focus.
     Key(Key),
-    /// A wheel scroll of the diff body by a signed number of rows.
     Scroll(i32),
-    /// A scroll action: top, bottom, page up, or page down.
     Action(GlobalAction),
-    /// Advance the committed search to the next or previous match.
     StepSearch(bool),
-    /// Cycle the focused pane forward or backward.
     CycleFocus(bool),
-    /// A key typed while a revision prompt is open.
     Prompt(Key),
-    /// Open the prompt for one side of the range.
     EditSide(DiffSide),
-    /// Reload the projection in another view.
     SwitchView(DiffView),
-    /// Replace the committed search.
     SetSearch(String),
-    /// Drop the committed search.
     ClearSearch,
-    /// Scroll the current search match into view without advancing.
     ScrollToCurrent,
-    /// A commit picker message.
     Commit(commit_picker::Msg),
-    /// Reload the same projection with a new scope.
     ReloadScope(Selection),
-    /// Reload the same projection in another mode.
     SwitchMode(ProjectionMode),
-    /// A `diff` range effect finished.
     Loaded(DiffRequest, Result<Arc<[FileDiff]>, Box<EngineError>>),
-    /// A commits-view effect finished: the steps and the first step's diff.
     HistoryLoaded(DiffRequest, Result<HistoryPayload, Box<EngineError>>),
-    /// A single commit step's projection finished.
     StepLoaded {
         index: usize,
         inner_height: usize,
@@ -580,8 +526,6 @@ pub enum Msg {
     },
 }
 
-/// The pure `diff` update. It mutates only the page and returns the shell work
-/// it produced.
 pub fn update(msg: Msg, page: &mut Diff, ctx: &Ctx) -> Vec<OutMsg> {
     match msg {
         Msg::Key(key) => body_key(page, key),
@@ -664,7 +608,6 @@ pub fn update(msg: Msg, page: &mut Diff, ctx: &Ctx) -> Vec<OutMsg> {
 }
 
 impl Diff {
-    /// The effect request that reloads the projection exactly as it is.
     pub fn request(&self) -> DiffRequest {
         DiffRequest {
             base: self.base.clone(),
@@ -781,7 +724,6 @@ fn switch_view(page: &mut Diff, view: DiffView) -> Vec<OutMsg> {
     if !matches {
         return Vec::new();
     }
-    // A first-parent walk needs commits; a snapshot endpoint cannot supply one.
     if view == DiffView::Commits
         && (engine::is_snapshot_spec(&page.base) || engine::is_snapshot_spec(&page.target))
     {
@@ -789,8 +731,6 @@ fn switch_view(page: &mut Diff, view: DiffView) -> Vec<OutMsg> {
             "The commits view needs commit revisions".to_owned(),
         )];
     }
-    // The commits view walks the target's first-parent chain, which a merge
-    // base need not lie on, so it keeps the base exactly as requested.
     if view == DiffView::Commits && page.merge_base {
         return vec![OutMsg::Diagnose(
             "The commits view cannot use a merge-base base".to_owned(),
@@ -921,7 +861,6 @@ fn history_loaded(
     page.visible = Arc::from(diff_visible(page.diffs()));
     page.invalidate();
 
-    // Restore the same commit as before, if it is still in range.
     let pending = if let DiffViewState::Commits(commits) = &page.view {
         preferred
             .and_then(|id| {
@@ -1001,18 +940,12 @@ fn step_loaded(
     }
 }
 
-// ---------------------------------------------------------------------------
-// View
-// ---------------------------------------------------------------------------
-
-/// Which side of the diff a pane draws.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Side {
     Old,
     New,
 }
 
-/// Draws one side of the diff.
 pub(crate) fn view(
     page: &Diff,
     ctx: &ViewCtx,
@@ -1086,7 +1019,6 @@ pub(crate) fn view(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Draws the base/target revision prompt when it is open.
 pub(crate) fn prompt_view(page: &Diff, theme: &Theme, frame: &mut Frame, area: Rect) {
     if let Some(prompt) = &page.prompt {
         let label = match prompt.side {
@@ -1102,8 +1034,6 @@ fn pane_title(side: Side, revision: &str, merge_base: bool, pane_width: u16) -> 
         Side::Old => "BASE",
         Side::New => "TARGET",
     };
-    // The base pane is the one resolved to the merge base; name that so the
-    // comparison is not mistaken for a tip-to-tip range.
     let suffix = if merge_base && side == Side::Old {
         " (merge-base)"
     } else {
@@ -1135,7 +1065,6 @@ fn diff_line(
     search: &[(usize, usize, bool)],
 ) -> Line<'static> {
     let VisualRowKind::Diff(kind) = kind else {
-        // Hunk headers and collapse indicators span the whole pane.
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let full = gutter + width;
         let mut padded = if kind == VisualRowKind::Hunk {
@@ -1157,11 +1086,8 @@ fn diff_line(
         return Line::from(Span::styled(padded, style));
     };
 
-    // Delta-style full-line background; the intra-line emphasis is already
-    // baked into the run styles, so a run's own background wins over the base.
     let base = line_background(kind, side, theme);
 
-    // Search matches are recolored on top of the diff emphasis.
     let owned;
     let runs: &[Run] = if search.is_empty() {
         runs
@@ -1247,7 +1173,6 @@ mod tests {
         assert_eq!(UnicodeWidthStr::width(narrow.as_str()), 14);
         assert_eq!(pane_title(Side::Old, "main", false, 2), "");
 
-        // The base pane names the merge-base resolution when it is in effect.
         assert_eq!(
             pane_title(Side::Old, "main", true, 30),
             " BASE · main (merge-base) "

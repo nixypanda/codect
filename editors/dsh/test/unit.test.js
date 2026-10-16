@@ -46,8 +46,6 @@ test("buildTreeRows hides the subtree of a collapsed directory", () => {
 });
 
 test("buildTreeRows orders directories before files at each level", () => {
-  // Directory-first, natural name order — matches the Workspace files plugin,
-  // so `src/lib/` precedes its sibling file `src/lib.rs`.
   const rows = buildTreeRows(["src/lib.rs", "src/lib/a.rs"], new Set());
   assert.deepEqual(
     rows.map((row) => [row.depth, row.kind, row.path]),
@@ -110,11 +108,6 @@ test("fileAddressFor maps relative and workspace-absolute paths", () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// diffChanges — synthetic DiffFile objects, no CLI or git
-// ---------------------------------------------------------------------------
-
-/** Minimal outline item; `diffChanges` only reads these fields. */
 function item(stable_key, parent_key, name, signature, kind = "field", retained_in_mode) {
   const outlineItem = {
     stable_key,
@@ -128,12 +121,10 @@ function item(stable_key, parent_key, name, signature, kind = "field", retained_
   return outlineItem;
 }
 
-/** A diff side with an outline; projection is irrelevant to `diffChanges`. */
 function side(outline) {
   return { snapshot_id: "test", projection: { text: "", items: [] }, outline };
 }
 
-/** A modified `DiffFile` from two outlines. */
 function diffFile(baseOutline, targetOutline) {
   return {
     path: "src/a.rs",
@@ -186,7 +177,6 @@ test("diffChanges reports a rename as deleted + added without a container change
   const added = changes.filter((change) => change.status === "added");
   assert.deepEqual(deleted.map((change) => change.item.stable_key), ["S::x"]);
   assert.deepEqual(added.map((change) => change.item.stable_key), ["S::y"]);
-  // The container differs only because its members did; it is explained away.
   assert.equal(changes.some((change) => change.item.stable_key === "S"), false);
   assert.equal(changes.some((change) => change.status === "changed"), false);
 });
@@ -217,10 +207,6 @@ test("diffChanges reports a container change with no descendant change", () => {
   assert.equal(changes[0].status, "changed");
   assert.equal(changes[0].item.stable_key, "Inner");
 });
-
-// ---------------------------------------------------------------------------
-// classifyExecError — distinguishes a missing binary from a timeout
-// ---------------------------------------------------------------------------
 
 test("classifyExecError reports ENOENT as a missing binary", () => {
   assert.equal(classifyExecError({ code: "ENOENT" }), "binary-missing");
