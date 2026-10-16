@@ -218,6 +218,28 @@ impl Show {
         &self.visible_rows.rows
     }
 
+    pub fn fold_marker(&self, row: &VisibleRow) -> Option<char> {
+        match row {
+            VisibleRow::Fold { .. } => Some('+'),
+            VisibleRow::Source { line } => {
+                let path = self.selected.as_ref()?;
+                let regions = self.folds.regions(path)?;
+                let region = regions
+                    .iter()
+                    .filter(|region| {
+                        region.start_line == *line
+                            && (self.mode != ProjectionMode::Tests || region.retained)
+                    })
+                    .max_by_key(|region| region.end_line)?;
+                Some(if self.fold_state.is_open(path, region) {
+                    '−'
+                } else {
+                    '+'
+                })
+            }
+        }
+    }
+
     pub fn visible_row_for_source_line(&self, line: usize) -> Option<usize> {
         self.visible_rows
             .rows
@@ -598,11 +620,14 @@ fn viewport(height: u16) -> usize {
     height.saturating_sub(4) as usize
 }
 
+pub(crate) const MARKER_CLICK_WIDTH: u16 = 2;
+
 #[derive(Debug)]
 pub enum Msg {
     Key(Key),
     Fold(ShowAction),
     Scroll(i32),
+    BodyClick { row: usize, marker: bool },
     Action(GlobalAction),
     StepSearch(bool),
     ScrollToCurrent,
@@ -626,6 +651,10 @@ pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
         }
         Msg::Scroll(delta) => {
             scroll_body(page, delta);
+            Vec::new()
+        }
+        Msg::BodyClick { row, marker } => {
+            body_click(page, row, marker, ctx.height);
             Vec::new()
         }
         Msg::Action(action) => {
@@ -803,6 +832,45 @@ fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
     }
 }
 
+fn body_click(page: &mut Show, row: usize, marker: bool, height: u16) {
+    if marker {
+        toggle_marker_region(page, row, height);
+    } else if row < page.line_count() {
+        page.move_cursor_to_row(row, height);
+    }
+}
+
+fn toggle_marker_region(page: &mut Show, row: usize, height: u16) {
+    let Some(path) = page.selected.clone() else {
+        return;
+    };
+    let Some(regions) = page.folds.regions(&path).map(<[FoldRegion]>::to_vec) else {
+        return;
+    };
+    let target = match page.visible_rows().get(row) {
+        Some(VisibleRow::Fold { region_index, .. }) => Some(*region_index),
+        Some(VisibleRow::Source { line }) => regions
+            .iter()
+            .enumerate()
+            .filter(|(_, region)| {
+                region.start_line == *line
+                    && (page.mode != ProjectionMode::Tests || region.retained)
+            })
+            .max_by_key(|(_, region)| region.end_line)
+            .map(|(index, _)| index),
+        None => None,
+    };
+    let Some(target) = target else {
+        return;
+    };
+    let open = !page.fold_state.is_open(&path, &regions[target]);
+    page.fold_state
+        .set(&path, &regions[target].stable_key, open);
+    page.ensure_visible_rows();
+    page.reanchor_cursor();
+    page.clamp_view(height);
+}
+
 fn subtree_keys(regions: &[FoldRegion], root: usize) -> Vec<String> {
     let root_key = regions[root].stable_key.as_str();
     let mut keys = vec![root_key.to_owned()];
@@ -967,18 +1035,22 @@ pub(crate) fn view(
             });
         }
         let mut clipped = highlight::clip_runs(&runs, hscroll, width);
-        let mut gutter = gutter_span(number, gutter, theme);
+        let mut marker = gutter_marker_span(page.fold_marker(row), theme);
+        let mut number = gutter_number_span(number, gutter, theme);
         if cursor_row == Some(index) {
             for run in &mut clipped {
                 if run.style.bg.is_none() {
                     run.style = run.style.bg(cursor_bg);
                 }
             }
-            if gutter.style.bg.is_none() {
-                gutter.style = gutter.style.bg(cursor_bg);
+            if marker.style.bg.is_none() {
+                marker.style = marker.style.bg(cursor_bg);
+            }
+            if number.style.bg.is_none() {
+                number.style = number.style.bg(cursor_bg);
             }
         }
-        let mut spans = vec![gutter];
+        let mut spans = vec![marker, number];
         spans.extend(
             clipped
                 .into_iter()
@@ -1010,7 +1082,7 @@ pub(crate) fn prompt_view(page: &Show, theme: &Theme, frame: &mut Frame, area: R
 }
 
 fn gutter_width(total: usize) -> usize {
-    total.max(1).to_string().len() + 1
+    total.max(1).to_string().len() + 3
 }
 
 fn highlight_search(
@@ -1030,7 +1102,14 @@ fn highlight_search(
     styled
 }
 
-fn gutter_span(number: usize, gutter: usize, theme: &Theme) -> Span<'static> {
-    let field = gutter.saturating_sub(1);
+fn gutter_marker_span(marker: Option<char>, theme: &Theme) -> Span<'static> {
+    match marker {
+        Some(marker) => Span::styled(format!("{marker} "), theme.fg(theme.palette.accent)),
+        None => Span::styled("  ".to_owned(), theme.fg(theme.palette.gutter)),
+    }
+}
+
+fn gutter_number_span(number: usize, gutter: usize, theme: &Theme) -> Span<'static> {
+    let field = gutter.saturating_sub(3);
     Span::styled(format!("{number:>field$} "), theme.fg(theme.palette.gutter))
 }

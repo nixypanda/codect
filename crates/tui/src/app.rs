@@ -30,7 +30,7 @@ use crate::page::{
 };
 use crate::render::block::pane_block;
 use crate::render::icons::Icons;
-use crate::render::layout::{PaneSlot, body_layout, commit_offset, frame_areas, window_offset};
+use crate::render::layout::{PaneSlot, body_layout, commit_offset, frame_areas};
 use crate::render::metrics::{Focus, MIN_HEIGHT, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH};
 use crate::render::theme::Theme;
 pub use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
@@ -410,6 +410,7 @@ fn route_prompt(app: &mut App, key: Key, ctx: Ctx) -> Vec<OutMsg> {
 }
 
 fn install_show_selection(app: &mut App) {
+    let height = tree_viewport_height(app);
     let Loaded::Show(show) = &mut app.loaded else {
         return;
     };
@@ -423,7 +424,7 @@ fn install_show_selection(app: &mut App) {
     match target {
         Some(path) => {
             show.selected = Some(path.clone());
-            app.tree.reveal(&path);
+            app.tree.reveal(&path, height);
         }
         None => {
             show.selected = None;
@@ -441,6 +442,7 @@ fn install_show_selection(app: &mut App) {
 }
 
 fn install_diff_selection(app: &mut App) {
+    let height = tree_viewport_height(app);
     let Loaded::Diff(diff) = &mut app.loaded else {
         return;
     };
@@ -453,7 +455,7 @@ fn install_diff_selection(app: &mut App) {
     match target {
         Some(path) => {
             diff.selected = Some(path.clone());
-            app.tree.reveal(&path);
+            app.tree.reveal(&path, height);
         }
         None => {
             diff.selected = None;
@@ -737,7 +739,8 @@ fn tree_key(key: Key) -> Option<tree::Msg> {
 }
 
 fn tree_apply(app: &mut App, msg: tree::Msg) {
-    let selected = app.tree.update(msg, app.loaded.visible());
+    let height = tree_viewport_height(app);
+    let selected = app.tree.update(msg, app.loaded.visible(), height);
     if let Some(tree::OutMsg::Selected(path)) = selected {
         select_path(app, path);
     }
@@ -746,7 +749,8 @@ fn tree_apply(app: &mut App, msg: tree::Msg) {
 fn select_path(app: &mut App, path: RepoPath) {
     app.pending = None;
     app.loaded.set_selected(Some(path.clone()));
-    app.tree.reveal(&path);
+    let height = tree_viewport_height(app);
+    app.tree.reveal(&path, height);
     app.loaded.reset_body_scroll();
 }
 
@@ -843,37 +847,86 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
             app.loaded.set_focus(Focus::Tree);
             match event.kind {
                 MouseKind::Click => {
-                    let inner_height = inner.height as usize;
-                    let offset = window_offset(app.tree.cursor, app.tree.rows.len(), inner_height);
-                    let index = offset + usize::from(event.row.saturating_sub(inner.y));
+                    let index = app.tree.scroll + usize::from(event.row.saturating_sub(inner.y));
                     if index < app.tree.rows.len() {
                         tree_apply(app, tree::Msg::Click(index));
                     }
                 }
-                MouseKind::ScrollUp => tree_apply(app, tree::Msg::Move(-MOUSE_SCROLL_STEP)),
-                MouseKind::ScrollDown => tree_apply(app, tree::Msg::Move(MOUSE_SCROLL_STEP)),
+                MouseKind::ScrollUp => tree_apply(app, tree::Msg::Scroll(-MOUSE_SCROLL_STEP)),
+                MouseKind::ScrollDown => tree_apply(app, tree::Msg::Scroll(MOUSE_SCROLL_STEP)),
             }
         }
-        PaneSlot::Show | PaneSlot::Old | PaneSlot::New => {
+        PaneSlot::Show => {
+            app.loaded.set_focus(Focus::Content);
+            match event.kind {
+                MouseKind::Click => {
+                    if inner.contains(point)
+                        && let Loaded::Show(show) = &mut app.loaded
+                    {
+                        let row = show.body.scroll as usize
+                            + usize::from(event.row.saturating_sub(inner.y));
+                        if row < show.line_count() {
+                            let marker = event.column - inner.x < show_page::MARKER_CLICK_WIDTH;
+                            let outs = show_page::update(
+                                show_page::Msg::BodyClick { row, marker },
+                                show,
+                                &ctx,
+                            );
+                            fold(app, outs, cmds);
+                        }
+                    }
+                }
+                MouseKind::ScrollUp | MouseKind::ScrollDown => {
+                    let delta = if event.kind == MouseKind::ScrollUp {
+                        -MOUSE_SCROLL_STEP
+                    } else {
+                        MOUSE_SCROLL_STEP
+                    };
+                    if let Loaded::Show(show) = &mut app.loaded {
+                        let outs = show_page::update(show_page::Msg::Scroll(delta), show, &ctx);
+                        fold(app, outs, cmds);
+                    }
+                }
+            }
+        }
+        PaneSlot::Old | PaneSlot::New => {
             app.loaded.set_focus(Focus::Content);
             let delta = match event.kind {
                 MouseKind::ScrollUp => -MOUSE_SCROLL_STEP,
                 MouseKind::ScrollDown => MOUSE_SCROLL_STEP,
                 MouseKind::Click => 0,
             };
-            if delta != 0 {
-                let outs = match &mut app.loaded {
-                    Loaded::Show(show) => {
-                        show_page::update(show_page::Msg::Scroll(delta), show, &ctx)
-                    }
-                    Loaded::Diff(diff) => {
-                        diff_page::update(diff_page::Msg::Scroll(delta), diff, &ctx)
-                    }
-                };
+            if delta != 0
+                && let Loaded::Diff(diff) = &mut app.loaded
+            {
+                let outs = diff_page::update(diff_page::Msg::Scroll(delta), diff, &ctx);
                 fold(app, outs, cmds);
             }
         }
     }
+}
+
+fn tree_inner(app: &App) -> Option<Rect> {
+    let (_, content, _) = frame_areas(app.size.width, app.size.height);
+    let is_diff = matches!(app.loaded, Loaded::Diff(_));
+    let has_commits =
+        matches!(&app.loaded, Loaded::Diff(diff) if matches!(diff.view, DiffViewState::Commits(_)));
+    let layout = body_layout(
+        content,
+        app.chrome.tree_percent,
+        is_diff,
+        has_commits,
+        Focus::Tree,
+    );
+    let slot = layout
+        .slots
+        .iter()
+        .find(|slot| slot.pane == PaneSlot::Tree)?;
+    Some(pane_block("", false, &app.chrome.theme, slot.edge).inner(slot.outer))
+}
+
+fn tree_viewport_height(app: &App) -> usize {
+    tree_inner(app).map_or(0, |rect| rect.height as usize)
 }
 
 fn commits_inner(app: &App) -> Option<Rect> {
@@ -931,6 +984,8 @@ pub(crate) fn settle(mut app: App) -> App {
     let tree_percent = app.chrome.tree_percent;
     app.loaded
         .settle(&app.chrome.theme, visible_body, width, height, tree_percent);
+    let tree_height = tree_viewport_height(&app);
+    app.tree.fit_viewport(tree_height);
     app
 }
 

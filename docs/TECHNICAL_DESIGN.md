@@ -1837,8 +1837,11 @@ keeps no persistent cache.
 - The file-tree width is adjustable and clamped.
 - `RepoPath` remains the identity; labels are escaped for display only.
 - Mouse capture is enabled. A left click selects a file or folds a directory;
-  a click in the commit picker selects a commit; the wheel scrolls the pane
-  under the pointer and focuses it. Overlays stay
+  a click in the commit picker selects a commit; a click in the show body moves
+  the source cursor, and a click on the fold `+`/`-` gutter toggles that
+  declaration; the wheel scrolls the pane under the pointer and focuses it,
+  scrolling the file tree's viewport without moving its cursor or selection.
+  Overlays stay
   keyboard-driven. Only normal tracking and SGR coordinates are turned on, so
   motion and drag never reach the event loop. Because capture takes over the
   terminal's own selection, copying uses the terminal's selection override
