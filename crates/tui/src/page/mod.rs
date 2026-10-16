@@ -7,9 +7,9 @@
 //!
 //! Each kind owns its model, its messages, and its `update` in its own module
 //! ([`show`], [`diff`]). This module holds the discriminator and the vocabulary
-//! both kinds share: scope, paging, search, and the tree's change badge, plus
-//! the small pieces of runtime the shell folds back. The per-kind items are
-//! re-exported here so a caller reads `page::Diff` rather than the submodule.
+//! both kinds share: scope, paging, and the tree's change badge, plus the small
+//! pieces of runtime the shell folds back. The per-kind items are re-exported
+//! here so a caller reads `page::Diff` rather than the submodule.
 //!
 //! After a resize both body offsets are clamped and a hidden cursor row is
 //! scrolled back into view; after a selection change a `show` body resets to the
@@ -76,28 +76,6 @@ pub enum Paging {
     Loading,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SearchSide {
-    Show,
-    Old,
-    New,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SearchMatch {
-    pub side: SearchSide,
-    pub line: usize,
-    pub start: usize,
-    pub end: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Search {
-    pub needle: String,
-    pub matches: Vec<SearchMatch>,
-    pub cursor: usize,
-}
-
 #[derive(Clone, Debug)]
 pub enum Loaded {
     Show(Show),
@@ -105,27 +83,6 @@ pub enum Loaded {
 }
 
 impl Loaded {
-    pub fn search(&self) -> Option<&Search> {
-        match self {
-            Self::Show(show) => show.search.as_ref(),
-            Self::Diff(diff) => diff.search.as_ref(),
-        }
-    }
-
-    pub fn mode(&self) -> ProjectionMode {
-        match self {
-            Self::Show(show) => show.mode,
-            Self::Diff(diff) => diff.mode,
-        }
-    }
-
-    pub fn scope(&self) -> &Scope {
-        match self {
-            Self::Show(show) => &show.scope,
-            Self::Diff(diff) => &diff.scope,
-        }
-    }
-
     pub fn paging(&self) -> Paging {
         match self {
             Self::Show(show) => show.paging,
@@ -210,30 +167,36 @@ impl Loaded {
         crate::command::prefix_groups(self)
     }
 
-    pub fn settle(
-        &mut self,
-        theme: &Theme,
-        visible_body: bool,
-        width: u16,
-        height: u16,
-        tree_percent: u16,
-        selected: Option<&RepoPath>,
-    ) {
+    /// The rows, folds, and highlighting a page owns, run before the shell
+    /// re-syncs the search.
+    pub fn settle_rows(&mut self, theme: &Theme, visible_body: bool, selected: Option<&RepoPath>) {
         match self {
             Self::Show(show) => {
                 show.ensure_visible_rows(selected);
                 if visible_body {
                     show.ensure_highlight(theme, selected);
                 }
-                show.resync_search(selected);
             }
             Self::Diff(diff) => {
                 if visible_body {
                     diff.ensure_highlight(theme, selected);
                 }
-                diff.resync_search(selected);
-                diff.refresh_rows(width, height, tree_percent, theme, selected);
             }
+        }
+    }
+
+    /// The diff row layout, run after the shell re-syncs the search. A show page
+    /// keeps its row cache in the page itself.
+    pub fn refresh_rows(
+        &mut self,
+        width: u16,
+        height: u16,
+        tree_percent: u16,
+        theme: &Theme,
+        selected: Option<&RepoPath>,
+    ) {
+        if let Self::Diff(diff) = self {
+            diff.refresh_rows(width, height, tree_percent, theme, selected);
         }
     }
 }
@@ -268,20 +231,6 @@ pub(super) fn scroll_by(action: GlobalAction, current: u16, step: u16, max: u16)
     }
 }
 
-pub(super) fn advance_search(search: &mut Option<Search>, forward: bool) -> Option<SearchMatch> {
-    let search = search.as_mut()?;
-    if search.matches.is_empty() {
-        return None;
-    }
-    let len = search.matches.len();
-    search.cursor = if forward {
-        (search.cursor + 1) % len
-    } else {
-        (search.cursor + len - 1) % len
-    };
-    search.matches.get(search.cursor).cloned()
-}
-
 pub(super) fn scroll_offset_to(index: usize, scroll: usize, height: usize) -> Option<u16> {
     if index < scroll {
         Some(index as u16)
@@ -290,11 +239,6 @@ pub(super) fn scroll_offset_to(index: usize, scroll: usize, height: usize) -> Op
     } else {
         None
     }
-}
-
-pub(super) fn current_match(search: &Option<Search>) -> Option<SearchMatch> {
-    let search = search.as_ref()?;
-    search.matches.get(search.cursor).cloned()
 }
 
 pub(super) fn text_edit(key: Key) -> Option<Edit> {
@@ -307,52 +251,5 @@ pub(super) fn text_edit(key: Key) -> Option<Edit> {
         Key::Home => Some(Edit::Home),
         Key::End => Some(Edit::End),
         _ => None,
-    }
-}
-
-fn search_ranges(
-    search: Option<&Search>,
-    side: SearchSide,
-    line: usize,
-) -> Vec<(usize, usize, bool)> {
-    let Some(search) = search else {
-        return Vec::new();
-    };
-    search
-        .matches
-        .iter()
-        .enumerate()
-        .filter(|(_, matched)| matched.side == side && matched.line == line)
-        .map(|(index, matched)| (matched.start, matched.end, index == search.cursor))
-        .collect()
-}
-
-fn collect_matches(text: &str, needle_lower: &str, side: SearchSide, out: &mut Vec<SearchMatch>) {
-    let needle: Vec<char> = needle_lower.chars().collect();
-    if needle.is_empty() {
-        return;
-    }
-    for (index, line) in text.lines().enumerate() {
-        let hay: Vec<(usize, char)> = line.char_indices().collect();
-        let mut i = 0;
-        while i + needle.len() <= hay.len() {
-            let matched = (0..needle.len())
-                .all(|k| hay[i + k].1.to_lowercase().next().unwrap_or(hay[i + k].1) == needle[k]);
-            if matched {
-                let start = hay[i].0;
-                let end = hay
-                    .get(i + needle.len())
-                    .map_or(line.len(), |&(byte, _)| byte);
-                out.push(SearchMatch {
-                    side,
-                    line: index + 1,
-                    start,
-                    end,
-                });
-                i += needle.len();
-            } else {
-                i += 1;
-            }
-        }
     }
 }

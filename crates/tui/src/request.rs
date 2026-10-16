@@ -7,7 +7,6 @@
 //! Some of the payload types are stand-ins for types that arrive in later
 //! tasks:
 //!
-//! - [`Query`] and [`QueryChange`] stand in for `workspace::Query` until 2.3.
 //! - [`NavigatorResize`] is the eventual resize request.
 //! - [`Focus`] is today's normalized focus until 3.1/3.2 introduce `FocusKey`.
 //!
@@ -19,9 +18,8 @@
 use base::{ProjectionMode, RepoPath, Selection};
 
 use crate::command::CommandId;
-use crate::page::Scope;
 use crate::render::metrics::Focus;
-use crate::workspace::FileSet;
+use crate::workspace::{FileSet, Query};
 
 /// A navigator width change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,13 +27,6 @@ pub(crate) enum NavigatorResize {
     Wider,
     Narrower,
     Reset,
-}
-
-/// The committed projection query. Task 2.3 moves it into the workspace.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Query {
-    pub mode: ProjectionMode,
-    pub scope: Scope,
 }
 
 /// A query change requested by the mode picker or the scope chooser.
@@ -282,7 +273,7 @@ mod tests {
     fn set_search_collects_matches_with_cursor_zero() {
         let mut app = show_app(vec![source_outline("a.rs", "alpha\nbeta\nalpha again\n")]);
         run(&mut app, Request::SetSearch("alpha".to_owned()));
-        let search = app.loaded.search().expect("a search");
+        let search = app.workspace.search.expect("a search");
         assert_eq!(search.matches.len(), 2);
         assert_eq!(search.cursor, 0);
     }
@@ -291,9 +282,9 @@ mod tests {
     fn set_search_empty_clears() {
         let mut app = show_app(vec![source_outline("a.rs", "alpha\n")]);
         run(&mut app, Request::SetSearch("alpha".to_owned()));
-        assert!(app.loaded.search().is_some());
+        assert!(app.workspace.search.is_some());
         run(&mut app, Request::SetSearch(String::new()));
-        assert!(app.loaded.search().is_none());
+        assert!(app.workspace.search.is_none());
     }
 
     #[test]
@@ -311,9 +302,9 @@ mod tests {
     fn clear_search_clears() {
         let mut app = show_app(vec![source_outline("a.rs", "alpha\n")]);
         run(&mut app, Request::SetSearch("alpha".to_owned()));
-        assert!(app.loaded.search().is_some());
+        assert!(app.workspace.search.is_some());
         run(&mut app, Request::ClearSearch);
-        assert!(app.loaded.search().is_none());
+        assert!(app.workspace.search.is_none());
     }
 
     #[test]

@@ -23,10 +23,10 @@ pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
     let (mode, revision) = match &app.loaded {
-        Loaded::Show(show) => (show.mode, show.revision.clone()),
+        Loaded::Show(show) => (app.workspace.query.mode, show.revision.clone()),
         Loaded::Diff(diff) => {
             let (base, target) = diff.revisions();
-            (diff.mode, format!("{base}..{target}"))
+            (app.workspace.query.mode, format!("{base}..{target}"))
         }
     };
     let context = [
@@ -114,7 +114,7 @@ pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         ));
     }
 
-    if let Some(search) = app.loaded.search() {
+    if let Some(search) = app.workspace.search.as_ref() {
         let total = search.matches.len();
         let current = if total == 0 { 0 } else { search.cursor + 1 };
         detail.push(Span::styled(

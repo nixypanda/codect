@@ -157,11 +157,15 @@ fn render_overlay(app: &App, frame: &mut Frame, area: Rect) {
             let groups = app.loaded.prefix_groups();
             let ctx = overlay::RenderCtx {
                 theme: &app.chrome.theme,
-                mode: app.loaded.mode(),
+                mode: app.workspace.query.mode,
                 entries: &entries,
                 groups: &groups,
                 visible: &app.workspace.files.paths,
-                matches: app.loaded.search().map_or(0, |search| search.matches.len()),
+                matches: app
+                    .workspace
+                    .search
+                    .as_ref()
+                    .map_or(0, |search| search.matches.len()),
                 pending_prefix: app.keymap.pending,
             };
             overlay::render(state, &ctx, frame, area);

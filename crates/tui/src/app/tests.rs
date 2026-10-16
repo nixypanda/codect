@@ -2,22 +2,24 @@ use super::*;
 use crate::component::overlay::Overlay;
 use crate::component::text_input::TextInput;
 use crate::page::show::{ShowHighlights, VisibleRow};
-use crate::page::{DiffSide, Loaded, Search, SearchMatch, SearchSide, ShowFocus};
+use crate::page::{DiffSide, Loaded, ShowFocus};
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
 use crate::test_support::{
     ATTRIBUTED_SOURCE, NESTED_SOURCE, area_set, assert_view_consistent, attributed_child_outline,
-    base_app, buffer_row, buffer_text, cell_x_of, click, commits_app, commits_ref, commits_request,
-    declaration_less, diff_app, diff_focus_of, diff_ref, diff_request, dropped_container_outline,
-    file_diff, focus_content, folder_app, item, merge_base_range_app, multi_method_outline,
-    nested_outline, press, render, row_with, scroll, select_file, selected, show_app,
-    show_app_mode, show_ref, show_request, snapshot_range_app, source_outline, source_outline_with,
-    tail_palette_entries, test_function_outline, tests_filter_outline, two_files,
-    two_function_outline,
+    base_app, buffer_row, buffer_text, cell_x_of, click, commit_search, commit_steps, commits_app,
+    commits_ref, commits_request, declaration_less, diff_app, diff_focus_of, diff_ref,
+    diff_request, dropped_container_outline, file_diff, focus_content, folder_app, item,
+    merge_base_range_app, multi_method_outline, nested_outline, press, render, row_with, scroll,
+    select_file, selected, show_app, show_app_mode, show_ref, show_request, snapshot_range_app,
+    source_outline, source_outline_with, tail_palette_entries, test_function_outline,
+    tests_filter_outline, two_files, two_function_outline,
 };
 use crate::workspace::BadgeTone;
+use crate::workspace::{Search, SearchMatch, SearchPane, collect_matches};
 use base::{
-    Area, RepoPath, Selection, SelectionGroup, SourceOutline, SupportedPath, assemble_outline,
+    Area, ProjectionMode, RepoPath, Selection, SelectionGroup, SourceOutline, SupportedPath,
+    assemble_outline,
 };
 use ratatui::style::Color;
 
@@ -37,7 +39,7 @@ fn a_loaded_result_installs_files_and_preserves_the_selection() {
         &app,
     );
 
-    assert_eq!(next.loaded.mode(), ProjectionMode::Signatures);
+    assert_eq!(next.workspace.query.mode, ProjectionMode::Signatures);
     assert_eq!(selected(&next).as_deref(), Some("a.rs"));
     assert_eq!(
         show_ref(&next).active_source(next.workspace.selected.as_ref()),
@@ -275,7 +277,7 @@ fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
     );
 
     assert_eq!(
-        next.loaded.mode(),
+        next.workspace.query.mode,
         ProjectionMode::Types,
         "mode must not change"
     );
@@ -433,7 +435,7 @@ fn empty_commit_history_installs_a_diff_and_focuses_commits() {
         &app,
     );
     assert!(commands.is_empty());
-    assert_eq!(next.loaded.mode(), ProjectionMode::Types);
+    assert_eq!(next.workspace.query.mode, ProjectionMode::Types);
     assert!(commits_ref(&next).is_empty());
     assert!(next.workspace.files.paths.is_empty());
     assert!(next.workspace.selected.is_none());
@@ -559,6 +561,59 @@ fn commit_navigation_back_to_loaded_step_cancels_batched_projection() {
 }
 
 #[test]
+fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
+    // Load the next step so the picker cursor sits past step 0.
+    let (advanced, produced) = update(Msg::Key(Key::Char('j')), &commits_app(3));
+    assert!(produced.is_empty());
+    let mut commands = Vec::new();
+    let mut app = advanced;
+    coalesce_commit_loads(&mut app, &mut commands);
+    assert!(matches!(commands.as_slice(), [Cmd::Step { index: 1, .. }]));
+    let (app, _) = update(
+        Msg::StepLoaded {
+            index: 1,
+            result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("B\n"))].into()),
+        },
+        &app,
+    );
+    assert_eq!(commits_ref(&app).cursor(), 1);
+
+    // Changing the scope emits the diff/history request under the new scope.
+    let new_selection = Selection::new(vec![SelectionGroup::Path(RepoPath::new("a.rs").unwrap())]);
+    let mut requery_app = app.clone();
+    let commands = run_request(
+        &mut requery_app,
+        Request::Requery(QueryChange::Scope(new_selection.clone())),
+    );
+    let request = match commands.as_slice() {
+        [Cmd::Diff(request)] => request.clone(),
+        other => panic!("expected one diff request, got {other:?}"),
+    };
+    assert_eq!(request.selection, new_selection);
+
+    // The pending step folded from that history load must carry the incoming
+    // scope, not the stale committed one.
+    let (_, commands) = update(
+        Msg::HistoryLoaded {
+            request,
+            result: Ok((
+                commit_steps(3).into(),
+                vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into(),
+            )),
+        },
+        &app,
+    );
+    let step = commands
+        .iter()
+        .find_map(|cmd| match cmd {
+            Cmd::Step { request, .. } => Some(request),
+            _ => None,
+        })
+        .expect("a pending commit step load");
+    assert_eq!(step.selection, new_selection);
+}
+
+#[test]
 fn palette_switches_between_range_and_commit_views() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
     assert!(
@@ -654,7 +709,11 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
     let app = settle(next);
 
     assert!(diff_ref(&app).merge_base);
-    assert!(diff_ref(&app).request().merge_base);
+    assert!(
+        diff_ref(&app)
+            .request(app.workspace.query.scope.selection.clone())
+            .merge_base
+    );
 
     assert!(
         !app.loaded
@@ -789,9 +848,9 @@ fn mode_picker_defers_the_mode_change_until_selection() {
     let (down, _) = update(Msg::Key(Key::Down), &opened);
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
 
-    assert_eq!(app.loaded.mode(), ProjectionMode::Types);
+    assert_eq!(app.workspace.query.mode, ProjectionMode::Types);
     assert_eq!(
-        chosen.loaded.mode(),
+        chosen.workspace.query.mode,
         ProjectionMode::Types,
         "mode changes on load"
     );
@@ -1085,14 +1144,23 @@ fn search_finds_matches_and_steps_them() {
         let (next, _) = update(Msg::Key(Key::Char(character)), &state);
         state = next;
     }
-    assert_eq!(state.loaded.search().expect("live search").matches.len(), 2);
+    assert_eq!(
+        state
+            .workspace
+            .search
+            .as_ref()
+            .expect("live search")
+            .matches
+            .len(),
+        2
+    );
 
     let (committed, _) = update(Msg::Key(Key::Enter), &state);
     assert_eq!(committed.overlay, None);
     let (stepped, _) = update(Msg::Key(Key::Char('n')), &committed);
-    assert_eq!(stepped.loaded.search().unwrap().cursor, 1);
+    assert_eq!(stepped.workspace.search.as_ref().unwrap().cursor, 1);
     let (back, _) = update(Msg::Key(Key::Char('N')), &stepped);
-    assert_eq!(back.loaded.search().unwrap().cursor, 0);
+    assert_eq!(back.workspace.search.as_ref().unwrap().cursor, 0);
 }
 
 #[test]
@@ -1101,23 +1169,19 @@ fn switching_files_recomputes_a_committed_search() {
         source_outline("a.rs", "alpha\n"),
         source_outline("b.rs", "beta\nalpha\n"),
     ]);
-    if let Loaded::Show(show) = &mut app.loaded {
-        show.search = Some(Search {
-            needle: "alpha".to_owned(),
-            matches: vec![SearchMatch {
-                side: SearchSide::Show,
-                line: 1,
-                start: 0,
-                end: 5,
-            }],
-            cursor: 0,
-        });
-    }
+    app.workspace.search = Some(Search {
+        needle: "alpha".to_owned(),
+        matches: vec![SearchMatch {
+            pane: SearchPane::Source,
+            line: 1,
+            start: 0,
+            end: 5,
+        }],
+        cursor: 0,
+    });
     app.workspace.selected = Some(RepoPath::new("b.rs").unwrap());
-    if let Loaded::Show(show) = &mut app.loaded {
-        show.resync_search(app.workspace.selected.as_ref());
-    }
-    let search = app.loaded.search().expect("search");
+    let app = settle(app);
+    let search = app.workspace.search.expect("search");
     assert_eq!(search.matches.len(), 1);
     assert_eq!(search.matches[0].line, 2, "the match moved to the new file");
 }
@@ -1141,7 +1205,7 @@ fn the_palette_and_finder_render_their_lists() {
         visible: &app.workspace.files.paths,
         entries: &app.loaded.palette_entries(),
         groups: &app.loaded.prefix_groups(),
-        mode: app.loaded.mode(),
+        mode: app.workspace.query.mode,
         pending_prefix: app.keymap.pending,
     }));
     let text = buffer_text(&render(&app, 100, 20));
@@ -1153,7 +1217,7 @@ fn the_palette_and_finder_render_their_lists() {
         visible: &app.workspace.files.paths,
         entries: &app.loaded.palette_entries(),
         groups: &app.loaded.prefix_groups(),
-        mode: app.loaded.mode(),
+        mode: app.workspace.query.mode,
         pending_prefix: app.keymap.pending,
     }));
     let text = buffer_text(&render(&app, 100, 20));
@@ -1922,13 +1986,11 @@ fn a_single_line_region_folds_with_zero_hidden_lines() {
 fn a_match_inside_a_fold_resolves_to_the_fold_row() {
     let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
     let mut app = show_app(vec![nested_outline("a.rs", source, (0, 5), (1, 4), true)]);
-    if let Loaded::Show(show) = &mut app.loaded {
-        show.set_search(app.workspace.selected.as_ref(), "needle");
-    }
+    commit_search(&mut app, "needle");
     let show = show_ref(&app);
 
     assert_eq!(
-        show.search.as_ref().expect("search").matches.len(),
+        app.workspace.search.as_ref().expect("search").matches.len(),
         2,
         "both matches are in the hidden body"
     );
@@ -1948,13 +2010,11 @@ fn stepping_to_a_match_inside_a_fold_opens_the_enclosing_regions() {
     let folded = press(&app, &[Key::Char('z'), Key::Char('M')]);
     assert_eq!(show_ref(&folded).line_count(), 1, "everything is folded");
     let mut searching = folded;
-    if let Loaded::Show(show) = &mut searching.loaded {
-        show.set_search(searching.workspace.selected.as_ref(), "needle");
-    }
+    commit_search(&mut searching, "needle");
 
     let (stepped, _) = update(Msg::Key(Key::Char('n')), &searching);
     let show = show_ref(&stepped);
-    let search = show.search.as_ref().expect("search");
+    let search = stepped.workspace.search.as_ref().expect("search");
     let matched = search.matches[search.cursor].line;
     assert!(
         matched == 3 || matched == 4,
@@ -1974,7 +2034,10 @@ fn stepping_to_a_match_inside_a_fold_opens_the_enclosing_regions() {
         show.body.scroll
     );
     assert!(
-        !show.search_ranges(matched).is_empty(),
+        !stepped
+            .workspace
+            .ranges_on_line(SearchPane::Source, matched)
+            .is_empty(),
         "the match stays highlighted after the rows changed"
     );
 
@@ -1994,14 +2057,12 @@ fn stepping_to_a_match_moves_the_cursor_to_the_match_row() {
     let mut app = show_app(vec![source_outline("a.rs", &source)]);
     app.size.height = 8;
     focus_content(&mut app);
-    if let Loaded::Show(show) = &mut app.loaded {
-        show.set_search(app.workspace.selected.as_ref(), "needle");
-    }
+    commit_search(&mut app, "needle");
 
     let (stepped, _) = update(Msg::Key(Key::Char('n')), &app);
     let stepped = settle(stepped);
     let show = show_ref(&stepped);
-    let search = show.search.as_ref().expect("search");
+    let search = stepped.workspace.search.as_ref().expect("search");
     let matched = search.matches[search.cursor].line;
     assert_eq!(matched, 25, "the needle is on line 25");
     assert_eq!(
@@ -2271,11 +2332,8 @@ fn types_mode_keeps_marker_rows_for_dropped_declarations() {
 fn tests_mode_search_ignores_hidden_dropped_matches_and_reveals_retained_ones() {
     let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
     focus_content(&mut app);
-    if let Loaded::Show(show) = &mut app.loaded {
-        show.set_search(app.workspace.selected.as_ref(), "hidden");
-    }
-    let show = show_ref(&app);
-    let matches = &show.search.as_ref().expect("search").matches;
+    commit_search(&mut app, "hidden");
+    let matches = &app.workspace.search.as_ref().expect("search").matches;
     assert_eq!(
         matches.len(),
         1,
@@ -2292,11 +2350,10 @@ fn tests_mode_search_ignores_hidden_dropped_matches_and_reveals_retained_ones() 
     );
 
     let mut dropped = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
-    if let Loaded::Show(show) = &mut dropped.loaded {
-        show.set_search(dropped.workspace.selected.as_ref(), "Dropped");
-    }
+    commit_search(&mut dropped, "Dropped");
     assert!(
-        show_ref(&dropped)
+        dropped
+            .workspace
             .search
             .as_ref()
             .expect("search")
@@ -2936,22 +2993,20 @@ fn ctrl_j_and_ctrl_k_type_into_a_text_capturing_overlay() {
 fn esc_with_no_overlay_clears_the_diagnostic_and_the_search() {
     let mut app = show_app(vec![source_outline("a.rs", "alpha\nbeta\n")]);
     app.diagnostic = Some(Diagnostic::new("boom".to_owned()));
-    if let Loaded::Show(show) = &mut app.loaded {
-        show.search = Some(Search {
-            needle: "alpha".to_owned(),
-            matches: vec![SearchMatch {
-                side: SearchSide::Show,
-                line: 1,
-                start: 0,
-                end: 5,
-            }],
-            cursor: 0,
-        });
-    }
+    app.workspace.search = Some(Search {
+        needle: "alpha".to_owned(),
+        matches: vec![SearchMatch {
+            pane: SearchPane::Source,
+            line: 1,
+            start: 0,
+            end: 5,
+        }],
+        cursor: 0,
+    });
 
     let (cleared, _) = update(Msg::Key(Key::Esc), &app);
     assert!(cleared.diagnostic.is_none(), "Esc clears the diagnostic");
-    assert!(cleared.loaded.search().is_none(), "Esc clears the search");
+    assert!(cleared.workspace.search.is_none(), "Esc clears the search");
 }
 
 #[test]
@@ -3600,4 +3655,359 @@ fn window_offset_keeps_the_cursor_visible() {
     assert_eq!(window_offset(10, 100, 10), 1);
     assert_eq!(window_offset(0, 3, 10), 0);
     assert_eq!(window_offset(5, 100, 0), 0);
+}
+
+/// Apply a request through the kernel path and return its effects.
+fn run_request(app: &mut App, request: Request) -> Vec<Cmd> {
+    let mut cmds = Vec::new();
+    apply_request(app, request, &mut cmds);
+    cmds
+}
+
+fn search_of(app: &App) -> &Search {
+    app.workspace.search.as_ref().expect("a committed search")
+}
+
+#[test]
+fn collect_matches_is_case_insensitive_and_non_overlapping() {
+    // Case-insensitive per character: the uppercase `A` matches.
+    let mut insensitive = Vec::new();
+    collect_matches("aAa", "a", SearchPane::Source, &mut insensitive);
+    assert_eq!(
+        insensitive
+            .iter()
+            .map(|m| (m.line, m.start, m.end))
+            .collect::<Vec<_>>(),
+        vec![(1, 0, 1), (1, 1, 2), (1, 2, 3)],
+        "the uppercase character matches and the last end is the line length"
+    );
+
+    // Non-overlapping: a match consumes its width before the next search.
+    let mut gaps = Vec::new();
+    collect_matches("aXa", "a", SearchPane::Source, &mut gaps);
+    assert_eq!(
+        gaps.iter()
+            .map(|m| (m.line, m.start, m.end))
+            .collect::<Vec<_>>(),
+        vec![(1, 0, 1), (1, 2, 3)],
+        "the non-matching character is skipped; end is the line length"
+    );
+}
+
+#[test]
+fn search_ranges_marks_only_the_global_cursor_match() {
+    let mut app = show_app(vec![source_outline("a.rs", "x x\n")]);
+    app.workspace.search = Some(Search {
+        needle: "x".to_owned(),
+        matches: vec![
+            SearchMatch {
+                pane: SearchPane::Source,
+                line: 1,
+                start: 0,
+                end: 1,
+            },
+            SearchMatch {
+                pane: SearchPane::Source,
+                line: 1,
+                start: 2,
+                end: 3,
+            },
+        ],
+        cursor: 1,
+    });
+    assert_eq!(
+        app.workspace.ranges_on_line(SearchPane::Source, 1),
+        vec![(0, 1, false), (2, 3, true)],
+        "the match the cursor names is the current one"
+    );
+
+    // A cursor on another pane leaves nothing current on this pane.
+    app.workspace.search = Some(Search {
+        needle: "x".to_owned(),
+        matches: vec![
+            SearchMatch {
+                pane: SearchPane::Old,
+                line: 1,
+                start: 0,
+                end: 1,
+            },
+            SearchMatch {
+                pane: SearchPane::Source,
+                line: 1,
+                start: 2,
+                end: 3,
+            },
+        ],
+        cursor: 0,
+    });
+    assert_eq!(
+        app.workspace.ranges_on_line(SearchPane::Source, 1),
+        vec![(2, 3, false)],
+        "no range is current while the cursor is on another pane"
+    );
+}
+
+#[test]
+fn search_matches_tags_the_owning_pane() {
+    let show = show_app(vec![source_outline("a.rs", "needle\n")]);
+    assert!(
+        show_ref(&show)
+            .search_matches("needle", &show.workspace)
+            .iter()
+            .all(|matched| matched.pane == SearchPane::Source),
+        "a show match belongs to the source pane"
+    );
+
+    let added = diff_app(vec![file_diff("a.rs", None, Some("needle\n"))]);
+    let matches = diff_ref(&added).search_matches("needle", &added.workspace);
+    assert!(!matches.is_empty());
+    assert!(
+        matches
+            .iter()
+            .all(|matched| matched.pane == SearchPane::New)
+    );
+
+    let deleted = diff_app(vec![file_diff("a.rs", Some("needle\n"), None)]);
+    assert!(
+        diff_ref(&deleted)
+            .search_matches("needle", &deleted.workspace)
+            .iter()
+            .all(|matched| matched.pane == SearchPane::Old)
+    );
+
+    let modified = diff_app(vec![file_diff("a.rs", Some("needle\n"), Some("needle\n"))]);
+    let matches = diff_ref(&modified).search_matches("needle", &modified.workspace);
+    assert_eq!(matches.len(), 2, "both sides match a modified file");
+    assert_eq!(matches[0].pane, SearchPane::Old, "the old side comes first");
+    assert_eq!(matches[1].pane, SearchPane::New);
+}
+
+#[test]
+fn settle_resyncs_the_workspace_search_and_clamps_the_cursor() {
+    let mut app = show_app(vec![
+        source_outline("a.rs", "alpha\nalpha\n"),
+        source_outline("b.rs", "alpha\n"),
+    ]);
+    app.workspace.search = Some(Search {
+        needle: "alpha".to_owned(),
+        matches: vec![
+            SearchMatch {
+                pane: SearchPane::Source,
+                line: 1,
+                start: 0,
+                end: 5,
+            },
+            SearchMatch {
+                pane: SearchPane::Source,
+                line: 2,
+                start: 0,
+                end: 5,
+            },
+        ],
+        cursor: 1,
+    });
+    app.workspace.selected = Some(RepoPath::new("b.rs").unwrap());
+
+    let app = settle(app);
+    let search = search_of(&app);
+    assert_eq!(search.matches.len(), 1, "recomputed for the new file");
+    assert_eq!(search.cursor, 0, "the cursor is clamped into range");
+}
+
+#[test]
+fn the_shell_advances_the_search_cursor_with_wrap_around() {
+    let app = show_app(vec![source_outline("a.rs", "a\nb\na\n")]);
+    let app = press(&app, &[Key::Char('/'), Key::Char('a'), Key::Enter]);
+    assert_eq!(search_of(&app).matches.len(), 2);
+    assert_eq!(search_of(&app).cursor, 0);
+
+    let forward = press(&app, &[Key::Char('n')]);
+    assert_eq!(search_of(&forward).cursor, 1);
+    let wrapped = press(&forward, &[Key::Char('n')]);
+    assert_eq!(
+        search_of(&wrapped).cursor,
+        0,
+        "advancing wraps to the first"
+    );
+
+    let back = press(&wrapped, &[Key::Char('N')]);
+    assert_eq!(search_of(&back).cursor, 1, "retreating wraps to the last");
+}
+
+#[test]
+fn commit_search_reveals_the_current_match_on_the_diff_pane() {
+    let target: String = (1..=40)
+        .map(|n| {
+            if n == 40 {
+                "needle\n".to_owned()
+            } else {
+                format!("line {n}\n")
+            }
+        })
+        .collect();
+    let mut app = diff_app(vec![file_diff("a.rs", None, Some(&target))]);
+    commit_search(&mut app, "needle");
+    assert_eq!(search_of(&app).matches.len(), 1);
+    assert_eq!(
+        diff_ref(&app).body_scroll(),
+        0,
+        "committing does not scroll"
+    );
+
+    run_request(&mut app, Request::CommitSearch);
+    assert!(
+        diff_ref(&app).body_scroll() > 0,
+        "committing reveals the current match"
+    );
+}
+
+#[test]
+fn query_loaded_commits_the_workspace_query() {
+    let app = two_files();
+    assert_eq!(app.workspace.query.mode, ProjectionMode::Types);
+
+    let (committed, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                mode: ProjectionMode::Signatures,
+                ..show_request()
+            },
+            result: Ok(vec![source_outline("a.rs", "a\n")].into()),
+        },
+        &app,
+    );
+    assert_eq!(
+        committed.workspace.query.mode,
+        ProjectionMode::Signatures,
+        "a successful load commits its mode"
+    );
+
+    let error = EngineError::Selection(base::SelectionError::UnknownArea {
+        name: "x".to_owned(),
+    });
+    let (failed, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                mode: ProjectionMode::Tests,
+                ..show_request()
+            },
+            result: Err(Box::new(error)),
+        },
+        &committed,
+    );
+    assert_eq!(
+        failed.workspace.query.mode,
+        ProjectionMode::Signatures,
+        "a failed load leaves the committed query alone"
+    );
+}
+
+#[test]
+fn a_scope_requery_keeps_the_loaded_mode() {
+    let app = two_files();
+    let (mut loaded, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                mode: ProjectionMode::Signatures,
+                ..show_request()
+            },
+            result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("b.rs", "b\n")].into()),
+        },
+        &app,
+    );
+    assert_eq!(loaded.workspace.query.mode, ProjectionMode::Signatures);
+
+    let selection = Selection::new(vec![SelectionGroup::Path(RepoPath::new("a.rs").unwrap())]);
+    let cmds = run_request(
+        &mut loaded,
+        Request::Requery(QueryChange::Scope(selection.clone())),
+    );
+    assert_eq!(
+        cmds,
+        vec![Cmd::Show(ShowRequest {
+            mode: ProjectionMode::Signatures,
+            selection,
+            ..show_request()
+        })],
+        "the scope change reloads with the loaded mode"
+    );
+}
+
+#[test]
+fn a_mode_requery_keeps_the_scope() {
+    let selection = Selection::new(vec![SelectionGroup::Path(RepoPath::new("b.rs").unwrap())]);
+    let app = base_app(LoadRequest::Show {
+        revision: "HEAD".to_owned(),
+        mode: ProjectionMode::Types,
+        selection: selection.clone(),
+    });
+    let (mut loaded, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                revision: "HEAD".to_owned(),
+                mode: ProjectionMode::Types,
+                selection: selection.clone(),
+            },
+            result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("b.rs", "b\n")].into()),
+        },
+        &app,
+    );
+    assert_eq!(loaded.workspace.query.scope.selection, selection);
+
+    let cmds = run_request(
+        &mut loaded,
+        Request::Requery(QueryChange::Mode(ProjectionMode::Tests)),
+    );
+    assert_eq!(
+        cmds,
+        vec![Cmd::Show(ShowRequest {
+            revision: "HEAD".to_owned(),
+            mode: ProjectionMode::Tests,
+            selection,
+        })],
+        "the mode change reloads with the committed scope"
+    );
+}
+
+#[test]
+fn search_survives_a_mode_reload_and_resyncs() {
+    let mut app = show_app(vec![source_outline("a.rs", "alpha\n")]);
+    commit_search(&mut app, "alpha");
+    assert_eq!(search_of(&app).matches[0].line, 1);
+
+    let (reloaded, _) = update(
+        Msg::ShowLoaded {
+            request: ShowRequest {
+                mode: ProjectionMode::Signatures,
+                ..show_request()
+            },
+            result: Ok(vec![source_outline("a.rs", "beta\nalpha\n")].into()),
+        },
+        &app,
+    );
+    assert!(reloaded.workspace.search.is_some(), "the search survives");
+
+    let reloaded = settle(reloaded);
+    let search = search_of(&reloaded);
+    assert_eq!(search.needle, "alpha");
+    assert_eq!(search.matches.len(), 1);
+    assert_eq!(
+        search.matches[0].line, 2,
+        "the search re-synced against the reloaded file"
+    );
+}
+
+#[test]
+fn set_search_refreshes_visible_rows_before_matching() {
+    let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    focus_content(&mut app);
+    commit_search(&mut app, "hidden");
+
+    let search = search_of(&app);
+    assert_eq!(
+        search.matches.len(),
+        1,
+        "the search sees only the visible rows"
+    );
+    assert_eq!(search.matches[0].line, 13);
 }

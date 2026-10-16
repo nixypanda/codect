@@ -459,6 +459,15 @@ pub(crate) fn select_file(app: &mut App, path: RepoPath) {
     );
 }
 
+/// Commit a search through the kernel request path, as the search input does.
+pub(crate) fn commit_search(app: &mut App, needle: &str) {
+    crate::app::apply_request(
+        app,
+        crate::request::Request::SetSearch(needle.to_owned()),
+        &mut Vec::new(),
+    );
+}
+
 pub(crate) fn diff_focus_of(app: &App) -> Focus {
     app.loaded.focus()
 }

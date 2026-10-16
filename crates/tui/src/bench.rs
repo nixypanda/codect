@@ -233,8 +233,8 @@ pub fn load_show(files: Vec<SourceOutline>, model: &App) -> App {
     let request = match &model.loaded {
         Loaded::Show(show) => ShowRequest {
             revision: show.revision.clone(),
-            mode: show.mode,
-            selection: show.scope.selection.clone(),
+            mode: model.workspace.query.mode,
+            selection: model.workspace.query.scope.selection.clone(),
         },
         Loaded::Diff(_) => show_request(),
     };
@@ -252,8 +252,8 @@ pub fn load_diff(diffs: Vec<FileDiff>, model: &App) -> App {
         Loaded::Diff(diff) => DiffRequest {
             base: diff.base.clone(),
             target: diff.target.clone(),
-            mode: diff.mode,
-            selection: diff.scope.selection.clone(),
+            mode: model.workspace.query.mode,
+            selection: model.workspace.query.scope.selection.clone(),
             view: match diff.view {
                 DiffViewState::Range(_) => DiffView::Range,
                 DiffViewState::Commits(_) => DiffView::Commits,

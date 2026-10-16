@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use base::{AreaSet, FileDiff, ProjectionMode, RepoPath, Selection, SourceOutline};
+use base::{AreaSet, FileDiff, RepoPath, SourceOutline};
 use engine::EngineError;
 use ratatui::layout::{Position, Rect};
 
@@ -35,7 +35,10 @@ use crate::render::theme::Theme;
 use crate::request::{NavigatorResize, QueryChange, Request};
 pub use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::util::input::{Key, Mouse, MouseKind};
-use crate::workspace::{FileSet, NO_CHANGES, NO_FILES, Workspace};
+use crate::workspace::{
+    FileSet, NO_CHANGES, NO_FILES, Query, Search, SearchMatch, Workspace, advance_search,
+    current_match,
+};
 
 const TREE_DEFAULT_PERCENT: u16 = 30;
 const TREE_MIN_PERCENT: u16 = 15;
@@ -139,18 +142,28 @@ impl App {
             LoadRequest::Show { .. } => NO_FILES,
             LoadRequest::Diff { .. } => NO_CHANGES,
         };
+        let query = match &request {
+            LoadRequest::Show {
+                mode, selection, ..
+            }
+            | LoadRequest::Diff {
+                mode, selection, ..
+            } => Query {
+                mode: *mode,
+                scope: Scope {
+                    selection: selection.clone(),
+                    label: scope_label,
+                },
+            },
+        };
         let loaded = match request {
             LoadRequest::Show {
                 revision,
                 mode,
-                selection,
+                selection: _,
             } => Loaded::Show(Show {
                 revision,
-                mode,
-                scope: Scope {
-                    selection,
-                    label: scope_label,
-                },
+                loaded_mode: mode,
                 files: Arc::from(Vec::new()),
                 focus: ShowFocus::Tree,
                 body: ShowBody {
@@ -159,7 +172,6 @@ impl App {
                     cursor_line: 1,
                 },
                 paging: Paging::Loading,
-                search: None,
                 highlight: Default::default(),
                 folds: Default::default(),
                 fold_state: Default::default(),
@@ -170,17 +182,13 @@ impl App {
                 base,
                 target,
                 mode,
-                selection,
+                selection: _,
                 view,
                 merge_base,
             } => Loaded::Diff(Diff::new(
                 base,
                 target,
                 mode,
-                Scope {
-                    selection,
-                    label: scope_label,
-                },
                 match view {
                     DiffView::Range => DiffViewState::Range(Range::empty()),
                     DiffView::Commits => DiffViewState::Commits(Commits::empty()),
@@ -203,11 +211,13 @@ impl App {
             keymap: Keymap::default(),
             loaded,
             workspace: Workspace {
+                query,
                 files: FileSet {
                     empty,
                     ..FileSet::default()
                 },
                 selected: None,
+                search: None,
             },
             diagnostic: None,
         }
@@ -236,7 +246,7 @@ impl App {
     }
 
     pub(crate) fn scope_label(&self) -> &str {
-        &self.loaded.scope().label
+        &self.workspace.query.scope.label
     }
 }
 
@@ -393,32 +403,26 @@ fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>, depth: u8) {
         }
         Request::Requery(change) => {
             let ctx = ctx(app);
-            let outs = match change {
-                QueryChange::Mode(mode) => route_switch_mode(app, mode, ctx),
-                QueryChange::Scope(selection) => route_reload_scope(app, selection, ctx),
-            };
+            let outs = route_requery(app, change, ctx);
             fold_at(app, outs, cmds, depth + 1);
         }
-        Request::QueryLoaded(_query) => on_query_changed(app),
+        Request::QueryLoaded(query) => {
+            app.workspace.query = query;
+            on_query_changed(app);
+        }
         Request::SetSearch(needle) => {
-            let ctx = ctx(app);
-            let outs = if needle.is_empty() {
-                route_clear_search(app, ctx)
-            } else {
-                route_set_search(app, &needle, ctx)
-            };
-            fold_at(app, outs, cmds, depth + 1);
+            set_search(app, needle);
             on_search_changed(app);
         }
         Request::CommitSearch => {
             let ctx = ctx(app);
-            let outs = route_scroll_current(app, ctx);
-            fold_at(app, outs, cmds, depth + 1);
+            if let Some(matched) = current_match(&app.workspace.search) {
+                let outs = route_reveal_match(app, matched, ctx);
+                fold_at(app, outs, cmds, depth + 1);
+            }
         }
         Request::ClearSearch => {
-            let ctx = ctx(app);
-            let outs = route_clear_search(app, ctx);
-            fold_at(app, outs, cmds, depth + 1);
+            app.workspace.search = None;
             on_search_changed(app);
         }
         Request::Focus(focus) => app.loaded.set_focus(focus),
@@ -516,7 +520,7 @@ fn route_show(app: &mut App, msg: show_page::Msg, ctx: Ctx) -> Vec<OutMsg> {
         loaded, workspace, ..
     } = app;
     match loaded {
-        Loaded::Show(show) => show_page::update(msg, show, workspace.selected.as_ref(), &ctx),
+        Loaded::Show(show) => show_page::update(msg, show, workspace, &ctx),
         Loaded::Diff(_) => Vec::new(),
     }
 }
@@ -526,7 +530,7 @@ fn route_diff(app: &mut App, msg: diff_page::Msg, ctx: Ctx) -> Vec<OutMsg> {
         loaded, workspace, ..
     } = app;
     match loaded {
-        Loaded::Diff(diff) => diff_page::update(msg, diff, workspace.selected.as_ref(), &ctx),
+        Loaded::Diff(diff) => diff_page::update(msg, diff, workspace, &ctx),
         Loaded::Show(_) => Vec::new(),
     }
 }
@@ -536,18 +540,8 @@ fn route_page_key(app: &mut App, key: Key, ctx: Ctx) -> Vec<OutMsg> {
         loaded, workspace, ..
     } = app;
     match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::Key(key),
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::Key(key),
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
+        Loaded::Show(show) => show_page::update(show_page::Msg::Key(key), show, workspace, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::Key(key), diff, workspace, &ctx),
     }
 }
 
@@ -556,18 +550,12 @@ fn route_page_action(app: &mut App, action: GlobalAction, ctx: Ctx) -> Vec<OutMs
         loaded, workspace, ..
     } = app;
     match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::Action(action),
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::Action(action),
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
+        Loaded::Show(show) => {
+            show_page::update(show_page::Msg::Action(action), show, workspace, &ctx)
+        }
+        Loaded::Diff(diff) => {
+            diff_page::update(diff_page::Msg::Action(action), diff, workspace, &ctx)
+        }
     }
 }
 
@@ -576,138 +564,40 @@ fn route_cycle_focus(app: &mut App, forward: bool, ctx: Ctx) -> Vec<OutMsg> {
         loaded, workspace, ..
     } = app;
     match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::CycleFocus(forward),
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::CycleFocus(forward),
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
+        Loaded::Show(show) => {
+            show_page::update(show_page::Msg::CycleFocus(forward), show, workspace, &ctx)
+        }
+        Loaded::Diff(diff) => {
+            diff_page::update(diff_page::Msg::CycleFocus(forward), diff, workspace, &ctx)
+        }
     }
 }
 
-fn route_step_search(app: &mut App, forward: bool, ctx: Ctx) -> Vec<OutMsg> {
+fn route_requery(app: &mut App, change: QueryChange, ctx: Ctx) -> Vec<OutMsg> {
     let App {
         loaded, workspace, ..
     } = app;
     match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::StepSearch(forward),
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::StepSearch(forward),
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
+        Loaded::Show(show) => {
+            show_page::update(show_page::Msg::Requery(change), show, workspace, &ctx)
+        }
+        Loaded::Diff(diff) => {
+            diff_page::update(diff_page::Msg::Requery(change), diff, workspace, &ctx)
+        }
     }
 }
 
-fn route_scroll_current(app: &mut App, ctx: Ctx) -> Vec<OutMsg> {
+fn route_reveal_match(app: &mut App, matched: SearchMatch, ctx: Ctx) -> Vec<OutMsg> {
     let App {
         loaded, workspace, ..
     } = app;
     match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::ScrollToCurrent,
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::ScrollToCurrent,
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-    }
-}
-
-fn route_set_search(app: &mut App, needle: &str, ctx: Ctx) -> Vec<OutMsg> {
-    let App {
-        loaded, workspace, ..
-    } = app;
-    match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::SetSearch(needle.to_owned()),
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::SetSearch(needle.to_owned()),
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-    }
-}
-
-fn route_clear_search(app: &mut App, ctx: Ctx) -> Vec<OutMsg> {
-    let App {
-        loaded, workspace, ..
-    } = app;
-    match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::ClearSearch,
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::ClearSearch,
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-    }
-}
-
-fn route_reload_scope(app: &mut App, selection: Selection, ctx: Ctx) -> Vec<OutMsg> {
-    let App {
-        loaded, workspace, ..
-    } = app;
-    match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::ReloadScope(selection),
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::ReloadScope(selection),
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-    }
-}
-
-fn route_switch_mode(app: &mut App, mode: ProjectionMode, ctx: Ctx) -> Vec<OutMsg> {
-    let App {
-        loaded, workspace, ..
-    } = app;
-    match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::SwitchMode(mode),
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::SwitchMode(mode),
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
+        Loaded::Show(show) => {
+            show_page::update(show_page::Msg::RevealMatch(matched), show, workspace, &ctx)
+        }
+        Loaded::Diff(diff) => {
+            diff_page::update(diff_page::Msg::RevealMatch(matched), diff, workspace, &ctx)
+        }
     }
 }
 
@@ -716,18 +606,56 @@ fn route_prompt(app: &mut App, key: Key, ctx: Ctx) -> Vec<OutMsg> {
         loaded, workspace, ..
     } = app;
     match loaded {
-        Loaded::Show(show) => show_page::update(
-            show_page::Msg::Prompt(key),
-            show,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
-        Loaded::Diff(diff) => diff_page::update(
-            diff_page::Msg::Prompt(key),
-            diff,
-            workspace.selected.as_ref(),
-            &ctx,
-        ),
+        Loaded::Show(show) => show_page::update(show_page::Msg::Prompt(key), show, workspace, &ctx),
+        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::Prompt(key), diff, workspace, &ctx),
+    }
+}
+
+/// Commit `needle` as the workspace search. An empty needle clears it; otherwise
+/// the active page's visible rows are refreshed first, then the matches are
+/// collected with the cursor on the first.
+fn set_search(app: &mut App, needle: String) {
+    if needle.is_empty() {
+        app.workspace.search = None;
+        return;
+    }
+    let App {
+        loaded, workspace, ..
+    } = app;
+    let matches = match loaded {
+        Loaded::Show(show) => {
+            show.ensure_visible_rows(workspace.selected.as_ref());
+            show.search_matches(&needle, workspace)
+        }
+        Loaded::Diff(diff) => diff.search_matches(&needle, workspace),
+    };
+    workspace.search = Some(Search {
+        needle,
+        matches,
+        cursor: 0,
+    });
+}
+
+/// Recompute the committed search against the current page and clamp the cursor.
+fn sync_search(app: &mut App) {
+    let Some(needle) = app
+        .workspace
+        .search
+        .as_ref()
+        .map(|search| search.needle.clone())
+    else {
+        return;
+    };
+    let App {
+        loaded, workspace, ..
+    } = app;
+    let matches = match loaded {
+        Loaded::Show(show) => show.search_matches(&needle, workspace),
+        Loaded::Diff(diff) => diff.search_matches(&needle, workspace),
+    };
+    if let Some(search) = workspace.search.as_mut() {
+        search.matches = matches;
+        search.cursor = search.cursor.min(search.matches.len().saturating_sub(1));
     }
 }
 
@@ -826,9 +754,8 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     // 9. Esc clears the diagnostic and the search.
     if key == Key::Esc {
         app.diagnostic = None;
-        let ctx = ctx(app);
-        let outs = route_clear_search(app, ctx);
-        fold(app, outs, cmds);
+        app.workspace.search = None;
+        on_search_changed(app);
     }
 }
 
@@ -904,11 +831,11 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth:
             open_overlay(app, Overlay::scope());
             cmds.push(Cmd::LoadAreas);
         }
-        Mode => open_overlay(app, Overlay::mode(app.loaded.mode())),
+        Mode => open_overlay(app, Overlay::mode(app.workspace.query.mode)),
         Palette => {
             let entries = app.loaded.palette_entries();
             let groups = app.loaded.prefix_groups();
-            let mode = app.loaded.mode();
+            let mode = app.workspace.query.mode;
             let visible = &app.workspace.files.paths;
             let pending_prefix = app.keymap.pending;
             let palette = Overlay::palette(&overlay::Ctx {
@@ -923,7 +850,7 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth:
         Finder => {
             let entries = app.loaded.palette_entries();
             let groups = app.loaded.prefix_groups();
-            let mode = app.loaded.mode();
+            let mode = app.workspace.query.mode;
             let visible = &app.workspace.files.paths;
             let pending_prefix = app.keymap.pending;
             let finder = Overlay::finder(&overlay::Ctx {
@@ -956,14 +883,18 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth:
             fold_at(app, outs, cmds, depth);
         }
         Top | Bottom | PageUp | PageDown => focus_command(app, action, cmds, depth),
-        NextMatch => {
-            let outs = route_step_search(app, true, ctx);
-            fold_at(app, outs, cmds, depth);
-        }
-        PreviousMatch => {
-            let outs = route_step_search(app, false, ctx);
-            fold_at(app, outs, cmds, depth);
-        }
+        NextMatch => reveal_next(app, true, cmds, depth),
+        PreviousMatch => reveal_next(app, false, cmds, depth),
+    }
+}
+
+/// Advance the workspace search cursor with wrap-around and reveal the match it
+/// now names.
+fn reveal_next(app: &mut App, forward: bool, cmds: &mut Vec<Cmd>, depth: u8) {
+    if let Some(matched) = advance_search(&mut app.workspace.search, forward) {
+        let ctx = ctx(app);
+        let outs = route_reveal_match(app, matched, ctx);
+        fold_at(app, outs, cmds, depth);
     }
 }
 
@@ -1068,7 +999,7 @@ fn overlay_key(app: &mut App, key: Key) -> (bool, Vec<overlay::OutMsg>) {
     };
     let entries = app.loaded.palette_entries();
     let groups = app.loaded.prefix_groups();
-    let mode = app.loaded.mode();
+    let mode = app.workspace.query.mode;
     let visible = &app.workspace.files.paths;
     let pending_prefix = app.keymap.pending;
     let ctx = overlay::Ctx {
@@ -1087,31 +1018,31 @@ fn overlay_key(app: &mut App, key: Key) -> (bool, Vec<overlay::OutMsg>) {
 }
 
 fn apply_overlay_out(app: &mut App, out: overlay::OutMsg, cmds: &mut Vec<Cmd>) {
-    let ctx = ctx(app);
     match out {
         overlay::OutMsg::Close => {
             app.overlay = None;
             app.keymap.pending = None;
         }
         overlay::OutMsg::Selection(selection) => {
-            let outs = route_reload_scope(app, selection, ctx);
-            fold(app, outs, cmds);
+            apply_at(
+                app,
+                Request::Requery(QueryChange::Scope(selection)),
+                cmds,
+                0,
+            );
         }
         overlay::OutMsg::Mode(mode) => {
-            let outs = route_switch_mode(app, mode, ctx);
-            fold(app, outs, cmds);
+            apply_at(app, Request::Requery(QueryChange::Mode(mode)), cmds, 0);
         }
         overlay::OutMsg::Action(action) => apply_action(app, action, cmds, 0),
         overlay::OutMsg::File(path) => {
             apply_at(app, Request::Select(Some(path)), cmds, 0);
         }
         overlay::OutMsg::Search(needle) => {
-            let outs = route_set_search(app, &needle, ctx);
-            fold(app, outs, cmds);
+            apply_at(app, Request::SetSearch(needle), cmds, 0);
         }
         overlay::OutMsg::SearchCommit => {
-            let outs = route_scroll_current(app, ctx);
-            fold(app, outs, cmds);
+            apply_at(app, Request::CommitSearch, cmds, 0);
         }
     }
 }
@@ -1194,7 +1125,7 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
                             let outs = show_page::update(
                                 show_page::Msg::BodyClick { row, marker },
                                 show,
-                                app.workspace.selected.as_ref(),
+                                &app.workspace,
                                 &ctx,
                             );
                             fold(app, outs, cmds);
@@ -1211,7 +1142,7 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
                         let outs = show_page::update(
                             show_page::Msg::Scroll(delta),
                             show,
-                            app.workspace.selected.as_ref(),
+                            &app.workspace,
                             &ctx,
                         );
                         fold(app, outs, cmds);
@@ -1229,12 +1160,8 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
             if delta != 0
                 && let Loaded::Diff(diff) = &mut app.loaded
             {
-                let outs = diff_page::update(
-                    diff_page::Msg::Scroll(delta),
-                    diff,
-                    app.workspace.selected.as_ref(),
-                    &ctx,
-                );
+                let outs =
+                    diff_page::update(diff_page::Msg::Scroll(delta), diff, &app.workspace, &ctx);
                 fold(app, outs, cmds);
             }
         }
@@ -1317,12 +1244,19 @@ pub(crate) fn settle(mut app: App) -> App {
     let width = app.size.width;
     let height = app.size.height;
     let tree_percent = app.chrome.tree_percent;
-    app.loaded.settle(
+    // Rows, folds, and highlighting first; then the search re-sync; then the
+    // diff row layout. The tree viewport comes last.
+    app.loaded.settle_rows(
         &app.chrome.theme,
         visible_body,
+        app.workspace.selected.as_ref(),
+    );
+    sync_search(&mut app);
+    app.loaded.refresh_rows(
         width,
         height,
         tree_percent,
+        &app.chrome.theme,
         app.workspace.selected.as_ref(),
     );
     let tree_height = tree_viewport_height(&app);
@@ -1353,7 +1287,7 @@ pub(crate) fn coalesce_commit_loads(app: &mut App, cmds: &mut Vec<Cmd>) {
         None
     };
     if let Some((index, step)) = pending {
-        let request = diff.request();
+        let request = diff.request(app.workspace.query.scope.selection.clone());
         diff.paging = Paging::Loading;
         cmds.push(Cmd::Step {
             request,

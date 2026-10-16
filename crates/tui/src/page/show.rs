@@ -1,5 +1,5 @@
 //! The `show` page: one revision's source explorer, the tree selection over it,
-//! the body's scroll offsets, the committed search, and per-file highlighting.
+//! the body's scroll offsets, and per-file highlighting.
 //!
 //! The body cursor always names a visible row's source line, so the `tests`-mode
 //! filter (which can hide the cursor's line) anchors it to the nearest visible
@@ -28,15 +28,16 @@ use crate::render::empty::render_empty;
 use crate::render::highlight::{self, StyledLine};
 use crate::render::layout::Edge;
 use crate::render::theme::Theme;
-use crate::request::Request;
+use crate::request::{QueryChange, Request};
 use crate::route::ShowRequest;
 use crate::util::cache::BoundedCache;
 use crate::util::input::Key;
-use crate::workspace::{FileSet, NO_FILES, Workspace};
+use crate::workspace::{
+    FileSet, NO_FILES, Query, SearchMatch, SearchPane, Workspace, collect_matches,
+};
 
 use super::{
-    Ctx, OutMsg, Paging, Scope, Search, SearchSide, ViewCtx, advance_search, collect_matches,
-    current_match, mode_label, page_step, scroll_offset_to, search_ranges, text_edit,
+    Ctx, OutMsg, Paging, Scope, ViewCtx, mode_label, page_step, scroll_offset_to, text_edit,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,13 +174,11 @@ impl VisibleRows {
 #[derive(Clone, Debug)]
 pub struct Show {
     pub revision: String,
-    pub mode: ProjectionMode,
-    pub scope: Scope,
+    pub loaded_mode: ProjectionMode,
     pub files: Arc<[SourceOutline]>,
     pub focus: ShowFocus,
     pub body: ShowBody,
     pub paging: Paging,
-    pub search: Option<Search>,
     pub highlight: ShowHighlights,
     pub folds: ShowFolds,
     pub fold_state: FoldState,
@@ -200,10 +199,6 @@ impl Show {
     pub fn active_lines(&self, selected: Option<&RepoPath>) -> Option<&[StyledLine]> {
         let path = selected?;
         self.highlight.lines(path)
-    }
-
-    pub fn search_ranges(&self, line: usize) -> Vec<(usize, usize, bool)> {
-        search_ranges(self.search.as_ref(), SearchSide::Show, line)
     }
 
     pub fn line_count(&self) -> usize {
@@ -229,7 +224,7 @@ impl Show {
                     .iter()
                     .filter(|region| {
                         region.start_line == *line
-                            && (self.mode != ProjectionMode::Tests || region.retained)
+                            && (self.loaded_mode != ProjectionMode::Tests || region.retained)
                     })
                     .max_by_key(|region| region.end_line)?;
                 Some(if self.fold_state.is_open(path, region) {
@@ -269,7 +264,7 @@ impl Show {
                     } => {
                         width
                             + unicode_width::UnicodeWidthStr::width(
-                                fold_suffix(*hidden, *dropped, self.mode).as_str(),
+                                fold_suffix(*hidden, *dropped, self.loaded_mode).as_str(),
                             )
                     }
                 }
@@ -289,7 +284,7 @@ impl Show {
             let total = self.source_line_count(Some(&path));
             let rows: Vec<VisibleRow> = match self.folds.regions(&path) {
                 Some(regions) => {
-                    build_visible_rows(regions, total, &path, &self.fold_state, self.mode)
+                    build_visible_rows(regions, total, &path, &self.fold_state, self.loaded_mode)
                 }
                 None => (1..=total)
                     .map(|line| VisibleRow::Source { line })
@@ -442,36 +437,18 @@ impl Show {
         }
     }
 
-    pub fn set_search(&mut self, selected: Option<&RepoPath>, needle: &str) {
-        if needle.is_empty() {
-            self.search = None;
-            return;
-        }
-        self.ensure_visible_rows(selected);
-        self.search = Some(Search {
-            needle: needle.to_owned(),
-            matches: self.search_matches(selected, needle),
-            cursor: 0,
-        });
-    }
-
-    pub fn resync_search(&mut self, selected: Option<&RepoPath>) {
-        let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
-            return;
-        };
-        self.ensure_visible_rows(selected);
-        let matches = self.search_matches(selected, &needle);
-        if let Some(search) = &mut self.search {
-            search.matches = matches;
-            search.cursor = search.cursor.min(search.matches.len().saturating_sub(1));
-        }
-    }
-
-    fn search_matches(&self, selected: Option<&RepoPath>, needle: &str) -> Vec<super::SearchMatch> {
+    /// The search matches for `needle` over the active file's source, keeping
+    /// only the matches on a visible row.
+    pub fn search_matches(&self, needle: &str, workspace: &Workspace) -> Vec<SearchMatch> {
         let needle_lower = needle.to_lowercase();
         let mut matches = Vec::new();
-        if let Some(file) = self.active_file(selected) {
-            collect_matches(&file.source, &needle_lower, SearchSide::Show, &mut matches);
+        if let Some(file) = self.active_file(workspace.selected.as_ref()) {
+            collect_matches(
+                &file.source,
+                &needle_lower,
+                SearchPane::Source,
+                &mut matches,
+            );
         }
         matches.retain(|matched| self.visible_row_for_source_line(matched.line).is_some());
         matches
@@ -635,19 +612,16 @@ pub enum Msg {
     Scroll(i32),
     BodyClick { row: usize, marker: bool },
     Action(GlobalAction),
-    StepSearch(bool),
-    ScrollToCurrent,
+    RevealMatch(SearchMatch),
     CycleFocus(bool),
     Prompt(Key),
     EditRevision,
-    SetSearch(String),
-    ClearSearch,
-    ReloadScope(Selection),
-    SwitchMode(ProjectionMode),
+    Requery(QueryChange),
     Loaded(ShowRequest, Result<Arc<[SourceOutline]>, Box<EngineError>>),
 }
 
-pub fn update(msg: Msg, page: &mut Show, selected: Option<&RepoPath>, ctx: &Ctx) -> Vec<OutMsg> {
+pub fn update(msg: Msg, page: &mut Show, workspace: &Workspace, ctx: &Ctx) -> Vec<OutMsg> {
+    let selected = workspace.selected.as_ref();
     page.ensure_visible_rows(selected);
     match msg {
         Msg::Key(key) => body_key(page, key, selected, ctx),
@@ -667,18 +641,9 @@ pub fn update(msg: Msg, page: &mut Show, selected: Option<&RepoPath>, ctx: &Ctx)
             cursor_action(page, action, ctx);
             Vec::new()
         }
-        Msg::StepSearch(forward) => {
-            if let Some(matched) = advance_search(&mut page.search, forward) {
-                page.reveal_source_line(selected, matched.line);
-                page.move_cursor_to_source_line(matched.line, ctx.height);
-            }
-            Vec::new()
-        }
-        Msg::ScrollToCurrent => {
-            if let Some(matched) = current_match(&page.search) {
-                page.reveal_source_line(selected, matched.line);
-                page.move_cursor_to_source_line(matched.line, ctx.height);
-            }
+        Msg::RevealMatch(matched) => {
+            page.reveal_source_line(selected, matched.line);
+            page.move_cursor_to_source_line(matched.line, ctx.height);
             Vec::new()
         }
         Msg::CycleFocus(forward) => {
@@ -689,29 +654,21 @@ pub fn update(msg: Msg, page: &mut Show, selected: Option<&RepoPath>, ctx: &Ctx)
             };
             Vec::new()
         }
-        Msg::Prompt(key) => prompt_key(page, key),
+        Msg::Prompt(key) => prompt_key(page, key, workspace),
         Msg::EditRevision => {
             page.prompt = Some(TextInput::new(page.revision.clone()));
             Vec::new()
         }
-        Msg::SetSearch(needle) => {
-            page.set_search(selected, &needle);
-            Vec::new()
-        }
-        Msg::ClearSearch => {
-            page.search = None;
-            Vec::new()
-        }
-        Msg::ReloadScope(selection) => {
+        Msg::Requery(change) => {
             page.paging = Paging::Loading;
-            let mut request = page.request();
-            request.selection = selection;
-            vec![OutMsg::Effect(Cmd::Show(request))]
-        }
-        Msg::SwitchMode(mode) => {
-            page.paging = Paging::Loading;
-            let mut request = page.request();
-            request.mode = mode;
+            let request = match change {
+                QueryChange::Mode(mode) => {
+                    let mut request = page.request(workspace.query.scope.selection.clone());
+                    request.mode = mode;
+                    request
+                }
+                QueryChange::Scope(selection) => page.request(selection),
+            };
             vec![OutMsg::Effect(Cmd::Show(request))]
         }
         Msg::Loaded(request, result) => loaded(page, request, result),
@@ -719,11 +676,13 @@ pub fn update(msg: Msg, page: &mut Show, selected: Option<&RepoPath>, ctx: &Ctx)
 }
 
 impl Show {
-    pub fn request(&self) -> ShowRequest {
+    /// The load request for `selection`, projected with the currently loaded
+    /// mode.
+    pub fn request(&self, selection: Selection) -> ShowRequest {
         ShowRequest {
             revision: self.revision.clone(),
-            mode: self.mode,
-            selection: self.scope.selection.clone(),
+            mode: self.loaded_mode,
+            selection,
         }
     }
 }
@@ -829,7 +788,7 @@ fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
             .filter(|(_, region)| {
                 region.start_line <= *line
                     && *line <= region.end_line
-                    && (page.mode != ProjectionMode::Tests || region.retained)
+                    && (page.loaded_mode != ProjectionMode::Tests || region.retained)
             })
             .max_by_key(|(_, region)| region.level)
             .map(|(index, _)| index),
@@ -858,7 +817,7 @@ fn toggle_marker_region(page: &mut Show, row: usize, selected: Option<&RepoPath>
             .enumerate()
             .filter(|(_, region)| {
                 region.start_line == *line
-                    && (page.mode != ProjectionMode::Tests || region.retained)
+                    && (page.loaded_mode != ProjectionMode::Tests || region.retained)
             })
             .max_by_key(|(_, region)| region.end_line)
             .map(|(index, _)| index),
@@ -912,7 +871,7 @@ fn scroll_body(page: &mut Show, delta: i32) {
     page.body.scroll = next;
 }
 
-fn prompt_key(page: &mut Show, key: Key) -> Vec<OutMsg> {
+fn prompt_key(page: &mut Show, key: Key, workspace: &Workspace) -> Vec<OutMsg> {
     let Some(mut input) = page.prompt.take() else {
         return Vec::new();
     };
@@ -925,11 +884,9 @@ fn prompt_key(page: &mut Show, key: Key) -> Vec<OutMsg> {
             let value = input.value();
             if !value.is_empty() {
                 page.paging = Paging::Loading;
-                effect = Some(Cmd::Show(ShowRequest {
-                    revision: value,
-                    mode: page.mode,
-                    selection: page.scope.selection.clone(),
-                }));
+                let mut request = page.request(workspace.query.scope.selection.clone());
+                request.revision = value;
+                effect = Some(Cmd::Show(request));
             }
         }
         key => {
@@ -953,8 +910,7 @@ fn loaded(
         Ok(files) => {
             page.paging = Paging::Ready;
             page.revision = request.revision;
-            page.mode = request.mode;
-            page.scope = Scope::new(request.selection);
+            page.loaded_mode = request.mode;
             page.files = files;
             page.highlight.clear();
             page.folds.clear();
@@ -966,11 +922,17 @@ fn loaded(
                 cursor_line: 1,
             };
             let paths = Arc::from(show_visible(&page.files));
-            vec![OutMsg::Request(Request::SetFiles(FileSet {
-                paths,
-                badges: Arc::new(BTreeMap::new()),
-                empty: NO_FILES,
-            }))]
+            vec![
+                OutMsg::Request(Request::QueryLoaded(Query {
+                    mode: request.mode,
+                    scope: Scope::new(request.selection),
+                })),
+                OutMsg::Request(Request::SetFiles(FileSet {
+                    paths,
+                    badges: Arc::new(BTreeMap::new()),
+                    empty: NO_FILES,
+                })),
+            ]
         }
         Err(error) => {
             page.paging = Paging::Ready;
@@ -1007,7 +969,7 @@ pub(crate) fn view(
     }
 
     if page.line_count() == 0 {
-        let (title, detail) = if page.mode == ProjectionMode::Tests {
+        let (title, detail) = if page.loaded_mode == ProjectionMode::Tests {
             ("No test declarations", "Nothing retained in this mode.")
         } else {
             ("Empty file", "This file has no source lines.")
@@ -1036,7 +998,7 @@ pub(crate) fn view(
         .take(height)
     {
         let number = row.source_line();
-        let ranges = page.search_ranges(number);
+        let ranges = workspace.ranges_on_line(SearchPane::Source, number);
         let mut runs = page.row_runs(selected, number, theme);
         runs = highlight_search(&runs, &ranges, theme);
         if let VisibleRow::Fold {
@@ -1045,7 +1007,7 @@ pub(crate) fn view(
         {
             runs.push(highlight::Run {
                 style: theme.fg(theme.palette.text_dim),
-                text: fold_suffix(*hidden, *dropped, page.mode),
+                text: fold_suffix(*hidden, *dropped, page.loaded_mode),
             });
         }
         let mut clipped = highlight::clip_runs(&runs, hscroll, width);

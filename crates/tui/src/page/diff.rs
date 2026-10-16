@@ -1,5 +1,5 @@
 //! The `diff` page: a base/target range compared directly, or the first-parent
-//! steps of a commits view, each with its own scroll, search, and highlighting.
+//! steps of a commits view, each with its own scroll and highlighting.
 //!
 //! The wrapped rows are cached and keyed on a generation counter plus the layout
 //! inputs, so any change to the diffs must bump the generation.
@@ -30,16 +30,17 @@ use crate::render::layout::{
 use crate::render::metrics::{Focus, SIDE_BY_SIDE_MIN_WIDTH};
 use crate::render::text::truncate_ellipsis;
 use crate::render::theme::Theme;
-use crate::request::Request;
+use crate::request::{QueryChange, Request};
 use crate::route::{DiffRequest, DiffView};
 use crate::util::cache::BoundedCache;
 use crate::util::input::Key;
-use crate::workspace::{BadgeTone, EmptyText, FileSet, NO_CHANGES, Workspace};
+use crate::workspace::{
+    BadgeTone, EmptyText, FileSet, NO_CHANGES, Query, SearchMatch, SearchPane, Workspace,
+    collect_matches,
+};
 
 use super::{
-    Ctx, OutMsg, Paging, Scope, Search, SearchMatch, SearchSide, ViewCtx, advance_search,
-    collect_matches, current_match, page_step, scroll_by, scroll_offset_to, search_ranges,
-    text_edit,
+    Ctx, OutMsg, Paging, Scope, ViewCtx, page_step, scroll_by, scroll_offset_to, text_edit,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,10 +106,8 @@ impl DiffHighlights {
 pub struct Diff {
     pub base: String,
     pub target: String,
-    pub mode: ProjectionMode,
-    pub scope: Scope,
+    pub loaded_mode: ProjectionMode,
     pub merge_base: bool,
-    pub search: Option<Search>,
     pub paging: Paging,
     pub prompt: Option<DiffPrompt>,
     pub view: DiffViewState,
@@ -182,17 +181,14 @@ impl Diff {
         base: String,
         target: String,
         mode: ProjectionMode,
-        scope: Scope,
         view: DiffViewState,
         merge_base: bool,
     ) -> Self {
         Self {
             base,
             target,
-            mode,
-            scope,
+            loaded_mode: mode,
             merge_base,
-            search: None,
             paging: Paging::Loading,
             prompt: None,
             view,
@@ -285,11 +281,11 @@ impl Diff {
         }
     }
 
-    pub fn visual_row_for(&self, side: SearchSide, line: usize) -> Option<usize> {
-        self.rows().iter().position(|row| match side {
-            SearchSide::Old => row.old_number == Some(line),
-            SearchSide::New => row.new_number == Some(line),
-            SearchSide::Show => false,
+    pub fn visual_row_for(&self, pane: SearchPane, line: usize) -> Option<usize> {
+        self.rows().iter().position(|row| match pane {
+            SearchPane::Old => row.old_number == Some(line),
+            SearchPane::New => row.new_number == Some(line),
+            SearchPane::Source => false,
         })
     }
 
@@ -374,68 +370,44 @@ impl Diff {
         (self.base.clone(), self.target.clone())
     }
 
-    pub fn search_ranges(&self, side: SearchSide, line: usize) -> Vec<(usize, usize, bool)> {
-        search_ranges(self.search.as_ref(), side, line)
-    }
-
-    fn search_matches(&self, selected: Option<&RepoPath>, needle: &str) -> Vec<SearchMatch> {
+    /// The search matches for `needle` over the active file diff. An added file
+    /// matches on the new side; a deleted file on the old; a modified file on
+    /// the old side first, then the new.
+    pub fn search_matches(&self, needle: &str, workspace: &Workspace) -> Vec<SearchMatch> {
         let needle_lower = needle.to_lowercase();
         let mut matches = Vec::new();
-        let Some(diff) = self.active_diff(selected) else {
+        let Some(diff) = self.active_diff(workspace.selected.as_ref()) else {
             return matches;
         };
         match diff {
             FileDiff::Added { new } => collect_matches(
                 new.canonical_text(),
                 &needle_lower,
-                SearchSide::New,
+                SearchPane::New,
                 &mut matches,
             ),
             FileDiff::Deleted { old } => collect_matches(
                 old.canonical_text(),
                 &needle_lower,
-                SearchSide::Old,
+                SearchPane::Old,
                 &mut matches,
             ),
             FileDiff::Modified { old, new } => {
                 collect_matches(
                     old.canonical_text(),
                     &needle_lower,
-                    SearchSide::Old,
+                    SearchPane::Old,
                     &mut matches,
                 );
                 collect_matches(
                     new.canonical_text(),
                     &needle_lower,
-                    SearchSide::New,
+                    SearchPane::New,
                     &mut matches,
                 );
             }
         }
         matches
-    }
-
-    pub fn set_search(&mut self, selected: Option<&RepoPath>, needle: &str) {
-        if needle.is_empty() {
-            self.search = None;
-            return;
-        }
-        self.search = Some(Search {
-            needle: needle.to_owned(),
-            matches: self.search_matches(selected, needle),
-            cursor: 0,
-        });
-    }
-
-    pub fn resync_search(&mut self, selected: Option<&RepoPath>) {
-        let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
-            return;
-        };
-        let matches = self.search_matches(selected, &needle);
-        if let Some(search) = &mut self.search {
-            search.matches = matches;
-            search.cursor = search.cursor.min(search.matches.len().saturating_sub(1));
-        }
     }
 
     pub fn ensure_highlight(&mut self, theme: &Theme, selected: Option<&RepoPath>) {
@@ -513,17 +485,13 @@ pub enum Msg {
     Key(Key),
     Scroll(i32),
     Action(GlobalAction),
-    StepSearch(bool),
+    RevealMatch(SearchMatch),
     CycleFocus(bool),
     Prompt(Key),
     EditSide(DiffSide),
     SwitchView(DiffView),
-    SetSearch(String),
-    ClearSearch,
-    ScrollToCurrent,
     Commit(commit_picker::Msg),
-    ReloadScope(Selection),
-    SwitchMode(ProjectionMode),
+    Requery(QueryChange),
     Loaded(DiffRequest, Result<Arc<[FileDiff]>, Box<EngineError>>),
     HistoryLoaded(DiffRequest, Result<HistoryPayload, Box<EngineError>>),
     StepLoaded {
@@ -533,7 +501,7 @@ pub enum Msg {
     },
 }
 
-pub fn update(msg: Msg, page: &mut Diff, selected: Option<&RepoPath>, ctx: &Ctx) -> Vec<OutMsg> {
+pub fn update(msg: Msg, page: &mut Diff, workspace: &Workspace, ctx: &Ctx) -> Vec<OutMsg> {
     match msg {
         Msg::Key(key) => body_key(page, key),
         Msg::Scroll(delta) => {
@@ -544,15 +512,22 @@ pub fn update(msg: Msg, page: &mut Diff, selected: Option<&RepoPath>, ctx: &Ctx)
             action_apply(page, action, ctx);
             Vec::new()
         }
-        Msg::StepSearch(forward) => {
-            step_search(page, forward, ctx);
+        Msg::RevealMatch(matched) => {
+            let index = page.visual_row_for(matched.pane, matched.line).unwrap_or(0);
+            if let Some(next) = scroll_offset_to(
+                index,
+                page.body_scroll() as usize,
+                ctx.height.saturating_sub(4) as usize,
+            ) {
+                page.set_body_scroll(next);
+            }
             Vec::new()
         }
         Msg::CycleFocus(forward) => {
             cycle_focus(page, forward);
             Vec::new()
         }
-        Msg::Prompt(key) => prompt_key(page, key),
+        Msg::Prompt(key) => prompt_key(page, key, workspace),
         Msg::EditSide(side) => {
             let value = match side {
                 DiffSide::Base => page.base.clone(),
@@ -564,44 +539,23 @@ pub fn update(msg: Msg, page: &mut Diff, selected: Option<&RepoPath>, ctx: &Ctx)
             });
             Vec::new()
         }
-        Msg::SwitchView(view) => switch_view(page, view),
-        Msg::SetSearch(needle) => {
-            page.set_search(selected, &needle);
-            Vec::new()
-        }
-        Msg::ClearSearch => {
-            page.search = None;
-            Vec::new()
-        }
-        Msg::ScrollToCurrent => {
-            if let Some(matched) = current_match(&page.search) {
-                let index = page.visual_row_for(matched.side, matched.line).unwrap_or(0);
-                if let Some(next) = scroll_offset_to(
-                    index,
-                    page.body_scroll() as usize,
-                    ctx.height.saturating_sub(4) as usize,
-                ) {
-                    page.set_body_scroll(next);
-                }
-            }
-            Vec::new()
-        }
+        Msg::SwitchView(view) => switch_view(page, view, workspace),
         Msg::Commit(msg) => {
             if let DiffViewState::Commits(commits) = &mut page.view {
                 commits.picker.update(msg);
             }
             Vec::new()
         }
-        Msg::ReloadScope(selection) => {
+        Msg::Requery(change) => {
             page.paging = Paging::Loading;
-            let mut request = page.request();
-            request.selection = selection;
-            vec![OutMsg::Effect(Cmd::Diff(request))]
-        }
-        Msg::SwitchMode(mode) => {
-            page.paging = Paging::Loading;
-            let mut request = page.request();
-            request.mode = mode;
+            let request = match change {
+                QueryChange::Mode(mode) => {
+                    let mut request = page.request(workspace.query.scope.selection.clone());
+                    request.mode = mode;
+                    request
+                }
+                QueryChange::Scope(selection) => page.request(selection),
+            };
             vec![OutMsg::Effect(Cmd::Diff(request))]
         }
         Msg::Loaded(request, result) => loaded(page, request, result),
@@ -615,12 +569,14 @@ pub fn update(msg: Msg, page: &mut Diff, selected: Option<&RepoPath>, ctx: &Ctx)
 }
 
 impl Diff {
-    pub fn request(&self) -> DiffRequest {
+    /// The load request for `selection`, projected with the currently loaded
+    /// mode.
+    pub fn request(&self, selection: Selection) -> DiffRequest {
         DiffRequest {
             base: self.base.clone(),
             target: self.target.clone(),
-            mode: self.mode,
-            selection: self.scope.selection.clone(),
+            mode: self.loaded_mode,
+            selection,
             view: match &self.view {
                 DiffViewState::Range(_) => DiffView::Range,
                 DiffViewState::Commits(_) => DiffView::Commits,
@@ -681,19 +637,6 @@ fn action_apply(page: &mut Diff, action: GlobalAction, ctx: &Ctx) {
     }
 }
 
-fn step_search(page: &mut Diff, forward: bool, ctx: &Ctx) {
-    if let Some(matched) = advance_search(&mut page.search, forward) {
-        let index = page.visual_row_for(matched.side, matched.line).unwrap_or(0);
-        if let Some(next) = scroll_offset_to(
-            index,
-            page.body_scroll() as usize,
-            ctx.height.saturating_sub(4) as usize,
-        ) {
-            page.set_body_scroll(next);
-        }
-    }
-}
-
 fn cycle_focus(page: &mut Diff, forward: bool) {
     match &mut page.view {
         DiffViewState::Range(range) => {
@@ -723,7 +666,7 @@ fn cycle_focus(page: &mut Diff, forward: bool) {
     }
 }
 
-fn switch_view(page: &mut Diff, view: DiffView) -> Vec<OutMsg> {
+fn switch_view(page: &mut Diff, view: DiffView, workspace: &Workspace) -> Vec<OutMsg> {
     let matches = matches!(
         (&page.view, view),
         (DiffViewState::Range(_), DiffView::Commits) | (DiffViewState::Commits(_), DiffView::Range)
@@ -744,12 +687,12 @@ fn switch_view(page: &mut Diff, view: DiffView) -> Vec<OutMsg> {
         ))];
     }
     page.paging = Paging::Loading;
-    let mut request = page.request();
+    let mut request = page.request(workspace.query.scope.selection.clone());
     request.view = view;
     vec![OutMsg::Effect(Cmd::Diff(request))]
 }
 
-fn prompt_key(page: &mut Diff, key: Key) -> Vec<OutMsg> {
+fn prompt_key(page: &mut Diff, key: Key, workspace: &Workspace) -> Vec<OutMsg> {
     let Some(mut prompt) = page.prompt.take() else {
         return Vec::new();
     };
@@ -761,7 +704,7 @@ fn prompt_key(page: &mut Diff, key: Key) -> Vec<OutMsg> {
             reopen = false;
             let value = prompt.input.value();
             if !value.is_empty() {
-                let mut request = page.request();
+                let mut request = page.request(workspace.query.scope.selection.clone());
                 match prompt.side {
                     DiffSide::Base => request.base = value,
                     DiffSide::Target => request.target = value,
@@ -809,9 +752,8 @@ fn loaded(
             page.paging = Paging::Ready;
             page.base = request.base;
             page.target = request.target;
-            page.mode = request.mode;
+            page.loaded_mode = request.mode;
             page.merge_base = request.merge_base;
-            page.scope = Scope::new(request.selection);
             page.prompt = None;
             if !matches!(page.view, DiffViewState::Range(_)) {
                 page.view = DiffViewState::Range(Range::empty());
@@ -823,7 +765,13 @@ fn loaded(
             page.set_body_scroll(0);
             page.invalidate();
             let file_set = file_set(page.diffs(), NO_CHANGES);
-            vec![OutMsg::Request(Request::SetFiles(file_set))]
+            vec![
+                OutMsg::Request(Request::QueryLoaded(Query {
+                    mode: request.mode,
+                    scope: Scope::new(request.selection),
+                })),
+                OutMsg::Request(Request::SetFiles(file_set)),
+            ]
         }
         Err(error) => {
             page.paging = Paging::Ready;
@@ -847,10 +795,10 @@ fn history_loaded(
     page.paging = Paging::Ready;
     page.base = request.base;
     page.target = request.target;
-    page.mode = request.mode;
+    page.loaded_mode = request.mode;
     page.merge_base = request.merge_base;
-    page.scope = Scope::new(request.selection);
     page.prompt = None;
+    let selection = request.selection;
     let preferred = match &page.view {
         DiffViewState::Commits(commits) => commits
             .picker
@@ -868,10 +816,13 @@ fn history_loaded(
     });
     page.invalidate();
 
-    let mut outs = vec![OutMsg::Request(Request::SetFiles(file_set(
-        page.diffs(),
-        NO_CHANGES,
-    )))];
+    let mut outs = vec![
+        OutMsg::Request(Request::QueryLoaded(Query {
+            mode: request.mode,
+            scope: Scope::new(selection.clone()),
+        })),
+        OutMsg::Request(Request::SetFiles(file_set(page.diffs(), NO_CHANGES))),
+    ];
 
     let pending = if let DiffViewState::Commits(commits) = &page.view {
         preferred
@@ -897,7 +848,7 @@ fn history_loaded(
     if let Some((index, step)) = pending {
         page.paging = Paging::Loading;
         outs.push(OutMsg::Effect(Cmd::Step {
-            request: page.request(),
+            request: page.request(selection),
             index,
             step,
         }));
@@ -1041,7 +992,9 @@ pub(crate) fn view(
         let ranges = if row.continuation {
             Vec::new()
         } else {
-            number.map_or_else(Vec::new, |line| page.search_ranges(search_side(side), line))
+            number.map_or_else(Vec::new, |line| {
+                workspace.ranges_on_line(search_pane(side), line)
+            })
         };
         lines.push(diff_line(
             number,
@@ -1084,10 +1037,10 @@ fn pane_title(side: Side, revision: &str, merge_base: bool, pane_width: u16) -> 
     truncate_ellipsis(&format!(" {label} · {revision}{suffix} "), available)
 }
 
-fn search_side(side: Side) -> SearchSide {
+fn search_pane(side: Side) -> SearchPane {
     match side {
-        Side::Old => SearchSide::Old,
-        Side::New => SearchSide::New,
+        Side::Old => SearchPane::Old,
+        Side::New => SearchPane::New,
     }
 }
 
