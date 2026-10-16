@@ -16,12 +16,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::page::{ChangeKind, Loaded};
 use crate::render::block::pane_block;
 use crate::render::empty::render_empty;
 use crate::render::layout::Edge;
 use crate::render::text::truncate_ellipsis;
 use crate::render::theme::Theme;
+use crate::workspace::BadgeTone;
 
 use super::RenderCtx;
 
@@ -380,10 +380,8 @@ pub(crate) fn render(
         let (title, detail) = if ctx.busy {
             ("Loading", "Projecting files…")
         } else {
-            match ctx.loaded {
-                Loaded::Show(_) => ("No files", "No source files in this scope."),
-                Loaded::Diff(_) => ("No changes", "Body-only edits are omitted."),
-            }
+            let empty = ctx.workspace.files.empty;
+            (empty.title, empty.detail)
         };
         render_empty(frame, inner, title, detail, theme);
         return;
@@ -393,7 +391,7 @@ pub(crate) fn render(
     let needs_scrollbar = state.rows.len() > height;
     let width = (inner.width as usize).saturating_sub(usize::from(needs_scrollbar));
     let offset = state.scroll.min(state.rows.len().saturating_sub(height));
-    let selected = ctx.loaded.selected();
+    let selected = ctx.workspace.selected.as_ref();
 
     let mut lines = Vec::new();
     for (index, row) in state.rows.iter().enumerate().skip(offset).take(height) {
@@ -547,10 +545,10 @@ fn badge(
     let RowKind::File { path } = &row.kind else {
         return None;
     };
-    match ctx.loaded.change_kind(path)? {
-        ChangeKind::Added => Some(("A", theme.palette.badge_add)),
-        ChangeKind::Modified => Some(("M", theme.palette.badge_mod)),
-        ChangeKind::Deleted => Some(("D", theme.palette.badge_del)),
+    match ctx.workspace.files.badges.get(path)? {
+        BadgeTone::Added => Some(("A", theme.palette.badge_add)),
+        BadgeTone::Modified => Some(("M", theme.palette.badge_mod)),
+        BadgeTone::Deleted => Some(("D", theme.palette.badge_del)),
     }
 }
 

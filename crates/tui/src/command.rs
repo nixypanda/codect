@@ -588,6 +588,7 @@ fn scope_matches(scope: KeyScope, focus: Option<Focus>) -> bool {
 ///
 /// A binding is in scope when it is [`KeyScope::Anywhere`] or its focus matches
 /// `focus`.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 pub(crate) fn validate(commands: &[CommandSpec], focus: Option<Focus>) -> Result<(), String> {
     let mut seen: Vec<KeySeq> = Vec::new();
     let mut chars: Vec<char> = Vec::new();
@@ -635,6 +636,7 @@ pub(crate) fn validate(commands: &[CommandSpec], focus: Option<Focus>) -> Result
     Ok(())
 }
 
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 fn owner_name(owner: Owner) -> &'static str {
     match owner {
         Owner::Kernel => "kernel",

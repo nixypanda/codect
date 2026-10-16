@@ -35,6 +35,7 @@ use crate::render::theme::Theme;
 use crate::request::{NavigatorResize, QueryChange, Request};
 pub use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::util::input::{Key, Mouse, MouseKind};
+use crate::workspace::{FileSet, NO_CHANGES, NO_FILES, Workspace};
 
 const TREE_DEFAULT_PERCENT: u16 = 30;
 const TREE_MIN_PERCENT: u16 = 15;
@@ -120,6 +121,7 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub keymap: Keymap,
     pub loaded: Loaded,
+    pub workspace: Workspace,
     pub diagnostic: Option<Diagnostic>,
 }
 
@@ -133,6 +135,10 @@ impl App {
         theme: Theme,
         icons: Icons,
     ) -> Self {
+        let empty = match &request {
+            LoadRequest::Show { .. } => NO_FILES,
+            LoadRequest::Diff { .. } => NO_CHANGES,
+        };
         let loaded = match request {
             LoadRequest::Show {
                 revision,
@@ -146,8 +152,6 @@ impl App {
                     label: scope_label,
                 },
                 files: Arc::from(Vec::new()),
-                visible: Arc::from(Vec::new()),
-                selected: None,
                 focus: ShowFocus::Tree,
                 body: ShowBody {
                     scroll: 0,
@@ -198,6 +202,13 @@ impl App {
             overlay: None,
             keymap: Keymap::default(),
             loaded,
+            workspace: Workspace {
+                files: FileSet {
+                    empty,
+                    ..FileSet::default()
+                },
+                selected: None,
+            },
             diagnostic: None,
         }
     }
@@ -218,6 +229,7 @@ impl App {
                 self.size.height,
                 self.chrome.tree_percent,
                 &self.chrome.theme,
+                self.workspace.selected.as_ref(),
             ),
             Loaded::Show(_) => Vec::new(),
         }
@@ -241,7 +253,8 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
         }
         Msg::Resize { width, height } => {
             next.size = Size { width, height };
-            next.loaded.clamp_scroll(height);
+            let selected = next.workspace.selected.clone();
+            next.loaded.clamp_scroll(height, selected.as_ref());
         }
         Msg::Tick => {
             next.chrome.spinner = next.chrome.spinner.wrapping_add(1);
@@ -257,7 +270,6 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
             let outs = route_show(&mut next, show_page::Msg::Loaded(request, result), ctx);
             fold(&mut next, outs, &mut cmds);
             if installed {
-                install_show_selection(&mut next);
                 next.diagnostic = None;
                 clear_prefix(&mut next);
             }
@@ -267,7 +279,6 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
             let outs = route_diff(&mut next, diff_page::Msg::Loaded(request, result), ctx);
             fold(&mut next, outs, &mut cmds);
             if installed {
-                install_diff_selection(&mut next);
                 next.diagnostic = None;
                 clear_prefix(&mut next);
             }
@@ -281,7 +292,6 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
             );
             fold(&mut next, outs, &mut cmds);
             if installed {
-                install_diff_selection(&mut next);
                 next.diagnostic = None;
             }
         }
@@ -299,7 +309,6 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
             );
             fold(&mut next, outs, &mut cmds);
             if installed {
-                install_diff_selection(&mut next);
                 next.diagnostic = None;
             }
         }
@@ -320,11 +329,19 @@ fn ctx(app: &App) -> Ctx {
     }
 }
 
+/// Apply outs from a root handler: effects append to `cmds` in order; requests
+/// nest at depth 0.
 pub(crate) fn fold(app: &mut App, outs: Vec<OutMsg>, cmds: &mut Vec<Cmd>) {
+    fold_at(app, outs, cmds, 0);
+}
+
+/// Apply outs whose requests are at `depth`, preserving interleaved order: a
+/// request is applied where it appeared relative to its sibling effects.
+fn fold_at(app: &mut App, outs: Vec<OutMsg>, cmds: &mut Vec<Cmd>, depth: u8) {
     for out in outs {
         match out {
             OutMsg::Effect(cmd) => cmds.push(cmd),
-            OutMsg::Request(request) => apply_request(app, request, cmds),
+            OutMsg::Request(request) => apply_at(app, request, cmds, depth),
         }
     }
 }
@@ -338,6 +355,7 @@ const REQUEST_DEPTH_LIMIT: u8 = 16;
 /// Requests nest depth-first: a request produced while applying another is
 /// applied before that request's next sibling. The depth limit guards against
 /// a cycle; exceeding it is a bug in a debug build.
+#[cfg(test)]
 pub(crate) fn apply_request(app: &mut App, request: Request, cmds: &mut Vec<Cmd>) {
     apply_at(app, request, cmds, 0);
 }
@@ -348,27 +366,26 @@ fn apply_at(app: &mut App, request: Request, cmds: &mut Vec<Cmd>, depth: u8) {
         app.diagnostic = Some(Diagnostic::new("request depth exceeded".to_owned()));
         return;
     }
-    let nested = apply_one(app, request, cmds);
-    for next in nested {
-        apply_at(app, next, cmds, depth + 1);
-    }
+    apply_one(app, request, cmds, depth);
 }
 
-/// Perform one request's kernel effect and return the requests its broadcast
-/// handlers produced, in broadcast order.
-fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>) -> Vec<Request> {
-    let mut nested = Vec::new();
+/// Perform one request's kernel effect. Requests its handlers produce are
+/// applied depth-first at `depth + 1` as they appear.
+fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>, depth: u8) {
     match request {
         Request::Quit => app.chrome.quit = true,
         Request::Diagnose(text) => app.diagnostic = Some(Diagnostic::new(text)),
         Request::ClearDiagnostic => app.diagnostic = None,
         Request::SetFiles(set) => {
-            if let Some(selected) = app.loaded.selected()
+            if let Some(selected) = app.workspace.selected.as_ref()
                 && !set.paths.iter().any(|path| path == selected)
             {
-                app.loaded.set_selected(None);
+                app.workspace.selected = None;
             }
-            on_files_changed(app);
+            app.workspace.files = set;
+            for next in on_files_changed(app) {
+                apply_at(app, next, cmds, depth + 1);
+            }
         }
         Request::Select(selection) => {
             select(app, selection);
@@ -380,7 +397,7 @@ fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>) -> Vec<Reques
                 QueryChange::Mode(mode) => route_switch_mode(app, mode, ctx),
                 QueryChange::Scope(selection) => route_reload_scope(app, selection, ctx),
             };
-            split_outs(outs, cmds, &mut nested);
+            fold_at(app, outs, cmds, depth + 1);
         }
         Request::QueryLoaded(_query) => on_query_changed(app),
         Request::SetSearch(needle) => {
@@ -390,18 +407,18 @@ fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>) -> Vec<Reques
             } else {
                 route_set_search(app, &needle, ctx)
             };
-            split_outs(outs, cmds, &mut nested);
+            fold_at(app, outs, cmds, depth + 1);
             on_search_changed(app);
         }
         Request::CommitSearch => {
             let ctx = ctx(app);
             let outs = route_scroll_current(app, ctx);
-            split_outs(outs, cmds, &mut nested);
+            fold_at(app, outs, cmds, depth + 1);
         }
         Request::ClearSearch => {
             let ctx = ctx(app);
             let outs = route_clear_search(app, ctx);
-            split_outs(outs, cmds, &mut nested);
+            fold_at(app, outs, cmds, depth + 1);
             on_search_changed(app);
         }
         Request::Focus(focus) => app.loaded.set_focus(focus),
@@ -410,7 +427,7 @@ fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>) -> Vec<Reques
         Request::CycleFocus { forward } => {
             let ctx = ctx(app);
             let outs = route_cycle_focus(app, forward, ctx);
-            split_outs(outs, cmds, &mut nested);
+            fold_at(app, outs, cmds, depth + 1);
         }
         Request::ResizeNavigator(resize) => {
             app.chrome.tree_percent = match resize {
@@ -435,41 +452,53 @@ fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>) -> Vec<Reques
                 .into_iter()
                 .find(|spec| spec.id == id)
             {
-                apply_action(app, spec.run, cmds);
+                apply_action(app, spec.run, cmds, depth + 1);
             }
         }
     }
-    nested
 }
 
-/// Route a page's outs: effects append to `cmds` in order, requests nest.
-fn split_outs(outs: Vec<OutMsg>, cmds: &mut Vec<Cmd>, nested: &mut Vec<Request>) {
-    for out in outs {
-        match out {
-            OutMsg::Effect(cmd) => cmds.push(cmd),
-            OutMsg::Request(request) => nested.push(request),
-        }
-    }
-}
-
-/// Set the selection, mirroring the old `select_path`: clear a pending prefix,
-/// select the path, reveal it in the tree, and reset the body scroll.
+/// Set the selection: clear a pending prefix, select the path, reveal it in the
+/// tree, and reset the body scroll.
 fn select(app: &mut App, selection: Option<RepoPath>) {
     clear_prefix(app);
     match selection {
         Some(path) => {
-            app.loaded.set_selected(Some(path.clone()));
+            app.workspace.selected = Some(path.clone());
             let height = tree_viewport_height(app);
             app.tree.reveal(&path, height);
+            app.loaded.reset_body_scroll(Some(&path));
         }
-        None => app.loaded.set_selected(None),
+        None => {
+            app.workspace.selected = None;
+            app.loaded.reset_body_scroll(None);
+        }
     }
-    app.loaded.reset_body_scroll();
 }
 
-/// The file set changed. In 2.1 this is a seam only; task 2.2 gives the tree
-/// its selection fallback here.
-fn on_files_changed(_app: &mut App) {}
+/// The file set changed: sync the tree and run the section 5.1 selection
+/// fallback. Returns the `Select` request to apply when a missing selection
+/// falls back to the nearest visible file.
+fn on_files_changed(app: &mut App) -> Vec<Request> {
+    let hint = app.tree.cursor;
+    let height = tree_viewport_height(app);
+    app.tree.sync(&app.workspace.files.paths);
+    match app.workspace.selected.clone() {
+        Some(path) => {
+            app.tree.reveal(&path, height);
+            Vec::new()
+        }
+        None => match nearest_visible(&app.tree, hint) {
+            Some(path) => vec![Request::Select(Some(path))],
+            None => {
+                if let Some(index) = app.tree.first_file_row() {
+                    app.tree.cursor = index;
+                }
+                Vec::new()
+            }
+        },
+    }
+}
 
 /// The selection changed. In 2.1 this is a seam only; later tasks reveal the
 /// new selection in the tree here. It fires for every `Select`, even when the
@@ -483,149 +512,223 @@ fn on_query_changed(_app: &mut App) {}
 fn on_search_changed(_app: &mut App) {}
 
 fn route_show(app: &mut App, msg: show_page::Msg, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(msg, show, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(msg, show, workspace.selected.as_ref(), &ctx),
         Loaded::Diff(_) => Vec::new(),
     }
 }
 
 fn route_diff(app: &mut App, msg: diff_page::Msg, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Diff(diff) => diff_page::update(msg, diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Diff(diff) => diff_page::update(msg, diff, workspace.selected.as_ref(), &ctx),
         Loaded::Show(_) => Vec::new(),
     }
 }
 
 fn route_page_key(app: &mut App, key: Key, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::Key(key), show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::Key(key), diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::Key(key),
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::Key(key),
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_page_action(app: &mut App, action: GlobalAction, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::Action(action), show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::Action(action), diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::Action(action),
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::Action(action),
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_cycle_focus(app: &mut App, forward: bool, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::CycleFocus(forward), show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::CycleFocus(forward), diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::CycleFocus(forward),
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::CycleFocus(forward),
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_step_search(app: &mut App, forward: bool, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::StepSearch(forward), show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::StepSearch(forward), diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::StepSearch(forward),
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::StepSearch(forward),
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_scroll_current(app: &mut App, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::ScrollToCurrent, show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::ScrollToCurrent, diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::ScrollToCurrent,
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::ScrollToCurrent,
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_set_search(app: &mut App, needle: &str, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => {
-            show_page::update(show_page::Msg::SetSearch(needle.to_owned()), show, &ctx)
-        }
-        Loaded::Diff(diff) => {
-            diff_page::update(diff_page::Msg::SetSearch(needle.to_owned()), diff, &ctx)
-        }
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::SetSearch(needle.to_owned()),
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::SetSearch(needle.to_owned()),
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_clear_search(app: &mut App, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::ClearSearch, show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::ClearSearch, diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::ClearSearch,
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::ClearSearch,
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_reload_scope(app: &mut App, selection: Selection, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::ReloadScope(selection), show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::ReloadScope(selection), diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::ReloadScope(selection),
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::ReloadScope(selection),
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_switch_mode(app: &mut App, mode: ProjectionMode, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::SwitchMode(mode), show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::SwitchMode(mode), diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::SwitchMode(mode),
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::SwitchMode(mode),
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
 }
 
 fn route_prompt(app: &mut App, key: Key, ctx: Ctx) -> Vec<OutMsg> {
-    match &mut app.loaded {
-        Loaded::Show(show) => show_page::update(show_page::Msg::Prompt(key), show, &ctx),
-        Loaded::Diff(diff) => diff_page::update(diff_page::Msg::Prompt(key), diff, &ctx),
+    let App {
+        loaded, workspace, ..
+    } = app;
+    match loaded {
+        Loaded::Show(show) => show_page::update(
+            show_page::Msg::Prompt(key),
+            show,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
+        Loaded::Diff(diff) => diff_page::update(
+            diff_page::Msg::Prompt(key),
+            diff,
+            workspace.selected.as_ref(),
+            &ctx,
+        ),
     }
-}
-
-fn install_show_selection(app: &mut App) {
-    let height = tree_viewport_height(app);
-    let Loaded::Show(show) = &mut app.loaded else {
-        return;
-    };
-    show.paging = Paging::Ready;
-    let previous = show.selected.clone();
-    let hint = app.tree.cursor;
-    app.tree.sync(&show.visible);
-    let target = previous
-        .filter(|path| show.visible.contains(path))
-        .or_else(|| nearest_visible(&app.tree, hint));
-    match target {
-        Some(path) => {
-            show.selected = Some(path.clone());
-            app.tree.reveal(&path, height);
-        }
-        None => {
-            show.selected = None;
-            if let Some(index) = app.tree.first_file_row() {
-                app.tree.cursor = index;
-            }
-        }
-    }
-    show.body = ShowBody {
-        scroll: 0,
-        hscroll: 0,
-        cursor_line: 1,
-    };
-    show.ensure_visible_rows();
-}
-
-fn install_diff_selection(app: &mut App) {
-    let height = tree_viewport_height(app);
-    let Loaded::Diff(diff) = &mut app.loaded else {
-        return;
-    };
-    let previous = diff.selected.clone();
-    let hint = app.tree.cursor;
-    app.tree.sync(&diff.visible);
-    let target = previous
-        .filter(|path| diff.visible.contains(path))
-        .or_else(|| nearest_visible(&app.tree, hint));
-    match target {
-        Some(path) => {
-            diff.selected = Some(path.clone());
-            app.tree.reveal(&path, height);
-        }
-        None => {
-            diff.selected = None;
-            if let Some(index) = app.tree.first_file_row() {
-                app.tree.cursor = index;
-            }
-        }
-    }
-    diff.set_body_scroll(0);
 }
 
 fn nearest_visible(tree: &Tree, hint: usize) -> Option<RepoPath> {
@@ -692,7 +795,7 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
         if let Key::Char(character) = key
             && let Some(action) = prefixed_action(app, prefix, character)
         {
-            apply_action(app, action, cmds);
+            apply_action(app, action, cmds, 0);
         }
         return;
     }
@@ -709,12 +812,12 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
     }
     // 7. A bound key runs its command.
     if let Some(action) = command_for(key, app) {
-        apply_action(app, action, cmds);
+        apply_action(app, action, cmds, 0);
         return;
     }
     // 8. Enter folds in the show body; otherwise forward to the focused pane.
     if key == Key::Enter && show_body_focused(app) {
-        apply_action(app, Action::Show(ShowAction::ToggleFold), cmds);
+        apply_action(app, Action::Show(ShowAction::ToggleFold), cmds, 0);
         return;
     }
     if focus_key(app, key, cmds) {
@@ -753,33 +856,33 @@ fn command_for(key: Key, app: &App) -> Option<Action> {
     crate::command::action_for_key(app, key)
 }
 
-fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>) {
+fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<Cmd>, depth: u8) {
     let ctx = ctx(app);
     match action {
-        Action::Global(action) => apply_global(app, action, cmds),
+        Action::Global(action) => apply_global(app, action, cmds, depth),
         Action::Show(ShowAction::EditRevision) => {
             let outs = route_show(app, show_page::Msg::EditRevision, ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
         Action::Show(action) => {
             let outs = route_show(app, show_page::Msg::Fold(action), ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
         Action::Range(RangeAction::EditBase) => {
             let outs = route_diff(app, diff_page::Msg::EditSide(DiffSide::Base), ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
         Action::Range(RangeAction::EditTarget) => {
             let outs = route_diff(app, diff_page::Msg::EditSide(DiffSide::Target), ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
         Action::Range(RangeAction::SwitchToCommits) => {
             let outs = route_diff(app, diff_page::Msg::SwitchView(DiffView::Commits), ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
         Action::Commits(CommitsAction::SwitchToRange) => {
             let outs = route_diff(app, diff_page::Msg::SwitchView(DiffView::Range), ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
     }
 }
@@ -791,7 +894,7 @@ fn open_overlay(app: &mut App, overlay: Overlay) {
     app.overlay = Some(overlay);
 }
 
-fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
+fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth: u8) {
     use GlobalAction::*;
     let ctx = ctx(app);
     match action {
@@ -806,7 +909,7 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
             let entries = app.loaded.palette_entries();
             let groups = app.loaded.prefix_groups();
             let mode = app.loaded.mode();
-            let visible = app.loaded.visible();
+            let visible = &app.workspace.files.paths;
             let pending_prefix = app.keymap.pending;
             let palette = Overlay::palette(&overlay::Ctx {
                 visible,
@@ -821,7 +924,7 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
             let entries = app.loaded.palette_entries();
             let groups = app.loaded.prefix_groups();
             let mode = app.loaded.mode();
-            let visible = app.loaded.visible();
+            let visible = &app.workspace.files.paths;
             let pending_prefix = app.keymap.pending;
             let finder = Overlay::finder(&overlay::Ctx {
                 visible,
@@ -846,33 +949,33 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
         TreeReset => app.chrome.tree_percent = TREE_DEFAULT_PERCENT,
         NextPane => {
             let outs = route_cycle_focus(app, true, ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
         PreviousPane => {
             let outs = route_cycle_focus(app, false, ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
-        Top | Bottom | PageUp | PageDown => focus_command(app, action, cmds),
+        Top | Bottom | PageUp | PageDown => focus_command(app, action, cmds, depth),
         NextMatch => {
             let outs = route_step_search(app, true, ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
         PreviousMatch => {
             let outs = route_step_search(app, false, ctx);
-            fold(app, outs, cmds);
+            fold_at(app, outs, cmds, depth);
         }
     }
 }
 
-fn focus_command(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
+fn focus_command(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth: u8) {
     if app.loaded.focus() == Focus::Tree {
         let step = page_step(app.size.height);
-        tree_apply(app, page_tree_msg(action, step));
+        tree_apply(app, page_tree_msg(action, step), cmds, depth);
         return;
     }
     let ctx = ctx(app);
     let outs = route_page_action(app, action, ctx);
-    fold(app, outs, cmds);
+    fold_at(app, outs, cmds, depth);
 }
 
 /// Forward `key` to the focused pane, as the old `focus_key` did. Returns
@@ -881,7 +984,7 @@ fn focus_command(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>) {
 fn focus_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) -> bool {
     if app.loaded.focus() == Focus::Tree {
         if let Some(msg) = tree_key(key) {
-            tree_apply(app, msg);
+            tree_apply(app, msg, cmds, 0);
             return true;
         }
         return false;
@@ -889,7 +992,7 @@ fn focus_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) -> bool {
     let handled = pane_key_handled(app, key);
     let ctx = ctx(app);
     let outs = route_page_key(app, key, ctx);
-    fold(app, outs, cmds);
+    fold_at(app, outs, cmds, 0);
     handled
 }
 
@@ -940,16 +1043,12 @@ fn tree_key(key: Key) -> Option<tree::Msg> {
     }
 }
 
-fn tree_apply(app: &mut App, msg: tree::Msg) {
+fn tree_apply(app: &mut App, msg: tree::Msg, cmds: &mut Vec<Cmd>, depth: u8) {
     let height = tree_viewport_height(app);
-    let selected = app.tree.update(msg, app.loaded.visible(), height);
+    let selected = app.tree.update(msg, &app.workspace.files.paths, height);
     if let Some(tree::OutMsg::Selected(path)) = selected {
-        select_path(app, path);
+        apply_at(app, Request::Select(Some(path)), cmds, depth);
     }
-}
-
-fn select_path(app: &mut App, path: RepoPath) {
-    select(app, Some(path));
 }
 
 fn overlay_update(app: &mut App, msg: overlay::Msg) -> Vec<overlay::OutMsg> {
@@ -970,7 +1069,7 @@ fn overlay_key(app: &mut App, key: Key) -> (bool, Vec<overlay::OutMsg>) {
     let entries = app.loaded.palette_entries();
     let groups = app.loaded.prefix_groups();
     let mode = app.loaded.mode();
-    let visible = app.loaded.visible();
+    let visible = &app.workspace.files.paths;
     let pending_prefix = app.keymap.pending;
     let ctx = overlay::Ctx {
         visible,
@@ -1002,8 +1101,10 @@ fn apply_overlay_out(app: &mut App, out: overlay::OutMsg, cmds: &mut Vec<Cmd>) {
             let outs = route_switch_mode(app, mode, ctx);
             fold(app, outs, cmds);
         }
-        overlay::OutMsg::Action(action) => apply_action(app, action, cmds),
-        overlay::OutMsg::File(path) => select_path(app, path),
+        overlay::OutMsg::Action(action) => apply_action(app, action, cmds, 0),
+        overlay::OutMsg::File(path) => {
+            apply_at(app, Request::Select(Some(path)), cmds, 0);
+        }
         overlay::OutMsg::Search(needle) => {
             let outs = route_set_search(app, &needle, ctx);
             fold(app, outs, cmds);
@@ -1068,11 +1169,15 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
                 MouseKind::Click => {
                     let index = app.tree.scroll + usize::from(event.row.saturating_sub(inner.y));
                     if index < app.tree.rows.len() {
-                        tree_apply(app, tree::Msg::Click(index));
+                        tree_apply(app, tree::Msg::Click(index), cmds, 0);
                     }
                 }
-                MouseKind::ScrollUp => tree_apply(app, tree::Msg::Scroll(-MOUSE_SCROLL_STEP)),
-                MouseKind::ScrollDown => tree_apply(app, tree::Msg::Scroll(MOUSE_SCROLL_STEP)),
+                MouseKind::ScrollUp => {
+                    tree_apply(app, tree::Msg::Scroll(-MOUSE_SCROLL_STEP), cmds, 0)
+                }
+                MouseKind::ScrollDown => {
+                    tree_apply(app, tree::Msg::Scroll(MOUSE_SCROLL_STEP), cmds, 0)
+                }
             }
         }
         PaneSlot::Show => {
@@ -1089,6 +1194,7 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
                             let outs = show_page::update(
                                 show_page::Msg::BodyClick { row, marker },
                                 show,
+                                app.workspace.selected.as_ref(),
                                 &ctx,
                             );
                             fold(app, outs, cmds);
@@ -1102,7 +1208,12 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
                         MOUSE_SCROLL_STEP
                     };
                     if let Loaded::Show(show) = &mut app.loaded {
-                        let outs = show_page::update(show_page::Msg::Scroll(delta), show, &ctx);
+                        let outs = show_page::update(
+                            show_page::Msg::Scroll(delta),
+                            show,
+                            app.workspace.selected.as_ref(),
+                            &ctx,
+                        );
                         fold(app, outs, cmds);
                     }
                 }
@@ -1118,7 +1229,12 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
             if delta != 0
                 && let Loaded::Diff(diff) = &mut app.loaded
             {
-                let outs = diff_page::update(diff_page::Msg::Scroll(delta), diff, &ctx);
+                let outs = diff_page::update(
+                    diff_page::Msg::Scroll(delta),
+                    diff,
+                    app.workspace.selected.as_ref(),
+                    &ctx,
+                );
                 fold(app, outs, cmds);
             }
         }
@@ -1201,8 +1317,14 @@ pub(crate) fn settle(mut app: App) -> App {
     let width = app.size.width;
     let height = app.size.height;
     let tree_percent = app.chrome.tree_percent;
-    app.loaded
-        .settle(&app.chrome.theme, visible_body, width, height, tree_percent);
+    app.loaded.settle(
+        &app.chrome.theme,
+        visible_body,
+        width,
+        height,
+        tree_percent,
+        app.workspace.selected.as_ref(),
+    );
     let tree_height = tree_viewport_height(&app);
     app.tree.fit_viewport(tree_height);
     app

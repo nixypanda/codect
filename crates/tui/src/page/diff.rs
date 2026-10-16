@@ -4,6 +4,7 @@
 //! The wrapped rows are cached and keyed on a generation counter plus the layout
 //! inputs, so any change to the diffs must bump the generation.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use base::{DiffRowKind, FileDiff, ProjectedFile, ProjectionMode, RepoPath, Selection};
@@ -33,6 +34,7 @@ use crate::request::Request;
 use crate::route::{DiffRequest, DiffView};
 use crate::util::cache::BoundedCache;
 use crate::util::input::Key;
+use crate::workspace::{BadgeTone, EmptyText, FileSet, NO_CHANGES, Workspace};
 
 use super::{
     Ctx, OutMsg, Paging, Scope, Search, SearchMatch, SearchSide, ViewCtx, advance_search,
@@ -106,8 +108,6 @@ pub struct Diff {
     pub mode: ProjectionMode,
     pub scope: Scope,
     pub merge_base: bool,
-    pub visible: Arc<[RepoPath]>,
-    pub selected: Option<RepoPath>,
     pub search: Option<Search>,
     pub paging: Paging,
     pub prompt: Option<DiffPrompt>,
@@ -192,8 +192,6 @@ impl Diff {
             mode,
             scope,
             merge_base,
-            visible: Arc::from(Vec::new()),
-            selected: None,
             search: None,
             paging: Paging::Loading,
             prompt: None,
@@ -211,18 +209,25 @@ impl Diff {
         self.rows.rows.as_slice()
     }
 
-    pub fn refresh_rows(&mut self, width: u16, height: u16, tree_percent: u16, theme: &Theme) {
+    pub fn refresh_rows(
+        &mut self,
+        width: u16,
+        height: u16,
+        tree_percent: u16,
+        theme: &Theme,
+        selected: Option<&RepoPath>,
+    ) {
         let key = RowsKey {
             generation: self.generation,
             width,
             height,
-            selected: self.selected.clone(),
+            selected: selected.cloned(),
             tree_percent,
         };
         if self.rows.key.as_ref() == Some(&key) {
             return;
         }
-        let rows = self.compute_rows(width, height, tree_percent, theme);
+        let rows = self.compute_rows(width, height, tree_percent, theme, selected);
         self.rows = Arc::new(DiffRows {
             key: Some(key),
             rows,
@@ -235,14 +240,15 @@ impl Diff {
         height: u16,
         tree_percent: u16,
         theme: &Theme,
+        selected: Option<&RepoPath>,
     ) -> Vec<VisualRow> {
-        let Some(active) = self.active_diff() else {
+        let Some(active) = self.active_diff(selected) else {
             return Vec::new();
         };
         let (_, content, _) = frame_areas(width, height);
         let (old_width, new_width) = self.side_widths(width, content, tree_percent, active, theme);
         let empty = DiffHighlight::default();
-        let highlights = self.active_highlight().unwrap_or(&empty);
+        let highlights = self.active_highlight(selected).unwrap_or(&empty);
         layout_diff(
             active,
             old_width,
@@ -328,8 +334,8 @@ impl Diff {
         }
     }
 
-    pub fn active_diff(&self) -> Option<&FileDiff> {
-        let path = self.selected.as_ref()?;
+    pub fn active_diff(&self, selected: Option<&RepoPath>) -> Option<&FileDiff> {
+        let path = selected?;
         self.diffs().iter().find(|diff| diff.path() == path)
     }
 
@@ -372,10 +378,10 @@ impl Diff {
         search_ranges(self.search.as_ref(), side, line)
     }
 
-    fn search_matches(&self, needle: &str) -> Vec<SearchMatch> {
+    fn search_matches(&self, selected: Option<&RepoPath>, needle: &str) -> Vec<SearchMatch> {
         let needle_lower = needle.to_lowercase();
         let mut matches = Vec::new();
-        let Some(diff) = self.active_diff() else {
+        let Some(diff) = self.active_diff(selected) else {
             return matches;
         };
         match diff {
@@ -409,37 +415,37 @@ impl Diff {
         matches
     }
 
-    pub fn set_search(&mut self, needle: &str) {
+    pub fn set_search(&mut self, selected: Option<&RepoPath>, needle: &str) {
         if needle.is_empty() {
             self.search = None;
             return;
         }
         self.search = Some(Search {
             needle: needle.to_owned(),
-            matches: self.search_matches(needle),
+            matches: self.search_matches(selected, needle),
             cursor: 0,
         });
     }
 
-    pub fn resync_search(&mut self) {
+    pub fn resync_search(&mut self, selected: Option<&RepoPath>) {
         let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
             return;
         };
-        let matches = self.search_matches(&needle);
+        let matches = self.search_matches(selected, &needle);
         if let Some(search) = &mut self.search {
             search.matches = matches;
             search.cursor = search.cursor.min(search.matches.len().saturating_sub(1));
         }
     }
 
-    pub fn ensure_highlight(&mut self, theme: &Theme) {
-        let Some(path) = self.selected.clone() else {
+    pub fn ensure_highlight(&mut self, theme: &Theme, selected: Option<&RepoPath>) {
+        let Some(path) = selected else {
             return;
         };
         let Some(diff) = self
             .diffs()
             .iter()
-            .find(|diff| *diff.path() == path)
+            .find(|diff| diff.path() == path)
             .cloned()
         else {
             return;
@@ -453,24 +459,24 @@ impl Diff {
             |file: &ProjectedFile| highlight::highlight(file.canonical_text(), language, theme);
         match &mut self.view {
             DiffViewState::Range(range) => {
-                if range.highlight.contains(&path) {
+                if range.highlight.contains(path) {
                     return;
                 }
                 let pair = diff_highlight(&diff, &highlight_side);
-                range.highlight.insert(path, pair);
+                range.highlight.insert(path.clone(), pair);
             }
             DiffViewState::Commits(commits) => {
-                if commits.highlight.contains(&path) {
+                if commits.highlight.contains(path) {
                     return;
                 }
                 let pair = diff_highlight(&diff, &highlight_side);
-                commits.highlight.insert(path, pair);
+                commits.highlight.insert(path.clone(), pair);
             }
         }
     }
 
-    pub fn active_highlight(&self) -> Option<&DiffHighlight> {
-        let path = self.selected.as_ref()?;
+    pub fn active_highlight(&self, selected: Option<&RepoPath>) -> Option<&DiffHighlight> {
+        let path = selected?;
         match &self.view {
             DiffViewState::Range(range) => range.highlight.highlight(path),
             DiffViewState::Commits(commits) => commits.highlight.highlight(path),
@@ -527,7 +533,7 @@ pub enum Msg {
     },
 }
 
-pub fn update(msg: Msg, page: &mut Diff, ctx: &Ctx) -> Vec<OutMsg> {
+pub fn update(msg: Msg, page: &mut Diff, selected: Option<&RepoPath>, ctx: &Ctx) -> Vec<OutMsg> {
     match msg {
         Msg::Key(key) => body_key(page, key),
         Msg::Scroll(delta) => {
@@ -560,7 +566,7 @@ pub fn update(msg: Msg, page: &mut Diff, ctx: &Ctx) -> Vec<OutMsg> {
         }
         Msg::SwitchView(view) => switch_view(page, view),
         Msg::SetSearch(needle) => {
-            page.set_search(&needle);
+            page.set_search(selected, &needle);
             Vec::new()
         }
         Msg::ClearSearch => {
@@ -814,9 +820,10 @@ fn loaded(
                 range.diffs = diffs;
                 range.highlight.clear();
             }
-            page.visible = Arc::from(diff_visible(page.diffs()));
+            page.set_body_scroll(0);
             page.invalidate();
-            Vec::new()
+            let file_set = file_set(page.diffs(), NO_CHANGES);
+            vec![OutMsg::Request(Request::SetFiles(file_set))]
         }
         Err(error) => {
             page.paging = Paging::Ready;
@@ -859,8 +866,12 @@ fn history_loaded(
         diffs,
         highlight: Default::default(),
     });
-    page.visible = Arc::from(diff_visible(page.diffs()));
     page.invalidate();
+
+    let mut outs = vec![OutMsg::Request(Request::SetFiles(file_set(
+        page.diffs(),
+        NO_CHANGES,
+    )))];
 
     let pending = if let DiffViewState::Commits(commits) = &page.view {
         preferred
@@ -885,13 +896,13 @@ fn history_loaded(
     };
     if let Some((index, step)) = pending {
         page.paging = Paging::Loading;
-        return vec![OutMsg::Effect(Cmd::Step {
+        outs.push(OutMsg::Effect(Cmd::Step {
             request: page.request(),
             index,
             step,
-        })];
+        }));
     }
-    Vec::new()
+    outs
 }
 
 fn step_loaded(
@@ -924,12 +935,16 @@ fn step_loaded(
                         ));
                     }
                 }
-                page.visible = Arc::from(diff_visible(page.diffs()));
+                page.set_body_scroll(0);
                 page.invalidate();
-            } else if let DiffViewState::Commits(commits) = &mut page.view {
-                commits.picker.update(commit_picker::Msg::Failed);
+                let file_set = file_set(page.diffs(), NO_CHANGES);
+                vec![OutMsg::Request(Request::SetFiles(file_set))]
+            } else {
+                if let DiffViewState::Commits(commits) = &mut page.view {
+                    commits.picker.update(commit_picker::Msg::Failed);
+                }
+                Vec::new()
             }
-            Vec::new()
         }
         Err(error) => {
             page.paging = Paging::Ready;
@@ -941,14 +956,37 @@ fn step_loaded(
     }
 }
 
+/// The workspace file set for a diff load: the paths and their badge tones.
+fn file_set(diffs: &[FileDiff], empty: EmptyText) -> FileSet {
+    let paths: Arc<[RepoPath]> = Arc::from(diff_visible(diffs));
+    let badges: BTreeMap<RepoPath, BadgeTone> = diffs
+        .iter()
+        .map(|diff| {
+            let tone = match diff {
+                FileDiff::Added { .. } => BadgeTone::Added,
+                FileDiff::Deleted { .. } => BadgeTone::Deleted,
+                FileDiff::Modified { .. } => BadgeTone::Modified,
+            };
+            (diff.path().clone(), tone)
+        })
+        .collect();
+    FileSet {
+        paths,
+        badges: Arc::new(badges),
+        empty,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Side {
     Old,
     New,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn view(
     page: &Diff,
+    workspace: &Workspace,
     ctx: &ViewCtx,
     frame: &mut Frame,
     area: Rect,
@@ -967,7 +1005,7 @@ pub(crate) fn view(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Some(active) = page.active_diff() else {
+    let Some(active) = page.active_diff(workspace.selected.as_ref()) else {
         let (title, detail) = if ctx.busy && ctx.tree_empty {
             ("Loading", "Comparing projections…")
         } else if ctx.tree_empty {

@@ -48,6 +48,7 @@ mod route;
 pub(crate) mod test_support;
 mod util;
 mod view;
+mod workspace;
 
 #[cfg(feature = "bench")]
 #[doc(hidden)]

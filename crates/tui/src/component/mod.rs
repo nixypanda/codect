@@ -11,13 +11,13 @@ pub(crate) mod overlay;
 pub(crate) mod text_input;
 pub(crate) mod tree;
 
-use crate::page::Loaded;
 use crate::render::icons::Icons;
 use crate::render::theme::Theme;
+use crate::workspace::Workspace;
 
 pub(crate) struct RenderCtx<'a> {
     pub theme: &'a Theme,
     pub icons: &'a Icons,
-    pub loaded: &'a Loaded,
+    pub workspace: &'a Workspace,
     pub busy: bool,
 }

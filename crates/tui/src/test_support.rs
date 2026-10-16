@@ -447,7 +447,16 @@ pub(crate) fn commits_ref(app: &App) -> &crate::component::commit_picker::Commit
 }
 
 pub(crate) fn selected(app: &App) -> Option<String> {
-    app.loaded.selected().map(ToString::to_string)
+    app.workspace.selected.as_ref().map(ToString::to_string)
+}
+
+/// Select through the kernel request path, as the tree and finder do.
+pub(crate) fn select_file(app: &mut App, path: RepoPath) {
+    crate::app::apply_request(
+        app,
+        crate::request::Request::Select(Some(path)),
+        &mut Vec::new(),
+    );
 }
 
 pub(crate) fn diff_focus_of(app: &App) -> Focus {
@@ -683,7 +692,9 @@ pub(crate) fn folder_app() -> App {
     )])
 }
 
-pub(crate) fn assert_view_consistent(show: &Show, height: u16) {
+pub(crate) fn assert_view_consistent(app: &App, height: u16) {
+    let show = show_ref(app);
+    let selected = app.workspace.selected.as_ref();
     let count = show.line_count();
     assert!(count > 0, "the projection must not be empty");
     assert!(
@@ -692,7 +703,7 @@ pub(crate) fn assert_view_consistent(show: &Show, height: u16) {
         show.body.scroll,
         count
     );
-    let max_h = show.max_line_width().saturating_sub(1) as u16;
+    let max_h = show.max_line_width(selected).saturating_sub(1) as u16;
     assert!(
         show.body.hscroll <= max_h,
         "hscroll {} must be <= max_line_width-1 {}",

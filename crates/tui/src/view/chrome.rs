@@ -100,13 +100,15 @@ pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
             theme.fg(theme.palette.del_fg),
         ));
     } else if let Loaded::Show(show) = &app.loaded
-        && show.active_source().is_some()
+        && show
+            .active_source(app.workspace.selected.as_ref())
+            .is_some()
     {
         detail.push(Span::styled(
             format!(
                 "{} of {} lines ",
                 show.line_count(),
-                show.source_line_count()
+                show.source_line_count(app.workspace.selected.as_ref())
             ),
             theme.fg(theme.palette.text_muted),
         ));
@@ -136,7 +138,7 @@ pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         hints.clear();
     }
     let hints_width = UnicodeWidthStr::width(hints.as_str());
-    let selected = app.loaded.selected();
+    let selected = app.workspace.selected.as_ref();
     let path = selected.map_or_else(|| "no selection".to_owned(), ToString::to_string);
     let path_width = area_width.saturating_sub(fixed_width + hints_width + 3);
     let mut spans = prefix;

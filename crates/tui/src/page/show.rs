@@ -32,6 +32,7 @@ use crate::request::Request;
 use crate::route::ShowRequest;
 use crate::util::cache::BoundedCache;
 use crate::util::input::Key;
+use crate::workspace::{FileSet, NO_FILES, Workspace};
 
 use super::{
     Ctx, OutMsg, Paging, Scope, Search, SearchSide, ViewCtx, advance_search, collect_matches,
@@ -175,8 +176,6 @@ pub struct Show {
     pub mode: ProjectionMode,
     pub scope: Scope,
     pub files: Arc<[SourceOutline]>,
-    pub visible: Arc<[RepoPath]>,
-    pub selected: Option<RepoPath>,
     pub focus: ShowFocus,
     pub body: ShowBody,
     pub paging: Paging,
@@ -189,17 +188,17 @@ pub struct Show {
 }
 
 impl Show {
-    pub fn active_file(&self) -> Option<&SourceOutline> {
-        let path = self.selected.as_ref()?;
+    pub fn active_file(&self, selected: Option<&RepoPath>) -> Option<&SourceOutline> {
+        let path = selected?;
         self.files.iter().find(|file| file.path() == path)
     }
 
-    pub fn active_source(&self) -> Option<&str> {
-        self.active_file().map(|file| file.source.as_str())
+    pub fn active_source(&self, selected: Option<&RepoPath>) -> Option<&str> {
+        self.active_file(selected).map(|file| file.source.as_str())
     }
 
-    pub fn active_lines(&self) -> Option<&[StyledLine]> {
-        let path = self.selected.as_ref()?;
+    pub fn active_lines(&self, selected: Option<&RepoPath>) -> Option<&[StyledLine]> {
+        let path = selected?;
         self.highlight.lines(path)
     }
 
@@ -211,19 +210,20 @@ impl Show {
         self.visible_rows.rows.len()
     }
 
-    pub fn source_line_count(&self) -> usize {
-        self.active_source().map_or(0, |text| text.lines().count())
+    pub fn source_line_count(&self, selected: Option<&RepoPath>) -> usize {
+        self.active_source(selected)
+            .map_or(0, |text| text.lines().count())
     }
 
     pub fn visible_rows(&self) -> &[VisibleRow] {
         &self.visible_rows.rows
     }
 
-    pub fn fold_marker(&self, row: &VisibleRow) -> Option<char> {
+    pub fn fold_marker(&self, selected: Option<&RepoPath>, row: &VisibleRow) -> Option<char> {
         match row {
             VisibleRow::Fold { .. } => Some('+'),
             VisibleRow::Source { line } => {
-                let path = self.selected.as_ref()?;
+                let path = selected?;
                 let regions = self.folds.regions(path)?;
                 let region = regions
                     .iter()
@@ -248,8 +248,8 @@ impl Show {
             .position(|row| row.covers(line))
     }
 
-    pub fn max_line_width(&self) -> usize {
-        let Some(text) = self.active_source() else {
+    pub fn max_line_width(&self, selected: Option<&RepoPath>) -> usize {
+        let Some(text) = self.active_source(selected) else {
             return 0;
         };
         let lines: Vec<&str> = text.lines().collect();
@@ -278,15 +278,15 @@ impl Show {
             .unwrap_or(0)
     }
 
-    pub fn ensure_visible_rows(&mut self) {
-        let Some(path) = self.selected.clone() else {
+    pub fn ensure_visible_rows(&mut self, selected: Option<&RepoPath>) {
+        let Some(path) = selected.cloned() else {
             self.visible_rows = VisibleRows::default();
             return;
         };
         let version = self.fold_state.version();
         if !self.visible_rows.is_current(&path, version) {
-            self.ensure_folds();
-            let total = self.source_line_count();
+            self.ensure_folds(Some(&path));
+            let total = self.source_line_count(Some(&path));
             let rows: Vec<VisibleRow> = match self.folds.regions(&path) {
                 Some(regions) => {
                     build_visible_rows(regions, total, &path, &self.fold_state, self.mode)
@@ -319,30 +319,35 @@ impl Show {
             .unwrap_or(1);
     }
 
-    fn ensure_folds(&mut self) {
-        let Some(path) = self.selected.clone() else {
+    fn ensure_folds(&mut self, selected: Option<&RepoPath>) {
+        let Some(path) = selected else {
             return;
         };
-        if self.folds.contains(&path) {
+        if self.folds.contains(path) {
             return;
         }
-        let Some(file) = self.files.iter().find(|file| file.path() == &path) else {
+        let Some(file) = self.files.iter().find(|file| file.path() == path) else {
             return;
         };
         let lines: Vec<&str> = file.source.lines().collect();
         let regions = fold_regions(&file.outline, &lines);
-        self.folds.insert(path, regions);
+        self.folds.insert(path.clone(), regions);
     }
 
-    fn row_runs(&self, line: usize, theme: &Theme) -> Vec<highlight::Run> {
-        if let Some(styled) = self.active_lines() {
+    fn row_runs(
+        &self,
+        selected: Option<&RepoPath>,
+        line: usize,
+        theme: &Theme,
+    ) -> Vec<highlight::Run> {
+        if let Some(styled) = self.active_lines(selected) {
             return styled
                 .get(line.saturating_sub(1))
                 .cloned()
                 .unwrap_or_default();
         }
         let text = self
-            .active_source()
+            .active_source(selected)
             .and_then(|source| source.lines().nth(line.saturating_sub(1)))
             .unwrap_or("");
         vec![highlight::Run {
@@ -369,8 +374,8 @@ impl Show {
         self.scroll_to_row(index, height);
     }
 
-    pub fn reanchor_cursor(&mut self) {
-        let total = self.source_line_count();
+    pub fn reanchor_cursor(&mut self, selected: Option<&RepoPath>) {
+        let total = self.source_line_count(selected);
         if total == 0 {
             self.body.cursor_line = 1;
             return;
@@ -391,36 +396,36 @@ impl Show {
             .map(VisibleRow::source_line)
     }
 
-    pub fn clamp_view(&mut self, height: u16) {
+    pub fn clamp_view(&mut self, height: u16, selected: Option<&RepoPath>) {
         let max = self.line_count().saturating_sub(1) as u16;
         self.body.scroll = self.body.scroll.min(max);
-        let max_h = self.max_line_width().saturating_sub(1) as u16;
+        let max_h = self.max_line_width(selected).saturating_sub(1) as u16;
         self.body.hscroll = self.body.hscroll.min(max_h);
         if let Some(row) = self.cursor_row() {
             self.scroll_to_row(row, height);
         }
     }
 
-    pub fn reveal_source_line(&mut self, line: usize) {
-        let Some(path) = self.selected.clone() else {
+    pub fn reveal_source_line(&mut self, selected: Option<&RepoPath>, line: usize) {
+        let Some(path) = selected else {
             return;
         };
-        self.ensure_folds();
-        let Some(regions) = self.folds.regions(&path).map(<[FoldRegion]>::to_vec) else {
+        self.ensure_folds(Some(path));
+        let Some(regions) = self.folds.regions(path).map(<[FoldRegion]>::to_vec) else {
             return;
         };
         let mut opened = false;
         for region in &regions {
             if region.start_line <= line
                 && line <= region.end_line
-                && !self.fold_state.is_open(&path, region)
+                && !self.fold_state.is_open(path, region)
             {
-                self.fold_state.set(&path, &region.stable_key, true);
+                self.fold_state.set(path, &region.stable_key, true);
                 opened = true;
             }
         }
         if opened {
-            self.ensure_visible_rows();
+            self.ensure_visible_rows(Some(path));
         }
     }
 
@@ -437,53 +442,53 @@ impl Show {
         }
     }
 
-    pub fn set_search(&mut self, needle: &str) {
+    pub fn set_search(&mut self, selected: Option<&RepoPath>, needle: &str) {
         if needle.is_empty() {
             self.search = None;
             return;
         }
-        self.ensure_visible_rows();
+        self.ensure_visible_rows(selected);
         self.search = Some(Search {
             needle: needle.to_owned(),
-            matches: self.search_matches(needle),
+            matches: self.search_matches(selected, needle),
             cursor: 0,
         });
     }
 
-    pub fn resync_search(&mut self) {
+    pub fn resync_search(&mut self, selected: Option<&RepoPath>) {
         let Some(needle) = self.search.as_ref().map(|search| search.needle.clone()) else {
             return;
         };
-        self.ensure_visible_rows();
-        let matches = self.search_matches(&needle);
+        self.ensure_visible_rows(selected);
+        let matches = self.search_matches(selected, &needle);
         if let Some(search) = &mut self.search {
             search.matches = matches;
             search.cursor = search.cursor.min(search.matches.len().saturating_sub(1));
         }
     }
 
-    fn search_matches(&self, needle: &str) -> Vec<super::SearchMatch> {
+    fn search_matches(&self, selected: Option<&RepoPath>, needle: &str) -> Vec<super::SearchMatch> {
         let needle_lower = needle.to_lowercase();
         let mut matches = Vec::new();
-        if let Some(file) = self.active_file() {
+        if let Some(file) = self.active_file(selected) {
             collect_matches(&file.source, &needle_lower, SearchSide::Show, &mut matches);
         }
         matches.retain(|matched| self.visible_row_for_source_line(matched.line).is_some());
         matches
     }
 
-    pub fn ensure_highlight(&mut self, theme: &Theme) {
-        let Some(path) = self.selected.clone() else {
+    pub fn ensure_highlight(&mut self, theme: &Theme, selected: Option<&RepoPath>) {
+        let Some(path) = selected else {
             return;
         };
-        if self.highlight.contains(&path) {
+        if self.highlight.contains(path) {
             return;
         }
-        let Some(file) = self.files.iter().find(|file| file.path() == &path) else {
+        let Some(file) = self.files.iter().find(|file| file.path() == path) else {
             return;
         };
         let lines = highlight::highlight(&file.source, file.language(), theme);
-        self.highlight.insert(path, lines);
+        self.highlight.insert(path.clone(), lines);
     }
 }
 
@@ -642,12 +647,12 @@ pub enum Msg {
     Loaded(ShowRequest, Result<Arc<[SourceOutline]>, Box<EngineError>>),
 }
 
-pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
-    page.ensure_visible_rows();
+pub fn update(msg: Msg, page: &mut Show, selected: Option<&RepoPath>, ctx: &Ctx) -> Vec<OutMsg> {
+    page.ensure_visible_rows(selected);
     match msg {
-        Msg::Key(key) => body_key(page, key, ctx),
+        Msg::Key(key) => body_key(page, key, selected, ctx),
         Msg::Fold(action) => {
-            fold_action(page, action, ctx.height);
+            fold_action(page, action, selected, ctx.height);
             Vec::new()
         }
         Msg::Scroll(delta) => {
@@ -655,7 +660,7 @@ pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
             Vec::new()
         }
         Msg::BodyClick { row, marker } => {
-            body_click(page, row, marker, ctx.height);
+            body_click(page, row, marker, selected, ctx.height);
             Vec::new()
         }
         Msg::Action(action) => {
@@ -664,14 +669,14 @@ pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
         }
         Msg::StepSearch(forward) => {
             if let Some(matched) = advance_search(&mut page.search, forward) {
-                page.reveal_source_line(matched.line);
+                page.reveal_source_line(selected, matched.line);
                 page.move_cursor_to_source_line(matched.line, ctx.height);
             }
             Vec::new()
         }
         Msg::ScrollToCurrent => {
             if let Some(matched) = current_match(&page.search) {
-                page.reveal_source_line(matched.line);
+                page.reveal_source_line(selected, matched.line);
                 page.move_cursor_to_source_line(matched.line, ctx.height);
             }
             Vec::new()
@@ -690,7 +695,7 @@ pub fn update(msg: Msg, page: &mut Show, ctx: &Ctx) -> Vec<OutMsg> {
             Vec::new()
         }
         Msg::SetSearch(needle) => {
-            page.set_search(&needle);
+            page.set_search(selected, &needle);
             Vec::new()
         }
         Msg::ClearSearch => {
@@ -723,8 +728,8 @@ impl Show {
     }
 }
 
-fn body_key(page: &mut Show, key: Key, ctx: &Ctx) -> Vec<OutMsg> {
-    let max_h = page.max_line_width().saturating_sub(1) as u16;
+fn body_key(page: &mut Show, key: Key, selected: Option<&RepoPath>, ctx: &Ctx) -> Vec<OutMsg> {
+    let max_h = page.max_line_width(selected).saturating_sub(1) as u16;
     match key {
         Key::Down | Key::Char('j') => {
             let row = page.cursor_row().map_or(0, |row| row + 1);
@@ -758,11 +763,11 @@ fn cursor_action(page: &mut Show, action: GlobalAction, ctx: &Ctx) {
     page.move_cursor_to_row(row, ctx.height);
 }
 
-fn fold_action(page: &mut Show, action: ShowAction, height: u16) {
-    let Some(path) = page.selected.clone() else {
+fn fold_action(page: &mut Show, action: ShowAction, selected: Option<&RepoPath>, height: u16) {
+    let Some(path) = selected else {
         return;
     };
-    let Some(regions) = page.folds.regions(&path).map(<[FoldRegion]>::to_vec) else {
+    let Some(regions) = page.folds.regions(path).map(<[FoldRegion]>::to_vec) else {
         return;
     };
     if regions.is_empty() {
@@ -771,12 +776,12 @@ fn fold_action(page: &mut Show, action: ShowAction, height: u16) {
     match action {
         ShowAction::OpenAll => {
             for region in &regions {
-                page.fold_state.set(&path, &region.stable_key, true);
+                page.fold_state.set(path, &region.stable_key, true);
             }
         }
         ShowAction::CloseAll => {
             for region in &regions {
-                page.fold_state.set(&path, &region.stable_key, false);
+                page.fold_state.set(path, &region.stable_key, false);
             }
         }
         _ => {
@@ -785,35 +790,33 @@ fn fold_action(page: &mut Show, action: ShowAction, height: u16) {
             };
             match action {
                 ShowAction::ToggleFold => {
-                    let open = !page.fold_state.is_open(&path, &regions[target]);
-                    page.fold_state
-                        .set(&path, &regions[target].stable_key, open);
+                    let open = !page.fold_state.is_open(path, &regions[target]);
+                    page.fold_state.set(path, &regions[target].stable_key, open);
                 }
                 ShowAction::OpenFold => {
-                    page.fold_state
-                        .set(&path, &regions[target].stable_key, true);
+                    page.fold_state.set(path, &regions[target].stable_key, true);
                 }
                 ShowAction::CloseFold => {
                     page.fold_state
-                        .set(&path, &regions[target].stable_key, false);
+                        .set(path, &regions[target].stable_key, false);
                 }
                 ShowAction::OpenRecursive => {
                     for key in subtree_keys(&regions, target) {
-                        page.fold_state.set(&path, &key, true);
+                        page.fold_state.set(path, &key, true);
                     }
                 }
                 ShowAction::CloseRecursive => {
                     for key in subtree_keys(&regions, target) {
-                        page.fold_state.set(&path, &key, false);
+                        page.fold_state.set(path, &key, false);
                     }
                 }
                 ShowAction::EditRevision | ShowAction::OpenAll | ShowAction::CloseAll => {}
             }
         }
     }
-    page.ensure_visible_rows();
-    page.reanchor_cursor();
-    page.clamp_view(height);
+    page.ensure_visible_rows(selected);
+    page.reanchor_cursor(selected);
+    page.clamp_view(height, selected);
 }
 
 fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
@@ -833,19 +836,19 @@ fn target_region(page: &Show, regions: &[FoldRegion]) -> Option<usize> {
     }
 }
 
-fn body_click(page: &mut Show, row: usize, marker: bool, height: u16) {
+fn body_click(page: &mut Show, row: usize, marker: bool, selected: Option<&RepoPath>, height: u16) {
     if marker {
-        toggle_marker_region(page, row, height);
+        toggle_marker_region(page, row, selected, height);
     } else if row < page.line_count() {
         page.move_cursor_to_row(row, height);
     }
 }
 
-fn toggle_marker_region(page: &mut Show, row: usize, height: u16) {
-    let Some(path) = page.selected.clone() else {
+fn toggle_marker_region(page: &mut Show, row: usize, selected: Option<&RepoPath>, height: u16) {
+    let Some(path) = selected else {
         return;
     };
-    let Some(regions) = page.folds.regions(&path).map(<[FoldRegion]>::to_vec) else {
+    let Some(regions) = page.folds.regions(path).map(<[FoldRegion]>::to_vec) else {
         return;
     };
     let target = match page.visible_rows().get(row) {
@@ -864,12 +867,11 @@ fn toggle_marker_region(page: &mut Show, row: usize, height: u16) {
     let Some(target) = target else {
         return;
     };
-    let open = !page.fold_state.is_open(&path, &regions[target]);
-    page.fold_state
-        .set(&path, &regions[target].stable_key, open);
-    page.ensure_visible_rows();
-    page.reanchor_cursor();
-    page.clamp_view(height);
+    let open = !page.fold_state.is_open(path, &regions[target]);
+    page.fold_state.set(path, &regions[target].stable_key, open);
+    page.ensure_visible_rows(Some(path));
+    page.reanchor_cursor(Some(path));
+    page.clamp_view(height, Some(path));
 }
 
 fn subtree_keys(regions: &[FoldRegion], root: usize) -> Vec<String> {
@@ -954,12 +956,21 @@ fn loaded(
             page.mode = request.mode;
             page.scope = Scope::new(request.selection);
             page.files = files;
-            page.visible = Arc::from(show_visible(&page.files));
             page.highlight.clear();
             page.folds.clear();
             page.visible_rows = VisibleRows::default();
             page.prompt = None;
-            Vec::new()
+            page.body = ShowBody {
+                scroll: 0,
+                hscroll: 0,
+                cursor_line: 1,
+            };
+            let paths = Arc::from(show_visible(&page.files));
+            vec![OutMsg::Request(Request::SetFiles(FileSet {
+                paths,
+                badges: Arc::new(BTreeMap::new()),
+                empty: NO_FILES,
+            }))]
         }
         Err(error) => {
             page.paging = Paging::Ready;
@@ -970,18 +981,20 @@ fn loaded(
 
 pub(crate) fn view(
     page: &Show,
+    workspace: &Workspace,
     ctx: &ViewCtx,
     frame: &mut Frame,
     area: Rect,
     focused: bool,
     edge: Edge,
 ) {
+    let selected = workspace.selected.as_ref();
     let theme = ctx.theme;
     let block = pane_block(" Source ", focused, theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if page.active_source().is_none() {
+    if page.active_source(selected).is_none() {
         let (title, detail) = if ctx.busy && ctx.tree_empty {
             ("Loading", "Projecting files…")
         } else if ctx.tree_empty {
@@ -1004,7 +1017,7 @@ pub(crate) fn view(
     }
 
     let total = page.line_count();
-    let source_total = page.source_line_count();
+    let source_total = page.source_line_count(selected);
     let height = inner.height as usize;
     let needs_scrollbar = total > height;
     let gutter = gutter_width(source_total);
@@ -1024,7 +1037,7 @@ pub(crate) fn view(
     {
         let number = row.source_line();
         let ranges = page.search_ranges(number);
-        let mut runs = page.row_runs(number, theme);
+        let mut runs = page.row_runs(selected, number, theme);
         runs = highlight_search(&runs, &ranges, theme);
         if let VisibleRow::Fold {
             hidden, dropped, ..
@@ -1036,7 +1049,7 @@ pub(crate) fn view(
             });
         }
         let mut clipped = highlight::clip_runs(&runs, hscroll, width);
-        let mut marker = gutter_marker_span(page.fold_marker(row), theme);
+        let mut marker = gutter_marker_span(page.fold_marker(selected, row), theme);
         let mut number = gutter_number_span(number, gutter, theme);
         if cursor_row == Some(index) {
             for run in &mut clipped {

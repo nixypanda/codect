@@ -15,7 +15,7 @@
 //! scrolled back into view; after a selection change a `show` body resets to the
 //! top and re-anchors through the same rule.
 
-use base::{FileDiff, ProjectionMode, RepoPath};
+use base::{ProjectionMode, RepoPath};
 
 use crate::action::{Action, GlobalAction, PrefixGroup};
 use crate::api::Cmd;
@@ -98,13 +98,6 @@ pub struct Search {
     pub cursor: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ChangeKind {
-    Added,
-    Modified,
-    Deleted,
-}
-
 #[derive(Clone, Debug)]
 pub enum Loaded {
     Show(Show),
@@ -112,27 +105,6 @@ pub enum Loaded {
 }
 
 impl Loaded {
-    pub fn visible(&self) -> &[RepoPath] {
-        match self {
-            Self::Show(show) => &show.visible,
-            Self::Diff(diff) => &diff.visible,
-        }
-    }
-
-    pub fn selected(&self) -> Option<&RepoPath> {
-        match self {
-            Self::Show(show) => show.selected.as_ref(),
-            Self::Diff(diff) => diff.selected.as_ref(),
-        }
-    }
-
-    pub fn set_selected(&mut self, selected: Option<RepoPath>) {
-        match self {
-            Self::Show(show) => show.selected = selected,
-            Self::Diff(diff) => diff.selected = selected,
-        }
-    }
-
     pub fn search(&self) -> Option<&Search> {
         match self {
             Self::Show(show) => show.search.as_ref(),
@@ -201,12 +173,12 @@ impl Loaded {
         }
     }
 
-    pub fn clamp_scroll(&mut self, height: u16) {
+    pub fn clamp_scroll(&mut self, height: u16, selected: Option<&RepoPath>) {
         match self {
             Self::Show(show) => {
-                show.ensure_visible_rows();
-                show.reanchor_cursor();
-                show.clamp_view(height);
+                show.ensure_visible_rows(selected);
+                show.reanchor_cursor(selected);
+                show.clamp_view(height, selected);
             }
             Self::Diff(diff) => {
                 let max = diff.rows().len().saturating_sub(1) as u16;
@@ -216,7 +188,7 @@ impl Loaded {
         }
     }
 
-    pub fn reset_body_scroll(&mut self) {
+    pub fn reset_body_scroll(&mut self, selected: Option<&RepoPath>) {
         match self {
             Self::Show(show) => {
                 show.body = ShowBody {
@@ -224,22 +196,10 @@ impl Loaded {
                     hscroll: 0,
                     cursor_line: 1,
                 };
-                show.ensure_visible_rows();
+                show.ensure_visible_rows(selected);
             }
             Self::Diff(diff) => diff.set_body_scroll(0),
         }
-    }
-
-    pub fn change_kind(&self, path: &RepoPath) -> Option<ChangeKind> {
-        let Self::Diff(diff) = self else {
-            return None;
-        };
-        let file = diff.diffs().iter().find(|file| file.path() == path)?;
-        Some(match file {
-            FileDiff::Added { .. } => ChangeKind::Added,
-            FileDiff::Deleted { .. } => ChangeKind::Deleted,
-            FileDiff::Modified { .. } => ChangeKind::Modified,
-        })
     }
 
     pub fn palette_entries(&self) -> Vec<(Action, &'static str, &'static str)> {
@@ -257,21 +217,22 @@ impl Loaded {
         width: u16,
         height: u16,
         tree_percent: u16,
+        selected: Option<&RepoPath>,
     ) {
         match self {
             Self::Show(show) => {
-                show.ensure_visible_rows();
+                show.ensure_visible_rows(selected);
                 if visible_body {
-                    show.ensure_highlight(theme);
+                    show.ensure_highlight(theme, selected);
                 }
-                show.resync_search();
+                show.resync_search(selected);
             }
             Self::Diff(diff) => {
                 if visible_body {
-                    diff.ensure_highlight(theme);
+                    diff.ensure_highlight(theme, selected);
                 }
-                diff.resync_search();
-                diff.refresh_rows(width, height, tree_percent, theme);
+                diff.resync_search(selected);
+                diff.refresh_rows(width, height, tree_percent, theme, selected);
             }
         }
     }

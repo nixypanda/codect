@@ -7,7 +7,6 @@
 //! Some of the payload types are stand-ins for types that arrive in later
 //! tasks:
 //!
-//! - [`FileSet`] is paths-only until task 2.2 adds badges and empty text.
 //! - [`Query`] and [`QueryChange`] stand in for `workspace::Query` until 2.3.
 //! - [`NavigatorResize`] is the eventual resize request.
 //! - [`Focus`] is today's normalized focus until 3.1/3.2 introduce `FocusKey`.
@@ -17,13 +16,12 @@
 //! here covers them without per-variant noise.
 #![allow(dead_code)]
 
-use std::sync::Arc;
-
 use base::{ProjectionMode, RepoPath, Selection};
 
 use crate::command::CommandId;
 use crate::page::Scope;
 use crate::render::metrics::Focus;
+use crate::workspace::FileSet;
 
 /// A navigator width change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,13 +29,6 @@ pub(crate) enum NavigatorResize {
     Wider,
     Narrower,
     Reset,
-}
-
-/// The file set the workspace holds. 2.1 carries only the paths; task 2.2 adds
-/// badges and the empty text.
-#[derive(Clone, Debug)]
-pub(crate) struct FileSet {
-    pub paths: Arc<[RepoPath]>,
 }
 
 /// The committed projection query. Task 2.3 moves it into the workspace.
@@ -131,22 +122,63 @@ mod tests {
     #[test]
     fn set_files_drops_a_missing_selection_without_an_event() {
         let mut app = two_files();
-        assert_eq!(app.loaded.selected(), Some(&RepoPath::new("a.rs").unwrap()));
+        assert_eq!(app.workspace.selected, Some(RepoPath::new("a.rs").unwrap()));
 
         let set = FileSet {
-            paths: Arc::from(vec![RepoPath::new("b.rs").unwrap()]),
+            paths: Arc::from(Vec::new()),
+            ..FileSet::default()
         };
         let cmds = run(&mut app, Request::SetFiles(set));
 
-        assert!(app.loaded.selected().is_none());
+        assert!(app.workspace.selected.is_none());
         assert!(cmds.is_empty());
-        assert!(app.diagnostic.is_none(), "no event fires in 2.1");
+        assert!(app.diagnostic.is_none(), "no event fires");
+    }
+
+    #[test]
+    fn set_files_falls_back_to_the_nearest_visible() {
+        let mut app = two_files();
+        assert_eq!(app.workspace.selected, Some(RepoPath::new("a.rs").unwrap()));
+
+        let set = FileSet {
+            paths: Arc::from(vec![RepoPath::new("b.rs").unwrap()]),
+            ..FileSet::default()
+        };
+        run(&mut app, Request::SetFiles(set));
+
+        assert_eq!(app.workspace.selected, Some(RepoPath::new("b.rs").unwrap()));
+    }
+
+    #[test]
+    fn set_files_does_not_reset_the_body_when_it_drops_a_missing_selection() {
+        let mut app = folder_app();
+        if let Loaded::Show(show) = &mut app.loaded {
+            show.body.scroll = 2;
+            show.body.hscroll = 1;
+        }
+
+        let set = FileSet {
+            paths: Arc::from(Vec::new()),
+            ..FileSet::default()
+        };
+        run(&mut app, Request::SetFiles(set));
+
+        assert!(app.workspace.selected.is_none());
+        if let Loaded::Show(show) = &app.loaded {
+            assert_eq!(
+                show.body.scroll, 2,
+                "dropping a selection must not reset the body"
+            );
+            assert_eq!(show.body.hscroll, 1);
+        } else {
+            panic!("expected a show");
+        }
     }
 
     #[test]
     fn select_always_notifies_even_for_the_same_path() {
         let mut app = folder_app();
-        let path = app.loaded.selected().cloned().expect("a selection");
+        let path = app.workspace.selected.clone().expect("a selection");
         if let Loaded::Show(show) = &mut app.loaded {
             show.body.scroll = 3;
             show.body.hscroll = 2;
@@ -167,7 +199,7 @@ mod tests {
         let mut app = folder_app();
         app.keymap.pending = Some('z');
         app.overlay = Some(Overlay::which_key());
-        let path = app.loaded.selected().cloned().expect("a selection");
+        let path = app.workspace.selected.clone().expect("a selection");
 
         run(&mut app, Request::Select(Some(path)));
 

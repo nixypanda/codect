@@ -67,13 +67,13 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
     let ctx = RenderCtx {
         theme: &app.chrome.theme,
         icons: &app.chrome.icons,
-        loaded: &app.loaded,
+        workspace: &app.workspace,
         busy: app.is_busy(),
     };
     let vctx = ViewCtx {
         theme: &app.chrome.theme,
         busy: app.is_busy(),
-        tree_empty: app.tree.rows.is_empty(),
+        tree_empty: app.workspace.files.paths.is_empty(),
     };
 
     for slot in &layout.slots {
@@ -105,6 +105,7 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
                 if let Loaded::Show(show) = &app.loaded {
                     show_page::view(
                         show,
+                        &app.workspace,
                         &vctx,
                         frame,
                         slot.outer,
@@ -117,6 +118,7 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
                 if let Loaded::Diff(diff) = &app.loaded {
                     diff_page::view(
                         diff,
+                        &app.workspace,
                         &vctx,
                         frame,
                         slot.outer,
@@ -130,6 +132,7 @@ fn render_body(app: &App, frame: &mut Frame, content: Rect) {
                 if let Loaded::Diff(diff) = &app.loaded {
                     diff_page::view(
                         diff,
+                        &app.workspace,
                         &vctx,
                         frame,
                         slot.outer,
@@ -157,7 +160,7 @@ fn render_overlay(app: &App, frame: &mut Frame, area: Rect) {
                 mode: app.loaded.mode(),
                 entries: &entries,
                 groups: &groups,
-                visible: app.loaded.visible(),
+                visible: &app.workspace.files.paths,
                 matches: app.loaded.search().map_or(0, |search| search.matches.len()),
                 pending_prefix: app.keymap.pending,
             };

@@ -10,10 +10,12 @@ use crate::test_support::{
     base_app, buffer_row, buffer_text, cell_x_of, click, commits_app, commits_ref, commits_request,
     declaration_less, diff_app, diff_focus_of, diff_ref, diff_request, dropped_container_outline,
     file_diff, focus_content, folder_app, item, merge_base_range_app, multi_method_outline,
-    nested_outline, press, render, row_with, scroll, selected, show_app, show_app_mode, show_ref,
-    show_request, snapshot_range_app, source_outline, source_outline_with, tail_palette_entries,
-    test_function_outline, tests_filter_outline, two_files, two_function_outline,
+    nested_outline, press, render, row_with, scroll, select_file, selected, show_app,
+    show_app_mode, show_ref, show_request, snapshot_range_app, source_outline, source_outline_with,
+    tail_palette_entries, test_function_outline, tests_filter_outline, two_files,
+    two_function_outline,
 };
+use crate::workspace::BadgeTone;
 use base::{
     Area, RepoPath, Selection, SelectionGroup, SourceOutline, SupportedPath, assemble_outline,
 };
@@ -37,7 +39,10 @@ fn a_loaded_result_installs_files_and_preserves_the_selection() {
 
     assert_eq!(next.loaded.mode(), ProjectionMode::Signatures);
     assert_eq!(selected(&next).as_deref(), Some("a.rs"));
-    assert_eq!(show_ref(&next).active_source(), Some("A\n"));
+    assert_eq!(
+        show_ref(&next).active_source(next.workspace.selected.as_ref()),
+        Some("A\n")
+    );
 }
 
 #[test]
@@ -51,8 +56,7 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
         .tree
         .row_of_file(&RepoPath::new("b.rs").unwrap())
         .unwrap();
-    app.loaded
-        .set_selected(Some(RepoPath::new("b.rs").unwrap()));
+    app.workspace.selected = Some(RepoPath::new("b.rs").unwrap());
 
     let (next, _) = update(
         Msg::ShowLoaded {
@@ -62,6 +66,195 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
         &app,
     );
     assert_eq!(selected(&next).as_deref(), Some("c.rs"));
+}
+
+#[test]
+fn a_reload_retains_the_selection_and_resets_the_show_body() {
+    let mut app = show_app(vec![source_outline("a.rs", "one\ntwo\nthree\n")]);
+    if let Loaded::Show(show) = &mut app.loaded {
+        show.body.scroll = 2;
+        show.body.hscroll = 1;
+        show.body.cursor_line = 3;
+    }
+
+    let (next, _) = update(
+        Msg::ShowLoaded {
+            request: show_request(),
+            result: Ok(vec![source_outline("a.rs", "one\ntwo\nthree\n")].into()),
+        },
+        &app,
+    );
+
+    assert_eq!(selected(&next).as_deref(), Some("a.rs"));
+    let show = show_ref(&next);
+    assert_eq!(show.body.scroll, 0, "a reload resets the scroll");
+    assert_eq!(show.body.hscroll, 0);
+    assert_eq!(show.body.cursor_line, 1);
+}
+
+#[test]
+fn a_reload_retains_the_selection_and_resets_the_diff_body() {
+    let mut app = diff_app(vec![file_diff(
+        "a.rs",
+        Some("1\n2\n3\n4\n5\n6\n"),
+        Some("1\n2\n3\n4\n5\nX\n"),
+    )]);
+    if let Loaded::Diff(diff) = &mut app.loaded {
+        diff.set_body_scroll(3);
+    }
+
+    let (next, _) = update(
+        Msg::DiffLoaded {
+            request: diff_request(),
+            result: Ok(vec![file_diff(
+                "a.rs",
+                Some("1\n2\n3\n4\n5\n6\n"),
+                Some("1\n2\n3\n4\n5\nX\n"),
+            )]
+            .into()),
+        },
+        &app,
+    );
+
+    assert_eq!(selected(&next).as_deref(), Some("a.rs"));
+    assert_eq!(
+        diff_ref(&next).body_scroll(),
+        0,
+        "a reload resets the scroll"
+    );
+}
+
+#[test]
+fn a_reload_that_drops_the_selection_falls_back_to_the_last_file() {
+    let app = press(&two_files(), &[Key::Char('j')]);
+    assert_eq!(selected(&app).as_deref(), Some("b.rs"));
+
+    let (next, _) = update(
+        Msg::ShowLoaded {
+            request: show_request(),
+            result: Ok(vec![source_outline("a.rs", "a\n")].into()),
+        },
+        &app,
+    );
+
+    assert_eq!(
+        selected(&next).as_deref(),
+        Some("a.rs"),
+        "with only earlier files, the last file is chosen"
+    );
+}
+
+#[test]
+fn an_empty_reload_clears_the_selection_and_the_tree_cursor() {
+    let app = two_files();
+    let (next, _) = update(
+        Msg::ShowLoaded {
+            request: show_request(),
+            result: Ok(Vec::new().into()),
+        },
+        &app,
+    );
+
+    assert!(next.workspace.selected.is_none());
+    assert_eq!(next.tree.cursor, 0);
+}
+
+#[test]
+fn a_diff_reload_applies_the_fallback_selection_within_the_update() {
+    let app = diff_app(vec![
+        file_diff("a.rs", Some("a\n"), Some("A\n")),
+        file_diff("b.rs", Some("b\n"), Some("B\n")),
+    ]);
+    assert_eq!(selected(&app).as_deref(), Some("a.rs"));
+
+    let (next, _) = update(
+        Msg::DiffLoaded {
+            request: diff_request(),
+            result: Ok(vec![file_diff("b.rs", Some("b\n"), Some("B\n"))].into()),
+        },
+        &app,
+    );
+
+    assert_eq!(selected(&next).as_deref(), Some("b.rs"));
+    assert_eq!(next.tree.cursor, 0, "the fallback is revealed in the tree");
+}
+
+#[test]
+fn a_show_file_set_has_no_badges() {
+    let app = two_files();
+    assert!(app.workspace.files.badges.is_empty());
+}
+
+#[test]
+fn a_diff_file_set_badges_added_modified_and_deleted() {
+    let app = diff_app(vec![
+        file_diff("a.rs", None, Some("a\n")),
+        file_diff("b.rs", Some("b\n"), Some("B\n")),
+        file_diff("c.rs", Some("c\n"), None),
+    ]);
+    let badges = &app.workspace.files.badges;
+    assert_eq!(
+        badges.get(&RepoPath::new("a.rs").unwrap()),
+        Some(&BadgeTone::Added)
+    );
+    assert_eq!(
+        badges.get(&RepoPath::new("b.rs").unwrap()),
+        Some(&BadgeTone::Modified)
+    );
+    assert_eq!(
+        badges.get(&RepoPath::new("c.rs").unwrap()),
+        Some(&BadgeTone::Deleted)
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("a.rs A"), "added badge missing: {text}");
+    assert!(text.contains("b.rs M"), "modified badge missing: {text}");
+    assert!(text.contains("c.rs D"), "deleted badge missing: {text}");
+}
+
+#[test]
+fn an_empty_show_session_renders_the_no_files_empty_text() {
+    let app = show_app(Vec::new());
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("No files"), "{text}");
+    assert!(text.contains("No source files in this scope."), "{text}");
+}
+
+#[test]
+fn an_empty_diff_session_renders_the_no_changes_empty_text() {
+    let app = diff_app(Vec::new());
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("No changes"), "{text}");
+    assert!(text.contains("Body-only edits are omitted."), "{text}");
+}
+
+#[test]
+fn a_busy_empty_show_renders_the_loading_state() {
+    let app = base_app(LoadRequest::Show {
+        revision: "HEAD".to_owned(),
+        mode: ProjectionMode::Types,
+        selection: Selection::all(),
+    });
+    assert!(app.is_busy());
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("Loading"), "{text}");
+    assert!(text.contains("Projecting files…"), "{text}");
+}
+
+#[test]
+fn a_busy_empty_diff_renders_the_loading_state() {
+    let app = base_app(LoadRequest::Diff {
+        base: "HEAD~1".to_owned(),
+        target: "HEAD".to_owned(),
+        mode: ProjectionMode::Types,
+        selection: Selection::all(),
+        view: DiffView::Range,
+        merge_base: false,
+    });
+    assert!(app.is_busy());
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("Loading"), "{text}");
+    assert!(text.contains("Comparing projections…"), "{text}");
 }
 
 #[test]
@@ -88,7 +281,7 @@ fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
     );
     assert_eq!(show_ref(&next).files.len(), 2);
     assert!(next.diagnostic.is_some());
-    assert!(next.loaded.selected().is_some());
+    assert!(next.workspace.selected.is_some());
 }
 
 #[test]
@@ -100,8 +293,9 @@ fn empty_projections_are_still_explorable_in_the_tree() {
     let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, vec!["empty.rs", "full.rs"]);
     assert!(
-        app.loaded
-            .visible()
+        app.workspace
+            .files
+            .paths
             .contains(&RepoPath::new("empty.rs").unwrap()),
         "a file with an empty projection must still appear in the tree"
     );
@@ -116,13 +310,17 @@ fn a_declaration_less_file_is_visible_and_renders_its_full_source() {
     ]);
 
     assert!(
-        app.loaded
-            .visible()
+        app.workspace
+            .files
+            .paths
             .contains(&RepoPath::new("comments.rs").unwrap()),
         "a declaration-less file must appear in the tree"
     );
     let show = show_ref(&app);
-    assert_eq!(show.active_source(), Some(source));
+    assert_eq!(
+        show.active_source(app.workspace.selected.as_ref()),
+        Some(source)
+    );
     assert_eq!(show.line_count(), 2, "no fold rows");
     assert!(
         show.visible_rows()
@@ -237,8 +435,8 @@ fn empty_commit_history_installs_a_diff_and_focuses_commits() {
     assert!(commands.is_empty());
     assert_eq!(next.loaded.mode(), ProjectionMode::Types);
     assert!(commits_ref(&next).is_empty());
-    assert!(next.loaded.visible().is_empty());
-    assert!(next.loaded.selected().is_none());
+    assert!(next.workspace.files.paths.is_empty());
+    assert!(next.workspace.selected.is_none());
     let (unchanged, commands) = update(Msg::Key(Key::Down), &next);
     assert!(commands.is_empty());
     assert_eq!(commits_ref(&unchanged).cursor(), 0);
@@ -324,7 +522,7 @@ fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_dis
     assert_eq!(commits_ref(&loaded).cursor(), 3);
     assert_eq!(commits_ref(&loaded).target(), None);
     assert_ne!(diff_ref(&loaded).revisions(), displayed_labels);
-    assert_eq!(loaded.loaded.selected(), app.loaded.selected());
+    assert_eq!(loaded.workspace.selected, app.workspace.selected);
 
     let (failed, commands) = update(
         Msg::StepLoaded {
@@ -375,6 +573,7 @@ fn palette_switches_between_range_and_commit_views() {
         &mut next,
         Action::Range(RangeAction::SwitchToCommits),
         &mut commands,
+        0,
     );
     assert_eq!(
         commands,
@@ -423,6 +622,7 @@ fn a_snapshot_range_cannot_switch_to_commits() {
         &mut next,
         Action::Range(RangeAction::SwitchToCommits),
         &mut commands,
+        0,
     );
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
@@ -468,6 +668,7 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
         &mut next,
         Action::Range(RangeAction::SwitchToCommits),
         &mut commands,
+        0,
     );
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
@@ -482,6 +683,7 @@ fn a_refused_commit_switch_leaves_paging_ready() {
         &mut next,
         Action::Range(RangeAction::SwitchToCommits),
         &mut commands,
+        0,
     );
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
@@ -501,6 +703,7 @@ fn a_merge_base_switch_refusal_leaves_paging_ready() {
         &mut next,
         Action::Range(RangeAction::SwitchToCommits),
         &mut commands,
+        0,
     );
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
@@ -521,16 +724,26 @@ fn navigation_defers_highlighting_until_settle() {
     if let Loaded::Show(show) = &mut fresh.loaded {
         show.highlight = ShowHighlights::default();
     }
-    assert!(show_ref(&fresh).active_lines().is_none());
+    assert!(
+        show_ref(&fresh)
+            .active_lines(fresh.workspace.selected.as_ref())
+            .is_none()
+    );
 
     let (moved, _) = update(Msg::Key(Key::Down), &fresh);
     assert!(
-        show_ref(&moved).active_lines().is_none(),
+        show_ref(&moved)
+            .active_lines(moved.workspace.selected.as_ref())
+            .is_none(),
         "update must not highlight"
     );
 
     let settled = settle(moved);
-    assert!(show_ref(&settled).active_lines().is_some());
+    assert!(
+        show_ref(&settled)
+            .active_lines(settled.workspace.selected.as_ref())
+            .is_some()
+    );
 }
 
 #[test]
@@ -546,7 +759,11 @@ fn settle_skips_highlighting_when_the_body_is_hidden() {
         show.highlight = ShowHighlights::default();
     }
     let settled = settle(app);
-    assert!(show_ref(&settled).active_lines().is_none());
+    assert!(
+        show_ref(&settled)
+            .active_lines(settled.workspace.selected.as_ref())
+            .is_none()
+    );
 }
 
 #[test]
@@ -896,10 +1113,9 @@ fn switching_files_recomputes_a_committed_search() {
             cursor: 0,
         });
     }
-    app.loaded
-        .set_selected(Some(RepoPath::new("b.rs").unwrap()));
+    app.workspace.selected = Some(RepoPath::new("b.rs").unwrap());
     if let Loaded::Show(show) = &mut app.loaded {
-        show.resync_search();
+        show.resync_search(app.workspace.selected.as_ref());
     }
     let search = app.loaded.search().expect("search");
     assert_eq!(search.matches.len(), 1);
@@ -922,7 +1138,7 @@ fn q_types_into_a_search_input_instead_of_quitting() {
 fn the_palette_and_finder_render_their_lists() {
     let mut app = two_files();
     app.overlay = Some(Overlay::palette(&overlay::Ctx {
-        visible: app.loaded.visible(),
+        visible: &app.workspace.files.paths,
         entries: &app.loaded.palette_entries(),
         groups: &app.loaded.prefix_groups(),
         mode: app.loaded.mode(),
@@ -934,7 +1150,7 @@ fn the_palette_and_finder_render_their_lists() {
 
     let mut app = two_files();
     app.overlay = Some(Overlay::finder(&overlay::Ctx {
-        visible: app.loaded.visible(),
+        visible: &app.workspace.files.paths,
         entries: &app.loaded.palette_entries(),
         groups: &app.loaded.prefix_groups(),
         mode: app.loaded.mode(),
@@ -1071,7 +1287,10 @@ fn clicking_the_fold_gutter_toggles_without_moving_the_cursor() {
         ),
         "the clicked declaration is now open"
     );
-    let first = show_ref(&opened).fold_marker(&show_ref(&opened).visible_rows()[0]);
+    let first = show_ref(&opened).fold_marker(
+        opened.workspace.selected.as_ref(),
+        &show_ref(&opened).visible_rows()[0],
+    );
     assert_eq!(first, Some('+'), "the other declaration stays folded");
 }
 
@@ -1146,7 +1365,7 @@ fn a_selection_scrolls_the_hidden_tree_to_the_file() {
     };
     focus_content(&mut app);
 
-    select_path(&mut app, RepoPath::new("f39.rs").expect("valid path"));
+    select_file(&mut app, RepoPath::new("f39.rs").expect("valid path"));
 
     let height = tree_viewport_height(&app);
     assert!(height >= 1, "a hidden tree still has a drawing height");
@@ -1249,7 +1468,7 @@ fn mouse_is_ignored_while_an_overlay_is_open() {
     app.overlay = Some(Overlay::Help);
     let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     assert_eq!(next.tree.cursor, app.tree.cursor);
-    assert_eq!(next.loaded.selected(), app.loaded.selected());
+    assert_eq!(next.workspace.selected, app.workspace.selected);
 }
 
 #[test]
@@ -1262,7 +1481,7 @@ fn a_click_on_the_header_or_a_divider_does_nothing() {
     focus_content(&mut body_focused);
     let (divider, _) = update(Msg::Mouse(click(29, 5)), &body_focused);
     assert!(matches!(divider.loaded, Loaded::Show(ref show) if show.focus == ShowFocus::Body));
-    assert_eq!(divider.loaded.selected(), app.loaded.selected());
+    assert_eq!(divider.workspace.selected, app.workspace.selected);
 }
 
 #[test]
@@ -1390,7 +1609,10 @@ fn the_body_shows_the_files_real_source_and_counts_its_lines() {
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("alpha"), "missing alpha: {text}");
     assert!(text.contains("beta"), "missing beta: {text}");
-    assert_eq!(show_ref(&app).active_source(), Some("alpha\nbeta\n"));
+    assert_eq!(
+        show_ref(&app).active_source(app.workspace.selected.as_ref()),
+        Some("alpha\nbeta\n")
+    );
     assert_eq!(show_ref(&app).line_count(), 2);
 }
 
@@ -1398,7 +1620,10 @@ fn the_body_shows_the_files_real_source_and_counts_its_lines() {
 fn the_body_renders_the_source_not_the_canonical_projection() {
     let file = source_outline_with("a.rs", "real source line\n", "PROJECTED\n");
     let app = show_app(vec![file]);
-    assert_eq!(show_ref(&app).active_source(), Some("real source line\n"));
+    assert_eq!(
+        show_ref(&app).active_source(app.workspace.selected.as_ref()),
+        Some("real source line\n")
+    );
 
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("real source line"), "source missing: {text}");
@@ -1419,7 +1644,7 @@ fn a_folded_signature_child_hides_its_body_and_counts_as_one_row() {
     )]);
     let show = show_ref(&app);
 
-    assert_eq!(show.source_line_count(), 6);
+    assert_eq!(show.source_line_count(app.workspace.selected.as_ref()), 6);
     assert_eq!(
         show.line_count(),
         3,
@@ -1534,7 +1759,7 @@ fn the_fold_suffix_widens_the_horizontal_scroll_range() {
     let fold_line = NESTED_SOURCE.lines().nth(1).expect("the folded signature");
     let expected = fold_line.chars().count() + "  ⋯ 3 lines".chars().count();
     assert_eq!(
-        show.max_line_width(),
+        show.max_line_width(app.workspace.selected.as_ref()),
         expected,
         "max width must include the fold suffix"
     );
@@ -1616,7 +1841,7 @@ fn is_open_honors_default_open_and_a_sticky_override() {
     let Loaded::Show(show) = &mut app.loaded else {
         panic!("expected a show");
     };
-    show.ensure_visible_rows();
+    show.ensure_visible_rows(app.workspace.selected.as_ref());
     let regions = show
         .folds
         .regions(&path)
@@ -1637,7 +1862,7 @@ fn is_open_honors_default_open_and_a_sticky_override() {
         show.fold_state.is_open(&path, &regions[1]),
         "the override wins over default_open"
     );
-    show.ensure_visible_rows();
+    show.ensure_visible_rows(app.workspace.selected.as_ref());
     assert_eq!(
         show.line_count(),
         6,
@@ -1659,7 +1884,7 @@ fn a_collapsed_container_hides_a_nested_collapse_entirely() {
         panic!("expected a show");
     };
     show.fold_state.set(&path, "impl Widget", false);
-    show.ensure_visible_rows();
+    show.ensure_visible_rows(app.workspace.selected.as_ref());
 
     assert_eq!(show.visible_rows().len(), 1, "only the outer fold row");
     assert_eq!(
@@ -1698,7 +1923,7 @@ fn a_match_inside_a_fold_resolves_to_the_fold_row() {
     let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
     let mut app = show_app(vec![nested_outline("a.rs", source, (0, 5), (1, 4), true)]);
     if let Loaded::Show(show) = &mut app.loaded {
-        show.set_search("needle");
+        show.set_search(app.workspace.selected.as_ref(), "needle");
     }
     let show = show_ref(&app);
 
@@ -1724,7 +1949,7 @@ fn stepping_to_a_match_inside_a_fold_opens_the_enclosing_regions() {
     assert_eq!(show_ref(&folded).line_count(), 1, "everything is folded");
     let mut searching = folded;
     if let Loaded::Show(show) = &mut searching.loaded {
-        show.set_search("needle");
+        show.set_search(searching.workspace.selected.as_ref(), "needle");
     }
 
     let (stepped, _) = update(Msg::Key(Key::Char('n')), &searching);
@@ -1770,7 +1995,7 @@ fn stepping_to_a_match_moves_the_cursor_to_the_match_row() {
     app.size.height = 8;
     focus_content(&mut app);
     if let Loaded::Show(show) = &mut app.loaded {
-        show.set_search("needle");
+        show.set_search(app.workspace.selected.as_ref(), "needle");
     }
 
     let (stepped, _) = update(Msg::Key(Key::Char('n')), &app);
@@ -1783,12 +2008,12 @@ fn stepping_to_a_match_moves_the_cursor_to_the_match_row() {
         show.body.cursor_line, matched,
         "stepping moves the cursor onto the match"
     );
-    assert_view_consistent(show, 8);
+    assert_view_consistent(&stepped, 8);
 
-    let advanced = press(&stepped, &[Key::Char('j')]);
-    let advanced = show_ref(&advanced);
+    let advanced_app = press(&stepped, &[Key::Char('j')]);
+    let advanced = show_ref(&advanced_app);
     assert_eq!(advanced.body.cursor_line, matched + 1);
-    assert_view_consistent(advanced, 8);
+    assert_view_consistent(&advanced_app, 8);
 }
 
 #[test]
@@ -1931,13 +2156,13 @@ fn tests_mode_selection_anchors_the_cursor_to_a_visible_row() {
     assert_eq!(
         show_ref(&app).body.cursor_line,
         5,
-        "install_show_selection anchors the cursor"
+        "the fallback selection anchors the cursor"
     );
     assert_eq!(show_ref(&app).cursor_row(), Some(0), "the cursor is drawn");
 
-    select_path(&mut app, RepoPath::new("z.rs").expect("valid path"));
+    select_file(&mut app, RepoPath::new("z.rs").expect("valid path"));
     assert_eq!(show_ref(&app).body.cursor_line, 1);
-    select_path(&mut app, RepoPath::new("a.rs").expect("valid path"));
+    select_file(&mut app, RepoPath::new("a.rs").expect("valid path"));
     let mut app = settle(app);
 
     let show = show_ref(&app);
@@ -2047,7 +2272,7 @@ fn tests_mode_search_ignores_hidden_dropped_matches_and_reveals_retained_ones() 
     let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
     focus_content(&mut app);
     if let Loaded::Show(show) = &mut app.loaded {
-        show.set_search("hidden");
+        show.set_search(app.workspace.selected.as_ref(), "hidden");
     }
     let show = show_ref(&app);
     let matches = &show.search.as_ref().expect("search").matches;
@@ -2068,7 +2293,7 @@ fn tests_mode_search_ignores_hidden_dropped_matches_and_reveals_retained_ones() 
 
     let mut dropped = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
     if let Loaded::Show(show) = &mut dropped.loaded {
-        show.set_search("Dropped");
+        show.set_search(dropped.workspace.selected.as_ref(), "Dropped");
     }
     assert!(
         show_ref(&dropped)
@@ -2235,13 +2460,13 @@ fn shrinking_fold_actions_clamp_the_scroll_and_keep_the_cursor_in_view() {
             1,
             "{name}: everything folds"
         );
-        assert_view_consistent(show_ref(&folded), 6);
+        assert_view_consistent(&folded, 6);
     }
 
     let bottom = press(&focus(6), &[Key::Char('G')]);
     let opened = press(&bottom, &[Key::Char('z'), Key::Char('R')]);
     assert_eq!(show_ref(&opened).line_count(), 6, "zR opens everything");
-    assert_view_consistent(show_ref(&opened), 6);
+    assert_view_consistent(&opened, 6);
 }
 
 #[test]
@@ -2259,7 +2484,7 @@ fn fold_all_after_a_bottom_jump_leaves_source_rows_to_draw() {
     let show = show_ref(&folded);
     assert_eq!(show.line_count(), 1, "everything folds to one row");
     assert_eq!(show.body.scroll, 0, "the scroll is clamped back to zero");
-    assert_view_consistent(show, 8);
+    assert_view_consistent(&folded, 8);
 
     let text = buffer_text(&render(&folded, 100, 8));
     assert!(
@@ -2280,7 +2505,7 @@ fn a_fold_action_clamps_hscroll_into_range() {
     assert!(before > 0, "the body panned right");
     assert_eq!(
         before as usize,
-        show_ref(&wide).max_line_width() - 1,
+        show_ref(&wide).max_line_width(wide.workspace.selected.as_ref()) - 1,
         "panning stops at the widest visible row"
     );
 
@@ -2289,7 +2514,7 @@ fn a_fold_action_clamps_hscroll_into_range() {
         show_ref(&opened).body.hscroll < before,
         "hscroll must shrink with the projection"
     );
-    assert_view_consistent(show_ref(&opened), wide.size.height);
+    assert_view_consistent(&opened, wide.size.height);
 }
 
 #[test]
@@ -2314,7 +2539,7 @@ fn a_resize_scrolls_the_cursor_back_into_view() {
         show.body.cursor_line, 30,
         "the resize keeps the cursor on its line"
     );
-    assert_view_consistent(show, 6);
+    assert_view_consistent(&resized, 6);
 }
 
 #[test]
@@ -2481,6 +2706,7 @@ fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
         &mut via_palette,
         Action::Show(ShowAction::CloseAll),
         &mut cmds,
+        0,
     );
     let via_keys = press(&focused, &[Key::Char('z'), Key::Char('M')]);
     assert_eq!(show_ref(&via_palette).line_count(), 1);
