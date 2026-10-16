@@ -2,7 +2,10 @@
 //!
 //! Only direct children of the file node are considered, which is what excludes
 //! imports and declarations nested inside expressions (`let`, `case`, and
-//! function bodies) without inspecting any expression.
+//! function bodies) without inspecting any expression. An explicit annotation
+//! is paired with its declaration by declared name rather than by adjacency or
+//! order, and Tests mode retains nothing because a test's name is a string
+//! literal inside a body that is never inspected.
 
 use std::collections::HashMap;
 
@@ -19,9 +22,6 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
     let tree = syntax::parse(input.source, input.path)?;
     let root = tree.root_node();
 
-    // Test detection is not implemented for Elm: a test's name is a string
-    // literal inside a body, which is never projected. Retaining nothing keeps
-    // an empty projection meaning "no tests retained", as in Rust and Python.
     match input.mode {
         ProjectionMode::Types | ProjectionMode::Signatures => {}
         ProjectionMode::Tests => {
@@ -92,8 +92,6 @@ pub(crate) fn project_file(input: ProjectionInput<'_>) -> Result<ProjectedFile, 
                 }
             }
             node::VALUE_DECLARATION if builder.mode == ProjectionMode::Signatures => {
-                // A destructuring declaration has no declared lower-case name
-                // to key or render, so it is not part of the named surface.
                 if let Some(left) = child.child_by_field_name(field::FUNCTION_LEFT) {
                     let name = renderer.declaration_name(left)?.to_owned();
                     let text = match annotations.get(&name) {
@@ -149,8 +147,6 @@ fn module_name(renderer: &Renderer<'_>, root: Node<'_>) -> Result<String, Projec
     }
 }
 
-// Explicit annotations are indexed by declared name so that pairing does not
-// depend on adjacency or on a fixed relative order (TECHNICAL_DESIGN.md 11.3).
 fn collect_annotations(
     renderer: &Renderer<'_>,
     root: Node<'_>,
@@ -175,9 +171,6 @@ struct Builder {
 }
 
 impl Builder {
-    // Returns the item's stable key so callers can mark nested members with
-    // their owner. Collisions get a deterministic source-order ordinal and
-    // never a byte offset (TECHNICAL_DESIGN.md 5.2).
     fn push(
         &mut self,
         kind: ItemKind,

@@ -11,7 +11,6 @@ use base::{
     Language, LanguageProjector, ProjectedFile, ProjectionError, ProjectionInput, RepoPath,
 };
 
-/// Projects Rust source files into the shared projection model.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RustProjector;
 

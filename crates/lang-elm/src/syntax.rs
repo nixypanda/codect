@@ -3,6 +3,9 @@
 //! Tree-sitter node names are centralized here so that grammar upgrades fail
 //! focused tests when node names or shapes change. Every other module in this
 //! crate refers to nodes through these constants.
+//!
+//! Parsing is all-or-nothing: a parse failure, an error node, or a missing node
+//! is a fatal `ProjectionError`, so no caller can emit a partial projection.
 
 use base::{ProjectionError, SourceSpan, SupportedPath};
 use tree_sitter::{Node, Parser, Tree};
@@ -61,9 +64,6 @@ pub mod field {
     pub const OPERATOR: &str = "operator";
 }
 
-// Parses one Elm source file and rejects any tree containing `ERROR` or
-// missing nodes. `None` parse results and error nodes are fatal so that no
-// caller can emit a partial projection (TECHNICAL_DESIGN.md section 9).
 pub(crate) fn parse(source: &str, path: &SupportedPath) -> Result<Tree, ProjectionError> {
     let mut parser = Parser::new();
     parser
@@ -92,9 +92,6 @@ pub(crate) fn parse(source: &str, path: &SupportedPath) -> Result<Tree, Projecti
     Ok(tree)
 }
 
-// `has_error` guarantees at least one node is an `ERROR` or missing node, but
-// the first in source order is not discoverable without walking; this returns
-// it iteratively to keep cost independent of expression depth.
 pub(crate) fn first_error_range(root: Node<'_>) -> Option<SourceSpan> {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
