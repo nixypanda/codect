@@ -24,6 +24,7 @@ nix develop                                    # or work from a checkout
 | --- | --- |
 | [Install](docs/INSTALL.md) | Nix flake, dev shell, optional-TUI build |
 | [Using the CLI](docs/CLI.md) | Commands, path/area scoping, focused-diff semantics |
+| [Language support](docs/LANGUAGES.md) | Per-language features and quirks |
 | [Terminal UI](docs/TUI.md) | Views, keybindings, mouse, theming |
 | [Neovim plugin](editors/nvim/README.md) | Setup, commands, Diffview integration |
 | [Product](docs/PRODUCT.md) | What Codect does, its modes, and its limits |

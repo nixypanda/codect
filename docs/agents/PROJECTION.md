@@ -153,6 +153,7 @@ TECHNICAL_DESIGN.md section 5.
 
 ## See also
 
+- [Language support](../LANGUAGES.md) — per-language features and quirks.
 - [CLI and JSON contract](CONTRACT.md).
 - [Invariants](INVARIANTS.md).
 - [`docs/PRODUCT.md`](../PRODUCT.md).
