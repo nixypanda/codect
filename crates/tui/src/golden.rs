@@ -19,14 +19,17 @@ use base::{FileDiff, ProjectionMode, Selection, SelectionError, SourceOutline};
 use engine::EngineError;
 
 use crate::api::Cmd;
-use crate::app::{App, LoadRequest, Msg, coalesce_commit_loads, settle, update};
+use crate::kernel::app::{Msg, settle, update};
+use crate::plugins::PluginsCmd;
+use crate::plugins::legacy::Msg as LegacyMsg;
 use crate::render::icons::{IconStyle, Icons};
 use crate::render::theme::{Capability, Flavor, Theme};
+use crate::route::LoadRequest;
 use crate::test_support::{
-    ATTRIBUTED_SOURCE, NESTED_SOURCE, area_set, attributed_child_outline, base_app_with,
-    commits_app, diff_app, diff_request, dropped_container_outline, file_diff, golden_document,
-    nested_outline, press, render, show_app, show_app_mode, show_request, source_outline, step,
-    tests_filter_outline, two_files,
+    ATTRIBUTED_SOURCE, App, NESTED_SOURCE, after_batch_effects, area_set, attributed_child_outline,
+    base_app_with, commits_app, diff_app, diff_request, dropped_container_outline, file_diff,
+    golden_document, legacy_msg, nested_outline, press, render, show_app, show_app_mode,
+    show_request, source_outline, step, tests_filter_outline, two_files,
 };
 use crate::util::input::Key;
 
@@ -173,10 +176,10 @@ fn load_show(theme: Theme, icons: Icons, files: Vec<SourceOutline>) -> App {
     );
     step(
         &app,
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: show_request(),
             result: Ok(files.into()),
-        },
+        }),
     )
 }
 
@@ -297,7 +300,7 @@ fn build_show_mode_picker() -> App {
 fn build_show_scope_chooser() -> App {
     step(
         &press(&two_files(), &[Key::Char('s')]),
-        Msg::AreasLoaded(Ok(area_set())),
+        legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))),
     )
 }
 
@@ -311,10 +314,10 @@ fn build_show_diagnostic() -> App {
     });
     step(
         &two_files(),
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: show_request(),
             result: Err(Box::new(error)),
-        },
+        }),
     )
 }
 
@@ -384,10 +387,10 @@ fn build_diff_merge_base() -> App {
     );
     let app = step(
         &app,
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request,
             result: Ok(three_diffs().into()),
-        },
+        }),
     );
     resize(&app, 120, 30)
 }
@@ -405,17 +408,16 @@ fn build_diff_commits_step() -> App {
     // The step effect is coalesced by the runtime, not by `update`; run it here
     // so the scenario exercises the real step-loading path.
     let mut model = app.clone();
-    let mut cmds = Vec::new();
-    coalesce_commit_loads(&mut model, &mut cmds);
+    let cmds = after_batch_effects(&mut model, &Vec::new());
     let index = cmds
         .iter()
         .find_map(|cmd| match cmd {
-            Cmd::Step { index, .. } => Some(*index),
+            PluginsCmd::Legacy(Cmd::Step { index, .. }) => Some(*index),
             _ => None,
         })
         .expect("a commit step effect");
     let result = Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into());
-    settle(update(Msg::StepLoaded { index, result }, &model).0)
+    settle(update(legacy_msg(LegacyMsg::StepLoaded { index, result }), &model).0)
 }
 
 fn build_too_small() -> App {
@@ -508,10 +510,10 @@ fn build_show_reload_last() -> App {
     let app = press(&two_files(), &[Key::Char('j')]);
     step(
         &app,
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: show_request(),
             result: Ok(vec![source_outline("a.rs", "a\n")].into()),
-        },
+        }),
     )
 }
 

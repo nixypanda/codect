@@ -15,9 +15,9 @@
 //! scrolled back into view; after a selection change a `show` body resets to the
 //! top and re-anchors through the same rule.
 
-use base::{ProjectionMode, RepoPath};
+use base::RepoPath;
 
-use crate::action::{Action, GlobalAction, PrefixGroup};
+use crate::action::{Action, PrefixGroup};
 use crate::api::Cmd;
 use crate::component::text_input::Edit;
 use crate::plugin::{
@@ -28,6 +28,11 @@ use crate::render::layout::{PaneSpec, Placement, VisualRow};
 use crate::render::theme::Theme;
 use crate::request::Request;
 use crate::util::input::Key;
+
+#[allow(unused_imports)]
+pub(crate) use crate::kernel::focus::{focus_default, focus_ring};
+pub(crate) use crate::kernel::nav::{page_step, scroll_by, scroll_offset_to};
+pub(crate) use crate::kernel::workspace::{Scope, available_modes, mode_label};
 
 pub(crate) mod diff;
 pub(crate) mod show;
@@ -68,68 +73,6 @@ pub(crate) fn diff_panes(has_commits: bool) -> Vec<PaneSpec> {
         panes.push(COMMITS_SPEC);
     }
     panes
-}
-
-/// The focus ring: the distinct focus keys of `panes`, bands first, then
-/// navigators, then bodies. Within a placement, registration order, then first
-/// appearance. Panes that share a focus key (the diff's two sides) are one stop.
-pub(crate) fn focus_ring(panes: &[PaneSpec]) -> Vec<FocusKey> {
-    let mut ring: Vec<FocusKey> = Vec::new();
-    for placement in [Placement::Band, Placement::Navigator, Placement::Body] {
-        for spec in panes.iter().filter(|spec| spec.placement == placement) {
-            if !ring.contains(&spec.focus) {
-                ring.push(spec.focus);
-            }
-        }
-    }
-    ring
-}
-
-/// The default focus: the first navigator's focus key, else the first body's.
-pub(crate) fn focus_default(panes: &[PaneSpec]) -> Option<FocusKey> {
-    panes
-        .iter()
-        .find(|spec| spec.placement == Placement::Navigator)
-        .or_else(|| panes.iter().find(|spec| spec.placement == Placement::Body))
-        .map(|spec| spec.focus)
-}
-
-pub(crate) fn available_modes() -> [ProjectionMode; 3] {
-    [
-        ProjectionMode::Types,
-        ProjectionMode::Signatures,
-        ProjectionMode::Tests,
-    ]
-}
-
-pub(crate) fn mode_label(mode: ProjectionMode) -> &'static str {
-    match mode {
-        ProjectionMode::Types => "types",
-        ProjectionMode::Signatures => "signatures",
-        ProjectionMode::Tests => "tests",
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Scope {
-    pub selection: base::Selection,
-    pub label: String,
-}
-
-impl Scope {
-    pub fn new(selection: base::Selection) -> Self {
-        let label = if selection.groups().is_empty() {
-            "all".to_owned()
-        } else {
-            selection
-                .groups()
-                .iter()
-                .map(base::SelectionGroup::label)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        Self { selection, label }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -284,29 +227,6 @@ pub struct ViewCtx<'a> {
     pub theme: &'a Theme,
     pub busy: bool,
     pub tree_empty: bool,
-}
-
-pub(super) fn page_step(height: u16) -> u16 {
-    (height.saturating_sub(3) / 2).max(1)
-}
-
-pub(super) fn scroll_by(action: GlobalAction, current: u16, step: u16, max: u16) -> u16 {
-    match action {
-        GlobalAction::Top => 0,
-        GlobalAction::Bottom => max,
-        GlobalAction::PageUp => current.saturating_sub(step),
-        _ => current.saturating_add(step).min(max),
-    }
-}
-
-pub(super) fn scroll_offset_to(index: usize, scroll: usize, height: usize) -> Option<u16> {
-    if index < scroll {
-        Some(index as u16)
-    } else if height > 0 && index >= scroll + height {
-        Some((index + 1 - height) as u16)
-    } else {
-        None
-    }
 }
 
 pub(super) fn text_edit(key: Key) -> Option<Edit> {

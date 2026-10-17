@@ -1,3 +1,8 @@
+//! The frame chrome: the header, the status line, the diagnostic toast, and the
+//! too-small notice. The kernel draws only the frame; a plugin contributes its
+//! chips and status segments.
+
+#![allow(dead_code)]
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
@@ -5,16 +10,51 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::App;
-use crate::component::overlay::Overlay;
-use crate::page::{Loaded, mode_label};
-use crate::plugin::{DIFF_BAND_FOCUS, TREE_FOCUS};
-use crate::render::layout::VisualRowKind;
+use crate::kernel::plugin::OverlaySpec;
+use crate::kernel::search::Search;
+use crate::kernel::workspace::mode_label;
 use crate::render::text::clip_line;
 use crate::render::theme::{Rgb, Theme};
 
-pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
-    let theme = &app.chrome.theme;
+/// The tone of a header chip.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChipTone {
+    Accent,
+    Neutral,
+}
+
+/// A header chip contributed by the kernel or a plugin.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Chip {
+    pub label: String,
+    pub tone: ChipTone,
+}
+
+/// The tone of a status segment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SegmentTone {
+    Text,
+    Muted,
+    Added,
+    Removed,
+}
+
+/// A status segment contributed by a plugin.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Segment {
+    pub text: String,
+    pub tone: SegmentTone,
+}
+
+pub(crate) fn render_header(
+    root: &str,
+    mode: base::ProjectionMode,
+    chips: &[Chip],
+    scope: &str,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let base = theme.bg(theme.palette.surface);
     let brand = Span::styled(
         " ◆ codect ",
@@ -22,22 +62,16 @@ pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
             .fg_bg(theme.ink(theme.palette.accent), theme.palette.accent)
             .add_modifier(Modifier::BOLD),
     );
-    let (mode, revision) = match &app.loaded {
-        Loaded::Show(show) => (app.workspace.query.mode, show.revision.clone()),
-        Loaded::Diff(diff) => {
-            let (base, target) = diff.revisions();
-            (app.workspace.query.mode, format!("{base}..{target}"))
-        }
-    };
-    let context = [
-        chip(mode_label(mode), theme.palette.accent, theme),
-        chip(&revision, theme.palette.surface_alt, theme),
-        chip(
-            &format!("scope: {}", app.scope_label()),
-            theme.palette.surface_alt,
-            theme,
-        ),
-    ];
+    let mut context = vec![chip(mode_label(mode), theme.palette.accent, theme)];
+    context.extend(chips.iter().map(|chip| match chip.tone {
+        ChipTone::Accent => chip_span(&chip.label, theme.palette.accent, theme),
+        ChipTone::Neutral => chip_span(&chip.label, theme.palette.surface_alt, theme),
+    }));
+    context.push(chip(
+        &format!("scope: {scope}"),
+        theme.palette.surface_alt,
+        theme,
+    ));
     let area_width = area.width as usize;
     let brand_width = UnicodeWidthStr::width(brand.content.as_ref());
     let mut shown = context.len();
@@ -57,7 +91,7 @@ pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let mut spans = vec![
         brand,
         Span::styled(
-            format!(" {} ", clip_tail(&app.root, root_width)),
+            format!(" {} ", clip_tail(root, root_width)),
             theme.fg(theme.palette.text_dim),
         ),
     ];
@@ -74,14 +108,25 @@ pub(crate) fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(base), area);
 }
 
-pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
-    let theme = &app.chrome.theme;
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_status(
+    busy: bool,
+    spinner: u8,
+    selected: Option<&str>,
+    segments: &[Segment],
+    search: Option<&Search>,
+    hints: &str,
+    compact_hints: &str,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let base = theme.bg(theme.palette.surface);
 
     let mut prefix: Vec<Span<'static>> = Vec::new();
-    if app.is_busy() {
+    if busy {
         prefix.push(Span::styled(
-            format!("{} ", spinner_frame(app.chrome.spinner)),
+            format!("{} ", spinner_frame(spinner)),
             theme.fg(theme.palette.accent),
         ));
         prefix.push(Span::styled(
@@ -90,31 +135,17 @@ pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         ));
     }
     let mut detail: Vec<Span<'static>> = Vec::new();
-    if let Some((added, removed)) = diff_stats(app) {
-        detail.push(Span::styled(
-            format!("+{added} "),
-            theme.fg(theme.palette.add_fg),
-        ));
-        detail.push(Span::styled(
-            format!("−{removed} "),
-            theme.fg(theme.palette.del_fg),
-        ));
-    } else if let Loaded::Show(show) = &app.loaded
-        && show
-            .active_source(app.workspace.selected.as_ref())
-            .is_some()
-    {
-        detail.push(Span::styled(
-            format!(
-                "{} of {} lines ",
-                show.line_count(),
-                show.source_line_count(app.workspace.selected.as_ref())
-            ),
-            theme.fg(theme.palette.text_muted),
-        ));
+    for segment in segments {
+        let color = match segment.tone {
+            SegmentTone::Text => theme.palette.text,
+            SegmentTone::Muted => theme.palette.text_muted,
+            SegmentTone::Added => theme.palette.add_fg,
+            SegmentTone::Removed => theme.palette.del_fg,
+        };
+        detail.push(Span::styled(segment.text.clone(), theme.fg(color)));
     }
 
-    if let Some(search) = app.workspace.search.as_ref() {
+    if let Some(search) = search {
         let total = search.matches.len();
         let current = if total == 0 { 0 } else { search.cursor + 1 };
         detail.push(Span::styled(
@@ -123,7 +154,6 @@ pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         ));
     }
 
-    let mut hints = hints(app);
     let hints_style = theme.fg(theme.palette.text_muted);
     let fixed_width: usize = prefix
         .iter()
@@ -131,15 +161,15 @@ pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum();
     let area_width = area.width as usize;
+    let mut hints = hints.to_owned();
     if fixed_width + UnicodeWidthStr::width(hints.as_str()) + 10 > area_width {
-        hints = compact_hints(app).to_owned();
+        hints = compact_hints.to_owned();
     }
     if fixed_width + UnicodeWidthStr::width(hints.as_str()) + 4 > area_width {
         hints.clear();
     }
     let hints_width = UnicodeWidthStr::width(hints.as_str());
-    let selected = app.workspace.selected.as_ref();
-    let path = selected.map_or_else(|| "no selection".to_owned(), ToString::to_string);
+    let path = selected.map_or_else(|| "no selection".to_owned(), str::to_owned);
     let path_width = area_width.saturating_sub(fixed_width + hints_width + 3);
     let mut spans = prefix;
     spans.push(Span::styled(
@@ -166,73 +196,12 @@ pub(crate) fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)).style(base), area);
 }
 
-fn compact_hints(app: &App) -> &'static str {
-    if app.overlay.is_some() || prompt_active(app) {
-        "Esc close "
-    } else {
-        "? help "
+/// The compact fallback hint for a target.
+pub(crate) fn compact_hint(overlay: Option<OverlaySpec>) -> &'static str {
+    match overlay {
+        Some(_) => "Esc close ",
+        None => "? help ",
     }
-}
-
-fn prompt_active(app: &App) -> bool {
-    app.loaded.prompt_active()
-}
-
-fn hints(app: &App) -> String {
-    if let Some(overlay) = &app.overlay {
-        return match overlay {
-            Overlay::Scope(_) => "↑↓ choose   Enter select   Esc close ".to_owned(),
-            Overlay::Mode { .. } => "↑↓ choose   Enter apply   Esc close ".to_owned(),
-            Overlay::Palette(_) | Overlay::Finder(_) => {
-                "type to filter   ↑↓ choose   Enter open   Esc close ".to_owned()
-            }
-            Overlay::Search(_) => "type to search   Enter next   Esc cancel ".to_owned(),
-            Overlay::WhichKey { .. } => "↑↓ / Ctrl-K/J choose   Enter run   Esc close ".to_owned(),
-            Overlay::Help => "Esc close ".to_owned(),
-        };
-    }
-    if prompt_active(app) {
-        return "Enter apply   Esc cancel ".to_owned();
-    }
-    if app.focus == Some(DIFF_BAND_FOCUS) {
-        return "j/k choose commit   Tab files   Ctrl-P commands   ? help ".to_owned();
-    }
-    if app.focus == Some(TREE_FOCUS) {
-        return "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ".to_owned();
-    }
-    match app.loaded {
-        Loaded::Show(_) => {
-            "wheel / j k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned()
-        }
-        Loaded::Diff(_) => {
-            "wheel / j k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned()
-        }
-    }
-}
-
-pub(crate) fn diff_stats(app: &App) -> Option<(usize, usize)> {
-    if !matches!(app.loaded, Loaded::Diff(_)) {
-        return None;
-    }
-    let mut added = 0;
-    let mut removed = 0;
-    for row in app.diff_rows() {
-        if row.continuation {
-            continue;
-        }
-        match row.kind {
-            VisualRowKind::Diff(base::DiffRowKind::Add) => added += 1,
-            VisualRowKind::Diff(base::DiffRowKind::Delete) => removed += 1,
-            VisualRowKind::Diff(base::DiffRowKind::Change) => {
-                added += 1;
-                removed += 1;
-            }
-            VisualRowKind::Diff(base::DiffRowKind::Equal)
-            | VisualRowKind::Hunk
-            | VisualRowKind::Collapse(_) => {}
-        }
-    }
-    Some((added, removed))
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -241,11 +210,10 @@ fn spinner_frame(frame: u8) -> &'static str {
     SPINNER[frame as usize % SPINNER.len()]
 }
 
-pub(crate) fn render_diagnostic(app: &App, frame: &mut Frame, area: Rect) {
-    let Some(diagnostic) = &app.diagnostic else {
+pub(crate) fn render_diagnostic(text: Option<&str>, theme: &Theme, frame: &mut Frame, area: Rect) {
+    let Some(text) = text else {
         return;
     };
-    let text = &diagnostic.text;
     let width = area.width.saturating_sub(4).min(90);
     if width == 0 || area.height < 2 {
         return;
@@ -256,7 +224,6 @@ pub(crate) fn render_diagnostic(app: &App, frame: &mut Frame, area: Rect) {
         width,
         height: 1,
     };
-    let theme = &app.chrome.theme;
     frame.render_widget(
         Paragraph::new(clip_line(text, 0, width as usize)).style(
             theme
@@ -276,6 +243,10 @@ pub(crate) fn render_too_small(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 fn chip(label: &str, background: Rgb, theme: &Theme) -> Span<'static> {
+    chip_span(label, background, theme)
+}
+
+fn chip_span(label: &str, background: Rgb, theme: &Theme) -> Span<'static> {
     Span::styled(
         format!(" {label} "),
         theme.fg_bg(theme.ink(background), background),

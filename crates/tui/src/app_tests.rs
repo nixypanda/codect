@@ -1,14 +1,18 @@
-use super::*;
+use crate::api::Cmd;
 use crate::component::overlay::Overlay;
 use crate::component::text_input::TextInput;
+use crate::kernel::app::{Diagnostic, Msg, settle, update};
 use crate::page::show::{ShowHighlights, VisibleRow};
 use crate::page::{DiffSide, Loaded, focus_default, focus_ring};
 use crate::plugin::{
     COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE, SOURCE_FOCUS, SOURCE_PANE,
     TREE_FOCUS, TREE_PANE,
 };
+use crate::plugins::PluginsCmd;
+use crate::plugins::legacy::Msg as LegacyMsg;
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
+use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::test_support::{
     ATTRIBUTED_SOURCE, NESTED_SOURCE, area_set, assert_view_consistent, attributed_child_outline,
     base_app, buffer_row, buffer_text, cell_x_of, click, commit_search, commit_steps, commits_app,
@@ -19,6 +23,7 @@ use crate::test_support::{
     source_outline, source_outline_with, tail_palette_entries, test_function_outline,
     tests_filter_outline, two_files, two_function_outline,
 };
+use crate::test_support::{App, legacy_msg};
 use crate::workspace::BadgeTone;
 use crate::workspace::{Search, SearchMatch, SearchPane, collect_matches};
 use base::{
@@ -27,19 +32,91 @@ use base::{
 };
 use ratatui::style::Color;
 
+use crate::action::{Action, CommitsAction, GlobalAction, RangeAction, ShowAction};
+use crate::component::overlay;
+use crate::component::tree::RowKind;
+use crate::kernel::plugin::{FocusKey, PluginSet, QueryChange, Request, Size};
+use crate::render::icons::Icons;
+use crate::util::input::Key;
+use engine::EngineError;
+
 const TEST_SOURCE: &str = "#[test]\nfn decode_source() {\n    let hidden = 42;\n}\n";
+
+const TREE_DEFAULT_PERCENT: u16 = 30;
+const TREE_MIN_PERCENT: u16 = 15;
+const TREE_MAX_PERCENT: u16 = 60;
+const TREE_STEP: u16 = 5;
+const DIAGNOSTIC_TICKS: u8 = 40;
+
+fn apply_request(app: &mut App, request: Request, cmds: &mut Vec<PluginsCmd>) {
+    let specs = crate::kernel::app::collect_specs(app);
+    crate::kernel::dispatch::apply_request(app, request, cmds, 0, &specs);
+}
+
+fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<PluginsCmd>, depth: u8) {
+    use crate::kernel::plugin::{Out, PluginId};
+    let specs = crate::kernel::app::collect_specs(app);
+    let outs = {
+        let overlay = app.plugins.overlay_pane();
+        let busy = app.plugins.busy();
+        let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+        app.plugins.legacy.apply_action(action, &cx)
+    };
+    let wrapped: Vec<(PluginId, Out<PluginsCmd>)> = outs
+        .into_iter()
+        .map(|out| {
+            (
+                crate::plugins::legacy::LEGACY,
+                match out {
+                    Out::Effect(cmd) => Out::Effect(PluginsCmd::Legacy(cmd)),
+                    Out::Kernel(request) => Out::Kernel(request),
+                },
+            )
+        })
+        .collect();
+    crate::kernel::dispatch::process_wrapped(app, wrapped, cmds, depth, &specs);
+}
+
+fn coalesce_commit_loads(app: &mut App, cmds: &mut Vec<PluginsCmd>) {
+    let effects = crate::test_support::after_batch_effects(app, cmds);
+    cmds.extend(effects);
+}
+
+fn command_for(key: Key, app: &App) -> Option<Action> {
+    crate::command::action_for_key(&app.plugins.legacy.loaded, app.kernel.focus, key)
+}
+
+fn tree_viewport_height(app: &App) -> usize {
+    let specs = crate::kernel::app::collect_specs(app);
+    let overlay = app.plugins.overlay_pane();
+    let busy = app.plugins.busy();
+    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    cx.layout_if_focused(TREE_FOCUS)
+        .slots
+        .iter()
+        .find(|slot| slot.pane == TREE_PANE)
+        .map_or(0, |slot| slot.geometry.inner.height as usize)
+}
+
+fn body_is_visible(app: &App) -> bool {
+    let specs = crate::kernel::app::collect_specs(app);
+    let overlay = app.plugins.overlay_pane();
+    let busy = app.plugins.busy();
+    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    cx.body_visible()
+}
 
 #[test]
 fn a_loaded_result_installs_files_and_preserves_the_selection() {
     let app = two_files();
     let (next, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Ok(vec![source_outline("a.rs", "A\n"), source_outline("b.rs", "B\n")].into()),
-        },
+        }),
         &app,
     );
 
@@ -58,17 +135,19 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
         source_outline("b.rs", "b\n"),
         source_outline("c.rs", "c\n"),
     ]);
-    app.tree.cursor = app
+    app.plugins.legacy.tree.cursor = app
+        .plugins
+        .legacy
         .tree
         .row_of_file(&RepoPath::new("b.rs").unwrap())
         .unwrap();
     app.workspace.selected = Some(RepoPath::new("b.rs").unwrap());
 
     let (next, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: show_request(),
             result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("c.rs", "c\n")].into()),
-        },
+        }),
         &app,
     );
     assert_eq!(selected(&next).as_deref(), Some("c.rs"));
@@ -77,17 +156,17 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
 #[test]
 fn a_reload_retains_the_selection_and_resets_the_show_body() {
     let mut app = show_app(vec![source_outline("a.rs", "one\ntwo\nthree\n")]);
-    if let Loaded::Show(show) = &mut app.loaded {
+    if let Loaded::Show(show) = &mut app.plugins.legacy.loaded {
         show.body.scroll = 2;
         show.body.hscroll = 1;
         show.body.cursor_line = 3;
     }
 
     let (next, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: show_request(),
             result: Ok(vec![source_outline("a.rs", "one\ntwo\nthree\n")].into()),
-        },
+        }),
         &app,
     );
 
@@ -105,12 +184,12 @@ fn a_reload_retains_the_selection_and_resets_the_diff_body() {
         Some("1\n2\n3\n4\n5\n6\n"),
         Some("1\n2\n3\n4\n5\nX\n"),
     )]);
-    if let Loaded::Diff(diff) = &mut app.loaded {
+    if let Loaded::Diff(diff) = &mut app.plugins.legacy.loaded {
         diff.set_body_scroll(3);
     }
 
     let (next, _) = update(
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request: diff_request(),
             result: Ok(vec![file_diff(
                 "a.rs",
@@ -118,7 +197,7 @@ fn a_reload_retains_the_selection_and_resets_the_diff_body() {
                 Some("1\n2\n3\n4\n5\nX\n"),
             )]
             .into()),
-        },
+        }),
         &app,
     );
 
@@ -136,10 +215,10 @@ fn a_reload_that_drops_the_selection_falls_back_to_the_last_file() {
     assert_eq!(selected(&app).as_deref(), Some("b.rs"));
 
     let (next, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: show_request(),
             result: Ok(vec![source_outline("a.rs", "a\n")].into()),
-        },
+        }),
         &app,
     );
 
@@ -154,15 +233,15 @@ fn a_reload_that_drops_the_selection_falls_back_to_the_last_file() {
 fn an_empty_reload_clears_the_selection_and_the_tree_cursor() {
     let app = two_files();
     let (next, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: show_request(),
             result: Ok(Vec::new().into()),
-        },
+        }),
         &app,
     );
 
     assert!(next.workspace.selected.is_none());
-    assert_eq!(next.tree.cursor, 0);
+    assert_eq!(next.plugins.legacy.tree.cursor, 0);
 }
 
 #[test]
@@ -174,15 +253,18 @@ fn a_diff_reload_applies_the_fallback_selection_within_the_update() {
     assert_eq!(selected(&app).as_deref(), Some("a.rs"));
 
     let (next, _) = update(
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request: diff_request(),
             result: Ok(vec![file_diff("b.rs", Some("b\n"), Some("B\n"))].into()),
-        },
+        }),
         &app,
     );
 
     assert_eq!(selected(&next).as_deref(), Some("b.rs"));
-    assert_eq!(next.tree.cursor, 0, "the fallback is revealed in the tree");
+    assert_eq!(
+        next.plugins.legacy.tree.cursor, 0,
+        "the fallback is revealed in the tree"
+    );
 }
 
 #[test]
@@ -270,13 +352,13 @@ fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
         name: "x".to_owned(),
     });
     let (next, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Err(Box::new(error)),
-        },
+        }),
         &app,
     );
 
@@ -296,7 +378,14 @@ fn empty_projections_are_still_explorable_in_the_tree() {
         source_outline_with("empty.rs", "// comment only\n", ""),
         source_outline("full.rs", "x\n"),
     ]);
-    let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
+    let labels: Vec<&str> = app
+        .plugins
+        .legacy
+        .tree
+        .rows
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect();
     assert_eq!(labels, vec!["empty.rs", "full.rs"]);
     assert!(
         app.workspace
@@ -347,7 +436,14 @@ fn a_diff_tree_contains_only_changed_paths() {
         file_diff("src/a.rs", Some("a\n"), Some("A\n")),
         file_diff("src/b.rs", None, Some("b\n")),
     ]);
-    let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
+    let labels: Vec<&str> = app
+        .plugins
+        .legacy
+        .tree
+        .rows
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect();
     assert_eq!(labels, vec!["src", "a.rs", "b.rs"]);
 }
 
@@ -358,11 +454,18 @@ fn tree_rows_follow_raw_path_order_and_are_nested() {
         source_outline("src/lib.rs", "l\n"),
         source_outline("src/main.rs", "m\n"),
     ]);
-    let labels: Vec<&str> = app.tree.rows.iter().map(|row| row.label.as_str()).collect();
+    let labels: Vec<&str> = app
+        .plugins
+        .legacy
+        .tree
+        .rows
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect();
     assert_eq!(labels, vec!["a.rs", "src", "lib.rs", "main.rs"]);
-    assert_eq!(app.tree.rows[0].depth, 0);
-    assert_eq!(app.tree.rows[1].depth, 0);
-    assert_eq!(app.tree.rows[2].depth, 1);
+    assert_eq!(app.plugins.legacy.tree.rows[0].depth, 0);
+    assert_eq!(app.plugins.legacy.tree.rows[1].depth, 0);
+    assert_eq!(app.plugins.legacy.tree.rows[2].depth, 1);
 }
 
 #[test]
@@ -372,14 +475,16 @@ fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
         source_outline("src/lib.rs", "l\n"),
         source_outline("src/main.rs", "m\n"),
     ]);
-    app.tree.cursor = 1;
+    app.plugins.legacy.tree.cursor = 1;
     assert!(matches!(
-        app.tree.current_row().unwrap().kind,
+        app.plugins.legacy.tree.current_row().unwrap().kind,
         RowKind::Directory { .. }
     ));
 
     let (collapsed, _) = update(Msg::Key(Key::Enter), &app);
     let labels: Vec<&str> = collapsed
+        .plugins
+        .legacy
         .tree
         .rows
         .iter()
@@ -387,7 +492,7 @@ fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
         .collect();
     assert_eq!(labels, vec!["a.rs", "src"]);
     assert!(matches!(
-        collapsed.tree.rows[1].kind,
+        collapsed.plugins.legacy.tree.rows[1].kind,
         RowKind::Directory {
             expanded: false,
             ..
@@ -396,6 +501,8 @@ fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
 
     let (expanded, _) = update(Msg::Key(Key::Right), &collapsed);
     let labels: Vec<&str> = expanded
+        .plugins
+        .legacy
         .tree
         .rows
         .iter()
@@ -410,10 +517,10 @@ fn left_on_a_directory_row_folds_it() {
         source_outline("a.rs", "a\n"),
         source_outline("src/lib.rs", "l\n"),
     ]);
-    app.tree.cursor = 1;
+    app.plugins.legacy.tree.cursor = 1;
     let (folded, _) = update(Msg::Key(Key::Left), &app);
     assert!(matches!(
-        folded.tree.rows[1].kind,
+        folded.plugins.legacy.tree.rows[1].kind,
         RowKind::Directory {
             expanded: false,
             ..
@@ -432,10 +539,10 @@ fn empty_commit_history_installs_a_diff_and_focuses_commits() {
         merge_base: false,
     });
     let (next, commands) = update(
-        Msg::HistoryLoaded {
+        legacy_msg(LegacyMsg::HistoryLoaded {
             request: commits_request(),
             result: Ok((Vec::new().into(), Vec::new().into())),
-        },
+        }),
         &app,
     );
     assert!(commands.is_empty());
@@ -474,12 +581,18 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     let (mut clicked, mut commands) = update(Msg::Mouse(click(4, 12)), &app);
     coalesce_commit_loads(&mut clicked, &mut commands);
     assert_eq!(diff_focus_of(&clicked), Some(DIFF_BAND_FOCUS));
-    assert!(matches!(commands.as_slice(), [Cmd::Step { index: 1, .. }]));
+    assert!(matches!(
+        commands.as_slice(),
+        [PluginsCmd::Legacy(Cmd::Step { index: 1, .. })]
+    ));
 
     let (mut wheeled, mut commands) = update(Msg::Mouse(scroll(4, 12, false)), &app);
     coalesce_commit_loads(&mut wheeled, &mut commands);
     assert_eq!(diff_focus_of(&wheeled), Some(DIFF_BAND_FOCUS));
-    assert!(matches!(commands.as_slice(), [Cmd::Step { index: 3, .. }]));
+    assert!(matches!(
+        commands.as_slice(),
+        [PluginsCmd::Legacy(Cmd::Step { index: 3, .. })]
+    ));
 
     let mut narrow = app.clone();
     narrow.size = Size {
@@ -488,7 +601,10 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     };
     let (mut narrow_clicked, mut commands) = update(Msg::Mouse(click(4, 12)), &narrow);
     coalesce_commit_loads(&mut narrow_clicked, &mut commands);
-    assert!(matches!(commands.as_slice(), [Cmd::Step { index: 1, .. }]));
+    assert!(matches!(
+        commands.as_slice(),
+        [PluginsCmd::Legacy(Cmd::Step { index: 1, .. })]
+    ));
 
     let (files, commands) = update(Msg::Mouse(click(4, 3)), &app);
     assert_eq!(diff_focus_of(&files), Some(TREE_FOCUS));
@@ -514,15 +630,18 @@ fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_dis
     assert_eq!(commits_ref(&app).target(), Some(3));
     assert!(commands.is_empty(), "a step load is deferred to coalescing");
     coalesce_commit_loads(&mut app, &mut commands);
-    assert!(matches!(commands.as_slice(), [Cmd::Step { index: 3, .. }]));
+    assert!(matches!(
+        commands.as_slice(),
+        [PluginsCmd::Legacy(Cmd::Step { index: 3, .. })]
+    ));
     assert_eq!(diff_ref(&app).diffs(), displayed.as_slice());
     assert_eq!(diff_ref(&app).revisions(), displayed_labels);
 
     let (loaded, _) = update(
-        Msg::StepLoaded {
+        legacy_msg(LegacyMsg::StepLoaded {
             index: 3,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("new\n"))].into()),
-        },
+        }),
         &app,
     );
     assert_eq!(commits_ref(&loaded).cursor(), 3);
@@ -531,14 +650,14 @@ fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_dis
     assert_eq!(loaded.workspace.selected, app.workspace.selected);
 
     let (failed, commands) = update(
-        Msg::StepLoaded {
+        legacy_msg(LegacyMsg::StepLoaded {
             index: 3,
             result: Err(Box::new(EngineError::Selection(
                 base::SelectionError::UnknownArea {
                     name: "missing".to_owned(),
                 },
             ))),
-        },
+        }),
         &app,
     );
     assert!(commands.is_empty());
@@ -572,12 +691,15 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
     let mut commands = Vec::new();
     let mut app = advanced;
     coalesce_commit_loads(&mut app, &mut commands);
-    assert!(matches!(commands.as_slice(), [Cmd::Step { index: 1, .. }]));
+    assert!(matches!(
+        commands.as_slice(),
+        [PluginsCmd::Legacy(Cmd::Step { index: 1, .. })]
+    ));
     let (app, _) = update(
-        Msg::StepLoaded {
+        legacy_msg(LegacyMsg::StepLoaded {
             index: 1,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("B\n"))].into()),
-        },
+        }),
         &app,
     );
     assert_eq!(commits_ref(&app).cursor(), 1);
@@ -590,7 +712,7 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
         Request::Requery(QueryChange::Scope(new_selection.clone())),
     );
     let request = match commands.as_slice() {
-        [Cmd::Diff(request)] => request.clone(),
+        [PluginsCmd::Legacy(Cmd::Diff(request))] => request.clone(),
         other => panic!("expected one diff request, got {other:?}"),
     };
     assert_eq!(request.selection, new_selection);
@@ -598,19 +720,19 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
     // The pending step folded from that history load must carry the incoming
     // scope, not the stale committed one.
     let (_, commands) = update(
-        Msg::HistoryLoaded {
+        legacy_msg(LegacyMsg::HistoryLoaded {
             request,
             result: Ok((
                 commit_steps(3).into(),
                 vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into(),
             )),
-        },
+        }),
         &app,
     );
     let step = commands
         .iter()
         .find_map(|cmd| match cmd {
-            Cmd::Step { request, .. } => Some(request),
+            PluginsCmd::Legacy(Cmd::Step { request, .. }) => Some(request),
             _ => None,
         })
         .expect("a pending commit step load");
@@ -621,7 +743,9 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
 fn palette_switches_between_range_and_commit_views() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
     assert!(
-        app.loaded
+        app.plugins
+            .legacy
+            .loaded
             .palette_entries()
             .iter()
             .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
@@ -636,10 +760,10 @@ fn palette_switches_between_range_and_commit_views() {
     );
     assert_eq!(
         commands,
-        vec![Cmd::Diff(DiffRequest {
+        vec![PluginsCmd::Legacy(Cmd::Diff(DiffRequest {
             view: DiffView::Commits,
             ..diff_request()
-        })]
+        }))]
     );
     assert_eq!(diff_ref(&next).revisions(), diff_ref(&app).revisions());
 }
@@ -660,16 +784,18 @@ fn a_snapshot_range_cannot_switch_to_commits() {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", None, Some("a\n"))].into()),
-        },
+        }),
         &app,
     );
     let app = settle(next);
 
     assert!(
-        !app.loaded
+        !app.plugins
+            .legacy
+            .loaded
             .palette_entries()
             .iter()
             .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
@@ -704,10 +830,10 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
-        },
+        }),
         &app,
     );
     let app = settle(next);
@@ -720,7 +846,9 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
     );
 
     assert!(
-        !app.loaded
+        !app.plugins
+            .legacy
+            .loaded
             .palette_entries()
             .iter()
             .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
@@ -751,7 +879,7 @@ fn a_refused_commit_switch_leaves_paging_ready() {
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
     assert_eq!(
-        next.loaded.paging(),
+        next.plugins.legacy.loaded.paging(),
         crate::page::Paging::Ready,
         "the refusal returns before paging is set to Loading"
     );
@@ -771,7 +899,7 @@ fn a_merge_base_switch_refusal_leaves_paging_ready() {
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
     assert_eq!(
-        next.loaded.paging(),
+        next.plugins.legacy.loaded.paging(),
         crate::page::Paging::Ready,
         "the refusal returns before paging is set to Loading"
     );
@@ -784,7 +912,7 @@ fn navigation_defers_highlighting_until_settle() {
         source_outline("b.rs", "pub fn b();\n"),
     ]);
     let mut fresh = app.clone();
-    if let Loaded::Show(show) = &mut fresh.loaded {
+    if let Loaded::Show(show) = &mut fresh.plugins.legacy.loaded {
         show.highlight = ShowHighlights::default();
     }
     assert!(
@@ -816,9 +944,9 @@ fn settle_skips_highlighting_when_the_body_is_hidden() {
         width: 60,
         height: 30,
     };
-    app.tree.cursor = 0;
+    app.plugins.legacy.tree.cursor = 0;
     app.focus = Some(TREE_FOCUS);
-    if let Loaded::Show(show) = &mut app.loaded {
+    if let Loaded::Show(show) = &mut app.plugins.legacy.loaded {
         show.highlight = ShowHighlights::default();
     }
     let settled = settle(app);
@@ -847,7 +975,10 @@ fn mode_picker_defers_the_mode_change_until_selection() {
     let app = two_files();
     let (opened, cmds) = update(Msg::Key(Key::Char('m')), &app);
     assert!(cmds.is_empty());
-    assert!(matches!(opened.overlay, Some(Overlay::Mode { .. })));
+    assert!(matches!(
+        opened.plugins.legacy.overlay,
+        Some(Overlay::Mode { .. })
+    ));
 
     let (down, _) = update(Msg::Key(Key::Down), &opened);
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
@@ -858,13 +989,13 @@ fn mode_picker_defers_the_mode_change_until_selection() {
         ProjectionMode::Types,
         "mode changes on load"
     );
-    assert_eq!(chosen.overlay, None);
+    assert_eq!(chosen.plugins.legacy.overlay, None);
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             mode: ProjectionMode::Signatures,
             ..show_request()
-        })]
+        }))]
     );
 }
 
@@ -876,17 +1007,17 @@ fn mode_picker_on_a_diff_keeps_the_diff_shape() {
     let (_, cmds) = update(Msg::Key(Key::Enter), &down);
     assert_eq!(
         cmds,
-        vec![Cmd::Diff(DiffRequest {
+        vec![PluginsCmd::Legacy(Cmd::Diff(DiffRequest {
             mode: ProjectionMode::Signatures,
             ..diff_request()
-        })]
+        }))]
     );
 }
 
 #[test]
 fn the_mode_picker_lists_the_modes() {
     let mut app = two_files();
-    app.overlay = Some(Overlay::mode(ProjectionMode::Types));
+    app.plugins.legacy.overlay = Some(Overlay::mode(ProjectionMode::Types));
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("types"), "{text}");
     assert!(text.contains("signatures"), "{text}");
@@ -902,20 +1033,20 @@ fn the_mode_picker_reaches_tests_and_clamps_at_the_last_mode() {
     let (_, cmds) = update(Msg::Key(Key::Enter), &down_again);
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             mode: ProjectionMode::Tests,
             ..show_request()
-        })]
+        }))]
     );
 
     let (clamped, _) = update(Msg::Key(Key::Down), &down_again);
     let (_, cmds) = update(Msg::Key(Key::Enter), &clamped);
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             mode: ProjectionMode::Tests,
             ..show_request()
-        })]
+        }))]
     );
 }
 
@@ -971,14 +1102,17 @@ fn tab_toggles_the_tree_and_both_diff_panes() {
 fn help_toggles_and_swallows_navigation() {
     let app = two_files();
     let (help, _) = update(Msg::Key(Key::Char('?')), &app);
-    assert_eq!(help.overlay, Some(Overlay::Help));
+    assert_eq!(help.plugins.legacy.overlay, Some(Overlay::Help));
 
     let (still, _) = update(Msg::Key(Key::Char('j')), &help);
-    assert_eq!(still.tree.cursor, help.tree.cursor);
-    assert_eq!(still.overlay, Some(Overlay::Help));
+    assert_eq!(
+        still.plugins.legacy.tree.cursor,
+        help.plugins.legacy.tree.cursor
+    );
+    assert_eq!(still.plugins.legacy.overlay, Some(Overlay::Help));
 
     let (closed, _) = update(Msg::Key(Key::Esc), &help);
-    assert_eq!(closed.overlay, None);
+    assert_eq!(closed.plugins.legacy.overlay, None);
 }
 
 #[test]
@@ -1007,10 +1141,10 @@ fn confirming_a_revision_emits_a_load_with_that_revision() {
     assert!(show_ref(&applied).prompt.is_none());
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             revision: "HEAD~2".to_owned(),
             ..show_request()
-        })]
+        }))]
     );
 }
 
@@ -1021,6 +1155,75 @@ fn escaping_a_revision_prompt_emits_nothing() {
     let (closed, cmds) = update(Msg::Key(Key::Esc), &opened);
     assert!(show_ref(&closed).prompt.is_none());
     assert!(cmds.is_empty());
+}
+
+#[test]
+fn a_cancelled_prompt_does_not_wedge_input() {
+    // A show revision prompt: Esc cancels it.
+    let mut app = folder_app();
+    focus_content(&mut app);
+    let before = show_ref(&app).body.cursor_line;
+
+    let (opened, _) = update(Msg::Key(Key::Char('r')), &app);
+    assert!(show_ref(&opened).prompt.is_some(), "r opens the prompt");
+    assert_eq!(
+        opened.plugins.overlay_pane(),
+        Some(crate::plugins::legacy::LEGACY_OVERLAY),
+        "the prompt occupies the overlay slot"
+    );
+
+    let (cancelled, _) = update(Msg::Key(Key::Esc), &opened);
+    assert!(show_ref(&cancelled).prompt.is_none(), "Esc cancels it");
+    assert_eq!(
+        cancelled.plugins.overlay_pane(),
+        None,
+        "the overlay slot clears with the prompt"
+    );
+
+    // j is no longer swallowed: it moves the show cursor again.
+    let (moved, _) = update(Msg::Key(Key::Char('j')), &cancelled);
+    assert!(
+        show_ref(&moved).body.cursor_line > before,
+        "j moves the cursor after the prompt is cancelled"
+    );
+
+    // q is no longer swallowed: it quits.
+    let (quit, _) = update(Msg::Key(Key::Char('q')), &cancelled);
+    assert!(quit.chrome.quit, "q quits after the prompt is cancelled");
+
+    // Enter with an empty value cancels the prompt just like Esc.
+    let (opened, _) = update(Msg::Key(Key::Char('r')), &app);
+    let mut emptied = opened;
+    for _ in 0.."HEAD".len() {
+        let (next, _) = update(Msg::Key(Key::Backspace), &emptied);
+        emptied = next;
+    }
+    let (empty_cancelled, cmds) = update(Msg::Key(Key::Enter), &emptied);
+    assert!(show_ref(&empty_cancelled).prompt.is_none());
+    assert!(cmds.is_empty(), "an empty value emits no load");
+    assert_eq!(
+        empty_cancelled.plugins.overlay_pane(),
+        None,
+        "the slot clears on an empty confirm too"
+    );
+    let (quit, _) = update(Msg::Key(Key::Char('q')), &empty_cancelled);
+    assert!(quit.chrome.quit, "q quits after an empty-value cancel");
+
+    // The diff base and target prompts cancel the same way.
+    for key in [Key::Char('b'), Key::Char('t')] {
+        let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+        let (opened, _) = update(Msg::Key(key), &app);
+        assert!(diff_ref(&opened).prompt.is_some(), "{key:?} opens a prompt");
+        let (cancelled, _) = update(Msg::Key(Key::Esc), &opened);
+        assert!(diff_ref(&cancelled).prompt.is_none());
+        assert_eq!(
+            cancelled.plugins.overlay_pane(),
+            None,
+            "the diff prompt clears on Esc"
+        );
+        let (quit, _) = update(Msg::Key(Key::Char('q')), &cancelled);
+        assert!(quit.chrome.quit, "q quits after a cancelled diff prompt");
+    }
 }
 
 #[test]
@@ -1041,7 +1244,7 @@ fn diff_revision_keys_target_base_and_target_fields() {
 #[test]
 fn the_revision_prompt_renders_its_label_and_text() {
     let mut app = two_files();
-    if let Loaded::Show(show) = &mut app.loaded {
+    if let Loaded::Show(show) = &mut app.plugins.legacy.loaded {
         show.prompt = Some(TextInput::new("HEAD~2"));
     }
     let text = buffer_text(&render(&app, 100, 20));
@@ -1053,23 +1256,26 @@ fn the_revision_prompt_renders_its_label_and_text() {
 fn scope_key_opens_the_chooser_and_requests_areas() {
     let app = two_files();
     let (opened, cmds) = update(Msg::Key(Key::Char('s')), &app);
-    assert!(matches!(opened.overlay, Some(Overlay::Scope(_))));
-    assert_eq!(cmds, vec![Cmd::LoadAreas]);
+    assert!(matches!(
+        opened.plugins.legacy.overlay,
+        Some(Overlay::Scope(_))
+    ));
+    assert_eq!(cmds, vec![PluginsCmd::Legacy(Cmd::LoadAreas)]);
 }
 
 #[test]
 fn choosing_all_from_the_chooser_loads_everything() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('s')), &app);
-    let (loaded, _) = update(Msg::AreasLoaded(Ok(area_set())), &opened);
+    let (loaded, _) = update(legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))), &opened);
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &loaded);
-    assert_eq!(chosen.overlay, None);
+    assert_eq!(chosen.plugins.legacy.overlay, None);
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             selection: Selection::all(),
             ..show_request()
-        })]
+        }))]
     );
 }
 
@@ -1077,19 +1283,19 @@ fn choosing_all_from_the_chooser_loads_everything() {
 fn selecting_an_area_loads_that_area() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('s')), &app);
-    let (loaded, _) = update(Msg::AreasLoaded(Ok(area_set())), &opened);
+    let (loaded, _) = update(legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))), &opened);
     let (down, _) = update(Msg::Key(Key::Down), &loaded);
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
-    assert_eq!(chosen.overlay, None);
+    assert_eq!(chosen.plugins.legacy.overlay, None);
     let expected = Selection::new(vec![SelectionGroup::Area(
         Area::new("core", [RepoPath::new("src/core").unwrap()]).unwrap(),
     )]);
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             selection: expected,
             ..show_request()
-        })]
+        }))]
     );
 }
 
@@ -1100,8 +1306,11 @@ fn a_config_error_keeps_the_chooser_open_with_a_message() {
     let error = EngineError::Selection(base::SelectionError::UnknownArea {
         name: "x".to_owned(),
     });
-    let (loaded, _) = update(Msg::AreasLoaded(Err(Box::new(error))), &opened);
-    match loaded.overlay {
+    let (loaded, _) = update(
+        legacy_msg(LegacyMsg::AreasLoaded(Err(Box::new(error)))),
+        &opened,
+    );
+    match loaded.plugins.legacy.overlay {
         Some(Overlay::Scope(chooser)) => assert!(chooser.error.is_some()),
         other => panic!("expected a scope chooser, got {other:?}"),
     }
@@ -1111,7 +1320,7 @@ fn a_config_error_keeps_the_chooser_open_with_a_message() {
 fn literal_path_entry_builds_a_path_selection() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('s')), &app);
-    let (loaded, _) = update(Msg::AreasLoaded(Ok(area_set())), &opened);
+    let (loaded, _) = update(legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))), &opened);
     let mut state = loaded;
     for _ in 0..3 {
         let (next, _) = update(Msg::Key(Key::Down), &state);
@@ -1124,16 +1333,16 @@ fn literal_path_entry_builds_a_path_selection() {
         typed = next;
     }
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &typed);
-    assert_eq!(chosen.overlay, None);
+    assert_eq!(chosen.plugins.legacy.overlay, None);
     let expected = Selection::new(vec![SelectionGroup::Path(
         RepoPath::new("src/lib.rs").unwrap(),
     )]);
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             selection: expected,
             ..show_request()
-        })]
+        }))]
     );
 }
 
@@ -1141,7 +1350,10 @@ fn literal_path_entry_builds_a_path_selection() {
 fn search_finds_matches_and_steps_them() {
     let app = show_app(vec![source_outline("a.rs", "alpha\nbeta\nalpha again\n")]);
     let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
-    assert!(matches!(opened.overlay, Some(Overlay::Search(_))));
+    assert!(matches!(
+        opened.plugins.legacy.overlay,
+        Some(Overlay::Search(_))
+    ));
 
     let mut state = opened;
     for character in "alpha".chars() {
@@ -1160,7 +1372,7 @@ fn search_finds_matches_and_steps_them() {
     );
 
     let (committed, _) = update(Msg::Key(Key::Enter), &state);
-    assert_eq!(committed.overlay, None);
+    assert_eq!(committed.plugins.legacy.overlay, None);
     let (stepped, _) = update(Msg::Key(Key::Char('n')), &committed);
     assert_eq!(stepped.workspace.search.as_ref().unwrap().cursor, 1);
     let (back, _) = update(Msg::Key(Key::Char('N')), &stepped);
@@ -1185,7 +1397,7 @@ fn switching_files_recomputes_a_committed_search() {
     });
     app.workspace.selected = Some(RepoPath::new("b.rs").unwrap());
     let app = settle(app);
-    let search = app.workspace.search.expect("search");
+    let search = app.kernel.workspace.search.clone().expect("search");
     assert_eq!(search.matches.len(), 1);
     assert_eq!(search.matches[0].line, 2, "the match moved to the new file");
 }
@@ -1196,7 +1408,7 @@ fn q_types_into_a_search_input_instead_of_quitting() {
     let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
     let (typed, _) = update(Msg::Key(Key::Char('q')), &opened);
     assert!(!typed.chrome.quit);
-    match &typed.overlay {
+    match &typed.plugins.legacy.overlay {
         Some(Overlay::Search(state)) => assert_eq!(state.input.text, "q"),
         other => panic!("expected a search overlay, got {other:?}"),
     }
@@ -1205,10 +1417,10 @@ fn q_types_into_a_search_input_instead_of_quitting() {
 #[test]
 fn the_palette_and_finder_render_their_lists() {
     let mut app = two_files();
-    app.overlay = Some(Overlay::palette(&overlay::Ctx {
+    app.plugins.legacy.overlay = Some(Overlay::palette(&overlay::Ctx {
         visible: &app.workspace.files.paths,
-        entries: &app.loaded.palette_entries(),
-        groups: &app.loaded.prefix_groups(),
+        entries: &app.plugins.legacy.loaded.palette_entries(),
+        groups: &app.plugins.legacy.loaded.prefix_groups(),
         mode: app.workspace.query.mode,
         pending_prefix: app.keymap.pending,
     }));
@@ -1217,10 +1429,10 @@ fn the_palette_and_finder_render_their_lists() {
     assert!(text.contains("Switch types"), "{text}");
 
     let mut app = two_files();
-    app.overlay = Some(Overlay::finder(&overlay::Ctx {
+    app.plugins.legacy.overlay = Some(Overlay::finder(&overlay::Ctx {
         visible: &app.workspace.files.paths,
-        entries: &app.loaded.palette_entries(),
-        groups: &app.loaded.prefix_groups(),
+        entries: &app.plugins.legacy.loaded.palette_entries(),
+        groups: &app.plugins.legacy.loaded.prefix_groups(),
         mode: app.workspace.query.mode,
         pending_prefix: app.keymap.pending,
     }));
@@ -1240,7 +1452,7 @@ fn page_keys_move_the_cursor_in_the_tree_and_the_body_cursor() {
         source_outline("b.rs", "x\n"),
     ]);
     let (down, _) = update(Msg::Key(Key::PageDown), &app);
-    assert!(down.tree.cursor > app.tree.cursor);
+    assert!(down.plugins.legacy.tree.cursor > app.plugins.legacy.tree.cursor);
 
     let mut body = app.clone();
     focus_content(&mut body);
@@ -1273,7 +1485,7 @@ fn clicking_a_file_selects_it() {
     let app = two_files();
     let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     assert_eq!(selected(&next).as_deref(), Some("b.rs"));
-    assert_eq!(next.tree.cursor, 1);
+    assert_eq!(next.plugins.legacy.tree.cursor, 1);
     assert_eq!(next.focus, Some(TREE_FOCUS));
 }
 
@@ -1285,6 +1497,8 @@ fn clicking_a_directory_folds_it() {
     ]);
     let (folded, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     let labels: Vec<&str> = folded
+        .plugins
+        .legacy
         .tree
         .rows
         .iter()
@@ -1299,13 +1513,16 @@ fn the_wheel_scrolls_the_tree_without_moving_the_selection() {
         .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
         .collect();
     let app = show_app(files);
-    assert_eq!(app.tree.scroll, 0);
+    assert_eq!(app.plugins.legacy.tree.scroll, 0);
     assert_eq!(selected(&app).as_deref(), Some("f00.rs"));
 
     let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
-    assert_eq!(scrolled.tree.scroll, 3, "the wheel moves the viewport");
     assert_eq!(
-        scrolled.tree.cursor, 0,
+        scrolled.plugins.legacy.tree.scroll, 3,
+        "the wheel moves the viewport"
+    );
+    assert_eq!(
+        scrolled.plugins.legacy.tree.cursor, 0,
         "the wheel does not move the cursor"
     );
     assert_eq!(
@@ -1315,7 +1532,10 @@ fn the_wheel_scrolls_the_tree_without_moving_the_selection() {
     );
 
     let (up, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, true)), &scrolled);
-    assert_eq!(up.tree.scroll, 0, "scrolling up clamps at the top");
+    assert_eq!(
+        up.plugins.legacy.tree.scroll, 0,
+        "scrolling up clamps at the top"
+    );
 }
 
 #[test]
@@ -1325,11 +1545,14 @@ fn moving_the_tree_cursor_after_a_scroll_reveals_it() {
         .collect();
     let app = show_app(files);
     let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
-    assert_eq!(scrolled.tree.scroll, 3);
+    assert_eq!(scrolled.plugins.legacy.tree.scroll, 3);
 
     let moved = press(&scrolled, &[Key::Char('j'); 30]);
-    assert_eq!(moved.tree.cursor, 30);
-    assert_eq!(moved.tree.scroll, 5, "the viewport follows the cursor");
+    assert_eq!(moved.plugins.legacy.tree.cursor, 30);
+    assert_eq!(
+        moved.plugins.legacy.tree.scroll, 5,
+        "the viewport follows the cursor"
+    );
 }
 
 #[test]
@@ -1402,7 +1625,7 @@ fn shrinking_the_tree_keeps_the_cursor_visible() {
         .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
         .collect();
     let app = press(&show_app(files), &[Key::Char('G')]);
-    assert_eq!(app.tree.cursor, 39);
+    assert_eq!(app.plugins.legacy.tree.cursor, 39);
 
     let (resized, _) = update(
         Msg::Resize {
@@ -1412,11 +1635,11 @@ fn shrinking_the_tree_keeps_the_cursor_visible() {
         &app,
     );
     let resized = settle(resized);
-    let height = resized.tree.viewport;
+    let height = resized.plugins.legacy.tree.viewport;
     assert!(height >= 1, "the tree still has a viewport");
     assert!(
-        resized.tree.scroll <= resized.tree.cursor
-            && resized.tree.cursor < resized.tree.scroll + height,
+        resized.plugins.legacy.tree.scroll <= resized.plugins.legacy.tree.cursor
+            && resized.plugins.legacy.tree.cursor < resized.plugins.legacy.tree.scroll + height,
         "the cursor stays inside the viewport after a shrink"
     );
 }
@@ -1437,9 +1660,10 @@ fn a_selection_scrolls_the_hidden_tree_to_the_file() {
 
     let height = tree_viewport_height(&app);
     assert!(height >= 1, "a hidden tree still has a drawing height");
-    assert_eq!(app.tree.cursor, 39);
+    assert_eq!(app.plugins.legacy.tree.cursor, 39);
     assert!(
-        app.tree.scroll <= app.tree.cursor && app.tree.cursor < app.tree.scroll + height,
+        app.plugins.legacy.tree.scroll <= app.plugins.legacy.tree.cursor
+            && app.plugins.legacy.tree.cursor < app.plugins.legacy.tree.scroll + height,
         "the hidden tree is scrolled to the revealed file"
     );
 }
@@ -1451,7 +1675,7 @@ fn growing_the_tree_keeps_a_scrolled_away_viewport() {
         .collect();
     let app = show_app(files);
     let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
-    assert_eq!(scrolled.tree.scroll, 3);
+    assert_eq!(scrolled.plugins.legacy.tree.scroll, 3);
 
     let (resized, _) = update(
         Msg::Resize {
@@ -1462,7 +1686,7 @@ fn growing_the_tree_keeps_a_scrolled_away_viewport() {
     );
     let resized = settle(resized);
     assert_eq!(
-        resized.tree.scroll, 3,
+        resized.plugins.legacy.tree.scroll, 3,
         "growing the tree does not re-reveal a scrolled-away cursor"
     );
 }
@@ -1474,10 +1698,13 @@ fn a_tree_click_uses_the_scrolled_offset() {
         .collect();
     let app = show_app(files);
     let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
-    assert_eq!(scrolled.tree.scroll, 3);
+    assert_eq!(scrolled.plugins.legacy.tree.scroll, 3);
 
     let (clicked, _) = update(Msg::Mouse(click(TREE_X, TREE_Y)), &scrolled);
-    assert_eq!(clicked.tree.cursor, 3, "the click maps to the scrolled row");
+    assert_eq!(
+        clicked.plugins.legacy.tree.cursor, 3,
+        "the click maps to the scrolled row"
+    );
     assert_eq!(selected(&clicked).as_deref(), Some("f03.rs"));
 }
 
@@ -1533,9 +1760,12 @@ fn the_wheel_scrolls_a_diff_and_clicking_it_focuses() {
 #[test]
 fn mouse_is_ignored_while_an_overlay_is_open() {
     let mut app = two_files();
-    app.overlay = Some(Overlay::Help);
+    app.plugins.legacy.overlay = Some(Overlay::Help);
     let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
-    assert_eq!(next.tree.cursor, app.tree.cursor);
+    assert_eq!(
+        next.plugins.legacy.tree.cursor,
+        app.plugins.legacy.tree.cursor
+    );
     assert_eq!(next.workspace.selected, app.workspace.selected);
 }
 
@@ -1543,7 +1773,10 @@ fn mouse_is_ignored_while_an_overlay_is_open() {
 fn a_click_on_the_header_or_a_divider_does_nothing() {
     let app = two_files();
     let (header, _) = update(Msg::Mouse(click(5, 0)), &app);
-    assert_eq!(header.tree.cursor, app.tree.cursor);
+    assert_eq!(
+        header.plugins.legacy.tree.cursor,
+        app.plugins.legacy.tree.cursor
+    );
 
     let mut body_focused = app.clone();
     focus_content(&mut body_focused);
@@ -1632,13 +1865,13 @@ fn a_load_marks_the_model_busy_until_it_completes() {
     assert!(loading.is_busy(), "an emitted load is busy");
 
     let (done, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("b.rs", "b\n")].into()),
-        },
+        }),
         &loading,
     );
     assert!(!done.is_busy(), "completion clears the busy state");
@@ -1906,10 +2139,11 @@ fn is_open_honors_default_open_and_a_sticky_override() {
         (1, 4),
         true,
     )]);
-    let Loaded::Show(show) = &mut app.loaded else {
+    let selected = app.kernel.workspace.selected.clone();
+    let Loaded::Show(show) = &mut app.plugins.legacy.loaded else {
         panic!("expected a show");
     };
-    show.ensure_visible_rows(app.workspace.selected.as_ref());
+    show.ensure_visible_rows(selected.as_ref());
     let regions = show
         .folds
         .regions(&path)
@@ -1930,7 +2164,7 @@ fn is_open_honors_default_open_and_a_sticky_override() {
         show.fold_state.is_open(&path, &regions[1]),
         "the override wins over default_open"
     );
-    show.ensure_visible_rows(app.workspace.selected.as_ref());
+    show.ensure_visible_rows(selected.as_ref());
     assert_eq!(
         show.line_count(),
         6,
@@ -1948,11 +2182,12 @@ fn a_collapsed_container_hides_a_nested_collapse_entirely() {
         (1, 4),
         true,
     )]);
-    let Loaded::Show(show) = &mut app.loaded else {
+    let selected = app.kernel.workspace.selected.clone();
+    let Loaded::Show(show) = &mut app.plugins.legacy.loaded else {
         panic!("expected a show");
     };
     show.fold_state.set(&path, "impl Widget", false);
-    show.ensure_visible_rows(app.workspace.selected.as_ref());
+    show.ensure_visible_rows(selected.as_ref());
 
     assert_eq!(show.visible_rows().len(), 1, "only the outer fold row");
     assert_eq!(
@@ -2629,14 +2864,17 @@ fn the_which_key_band_cancels_on_an_unrelated_key_and_on_esc() {
 
     let band = press(&app, &[Key::Char('z')]);
     assert_eq!(
-        band.overlay,
+        band.plugins.legacy.overlay,
         Some(Overlay::which_key()),
         "pressing z opens the fold band"
     );
     assert_eq!(band.keymap.pending, Some('z'), "the prefix is pending");
 
     let cancelled = press(&band, &[Key::Char('x')]);
-    assert_eq!(cancelled.overlay, None, "an unrelated key closes the band");
+    assert_eq!(
+        cancelled.plugins.legacy.overlay, None,
+        "an unrelated key closes the band"
+    );
     assert_eq!(cancelled.keymap.pending, None, "the prefix is cleared");
     assert_eq!(
         show_ref(&cancelled).body.cursor_line,
@@ -2645,7 +2883,7 @@ fn the_which_key_band_cancels_on_an_unrelated_key_and_on_esc() {
     );
 
     let escaped = press(&band, &[Key::Esc]);
-    assert_eq!(escaped.overlay, None, "Esc closes the band");
+    assert_eq!(escaped.plugins.legacy.overlay, None, "Esc closes the band");
     assert_eq!(escaped.keymap.pending, None, "Esc clears the prefix");
     assert_eq!(show_ref(&escaped).body.cursor_line, 1);
 
@@ -2658,10 +2896,16 @@ fn a_mouse_event_closes_the_which_key_band() {
     let mut app = folder_app();
     focus_content(&mut app);
     let armed = press(&app, &[Key::Char('z')]);
-    assert!(matches!(armed.overlay, Some(Overlay::WhichKey { .. })));
+    assert!(matches!(
+        armed.plugins.legacy.overlay,
+        Some(Overlay::WhichKey { .. })
+    ));
 
     let (cleared, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &armed);
-    assert!(cleared.overlay.is_none(), "the mouse drops the band");
+    assert!(
+        cleared.plugins.legacy.overlay.is_none(),
+        "the mouse drops the band"
+    );
 
     let moved = press(&cleared, &[Key::Char('j')]);
     assert_eq!(
@@ -2676,20 +2920,23 @@ fn a_reload_closes_the_which_key_band() {
     let mut app = folder_app();
     focus_content(&mut app);
     let armed = press(&app, &[Key::Char('z')]);
-    assert!(matches!(armed.overlay, Some(Overlay::WhichKey { .. })));
+    assert!(matches!(
+        armed.plugins.legacy.overlay,
+        Some(Overlay::WhichKey { .. })
+    ));
 
     let (reloaded, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Ok(vec![nested_outline("a.rs", NESTED_SOURCE, (0, 5), (1, 4), true)].into()),
-        },
+        }),
         &armed,
     );
     assert!(
-        reloaded.overlay.is_none(),
+        reloaded.plugins.legacy.overlay.is_none(),
         "a reload drops the pending band"
     );
 }
@@ -2708,13 +2955,13 @@ fn a_fold_override_survives_a_reload_and_a_selection_change() {
     assert_eq!(show_ref(&opened).line_count(), 6);
 
     let (reloaded, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Ok(files().into()),
-        },
+        }),
         &opened,
     );
     let reloaded = settle(reloaded);
@@ -2741,7 +2988,7 @@ fn a_fold_override_survives_a_reload_and_a_selection_change() {
 #[test]
 fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
     let app = folder_app();
-    let entries = app.loaded.palette_entries();
+    let entries = app.plugins.legacy.loaded.palette_entries();
     for (action, hint) in [
         (ShowAction::ToggleFold, "za"),
         (ShowAction::OpenFold, "zo"),
@@ -2846,28 +3093,34 @@ fn the_band_keys_select_and_run_a_binding() {
         show_ref(&via_keys).line_count()
     );
     assert!(
-        via_band.overlay.is_none(),
+        via_band.plugins.legacy.overlay.is_none(),
         "running a binding closes the band"
     );
 
     // Ctrl-J and Ctrl-K move the highlight without dispatching a binding.
     let opened = press(&app, &[Key::Char('z')]);
-    assert_eq!(opened.overlay, Some(Overlay::which_key()));
+    assert_eq!(opened.plugins.legacy.overlay, Some(Overlay::which_key()));
     assert_eq!(opened.keymap.pending, Some('z'));
     let down = press(&opened, &[Key::CtrlJ]);
-    assert_eq!(down.overlay, Some(Overlay::WhichKey { cursor: 1 }));
+    assert_eq!(
+        down.plugins.legacy.overlay,
+        Some(Overlay::WhichKey { cursor: 1 })
+    );
     let up = press(&down, &[Key::CtrlK]);
-    assert_eq!(up.overlay, Some(Overlay::which_key()));
+    assert_eq!(up.plugins.legacy.overlay, Some(Overlay::which_key()));
     let clamped = press(&up, &[Key::CtrlK]);
     assert_eq!(
-        clamped.overlay,
+        clamped.plugins.legacy.overlay,
         Some(Overlay::which_key()),
         "the highlight clamps at the first binding"
     );
 
     // The arrow keys move the same highlight.
     let arrows = press(&app, &[Key::Char('z'), Key::Down, Key::Down, Key::Up]);
-    assert_eq!(arrows.overlay, Some(Overlay::WhichKey { cursor: 1 }));
+    assert_eq!(
+        arrows.plugins.legacy.overlay,
+        Some(Overlay::WhichKey { cursor: 1 })
+    );
 }
 
 #[test]
@@ -2886,8 +3139,8 @@ fn ctrl_j_and_ctrl_k_keep_their_j_k_alias_outside_the_band() {
 #[test]
 fn the_band_bindings_match_their_palette_entries() {
     let app = folder_app();
-    let groups = app.loaded.prefix_groups();
-    let entries = app.loaded.palette_entries();
+    let groups = app.plugins.legacy.loaded.prefix_groups();
+    let entries = app.plugins.legacy.loaded.palette_entries();
     let folds = groups
         .iter()
         .find(|group| group.name == "fold")
@@ -2910,11 +3163,14 @@ fn q_under_a_pending_prefix_closes_the_band_without_quitting() {
     let mut app = folder_app();
     focus_content(&mut app);
     let band = press(&app, &[Key::Char('z')]);
-    assert_eq!(band.overlay, Some(Overlay::WhichKey { cursor: 0 }));
+    assert_eq!(
+        band.plugins.legacy.overlay,
+        Some(Overlay::WhichKey { cursor: 0 })
+    );
     assert_eq!(band.keymap.pending, Some('z'));
 
     let closed = press(&band, &[Key::Char('q')]);
-    assert_eq!(closed.overlay, None, "q closes the band");
+    assert_eq!(closed.plugins.legacy.overlay, None, "q closes the band");
     assert!(
         !closed.chrome.quit,
         "q does not quit under a pending prefix"
@@ -2949,18 +3205,21 @@ fn an_unhandled_key_falls_through_a_non_modal_overlay() {
     let mut app = two_files();
     // Force the band open with no pending prefix. It is non-modal, so a key it
     // does not handle falls through to the keymap.
-    app.overlay = Some(Overlay::WhichKey { cursor: 0 });
+    app.plugins.legacy.overlay = Some(Overlay::WhichKey { cursor: 0 });
     assert_eq!(app.keymap.pending, None);
 
     let (next, _) = update(Msg::Key(Key::Char('?')), &app);
-    assert_eq!(next.overlay, Some(Overlay::Help));
+    assert_eq!(next.plugins.legacy.overlay, Some(Overlay::Help));
 }
 
 #[test]
 fn ctrl_c_quits_with_a_capturing_overlay_open() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
-    assert!(matches!(opened.overlay, Some(Overlay::Search(_))));
+    assert!(matches!(
+        opened.plugins.legacy.overlay,
+        Some(Overlay::Search(_))
+    ));
 
     let (quit, _) = update(Msg::Key(Key::CtrlC), &opened);
     assert!(quit.chrome.quit, "Ctrl-C quits even from a search input");
@@ -2971,12 +3230,15 @@ fn q_quits_from_help_and_from_the_mode_picker() {
     let app = two_files();
 
     let (help, _) = update(Msg::Key(Key::Char('?')), &app);
-    assert_eq!(help.overlay, Some(Overlay::Help));
+    assert_eq!(help.plugins.legacy.overlay, Some(Overlay::Help));
     let (quit_help, _) = update(Msg::Key(Key::Char('q')), &help);
     assert!(quit_help.chrome.quit, "q quits from help");
 
     let (mode, _) = update(Msg::Key(Key::Char('m')), &app);
-    assert!(matches!(mode.overlay, Some(Overlay::Mode { .. })));
+    assert!(matches!(
+        mode.plugins.legacy.overlay,
+        Some(Overlay::Mode { .. })
+    ));
     let (quit_mode, _) = update(Msg::Key(Key::Char('q')), &mode);
     assert!(quit_mode.chrome.quit, "q quits from the mode picker");
 }
@@ -2987,7 +3249,7 @@ fn ctrl_j_and_ctrl_k_type_into_a_text_capturing_overlay() {
     let (search, _) = update(Msg::Key(Key::Char('/')), &app);
     let (j, _) = update(Msg::Key(Key::CtrlJ), &search);
     let (jk, _) = update(Msg::Key(Key::CtrlK), &j);
-    match &jk.overlay {
+    match &jk.plugins.legacy.overlay {
         Some(Overlay::Search(state)) => assert_eq!(state.input.text, "jk"),
         other => panic!("expected a search overlay, got {other:?}"),
     }
@@ -3019,7 +3281,10 @@ fn the_band_reads_its_prefix_from_the_keymap() {
     focus_content(&mut app);
     let band = press(&app, &[Key::Char('z')]);
     assert_eq!(band.keymap.pending, Some('z'));
-    assert_eq!(band.overlay, Some(Overlay::WhichKey { cursor: 0 }));
+    assert_eq!(
+        band.plugins.legacy.overlay,
+        Some(Overlay::WhichKey { cursor: 0 })
+    );
 
     let text = buffer_text(&render(&band, 100, 20));
     assert!(
@@ -3045,13 +3310,13 @@ fn closing_the_band_clears_the_pending_prefix() {
     // A reload closes the band and drops the prefix.
     let band = press(&app, &[Key::Char('z')]);
     let (reloaded, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Ok(vec![nested_outline("a.rs", NESTED_SOURCE, (0, 5), (1, 4), true)].into()),
-        },
+        }),
         &band,
     );
     assert_eq!(reloaded.keymap.pending, None, "a reload clears it");
@@ -3068,16 +3333,23 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
     // The accessor is exactly the registry's `palette == true` subset, sorted
     // by (rank, registration order).
     for app in [&show, &range, &snapshot, &merge_base, &commits] {
-        let mut specs: Vec<crate::command::CommandSpec> = crate::command::commands(app)
-            .into_iter()
-            .filter(|spec| spec.palette)
-            .collect();
+        let mut specs: Vec<crate::command::CommandSpec> =
+            crate::command::commands(&app.plugins.legacy.loaded, app.focus)
+                .into_iter()
+                .filter(|spec| spec.palette)
+                .collect();
         specs.sort_by_key(|spec| spec.rank);
         let expected: Vec<_> = specs
             .iter()
-            .map(|spec| (spec.run, spec.label, spec.hint))
+            .map(|spec| {
+                (
+                    crate::command::action_for(spec.id.name).expect("known command"),
+                    spec.label,
+                    spec.hint,
+                )
+            })
             .collect();
-        assert_eq!(app.loaded.palette_entries(), expected);
+        assert_eq!(app.plugins.legacy.loaded.palette_entries(), expected);
     }
 
     let mut show_expected = vec![
@@ -3105,8 +3377,8 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
         (Action::Show(ShowAction::CloseAll), "Close all folds", "zM"),
     ];
     show_expected.extend(tail_palette_entries());
-    assert_eq!(show.loaded.palette_entries().len(), 20);
-    assert_eq!(show.loaded.palette_entries(), show_expected);
+    assert_eq!(show.plugins.legacy.loaded.palette_entries().len(), 20);
+    assert_eq!(show.plugins.legacy.loaded.palette_entries(), show_expected);
 
     let mut range_expected = vec![
         (
@@ -3132,8 +3404,11 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
         ),
     ];
     range_expected.extend(tail_palette_entries());
-    assert_eq!(range.loaded.palette_entries().len(), 15);
-    assert_eq!(range.loaded.palette_entries(), range_expected);
+    assert_eq!(range.plugins.legacy.loaded.palette_entries().len(), 15);
+    assert_eq!(
+        range.plugins.legacy.loaded.palette_entries(),
+        range_expected
+    );
 
     let mut snapshot_expected = vec![
         (
@@ -3154,8 +3429,11 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
         ),
     ];
     snapshot_expected.extend(tail_palette_entries());
-    assert_eq!(snapshot.loaded.palette_entries().len(), 14);
-    assert_eq!(snapshot.loaded.palette_entries(), snapshot_expected);
+    assert_eq!(snapshot.plugins.legacy.loaded.palette_entries().len(), 14);
+    assert_eq!(
+        snapshot.plugins.legacy.loaded.palette_entries(),
+        snapshot_expected
+    );
 
     let mut merge_base_expected = vec![
         (
@@ -3176,8 +3454,11 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
         ),
     ];
     merge_base_expected.extend(tail_palette_entries());
-    assert_eq!(merge_base.loaded.palette_entries().len(), 14);
-    assert_eq!(merge_base.loaded.palette_entries(), merge_base_expected);
+    assert_eq!(merge_base.plugins.legacy.loaded.palette_entries().len(), 14);
+    assert_eq!(
+        merge_base.plugins.legacy.loaded.palette_entries(),
+        merge_base_expected
+    );
 
     let mut commits_expected = vec![
         (
@@ -3193,8 +3474,11 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
         ),
     ];
     commits_expected.extend(tail_palette_entries());
-    assert_eq!(commits.loaded.palette_entries().len(), 13);
-    assert_eq!(commits.loaded.palette_entries(), commits_expected);
+    assert_eq!(commits.plugins.legacy.loaded.palette_entries().len(), 13);
+    assert_eq!(
+        commits.plugins.legacy.loaded.palette_entries(),
+        commits_expected
+    );
 }
 
 #[test]
@@ -3205,14 +3489,14 @@ fn command_lookup_reproduces_the_key_table() {
         commits_app(3),
     ];
     for app in &apps {
-        for spec in crate::command::commands(app) {
+        for spec in crate::command::commands(&app.plugins.legacy.loaded, app.focus) {
             for binding in &spec.bindings {
                 if let (crate::command::KeySeq::Key(key), crate::command::KeyScope::Anywhere) =
                     (binding.seq, binding.scope)
                 {
                     assert_eq!(
                         command_for(key, app),
-                        Some(spec.run),
+                        Some(crate::command::action_for(spec.id.name).expect("known command")),
                         "{:?} must bind {key:?}",
                         spec.id
                     );
@@ -3236,7 +3520,7 @@ fn command_lookup_reproduces_the_key_table() {
 fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
     let mut show = folder_app();
     focus_content(&mut show);
-    let groups = show.loaded.prefix_groups();
+    let groups = show.plugins.legacy.loaded.prefix_groups();
     assert_eq!(groups.len(), 1, "one prefix group");
     assert_eq!(groups[0].key, 'z');
     assert_eq!(groups[0].name, "fold");
@@ -3247,27 +3531,51 @@ fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
 
     // The prefix only parks while the show body holds focus.
     assert_eq!(
-        crate::command::pending_prefix(&show, Key::Char('z')),
+        crate::command::pending_prefix(
+            &show.plugins.legacy.loaded,
+            show.kernel.focus,
+            Key::Char('z')
+        ),
         Some('z')
     );
     let tree = folder_app();
-    assert_eq!(crate::command::pending_prefix(&tree, Key::Char('z')), None);
+    assert_eq!(
+        crate::command::pending_prefix(
+            &tree.plugins.legacy.loaded,
+            tree.kernel.focus,
+            Key::Char('z')
+        ),
+        None
+    );
     assert!(
-        crate::command::prefix_groups_in_scope(&tree.loaded, Some(TREE_FOCUS)).is_empty(),
+        crate::command::prefix_groups_in_scope(&tree.plugins.legacy.loaded, Some(TREE_FOCUS))
+            .is_empty(),
         "the tree focus has no prefix in scope"
     );
     assert_eq!(
-        crate::command::prefix_groups_in_scope(&show.loaded, Some(SOURCE_FOCUS)).len(),
+        crate::command::prefix_groups_in_scope(&show.plugins.legacy.loaded, Some(SOURCE_FOCUS))
+            .len(),
         1
     );
     for app in [
         diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]),
         commits_app(3),
     ] {
-        assert_eq!(crate::command::pending_prefix(&app, Key::Char('z')), None);
-        assert!(app.loaded.prefix_groups().is_empty());
+        assert_eq!(
+            crate::command::pending_prefix(
+                &app.plugins.legacy.loaded,
+                app.kernel.focus,
+                Key::Char('z')
+            ),
+            None
+        );
+        assert!(app.plugins.legacy.loaded.prefix_groups().is_empty());
         assert!(
-            crate::command::prefix_groups_in_scope(&app.loaded, Some(DIFF_BODY_FOCUS)).is_empty()
+            crate::command::prefix_groups_in_scope(
+                &app.plugins.legacy.loaded,
+                Some(DIFF_BODY_FOCUS)
+            )
+            .is_empty()
         );
     }
 }
@@ -3279,11 +3587,13 @@ fn every_palette_entry_dispatches_its_registered_binding() {
         diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]),
         commits_app(3),
     ] {
-        let specs = crate::command::commands(&app);
-        let entries = app.loaded.palette_entries();
+        let specs = crate::command::commands(&app.plugins.legacy.loaded, app.focus);
+        let entries = app.plugins.legacy.loaded.palette_entries();
         for spec in &specs {
             let listed = entries.iter().any(|(action, label, hint)| {
-                *action == spec.run && *label == spec.label && *hint == spec.hint
+                *action == crate::command::action_for(spec.id.name).expect("known command")
+                    && *label == spec.label
+                    && *hint == spec.hint
             });
             assert_eq!(listed, spec.palette, "palette membership for {:?}", spec.id);
 
@@ -3292,10 +3602,15 @@ fn every_palette_entry_dispatches_its_registered_binding() {
                     crate::command::KeySeq::Key(key)
                         if binding.scope == crate::command::KeyScope::Anywhere =>
                     {
-                        assert_eq!(command_for(key, &app), Some(spec.run));
+                        assert_eq!(
+                            command_for(key, &app),
+                            Some(crate::command::action_for(spec.id.name).expect("known command"))
+                        );
                     }
                     crate::command::KeySeq::Prefixed(prefix, second) => {
                         let group = app
+                            .plugins
+                            .legacy
                             .loaded
                             .prefix_groups()
                             .into_iter()
@@ -3306,7 +3621,10 @@ fn every_palette_entry_dispatches_its_registered_binding() {
                             .iter()
                             .find(|binding| binding.key == second)
                             .expect("a band binding");
-                        assert_eq!(band.action, spec.run);
+                        assert_eq!(
+                            band.action,
+                            crate::command::action_for(spec.id.name).expect("known command")
+                        );
                     }
                     _ => {}
                 }
@@ -3484,7 +3802,13 @@ fn responsive_boundaries_pick_the_right_layout() {
 #[test]
 fn loaded_panes_lists_the_tree_then_the_view_bodies() {
     let ids = |app: &App| -> Vec<crate::plugin::PaneId> {
-        app.loaded.panes().iter().map(|spec| spec.id).collect()
+        app.plugins
+            .legacy
+            .loaded
+            .panes()
+            .iter()
+            .map(|spec| spec.id)
+            .collect()
     };
 
     let show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
@@ -3504,14 +3828,14 @@ fn loaded_panes_lists_the_tree_then_the_view_bodies() {
 fn the_source_and_diff_sides_share_one_focus_stop() {
     let show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
     assert_eq!(
-        focus_ring(&show.loaded.panes()),
+        focus_ring(&show.plugins.legacy.loaded.panes()),
         vec![TREE_FOCUS, SOURCE_FOCUS]
     );
 
     // The range's two sides share one body focus key, so the ring has two stops.
     let range = diff_app(vec![file_diff("a.rs", Some("x\n"), Some("y\n"))]);
     assert_eq!(
-        focus_ring(&range.loaded.panes()),
+        focus_ring(&range.plugins.legacy.loaded.panes()),
         vec![TREE_FOCUS, DIFF_BODY_FOCUS]
     );
     let (step, _) = update(Msg::Key(Key::Tab), &range);
@@ -3522,7 +3846,7 @@ fn the_source_and_diff_sides_share_one_focus_stop() {
     // The commits band comes first, then the navigator, then the shared body.
     let commits = commits_app(3);
     assert_eq!(
-        focus_ring(&commits.loaded.panes()),
+        focus_ring(&commits.plugins.legacy.loaded.panes()),
         vec![DIFF_BAND_FOCUS, TREE_FOCUS, DIFF_BODY_FOCUS]
     );
 }
@@ -3606,7 +3930,14 @@ fn non_utf8_path_components_render_escaped() {
         source: "x\n".to_owned(),
     };
     let app = show_app(vec![file]);
-    let labels: Vec<String> = app.tree.rows.iter().map(|row| row.label.clone()).collect();
+    let labels: Vec<String> = app
+        .plugins
+        .legacy
+        .tree
+        .rows
+        .iter()
+        .map(|row| row.label.clone())
+        .collect();
     assert!(labels.iter().any(|label| label == "src"), "{labels:?}");
     assert!(
         labels.iter().any(|label| label.contains("\\xFF")),
@@ -3630,7 +3961,7 @@ fn a_long_diff_line_is_wrapped_inside_its_pane() {
 #[test]
 fn the_help_overlay_lists_the_keys() {
     let mut app = two_files();
-    app.overlay = Some(Overlay::Help);
+    app.plugins.legacy.overlay = Some(Overlay::Help);
     let text = buffer_text(&render(&app, 100, 32));
     assert!(text.contains("help"), "{text}");
     assert!(text.contains("quit"), "{text}");
@@ -3685,7 +4016,7 @@ fn the_canvas_is_opaque_in_every_flavor() {
         for overlay in [None, Some(Overlay::Help)] {
             let mut app = two_files();
             app.chrome.theme = Theme::new(flavor, Capability::TrueColor);
-            app.overlay = overlay;
+            app.plugins.legacy.overlay = overlay;
             let buffer = render(&app, 100, 20);
             for y in 0..buffer.area.height {
                 for x in 0..buffer.area.width {
@@ -3743,7 +4074,7 @@ fn window_offset_keeps_the_cursor_visible() {
 }
 
 /// Apply a request through the kernel path and return its effects.
-fn run_request(app: &mut App, request: Request) -> Vec<Cmd> {
+fn run_request(app: &mut App, request: Request) -> Vec<PluginsCmd> {
     let mut cmds = Vec::new();
     apply_request(app, request, &mut cmds);
     cmds
@@ -3952,13 +4283,13 @@ fn query_loaded_commits_the_workspace_query() {
     assert_eq!(app.workspace.query.mode, ProjectionMode::Types);
 
     let (committed, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Ok(vec![source_outline("a.rs", "a\n")].into()),
-        },
+        }),
         &app,
     );
     assert_eq!(
@@ -3971,13 +4302,13 @@ fn query_loaded_commits_the_workspace_query() {
         name: "x".to_owned(),
     });
     let (failed, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Tests,
                 ..show_request()
             },
             result: Err(Box::new(error)),
-        },
+        }),
         &committed,
     );
     assert_eq!(
@@ -3991,13 +4322,13 @@ fn query_loaded_commits_the_workspace_query() {
 fn a_scope_requery_keeps_the_loaded_mode() {
     let app = two_files();
     let (mut loaded, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("b.rs", "b\n")].into()),
-        },
+        }),
         &app,
     );
     assert_eq!(loaded.workspace.query.mode, ProjectionMode::Signatures);
@@ -4009,11 +4340,11 @@ fn a_scope_requery_keeps_the_loaded_mode() {
     );
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             mode: ProjectionMode::Signatures,
             selection,
             ..show_request()
-        })],
+        }))],
         "the scope change reloads with the loaded mode"
     );
 }
@@ -4027,14 +4358,14 @@ fn a_mode_requery_keeps_the_scope() {
         selection: selection.clone(),
     });
     let (mut loaded, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 revision: "HEAD".to_owned(),
                 mode: ProjectionMode::Types,
                 selection: selection.clone(),
             },
             result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("b.rs", "b\n")].into()),
-        },
+        }),
         &app,
     );
     assert_eq!(loaded.workspace.query.scope.selection, selection);
@@ -4045,11 +4376,11 @@ fn a_mode_requery_keeps_the_scope() {
     );
     assert_eq!(
         cmds,
-        vec![Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
             revision: "HEAD".to_owned(),
             mode: ProjectionMode::Tests,
             selection,
-        })],
+        }))],
         "the mode change reloads with the committed scope"
     );
 }
@@ -4061,13 +4392,13 @@ fn search_survives_a_mode_reload_and_resyncs() {
     assert_eq!(search_of(&app).matches[0].line, 1);
 
     let (reloaded, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
             },
             result: Ok(vec![source_outline("a.rs", "beta\nalpha\n")].into()),
-        },
+        }),
         &app,
     );
     assert!(reloaded.workspace.search.is_some(), "the search survives");
@@ -4149,7 +4480,10 @@ fn the_focus_ring_wraps_in_the_commits_view() {
 fn focus_defaults_to_the_navigator() {
     let show = two_files();
     assert_eq!(show.focus, Some(TREE_FOCUS));
-    assert_eq!(focus_default(&show.loaded.panes()), Some(TREE_FOCUS));
+    assert_eq!(
+        focus_default(&show.plugins.legacy.loaded.panes()),
+        Some(TREE_FOCUS)
+    );
 
     let range = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
     assert_eq!(range.focus, Some(TREE_FOCUS));
@@ -4170,14 +4504,16 @@ fn focus_normalises_when_the_band_disappears() {
     assert_eq!(app.focus, Some(DIFF_BAND_FOCUS));
 
     let (next, _) = update(
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request: diff_request(),
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
-        },
+        }),
         &app,
     );
     assert!(
         !next
+            .plugins
+            .legacy
             .loaded
             .panes()
             .iter()

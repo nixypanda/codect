@@ -1,75 +1,21 @@
 //! The command registry: one table drives key dispatch, the command palette,
 //! and the which-key band.
 //!
-//! This is the temporary, in-crate form of the vocabulary in the plugin plan's
-//! section 4.6. `PluginId` does not exist yet, so [`Owner`] stands in for it,
-//! and [`CommandSpec::run`] carries the resolved [`Action`] that the per-plugin
-//! effects of 4.x will eventually replace.
-//!
-//! [`commands`] reproduces today's `command_for`, `palette_entries`, and
-//! `fold_bindings` byte-for-byte. The kernel and explorer commands are emitted
-//! in both sessions; the source and diff commands are emitted only in their own
-//! session. [`validate`] enforces the section 4.8 registry invariants.
+//! The types live in [`crate::kernel::command`]; this module builds the table
+//! and resolves a command name to its temporary [`Action`]. In this phase the
+//! registry belongs to the `Legacy` plugin; tasks 4.2+ split it per plugin.
+
+#![allow(dead_code)]
+#[allow(unused_imports)]
+pub(crate) use crate::kernel::command::{
+    Binding, CommandId, CommandSpec, Group, KeyScope, KeySeq, Owner, validate,
+};
 
 use crate::action::{Action, CommitsAction, GlobalAction, PrefixGroup, RangeAction, ShowAction};
-use crate::app::App;
+use crate::kernel::plugin::FocusKey;
 use crate::page::{DiffViewState, Loaded};
-use crate::plugin::{FocusKey, SOURCE_FOCUS};
+use crate::plugin::SOURCE_FOCUS;
 use crate::util::input::Key;
-
-/// The temporary owner of a command: the plugin id it will become.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Owner {
-    Kernel,
-    Show,
-    Diff,
-    Tree,
-    Overlay,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CommandId {
-    pub owner: Owner,
-    pub name: &'static str,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum KeySeq {
-    Key(Key),
-    Prefixed(char, char),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum KeyScope {
-    Anywhere,
-    Focused(FocusKey),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Binding {
-    pub seq: KeySeq,
-    pub scope: KeyScope,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Group {
-    pub prefix: char,
-    pub name: &'static str,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CommandSpec {
-    pub id: CommandId,
-    pub label: &'static str,
-    pub hint: &'static str,
-    pub bindings: Vec<Binding>,
-    pub palette: bool,
-    pub group: Option<Group>,
-    pub rank: u16,
-    /// Temporary: the effect this command dispatches, until 4.x moves `run` to
-    /// the owning plugin.
-    pub run: Action,
-}
 
 const FOLD: Group = Group {
     prefix: 'z',
@@ -100,7 +46,6 @@ fn spec(
     palette: bool,
     group: Option<Group>,
     rank: u16,
-    run: Action,
 ) -> CommandSpec {
     CommandSpec {
         id: CommandId { owner, name },
@@ -110,17 +55,12 @@ fn spec(
         palette,
         group,
         rank,
-        run,
     }
 }
 
 /// The whole registry for the session `loaded` belongs to.
-///
-/// Registration order is stable but not behaviour: the palette and which-key
-/// order by `rank`, and no two commands bind the same key sequence.
 fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
     let mut commands = vec![
-        // Kernel commands exist in both sessions.
         spec(
             Owner::Kernel,
             "quit",
@@ -130,7 +70,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             390,
-            Action::Global(GlobalAction::Quit),
         ),
         spec(
             Owner::Kernel,
@@ -141,7 +80,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             320,
-            Action::Global(GlobalAction::NextPane),
         ),
         spec(
             Owner::Kernel,
@@ -152,7 +90,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             false,
             None,
             0,
-            Action::Global(GlobalAction::PreviousPane),
         ),
         spec(
             Owner::Kernel,
@@ -166,7 +103,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             360,
-            Action::Global(GlobalAction::Top),
         ),
         spec(
             Owner::Kernel,
@@ -180,7 +116,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             370,
-            Action::Global(GlobalAction::Bottom),
         ),
         spec(
             Owner::Kernel,
@@ -194,7 +129,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             false,
             None,
             0,
-            Action::Global(GlobalAction::PageUp),
         ),
         spec(
             Owner::Kernel,
@@ -208,7 +142,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             false,
             None,
             0,
-            Action::Global(GlobalAction::PageDown),
         ),
         spec(
             Owner::Kernel,
@@ -219,7 +152,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             false,
             None,
             0,
-            Action::Global(GlobalAction::NextMatch),
         ),
         spec(
             Owner::Kernel,
@@ -230,9 +162,7 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             false,
             None,
             0,
-            Action::Global(GlobalAction::PreviousMatch),
         ),
-        // The explorer's resize commands exist in both sessions.
         spec(
             Owner::Tree,
             "wider",
@@ -242,7 +172,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             330,
-            Action::Global(GlobalAction::TreeWider),
         ),
         spec(
             Owner::Tree,
@@ -253,7 +182,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             340,
-            Action::Global(GlobalAction::TreeNarrower),
         ),
         spec(
             Owner::Tree,
@@ -264,9 +192,7 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             350,
-            Action::Global(GlobalAction::TreeReset),
         ),
-        // The overlay roots exist in both sessions.
         spec(
             Owner::Overlay,
             "modes.open",
@@ -276,7 +202,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             100,
-            Action::Global(GlobalAction::Mode),
         ),
         spec(
             Owner::Overlay,
@@ -287,7 +212,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             110,
-            Action::Global(GlobalAction::Scope),
         ),
         spec(
             Owner::Overlay,
@@ -298,7 +222,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             300,
-            Action::Global(GlobalAction::Finder),
         ),
         spec(
             Owner::Overlay,
@@ -309,7 +232,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             310,
-            Action::Global(GlobalAction::Search),
         ),
         spec(
             Owner::Overlay,
@@ -320,7 +242,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             true,
             None,
             380,
-            Action::Global(GlobalAction::Help),
         ),
         spec(
             Owner::Overlay,
@@ -331,7 +252,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             false,
             None,
             0,
-            Action::Global(GlobalAction::Palette),
         ),
     ];
 
@@ -346,40 +266,17 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
                 true,
                 None,
                 200,
-                Action::Show(ShowAction::EditRevision),
             ));
-            for (name, label, hint, second, rank, action) in [
-                (
-                    "fold.toggle",
-                    "Toggle fold",
-                    "za",
-                    'a',
-                    210,
-                    ShowAction::ToggleFold,
-                ),
-                (
-                    "fold.open",
-                    "Open fold",
-                    "zo",
-                    'o',
-                    211,
-                    ShowAction::OpenFold,
-                ),
-                (
-                    "fold.close",
-                    "Close fold",
-                    "zc",
-                    'c',
-                    212,
-                    ShowAction::CloseFold,
-                ),
+            for (name, label, hint, second, rank) in [
+                ("fold.toggle", "Toggle fold", "za", 'a', 210),
+                ("fold.open", "Open fold", "zo", 'o', 211),
+                ("fold.close", "Close fold", "zc", 'c', 212),
                 (
                     "fold.open_recursive",
                     "Open fold recursively",
                     "zO",
                     'O',
                     213,
-                    ShowAction::OpenRecursive,
                 ),
                 (
                     "fold.close_recursive",
@@ -387,24 +284,9 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
                     "zC",
                     'C',
                     214,
-                    ShowAction::CloseRecursive,
                 ),
-                (
-                    "fold.open_all",
-                    "Open all folds",
-                    "zR",
-                    'R',
-                    215,
-                    ShowAction::OpenAll,
-                ),
-                (
-                    "fold.close_all",
-                    "Close all folds",
-                    "zM",
-                    'M',
-                    216,
-                    ShowAction::CloseAll,
-                ),
+                ("fold.open_all", "Open all folds", "zR", 'R', 215),
+                ("fold.close_all", "Close all folds", "zM", 'M', 216),
             ] {
                 commands.push(spec(
                     Owner::Show,
@@ -415,7 +297,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
                     true,
                     Some(FOLD),
                     rank,
-                    Action::Show(action),
                 ));
             }
         }
@@ -436,7 +317,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
                 range,
                 None,
                 200,
-                Action::Range(RangeAction::EditBase),
             ));
             commands.push(spec(
                 Owner::Diff,
@@ -447,7 +327,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
                 range,
                 None,
                 201,
-                Action::Range(RangeAction::EditTarget),
             ));
             commands.push(spec(
                 Owner::Diff,
@@ -458,7 +337,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
                 switchable,
                 None,
                 202,
-                Action::Range(RangeAction::SwitchToCommits),
             ));
             commands.push(spec(
                 Owner::Diff,
@@ -469,7 +347,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
                 commits,
                 None,
                 200,
-                Action::Commits(CommitsAction::SwitchToRange),
             ));
         }
     }
@@ -477,33 +354,73 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
     commands
 }
 
-/// The registry for `app`, validated in debug builds.
-pub(crate) fn commands(app: &App) -> Vec<CommandSpec> {
-    let specs = raw_commands(&app.loaded);
+/// The registry for `loaded`, validated in debug builds.
+pub(crate) fn commands(loaded: &Loaded, focus: Option<FocusKey>) -> Vec<CommandSpec> {
+    let specs = raw_commands(loaded);
+    #[cfg(not(debug_assertions))]
+    let _ = focus;
     #[cfg(debug_assertions)]
-    if let Err(message) = validate(&specs, app.focus) {
+    if let Err(message) = validate(&specs, focus) {
         panic!("command registry validation failed: {message}");
     }
     specs
 }
 
+/// The temporary action a command name dispatches.
+pub(crate) fn action_for(name: &str) -> Option<Action> {
+    Some(match name {
+        "quit" => Action::Global(GlobalAction::Quit),
+        "pane.next" => Action::Global(GlobalAction::NextPane),
+        "pane.previous" => Action::Global(GlobalAction::PreviousPane),
+        "nav.top" => Action::Global(GlobalAction::Top),
+        "nav.bottom" => Action::Global(GlobalAction::Bottom),
+        "nav.page_up" => Action::Global(GlobalAction::PageUp),
+        "nav.page_down" => Action::Global(GlobalAction::PageDown),
+        "search.next" => Action::Global(GlobalAction::NextMatch),
+        "search.previous" => Action::Global(GlobalAction::PreviousMatch),
+        "wider" => Action::Global(GlobalAction::TreeWider),
+        "narrower" => Action::Global(GlobalAction::TreeNarrower),
+        "reset" => Action::Global(GlobalAction::TreeReset),
+        "modes.open" => Action::Global(GlobalAction::Mode),
+        "scope.open" => Action::Global(GlobalAction::Scope),
+        "finder.open" => Action::Global(GlobalAction::Finder),
+        "search.open" => Action::Global(GlobalAction::Search),
+        "help.toggle" => Action::Global(GlobalAction::Help),
+        "palette.open" => Action::Global(GlobalAction::Palette),
+        "revision.edit" => Action::Show(ShowAction::EditRevision),
+        "fold.toggle" => Action::Show(ShowAction::ToggleFold),
+        "fold.open" => Action::Show(ShowAction::OpenFold),
+        "fold.close" => Action::Show(ShowAction::CloseFold),
+        "fold.open_recursive" => Action::Show(ShowAction::OpenRecursive),
+        "fold.close_recursive" => Action::Show(ShowAction::CloseRecursive),
+        "fold.open_all" => Action::Show(ShowAction::OpenAll),
+        "fold.close_all" => Action::Show(ShowAction::CloseAll),
+        "base.edit" => Action::Range(RangeAction::EditBase),
+        "target.edit" => Action::Range(RangeAction::EditTarget),
+        "view.commits" => Action::Range(RangeAction::SwitchToCommits),
+        "view.range" => Action::Commits(CommitsAction::SwitchToRange),
+        _ => return None,
+    })
+}
+
 /// The first `Anywhere` command bound to `key`, matching today's
 /// `command_for`.
-pub(crate) fn action_for_key(app: &App, key: Key) -> Option<Action> {
-    commands(app).into_iter().find_map(|spec| {
+pub(crate) fn action_for_key(loaded: &Loaded, focus: Option<FocusKey>, key: Key) -> Option<Action> {
+    commands(loaded, focus).into_iter().find_map(|spec| {
         spec.bindings
             .iter()
             .any(|binding| binding.scope == KeyScope::Anywhere && binding.seq == KeySeq::Key(key))
-            .then_some(spec.run)
+            .then(|| action_for(spec.id.name))
+            .flatten()
     })
 }
 
 /// The prefix `key` parks, if any `Prefixed` binding is in scope.
-pub(crate) fn pending_prefix(app: &App, key: Key) -> Option<char> {
+pub(crate) fn pending_prefix(loaded: &Loaded, focus: Option<FocusKey>, key: Key) -> Option<char> {
     let Key::Char(character) = key else {
         return None;
     };
-    let groups = prefix_groups_in_scope(&app.loaded, app.focus);
+    let groups = prefix_groups_in_scope(loaded, focus);
     groups
         .iter()
         .any(|group| group.key == character)
@@ -520,7 +437,7 @@ pub(crate) fn palette_entries(loaded: &Loaded) -> Vec<(Action, &'static str, &'s
     specs.sort_by_key(|spec| spec.rank);
     specs
         .into_iter()
-        .map(|spec| (spec.run, spec.label, spec.hint))
+        .filter_map(|spec| Some((action_for(spec.id.name)?, spec.label, spec.hint)))
         .collect()
 }
 
@@ -557,9 +474,12 @@ fn collect_prefix_groups(loaded: &Loaded, in_scope: impl Fn(KeyScope) -> bool) -
         }) else {
             continue;
         };
+        let Some(action) = action_for(spec.id.name) else {
+            continue;
+        };
         let binding = crate::action::Binding {
             key,
-            action: spec.run,
+            action,
             label: spec.label,
             hint: spec.hint,
         };
@@ -575,95 +495,18 @@ fn collect_prefix_groups(loaded: &Loaded, in_scope: impl Fn(KeyScope) -> bool) -
     groups
 }
 
-/// Whether a binding scope is active given the optional focus.
 fn scope_matches(scope: KeyScope, focus: Option<FocusKey>) -> bool {
-    match scope {
-        KeyScope::Anywhere => true,
-        KeyScope::Focused(target) => focus == Some(target),
-    }
-}
-
-/// The section 4.8 registry invariants, checked over the in-scope bindings.
-///
-/// A binding is in scope when it is [`KeyScope::Anywhere`] or its focus matches
-/// `focus`.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
-pub(crate) fn validate(commands: &[CommandSpec], focus: Option<FocusKey>) -> Result<(), String> {
-    let mut seen: Vec<KeySeq> = Vec::new();
-    let mut chars: Vec<char> = Vec::new();
-    let mut prefixes: Vec<char> = Vec::new();
-
-    for spec in commands {
-        for binding in &spec.bindings {
-            if !scope_matches(binding.scope, focus) {
-                continue;
-            }
-            if seen.contains(&binding.seq) {
-                return Err(format!(
-                    "{}:{} binds {:?} twice",
-                    owner_name(spec.id.owner),
-                    spec.id.name,
-                    binding.seq
-                ));
-            }
-            seen.push(binding.seq);
-            match binding.seq {
-                KeySeq::Key(Key::Char(character)) => chars.push(character),
-                KeySeq::Key(_) => {}
-                KeySeq::Prefixed(prefix, _) => {
-                    if spec.group.is_none() {
-                        return Err(format!(
-                            "{}:{} has a prefixed binding without a group",
-                            owner_name(spec.id.owner),
-                            spec.id.name
-                        ));
-                    }
-                    prefixes.push(prefix);
-                }
-            }
-        }
-    }
-
-    for prefix in &prefixes {
-        if chars.contains(prefix) {
-            return Err(format!(
-                "character {prefix:?} is both a key binding and a prefix"
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
-fn owner_name(owner: Owner) -> &'static str {
-    match owner {
-        Owner::Kernel => "kernel",
-        Owner::Show => "show",
-        Owner::Diff => "diff",
-        Owner::Tree => "tree",
-        Owner::Overlay => "overlay",
-    }
+    crate::kernel::command::scope_matches(scope, focus)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::plugin::{DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, TREE_FOCUS};
-    use crate::test_support::{commits_app, diff_app, file_diff, folder_app};
+    use crate::test_support::{commits_app, diff_app, file_diff, folder_app, loaded};
 
     fn test_command(name: &'static str, bindings: Vec<Binding>) -> CommandSpec {
-        spec(
-            Owner::Kernel,
-            name,
-            "",
-            "",
-            bindings,
-            false,
-            None,
-            0,
-            Action::Global(GlobalAction::Quit),
-        )
+        spec(Owner::Kernel, name, "", "", bindings, false, None, 0)
     }
 
     fn bound(seq: KeySeq, scope: KeyScope) -> Binding {
@@ -684,8 +527,6 @@ mod tests {
         ];
         assert!(validate(&both_anywhere, None).is_err());
 
-        // An `Anywhere` binding collides with a `Focused` one only when the
-        // focus matches.
         let boundary = vec![
             test_command(
                 "a",
@@ -726,11 +567,9 @@ mod tests {
                     name: "group",
                 }),
                 210,
-                Action::Show(ShowAction::ToggleFold),
             ),
         ];
         assert!(validate(&conflict, Some(SOURCE_FOCUS)).is_err());
-        // Disjoint scopes: away from `Content` the prefix is out of scope.
         assert!(validate(&conflict, Some(TREE_FOCUS)).is_ok());
     }
 
@@ -748,7 +587,6 @@ mod tests {
             true,
             None,
             210,
-            Action::Show(ShowAction::ToggleFold),
         )];
         assert!(validate(&missing, Some(SOURCE_FOCUS)).is_err());
     }
@@ -759,7 +597,7 @@ mod tests {
         let range = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
         let commits = commits_app(3);
 
-        for loaded in [&show.loaded, &range.loaded, &commits.loaded] {
+        for loaded in [loaded(&show), loaded(&range), loaded(&commits)] {
             let specs = raw_commands(loaded);
             for focus in [
                 Some(TREE_FOCUS),
@@ -782,8 +620,8 @@ mod tests {
                 .filter(|spec| spec.id.owner == Owner::Show && spec.id.name.starts_with("fold."))
                 .count()
         };
-        assert_eq!(folds(&show.loaded), 7);
-        assert_eq!(folds(&range.loaded), 0);
-        assert_eq!(folds(&commits.loaded), 0);
+        assert_eq!(folds(loaded(&show)), 7);
+        assert_eq!(folds(loaded(&range)), 0);
+        assert_eq!(folds(loaded(&commits)), 0);
     }
 }

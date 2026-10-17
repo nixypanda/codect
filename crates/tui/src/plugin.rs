@@ -3,26 +3,12 @@
 //! These are plain values. The layout, the focus ring, and the pages use them
 //! to name a region without naming a type; a `PaneId`'s owner is the plugin
 //! that draws it, and several panes may share one `FocusKey` (the diff's two
-//! sides do). They are `pub` so the bench-feature façade stays clean, as with
-//! [`crate::workspace`].
+//! sides do).
+//!
+//! The identifier types live in [`crate::kernel::plugin`]; this module
+//! re-exports them and holds the built-in pane constants until Phase 5.
 
-/// A plugin's stable identity. `PluginId("kernel")` is reserved.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct PluginId(pub &'static str);
-
-/// One pane a plugin owns. `slot` distinguishes the panes of one owner.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct PaneId {
-    pub owner: PluginId,
-    pub slot: u8,
-}
-
-/// The unit focus moves between. Panes that scroll together share one.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct FocusKey {
-    pub owner: PluginId,
-    pub slot: u8,
-}
+pub(crate) use crate::kernel::plugin::{FocusKey, PaneId, PluginId};
 
 /// The tree plugin's id.
 pub(crate) const TREE: PluginId = PluginId("tree");

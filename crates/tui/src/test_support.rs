@@ -1,7 +1,7 @@
 //! Shared test builders for the TUI.
 //!
-//! `#[cfg(test)]` only. The helpers are `pub(crate)` so `app::tests` and future
-//! golden frames construct the same fixtures from one place.
+//! `#[cfg(test)]` only. The helpers are `pub(crate)` so the migrated app tests
+//! and the golden frames construct the same fixtures from one place.
 
 use base::{
     Area, AreaSet, FileDiff, ItemKind, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath,
@@ -11,13 +11,22 @@ use engine::CommitStep;
 use ratatui::style::{Color, Modifier};
 
 use crate::action::{Action, GlobalAction};
-use crate::app::{App, DiffRequest, DiffView, LoadRequest, Msg, ShowRequest, settle, update};
+use crate::kernel::app::{App as GenericApp, Msg as GenericMsg, settle, update};
+use crate::kernel::dispatch::apply_request;
+use crate::kernel::plugin::{PluginSet, Request};
+use crate::kernel::view::view;
 use crate::page::{Diff, DiffViewState, Loaded, Show};
-use crate::plugin::{DIFF_BODY_FOCUS, FocusKey, SOURCE_FOCUS};
+use crate::plugin::{DIFF_BODY_FOCUS, SOURCE_FOCUS};
+use crate::plugins::legacy::Msg as LegacyMsg;
+use crate::plugins::{KernelOptions, Plugins, PluginsMsg, build};
 use crate::render::icons::{IconStyle, Icons};
 use crate::render::theme::Theme;
+use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::util::input::{Key, Mouse, MouseKind};
-use crate::view::view;
+
+pub(crate) type App = GenericApp<Plugins>;
+pub(crate) type Msg = GenericMsg<PluginsMsg>;
+pub(crate) type Cmd = crate::plugins::PluginsCmd;
 
 pub(crate) fn item(text: &str) -> ProjectedItem {
     ProjectedItem {
@@ -249,15 +258,24 @@ pub(crate) fn base_app(request: LoadRequest) -> App {
 }
 
 pub(crate) fn base_app_with(request: LoadRequest, theme: Theme, icons: Icons) -> App {
-    App::new(
-        "/repo".to_owned(),
+    build(KernelOptions {
+        root: "/repo".to_owned(),
         request,
-        "all".to_owned(),
-        100,
-        30,
+        scope_label: "all".to_owned(),
+        width: 100,
+        height: 30,
         theme,
         icons,
-    )
+    })
+    .0
+}
+
+pub(crate) fn loaded(app: &App) -> &Loaded {
+    &app.plugins.legacy.loaded
+}
+
+pub(crate) fn legacy_msg(msg: LegacyMsg) -> Msg {
+    Msg::Plugin(PluginsMsg::Legacy(msg))
 }
 
 pub(crate) fn step(app: &App, msg: Msg) -> App {
@@ -275,14 +293,14 @@ pub(crate) fn show_app_mode(files: Vec<SourceOutline>, mode: ProjectionMode) -> 
         selection: Selection::all(),
     });
     let (next, _) = update(
-        Msg::ShowLoaded {
+        legacy_msg(LegacyMsg::ShowLoaded {
             request: ShowRequest {
                 revision: "HEAD".to_owned(),
                 mode,
                 selection: Selection::all(),
             },
             result: Ok(files.into()),
-        },
+        }),
         &app,
     );
     settle(next)
@@ -298,10 +316,10 @@ pub(crate) fn diff_app(diffs: Vec<FileDiff>) -> App {
         merge_base: false,
     });
     let (next, _) = update(
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request: diff_request(),
             result: Ok(diffs.into()),
-        },
+        }),
         &app,
     );
     settle(next)
@@ -334,13 +352,13 @@ pub(crate) fn commits_app(count: usize) -> App {
         merge_base: false,
     });
     let (next, _) = update(
-        Msg::HistoryLoaded {
+        legacy_msg(LegacyMsg::HistoryLoaded {
             request: commits_request(),
             result: Ok((
                 commit_steps(count).into(),
                 vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into(),
             )),
-        },
+        }),
         &app,
     );
     settle(next)
@@ -361,10 +379,10 @@ pub(crate) fn snapshot_range_app() -> App {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", None, Some("a\n"))].into()),
-        },
+        }),
         &app,
     );
     settle(next)
@@ -386,10 +404,10 @@ pub(crate) fn merge_base_range_app() -> App {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        Msg::DiffLoaded {
+        legacy_msg(LegacyMsg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
-        },
+        }),
         &app,
     );
     settle(next)
@@ -423,21 +441,21 @@ pub(crate) fn tail_palette_entries() -> Vec<(Action, &'static str, &'static str)
 }
 
 pub(crate) fn show_ref(app: &App) -> &Show {
-    match &app.loaded {
+    match &app.plugins.legacy.loaded {
         Loaded::Show(show) => show,
         _ => panic!("expected a show"),
     }
 }
 
 pub(crate) fn diff_ref(app: &App) -> &Diff {
-    match &app.loaded {
+    match &app.plugins.legacy.loaded {
         Loaded::Diff(diff) => diff,
         _ => panic!("expected a diff"),
     }
 }
 
 pub(crate) fn commits_ref(app: &App) -> &crate::component::commit_picker::CommitPicker {
-    match &app.loaded {
+    match &app.plugins.legacy.loaded {
         Loaded::Diff(diff) => match &diff.view {
             DiffViewState::Commits(commits) => &commits.picker,
             _ => panic!("expected commits"),
@@ -447,33 +465,49 @@ pub(crate) fn commits_ref(app: &App) -> &crate::component::commit_picker::Commit
 }
 
 pub(crate) fn selected(app: &App) -> Option<String> {
-    app.workspace.selected.as_ref().map(ToString::to_string)
+    app.kernel
+        .workspace
+        .selected
+        .as_ref()
+        .map(ToString::to_string)
 }
 
 /// Select through the kernel request path, as the tree and finder do.
 pub(crate) fn select_file(app: &mut App, path: RepoPath) {
-    crate::app::apply_request(
-        app,
-        crate::request::Request::Select(Some(path)),
-        &mut Vec::new(),
-    );
+    apply(app, Request::Select(Some(path)));
 }
 
 /// Commit a search through the kernel request path, as the search input does.
 pub(crate) fn commit_search(app: &mut App, needle: &str) {
-    crate::app::apply_request(
-        app,
-        crate::request::Request::SetSearch(needle.to_owned()),
-        &mut Vec::new(),
-    );
+    apply(app, Request::SetSearch(needle.to_owned()));
 }
 
-pub(crate) fn diff_focus_of(app: &App) -> Option<FocusKey> {
-    app.focus
+fn apply(app: &mut App, request: Request) {
+    let specs = crate::kernel::app::collect_specs(app);
+    apply_request(app, request, &mut Vec::new(), 0, &specs);
+}
+
+/// Run the plugin `after_batch` hook and return the effects it produced.
+pub(crate) fn after_batch_effects(app: &mut App, pending: &[Cmd]) -> Vec<Cmd> {
+    let specs = crate::kernel::app::collect_specs(app);
+    let outs = {
+        let kernel = &app.kernel;
+        let overlay = app.plugins.overlay_pane();
+        let busy = app.plugins.busy();
+        let cx = crate::kernel::app::cx_for(kernel, overlay, busy, &specs);
+        app.plugins.after_batch(pending, &cx)
+    };
+    let mut cmds = Vec::new();
+    crate::kernel::dispatch::process_wrapped(app, outs, &mut cmds, 0, &specs);
+    cmds
+}
+
+pub(crate) fn diff_focus_of(app: &App) -> Option<crate::kernel::plugin::FocusKey> {
+    app.kernel.focus
 }
 
 pub(crate) fn focus_content(app: &mut App) {
-    app.focus = Some(match &app.loaded {
+    app.kernel.focus = Some(match &app.plugins.legacy.loaded {
         Loaded::Show(_) => SOURCE_FOCUS,
         Loaded::Diff(_) => DIFF_BODY_FOCUS,
     });
@@ -648,8 +682,6 @@ fn color_token(color: Color) -> String {
 }
 
 fn modifier_token(modifier: Modifier) -> String {
-    // Every `Modifier` flag ratatui 0.30 exposes, in declaration order, so no
-    // flag is silently dropped from a golden's style dump.
     const FLAGS: [(Modifier, &str); 9] = [
         (Modifier::BOLD, "BOLD"),
         (Modifier::DIM, "DIM"),
@@ -706,7 +738,7 @@ pub(crate) fn folder_app() -> App {
 
 pub(crate) fn assert_view_consistent(app: &App, height: u16) {
     let show = show_ref(app);
-    let selected = app.workspace.selected.as_ref();
+    let selected = app.kernel.workspace.selected.as_ref();
     let count = show.line_count();
     assert!(count > 0, "the projection must not be empty");
     assert!(
