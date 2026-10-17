@@ -41,12 +41,6 @@ use super::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ShowFocus {
-    Tree,
-    Body,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShowBody {
     pub scroll: u16,
     pub hscroll: u16,
@@ -176,7 +170,6 @@ pub struct Show {
     pub revision: String,
     pub loaded_mode: ProjectionMode,
     pub files: Arc<[SourceOutline]>,
-    pub focus: ShowFocus,
     pub body: ShowBody,
     pub paging: Paging,
     pub highlight: ShowHighlights,
@@ -613,7 +606,6 @@ pub enum Msg {
     BodyClick { row: usize, marker: bool },
     Action(GlobalAction),
     RevealMatch(SearchMatch),
-    CycleFocus(bool),
     Prompt(Key),
     EditRevision,
     Requery(QueryChange),
@@ -644,14 +636,6 @@ pub fn update(msg: Msg, page: &mut Show, workspace: &Workspace, ctx: &Ctx) -> Ve
         Msg::RevealMatch(matched) => {
             page.reveal_source_line(selected, matched.line);
             page.move_cursor_to_source_line(matched.line, ctx.height);
-            Vec::new()
-        }
-        Msg::CycleFocus(forward) => {
-            page.focus = if forward {
-                ShowFocus::Body
-            } else {
-                ShowFocus::Tree
-            };
             Vec::new()
         }
         Msg::Prompt(key) => prompt_key(page, key, workspace),

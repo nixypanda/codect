@@ -25,14 +25,15 @@ use crate::component::overlay::{self, Overlay};
 use crate::component::tree::{self, RowKind, Tree};
 use crate::page::{
     Commits, Ctx, Diff, DiffSide, DiffViewState, Loaded, OutMsg, Paging, Range, Scope, Show,
-    ShowBody, ShowFocus, diff as diff_page, show as show_page,
+    ShowBody, diff as diff_page, focus_default, focus_ring, show as show_page,
 };
 use crate::plugin::{
-    COMMITS_PANE, DIFF_BAND_FOCUS, NEW_PANE, OLD_PANE, SOURCE_PANE, TREE_FOCUS, TREE_PANE,
+    COMMITS_PANE, DIFF_BAND_FOCUS, FocusKey, NEW_PANE, OLD_PANE, SOURCE_FOCUS, SOURCE_PANE,
+    TREE_FOCUS, TREE_PANE,
 };
 use crate::render::icons::Icons;
-use crate::render::layout::{body_layout, commit_offset, frame_areas};
-use crate::render::metrics::{Focus, MIN_HEIGHT, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH};
+use crate::render::layout::{BodyLayout, body_layout, commit_offset, frame_areas};
+use crate::render::metrics::{MIN_HEIGHT, SIDE_BY_SIDE_MIN_WIDTH, SINGLE_PANE_MIN_WIDTH};
 use crate::render::theme::Theme;
 use crate::request::{NavigatorResize, QueryChange, Request};
 pub use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
@@ -122,6 +123,7 @@ pub struct App {
     pub root: String,
     pub size: Size,
     pub chrome: Chrome,
+    pub focus: Option<FocusKey>,
     pub tree: Tree,
     pub overlay: Option<Overlay>,
     pub keymap: Keymap,
@@ -167,7 +169,6 @@ impl App {
                 revision,
                 loaded_mode: mode,
                 files: Arc::from(Vec::new()),
-                focus: ShowFocus::Tree,
                 body: ShowBody {
                     scroll: 0,
                     hscroll: 0,
@@ -198,6 +199,7 @@ impl App {
                 merge_base,
             )),
         };
+        let focus = focus_default(&loaded.panes());
         Self {
             root,
             size: Size { width, height },
@@ -208,6 +210,7 @@ impl App {
                 spinner: 0,
                 quit: false,
             },
+            focus,
             tree: Tree::default(),
             overlay: None,
             keymap: Keymap::default(),
@@ -332,12 +335,23 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
         }
     }
 
+    // Focus normalisation (section 4.7 step 6): a focus that names no current
+    // pane falls back to the default.
+    let panes = next.loaded.panes();
+    if !next
+        .focus
+        .is_some_and(|focus| panes.iter().any(|spec| spec.focus == focus))
+    {
+        next.focus = focus_default(&panes);
+    }
+
     (next, cmds)
 }
 
 fn ctx(app: &App) -> Ctx {
     Ctx {
         height: app.size.height,
+        focus: app.focus,
     }
 }
 
@@ -427,14 +441,9 @@ fn apply_one(app: &mut App, request: Request, cmds: &mut Vec<Cmd>, depth: u8) {
             app.workspace.search = None;
             on_search_changed(app);
         }
-        Request::Focus(focus) => app.loaded.set_focus(focus),
-        // The file tree is the only navigator, so it is always the default.
-        Request::FocusDefault => app.loaded.set_focus(Focus::Tree),
-        Request::CycleFocus { forward } => {
-            let ctx = ctx(app);
-            let outs = route_cycle_focus(app, forward, ctx);
-            fold_at(app, outs, cmds, depth + 1);
-        }
+        Request::Focus(focus) => app.focus = Some(focus),
+        Request::FocusDefault => app.focus = focus_default(&app.loaded.panes()),
+        Request::CycleFocus { forward } => cycle_focus(app, forward),
         Request::ResizeNavigator(resize) => {
             app.chrome.tree_percent = match resize {
                 NavigatorResize::Wider => {
@@ -557,20 +566,6 @@ fn route_page_action(app: &mut App, action: GlobalAction, ctx: Ctx) -> Vec<OutMs
         }
         Loaded::Diff(diff) => {
             diff_page::update(diff_page::Msg::Action(action), diff, workspace, &ctx)
-        }
-    }
-}
-
-fn route_cycle_focus(app: &mut App, forward: bool, ctx: Ctx) -> Vec<OutMsg> {
-    let App {
-        loaded, workspace, ..
-    } = app;
-    match loaded {
-        Loaded::Show(show) => {
-            show_page::update(show_page::Msg::CycleFocus(forward), show, workspace, &ctx)
-        }
-        Loaded::Diff(diff) => {
-            diff_page::update(diff_page::Msg::CycleFocus(forward), diff, workspace, &ctx)
         }
     }
 }
@@ -762,16 +757,34 @@ fn handle_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) {
 }
 
 fn show_body_focused(app: &App) -> bool {
-    matches!(app.loaded, Loaded::Show(_)) && app.loaded.focus() == Focus::Content
+    matches!(app.loaded, Loaded::Show(_)) && app.focus == Some(SOURCE_FOCUS)
 }
 
 /// The action a `Prefixed(prefix, key)` binding in scope runs, if any.
 fn prefixed_action(app: &App, prefix: char, key: char) -> Option<Action> {
-    crate::command::prefix_groups_in_scope(&app.loaded, Some(app.loaded.focus()))
+    crate::command::prefix_groups_in_scope(&app.loaded, app.focus)
         .iter()
         .find(|group| group.key == prefix)
         .and_then(|group| group.bindings.iter().find(|binding| binding.key == key))
         .map(|binding| binding.action)
+}
+
+/// Move focus to the next or previous stop in the ring, wrapping.
+fn cycle_focus(app: &mut App, forward: bool) {
+    let ring = focus_ring(&app.loaded.panes());
+    if ring.is_empty() {
+        return;
+    }
+    let index = app
+        .focus
+        .and_then(|focus| ring.iter().position(|key| *key == focus))
+        .unwrap_or(0);
+    let next = if forward {
+        (index + 1) % ring.len()
+    } else {
+        (index + ring.len() - 1) % ring.len()
+    };
+    app.focus = Some(ring[next]);
 }
 
 fn clear_prefix(app: &mut App) {
@@ -825,7 +838,6 @@ fn open_overlay(app: &mut App, overlay: Overlay) {
 
 fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth: u8) {
     use GlobalAction::*;
-    let ctx = ctx(app);
     match action {
         Quit => app.chrome.quit = true,
         Help => open_overlay(app, Overlay::help()),
@@ -876,14 +888,8 @@ fn apply_global(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth:
                 .max(TREE_MIN_PERCENT);
         }
         TreeReset => app.chrome.tree_percent = TREE_DEFAULT_PERCENT,
-        NextPane => {
-            let outs = route_cycle_focus(app, true, ctx);
-            fold_at(app, outs, cmds, depth);
-        }
-        PreviousPane => {
-            let outs = route_cycle_focus(app, false, ctx);
-            fold_at(app, outs, cmds, depth);
-        }
+        NextPane => cycle_focus(app, true),
+        PreviousPane => cycle_focus(app, false),
         Top | Bottom | PageUp | PageDown => focus_command(app, action, cmds, depth),
         NextMatch => reveal_next(app, true, cmds, depth),
         PreviousMatch => reveal_next(app, false, cmds, depth),
@@ -901,7 +907,7 @@ fn reveal_next(app: &mut App, forward: bool, cmds: &mut Vec<Cmd>, depth: u8) {
 }
 
 fn focus_command(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth: u8) {
-    if app.loaded.focus() == Focus::Tree {
+    if app.focus == Some(TREE_FOCUS) {
         let step = page_step(app.size.height);
         tree_apply(app, page_tree_msg(action, step), cmds, depth);
         return;
@@ -915,7 +921,7 @@ fn focus_command(app: &mut App, action: GlobalAction, cmds: &mut Vec<Cmd>, depth
 /// whether the pane consumed the key, so an unhandled `Esc` can clear the
 /// diagnostic and the search (step 9).
 fn focus_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) -> bool {
-    if app.loaded.focus() == Focus::Tree {
+    if app.focus == Some(TREE_FOCUS) {
         if let Some(msg) = tree_key(key) {
             tree_apply(app, msg, cmds, 0);
             return true;
@@ -929,7 +935,8 @@ fn focus_key(app: &mut App, key: Key, cmds: &mut Vec<Cmd>) -> bool {
     handled
 }
 
-/// The keys a focused body pane consumes today (`page::{show,diff}::body_key`).
+/// The keys a focused body or band pane consumes today
+/// (`page::{show,diff}::body_key`). The tree is handled before this is reached.
 fn pane_key_handled(app: &App, key: Key) -> bool {
     match &app.loaded {
         Loaded::Show(_) => matches!(
@@ -943,12 +950,7 @@ fn pane_key_handled(app: &App, key: Key) -> bool {
                 | Key::Left
                 | Key::Char('h')
         ),
-        Loaded::Diff(diff) => match diff.focus() {
-            Focus::Content | Focus::Commits => {
-                matches!(key, Key::Down | Key::Char('j') | Key::Up | Key::Char('k'))
-            }
-            Focus::Tree => false,
-        },
+        Loaded::Diff(_) => matches!(key, Key::Down | Key::Char('j') | Key::Up | Key::Char('k')),
     }
 }
 
@@ -1057,15 +1059,11 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
         return;
     }
 
-    let panes = app.loaded.panes();
-    let (_, content, _) = frame_areas(app.size.width, app.size.height);
-    let layout = body_layout(
-        content,
-        app.chrome.tree_percent,
-        &panes,
-        app.loaded.focus_key(),
-        &app.chrome.theme,
-    );
+    let focus = app
+        .focus
+        .or_else(|| focus_default(&app.loaded.panes()))
+        .unwrap_or(TREE_FOCUS);
+    let layout = layout_if_focused(app, focus);
     let point = Position {
         x: event.column,
         y: event.row,
@@ -1077,11 +1075,11 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
     else {
         return;
     };
+    app.focus = Some(slot.focus);
     let inner = slot.geometry.inner;
     let ctx = ctx(app);
 
     if slot.pane == COMMITS_PANE {
-        app.loaded.set_focus(Focus::Commits);
         let msg = match event.kind {
             MouseKind::Click => {
                 if !inner.contains(point) {
@@ -1097,7 +1095,6 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
             fold(app, outs, cmds);
         }
     } else if slot.pane == TREE_PANE {
-        app.loaded.set_focus(Focus::Tree);
         match event.kind {
             MouseKind::Click => {
                 let index = app.tree.scroll + usize::from(event.row.saturating_sub(inner.y));
@@ -1109,7 +1106,6 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
             MouseKind::ScrollDown => tree_apply(app, tree::Msg::Scroll(MOUSE_SCROLL_STEP), cmds, 0),
         }
     } else if slot.pane == SOURCE_PANE {
-        app.loaded.set_focus(Focus::Content);
         match event.kind {
             MouseKind::Click => {
                 if inner.contains(point)
@@ -1147,7 +1143,6 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
             }
         }
     } else if slot.pane == OLD_PANE || slot.pane == NEW_PANE {
-        app.loaded.set_focus(Focus::Content);
         let delta = match event.kind {
             MouseKind::ScrollUp => -MOUSE_SCROLL_STEP,
             MouseKind::ScrollDown => MOUSE_SCROLL_STEP,
@@ -1162,16 +1157,22 @@ fn mouse(app: &mut App, event: Mouse, cmds: &mut Vec<Cmd>) {
     }
 }
 
-fn tree_inner(app: &App) -> Option<Rect> {
+/// The body layout at a given focus, so a caller can hit-test or size a pane
+/// without first moving the kernel's focus.
+fn layout_if_focused(app: &App, focus: FocusKey) -> BodyLayout {
     let (_, content, _) = frame_areas(app.size.width, app.size.height);
     let panes = app.loaded.panes();
-    let layout = body_layout(
+    body_layout(
         content,
         app.chrome.tree_percent,
         &panes,
-        Some(TREE_FOCUS),
+        Some(focus),
         &app.chrome.theme,
-    );
+    )
+}
+
+fn tree_inner(app: &App) -> Option<Rect> {
+    let layout = layout_if_focused(app, TREE_FOCUS);
     let slot = layout.slots.iter().find(|slot| slot.pane == TREE_PANE)?;
     Some(slot.geometry.inner)
 }
@@ -1181,15 +1182,7 @@ fn tree_viewport_height(app: &App) -> usize {
 }
 
 fn commits_inner(app: &App) -> Option<Rect> {
-    let (_, content, _) = frame_areas(app.size.width, app.size.height);
-    let panes = app.loaded.panes();
-    let layout = body_layout(
-        content,
-        app.chrome.tree_percent,
-        &panes,
-        Some(DIFF_BAND_FOCUS),
-        &app.chrome.theme,
-    );
+    let layout = layout_if_focused(app, DIFF_BAND_FOCUS);
     let slot = layout.slots.iter().find(|slot| slot.pane == COMMITS_PANE)?;
     Some(slot.geometry.inner)
 }
@@ -1225,11 +1218,7 @@ fn body_is_visible(app: &App) -> bool {
     if app.size.width < SINGLE_PANE_MIN_WIDTH || app.size.height < MIN_HEIGHT {
         return false;
     }
-    app.size.width >= SIDE_BY_SIDE_MIN_WIDTH || app.loaded.focus() != Focus::Tree
-}
-
-pub(crate) fn layout_focus(app: &App) -> Focus {
-    app.loaded.focus()
+    app.size.width >= SIDE_BY_SIDE_MIN_WIDTH || app.focus != Some(TREE_FOCUS)
 }
 
 pub(crate) fn settle(mut app: App) -> App {

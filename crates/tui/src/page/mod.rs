@@ -25,7 +25,6 @@ use crate::plugin::{
     SOURCE_PANE, TREE_FOCUS, TREE_PANE,
 };
 use crate::render::layout::{PaneSpec, Placement, VisualRow};
-use crate::render::metrics::Focus;
 use crate::render::theme::Theme;
 use crate::request::Request;
 use crate::util::input::Key;
@@ -34,7 +33,7 @@ pub(crate) mod diff;
 pub(crate) mod show;
 
 pub(crate) use diff::{Commits, Diff, DiffSide, DiffViewState, Range};
-pub(crate) use show::{Show, ShowBody, ShowFocus};
+pub(crate) use show::{Show, ShowBody};
 
 const TREE_SPEC: PaneSpec = PaneSpec {
     id: TREE_PANE,
@@ -69,6 +68,30 @@ pub(crate) fn diff_panes(has_commits: bool) -> Vec<PaneSpec> {
         panes.push(COMMITS_SPEC);
     }
     panes
+}
+
+/// The focus ring: the distinct focus keys of `panes`, bands first, then
+/// navigators, then bodies. Within a placement, registration order, then first
+/// appearance. Panes that share a focus key (the diff's two sides) are one stop.
+pub(crate) fn focus_ring(panes: &[PaneSpec]) -> Vec<FocusKey> {
+    let mut ring: Vec<FocusKey> = Vec::new();
+    for placement in [Placement::Band, Placement::Navigator, Placement::Body] {
+        for spec in panes.iter().filter(|spec| spec.placement == placement) {
+            if !ring.contains(&spec.focus) {
+                ring.push(spec.focus);
+            }
+        }
+    }
+    ring
+}
+
+/// The default focus: the first navigator's focus key, else the first body's.
+pub(crate) fn focus_default(panes: &[PaneSpec]) -> Option<FocusKey> {
+    panes
+        .iter()
+        .find(|spec| spec.placement == Placement::Navigator)
+        .or_else(|| panes.iter().find(|spec| spec.placement == Placement::Body))
+        .map(|spec| spec.focus)
 }
 
 pub(crate) fn available_modes() -> [ProjectionMode; 3] {
@@ -140,46 +163,12 @@ impl Loaded {
         }
     }
 
-    pub(crate) fn focus(&self) -> Focus {
-        match self {
-            Self::Show(show) => match show.focus {
-                ShowFocus::Tree => Focus::Tree,
-                ShowFocus::Body => Focus::Content,
-            },
-            Self::Diff(diff) => diff.focus(),
-        }
-    }
-
-    pub(crate) fn set_focus(&mut self, focus: Focus) {
-        match self {
-            Self::Show(show) => {
-                show.focus = match focus {
-                    Focus::Tree => ShowFocus::Tree,
-                    _ => ShowFocus::Body,
-                };
-            }
-            Self::Diff(diff) => diff.set_focus(focus),
-        }
-    }
-
     /// The panes the loaded kind shows, in registration order: the tree first,
     /// then the view's body panes and its band.
     pub(crate) fn panes(&self) -> Vec<PaneSpec> {
         match self {
             Self::Show(_) => vec![TREE_SPEC, SOURCE_SPEC],
             Self::Diff(diff) => diff_panes(matches!(diff.view, DiffViewState::Commits(_))),
-        }
-    }
-
-    /// The focus key the loaded kind's focus names.
-    pub(crate) fn focus_key(&self) -> Option<FocusKey> {
-        match self.focus() {
-            Focus::Tree => Some(TREE_FOCUS),
-            Focus::Content => Some(match self {
-                Self::Show(_) => SOURCE_FOCUS,
-                Self::Diff(_) => DIFF_BODY_FOCUS,
-            }),
-            Focus::Commits => Some(DIFF_BAND_FOCUS),
         }
     }
 
@@ -264,6 +253,9 @@ impl Loaded {
 #[derive(Clone, Copy, Debug)]
 pub struct Ctx {
     pub height: u16,
+    /// The kernel's focus, so a page can tell its body pane from its band when
+    /// both route through the same `update`.
+    pub focus: Option<FocusKey>,
 }
 
 #[derive(Debug)]

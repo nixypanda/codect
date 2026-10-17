@@ -2,10 +2,9 @@
 //! and the which-key band.
 //!
 //! This is the temporary, in-crate form of the vocabulary in the plugin plan's
-//! section 4.6. `PluginId` and `FocusKey` do not exist yet, so [`Owner`] and the
-//! existing [`Focus`] stand in for them, and [`CommandSpec::run`] carries the
-//! resolved [`Action`] that the per-plugin effects of 4.x will eventually
-//! replace.
+//! section 4.6. `PluginId` does not exist yet, so [`Owner`] stands in for it,
+//! and [`CommandSpec::run`] carries the resolved [`Action`] that the per-plugin
+//! effects of 4.x will eventually replace.
 //!
 //! [`commands`] reproduces today's `command_for`, `palette_entries`, and
 //! `fold_bindings` byte-for-byte. The kernel and explorer commands are emitted
@@ -15,7 +14,7 @@
 use crate::action::{Action, CommitsAction, GlobalAction, PrefixGroup, RangeAction, ShowAction};
 use crate::app::App;
 use crate::page::{DiffViewState, Loaded};
-use crate::render::metrics::Focus;
+use crate::plugin::{FocusKey, SOURCE_FOCUS};
 use crate::util::input::Key;
 
 /// The temporary owner of a command: the plugin id it will become.
@@ -43,7 +42,7 @@ pub(crate) enum KeySeq {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum KeyScope {
     Anywhere,
-    Focused(Focus),
+    Focused(FocusKey),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,7 +83,7 @@ fn anywhere(seq: KeySeq) -> Binding {
     }
 }
 
-fn focused(seq: KeySeq, focus: Focus) -> Binding {
+fn focused(seq: KeySeq, focus: FocusKey) -> Binding {
     Binding {
         seq,
         scope: KeyScope::Focused(focus),
@@ -412,7 +411,7 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
                     name,
                     label,
                     hint,
-                    vec![focused(KeySeq::Prefixed('z', second), Focus::Content)],
+                    vec![focused(KeySeq::Prefixed('z', second), SOURCE_FOCUS)],
                     true,
                     Some(FOLD),
                     rank,
@@ -482,7 +481,7 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
 pub(crate) fn commands(app: &App) -> Vec<CommandSpec> {
     let specs = raw_commands(&app.loaded);
     #[cfg(debug_assertions)]
-    if let Err(message) = validate(&specs, Some(app.loaded.focus())) {
+    if let Err(message) = validate(&specs, app.focus) {
         panic!("command registry validation failed: {message}");
     }
     specs
@@ -504,7 +503,7 @@ pub(crate) fn pending_prefix(app: &App, key: Key) -> Option<char> {
     let Key::Char(character) = key else {
         return None;
     };
-    let groups = prefix_groups_in_scope(&app.loaded, Some(app.loaded.focus()));
+    let groups = prefix_groups_in_scope(&app.loaded, app.focus);
     groups
         .iter()
         .any(|group| group.key == character)
@@ -532,7 +531,7 @@ pub(crate) fn prefix_groups(loaded: &Loaded) -> Vec<PrefixGroup> {
 }
 
 /// The grouped `Prefixed` subset whose bindings are in scope for `focus`.
-pub(crate) fn prefix_groups_in_scope(loaded: &Loaded, focus: Option<Focus>) -> Vec<PrefixGroup> {
+pub(crate) fn prefix_groups_in_scope(loaded: &Loaded, focus: Option<FocusKey>) -> Vec<PrefixGroup> {
     collect_prefix_groups(loaded, |scope| scope_matches(scope, focus))
 }
 
@@ -577,7 +576,7 @@ fn collect_prefix_groups(loaded: &Loaded, in_scope: impl Fn(KeyScope) -> bool) -
 }
 
 /// Whether a binding scope is active given the optional focus.
-fn scope_matches(scope: KeyScope, focus: Option<Focus>) -> bool {
+fn scope_matches(scope: KeyScope, focus: Option<FocusKey>) -> bool {
     match scope {
         KeyScope::Anywhere => true,
         KeyScope::Focused(target) => focus == Some(target),
@@ -589,7 +588,7 @@ fn scope_matches(scope: KeyScope, focus: Option<Focus>) -> bool {
 /// A binding is in scope when it is [`KeyScope::Anywhere`] or its focus matches
 /// `focus`.
 #[cfg_attr(not(debug_assertions), allow(dead_code))]
-pub(crate) fn validate(commands: &[CommandSpec], focus: Option<Focus>) -> Result<(), String> {
+pub(crate) fn validate(commands: &[CommandSpec], focus: Option<FocusKey>) -> Result<(), String> {
     let mut seen: Vec<KeySeq> = Vec::new();
     let mut chars: Vec<char> = Vec::new();
     let mut prefixes: Vec<char> = Vec::new();
@@ -650,6 +649,7 @@ fn owner_name(owner: Owner) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::{DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, TREE_FOCUS};
     use crate::test_support::{commits_app, diff_app, file_diff, folder_app};
 
     fn test_command(name: &'static str, bindings: Vec<Binding>) -> CommandSpec {
@@ -695,12 +695,12 @@ mod tests {
                 "b",
                 vec![bound(
                     KeySeq::Key(Key::Char('x')),
-                    KeyScope::Focused(Focus::Tree),
+                    KeyScope::Focused(TREE_FOCUS),
                 )],
             ),
         ];
-        assert!(validate(&boundary, Some(Focus::Tree)).is_err());
-        assert!(validate(&boundary, Some(Focus::Content)).is_ok());
+        assert!(validate(&boundary, Some(TREE_FOCUS)).is_err());
+        assert!(validate(&boundary, Some(SOURCE_FOCUS)).is_ok());
         assert!(validate(&boundary, None).is_ok());
     }
 
@@ -718,7 +718,7 @@ mod tests {
                 "",
                 vec![bound(
                     KeySeq::Prefixed('x', 'a'),
-                    KeyScope::Focused(Focus::Content),
+                    KeyScope::Focused(SOURCE_FOCUS),
                 )],
                 true,
                 Some(Group {
@@ -729,9 +729,9 @@ mod tests {
                 Action::Show(ShowAction::ToggleFold),
             ),
         ];
-        assert!(validate(&conflict, Some(Focus::Content)).is_err());
+        assert!(validate(&conflict, Some(SOURCE_FOCUS)).is_err());
         // Disjoint scopes: away from `Content` the prefix is out of scope.
-        assert!(validate(&conflict, Some(Focus::Tree)).is_ok());
+        assert!(validate(&conflict, Some(TREE_FOCUS)).is_ok());
     }
 
     #[test]
@@ -743,14 +743,14 @@ mod tests {
             "",
             vec![bound(
                 KeySeq::Prefixed('z', 'a'),
-                KeyScope::Focused(Focus::Content),
+                KeyScope::Focused(SOURCE_FOCUS),
             )],
             true,
             None,
             210,
             Action::Show(ShowAction::ToggleFold),
         )];
-        assert!(validate(&missing, Some(Focus::Content)).is_err());
+        assert!(validate(&missing, Some(SOURCE_FOCUS)).is_err());
     }
 
     #[test]
@@ -762,9 +762,10 @@ mod tests {
         for loaded in [&show.loaded, &range.loaded, &commits.loaded] {
             let specs = raw_commands(loaded);
             for focus in [
-                Some(Focus::Tree),
-                Some(Focus::Content),
-                Some(Focus::Commits),
+                Some(TREE_FOCUS),
+                Some(SOURCE_FOCUS),
+                Some(DIFF_BODY_FOCUS),
+                Some(DIFF_BAND_FOCUS),
                 None,
             ] {
                 assert!(

@@ -20,7 +20,7 @@ use crate::action::GlobalAction;
 use crate::api::{Cmd, HistoryPayload};
 use crate::component::commit_picker::{self, CommitPicker};
 use crate::component::text_input::TextInput;
-use crate::plugin::{DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE};
+use crate::plugin::{DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE};
 use crate::render::block::pane_block;
 use crate::render::empty::render_empty;
 use crate::render::highlight::{self, Run, StyledLine};
@@ -28,7 +28,6 @@ use crate::render::layout::{
     Edge, PaneSpec, VisualRow, VisualRowKind, body_layout, commit_offset, frame_areas,
     gutter_width, layout_diff,
 };
-use crate::render::metrics::Focus;
 use crate::render::text::truncate_ellipsis;
 use crate::render::theme::Theme;
 use crate::request::{QueryChange, Request};
@@ -55,19 +54,6 @@ pub enum DiffSide {
 pub struct DiffPrompt {
     pub side: DiffSide,
     pub input: TextInput,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RangeFocus {
-    Tree,
-    Diff,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommitsFocus {
-    Commits,
-    Tree,
-    Diff,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,7 +126,6 @@ pub enum DiffViewState {
 
 #[derive(Clone, Debug)]
 pub struct Range {
-    pub focus: RangeFocus,
     pub body: DiffBody,
     pub diffs: Arc<[FileDiff]>,
     pub highlight: DiffHighlights,
@@ -148,7 +133,6 @@ pub struct Range {
 
 #[derive(Clone, Debug)]
 pub struct Commits {
-    pub focus: CommitsFocus,
     pub picker: CommitPicker,
     pub body: DiffBody,
     pub diffs: Arc<[FileDiff]>,
@@ -158,7 +142,6 @@ pub struct Commits {
 impl Range {
     pub fn empty() -> Self {
         Self {
-            focus: RangeFocus::Tree,
             body: DiffBody { scroll: 0 },
             diffs: Arc::from(Vec::new()),
             highlight: DiffHighlights::default(),
@@ -169,7 +152,6 @@ impl Range {
 impl Commits {
     pub fn empty() -> Self {
         Self {
-            focus: CommitsFocus::Tree,
             picker: CommitPicker::empty(),
             body: DiffBody { scroll: 0 },
             diffs: Arc::from(Vec::new()),
@@ -265,38 +247,6 @@ impl Diff {
             SearchPane::Source => false,
         })
     }
-
-    pub(crate) fn focus(&self) -> Focus {
-        match &self.view {
-            DiffViewState::Range(range) => match range.focus {
-                RangeFocus::Tree => Focus::Tree,
-                RangeFocus::Diff => Focus::Content,
-            },
-            DiffViewState::Commits(commits) => match commits.focus {
-                CommitsFocus::Commits => Focus::Commits,
-                CommitsFocus::Tree => Focus::Tree,
-                CommitsFocus::Diff => Focus::Content,
-            },
-        }
-    }
-
-    pub(crate) fn set_focus(&mut self, focus: Focus) {
-        match &mut self.view {
-            DiffViewState::Range(range) => {
-                range.focus = match focus {
-                    Focus::Tree => RangeFocus::Tree,
-                    _ => RangeFocus::Diff,
-                };
-            }
-            DiffViewState::Commits(commits) => {
-                commits.focus = match focus {
-                    Focus::Commits => CommitsFocus::Commits,
-                    Focus::Tree => CommitsFocus::Tree,
-                    Focus::Content => CommitsFocus::Diff,
-                };
-            }
-        }
-    }
 }
 
 /// The wrapped width of each diff side, taken from the body layout so the rows
@@ -335,14 +285,6 @@ impl Diff {
     pub fn active_diff(&self, selected: Option<&RepoPath>) -> Option<&FileDiff> {
         let path = selected?;
         self.diffs().iter().find(|diff| diff.path() == path)
-    }
-
-    #[cfg(test)]
-    pub fn focus_is_diff(&self) -> bool {
-        match &self.view {
-            DiffViewState::Range(range) => range.focus == RangeFocus::Diff,
-            DiffViewState::Commits(commits) => commits.focus == CommitsFocus::Diff,
-        }
     }
 
     pub fn body_scroll(&self) -> u16 {
@@ -489,7 +431,6 @@ pub enum Msg {
     Scroll(i32),
     Action(GlobalAction),
     RevealMatch(SearchMatch),
-    CycleFocus(bool),
     Prompt(Key),
     EditSide(DiffSide),
     SwitchView(DiffView),
@@ -506,7 +447,7 @@ pub enum Msg {
 
 pub fn update(msg: Msg, page: &mut Diff, workspace: &Workspace, ctx: &Ctx) -> Vec<OutMsg> {
     match msg {
-        Msg::Key(key) => body_key(page, key),
+        Msg::Key(key) => body_key(page, key, ctx),
         Msg::Scroll(delta) => {
             scroll_body(page, delta);
             Vec::new()
@@ -524,10 +465,6 @@ pub fn update(msg: Msg, page: &mut Diff, workspace: &Workspace, ctx: &Ctx) -> Ve
             ) {
                 page.set_body_scroll(next);
             }
-            Vec::new()
-        }
-        Msg::CycleFocus(forward) => {
-            cycle_focus(page, forward);
             Vec::new()
         }
         Msg::Prompt(key) => prompt_key(page, key, workspace),
@@ -589,26 +526,22 @@ impl Diff {
     }
 }
 
-fn body_key(page: &mut Diff, key: Key) -> Vec<OutMsg> {
-    match page.focus() {
-        Focus::Commits => {
-            if let Some(msg) = commit_key(key)
-                && let DiffViewState::Commits(commits) = &mut page.view
-            {
-                commits.picker.update(msg);
-            }
+fn body_key(page: &mut Diff, key: Key, ctx: &Ctx) -> Vec<OutMsg> {
+    if ctx.focus == Some(DIFF_BAND_FOCUS) {
+        if let Some(msg) = commit_key(key)
+            && let DiffViewState::Commits(commits) = &mut page.view
+        {
+            commits.picker.update(msg);
         }
-        Focus::Content => {
-            let max = page.rows().len().saturating_sub(1) as u16;
-            let scroll = match key {
-                Key::Down | Key::Char('j') => page.body_scroll().saturating_add(1).min(max),
-                Key::Up | Key::Char('k') => page.body_scroll().saturating_sub(1),
-                _ => return Vec::new(),
-            };
-            page.set_body_scroll(scroll);
-        }
-        Focus::Tree => {}
+        return Vec::new();
     }
+    let max = page.rows().len().saturating_sub(1) as u16;
+    let scroll = match key {
+        Key::Down | Key::Char('j') => page.body_scroll().saturating_add(1).min(max),
+        Key::Up | Key::Char('k') => page.body_scroll().saturating_sub(1),
+        _ => return Vec::new(),
+    };
+    page.set_body_scroll(scroll);
     Vec::new()
 }
 
@@ -625,48 +558,15 @@ fn scroll_body(page: &mut Diff, delta: i32) {
 
 fn action_apply(page: &mut Diff, action: GlobalAction, ctx: &Ctx) {
     let step = page_step(ctx.height);
-    match page.focus() {
-        Focus::Commits => {
-            if let DiffViewState::Commits(commits) = &mut page.view {
-                commits.picker.update(commit_move_msg(action, step));
-            }
+    if ctx.focus == Some(DIFF_BAND_FOCUS) {
+        if let DiffViewState::Commits(commits) = &mut page.view {
+            commits.picker.update(commit_move_msg(action, step));
         }
-        Focus::Content => {
-            let max = page.rows().len().saturating_sub(1) as u16;
-            let scroll = scroll_by(action, page.body_scroll(), step, max);
-            page.set_body_scroll(scroll);
-        }
-        Focus::Tree => {}
+        return;
     }
-}
-
-fn cycle_focus(page: &mut Diff, forward: bool) {
-    match &mut page.view {
-        DiffViewState::Range(range) => {
-            range.focus = match (range.focus, forward) {
-                (RangeFocus::Tree, true) => RangeFocus::Diff,
-                (RangeFocus::Tree, false) => RangeFocus::Diff,
-                (RangeFocus::Diff, _) => RangeFocus::Tree,
-            };
-        }
-        DiffViewState::Commits(commits) => {
-            let order = [
-                CommitsFocus::Commits,
-                CommitsFocus::Tree,
-                CommitsFocus::Diff,
-            ];
-            let index = order
-                .iter()
-                .position(|focus| *focus == commits.focus)
-                .unwrap_or(0);
-            let next = if forward {
-                (index + 1) % order.len()
-            } else {
-                (index + order.len() - 1) % order.len()
-            };
-            commits.focus = order[next];
-        }
-    }
+    let max = page.rows().len().saturating_sub(1) as u16;
+    let scroll = scroll_by(action, page.body_scroll(), step, max);
+    page.set_body_scroll(scroll);
 }
 
 fn switch_view(page: &mut Diff, view: DiffView, workspace: &Workspace) -> Vec<OutMsg> {
@@ -811,7 +711,6 @@ fn history_loaded(
         DiffViewState::Range(_) => None,
     };
     page.view = DiffViewState::Commits(Commits {
-        focus: CommitsFocus::Commits,
         picker: CommitPicker::steps(steps),
         body: DiffBody { scroll: 0 },
         diffs,
@@ -820,6 +719,7 @@ fn history_loaded(
     page.invalidate();
 
     let mut outs = vec![
+        OutMsg::Request(Request::Focus(DIFF_BAND_FOCUS)),
         OutMsg::Request(Request::QueryLoaded(Query {
             mode: request.mode,
             scope: Scope::new(selection.clone()),

@@ -50,7 +50,7 @@ pub(crate) fn view(app: &App, frame: &mut Frame) {
 
 fn render_body(app: &App, frame: &mut Frame, content: Rect) {
     let panes = app.loaded.panes();
-    let focus = app.loaded.focus_key();
+    let focus = app.focus;
     let layout = body_layout(
         content,
         app.chrome.tree_percent,

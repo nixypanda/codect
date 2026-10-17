@@ -13,8 +13,8 @@ use ratatui::style::{Color, Modifier};
 use crate::action::{Action, GlobalAction};
 use crate::app::{App, DiffRequest, DiffView, LoadRequest, Msg, ShowRequest, settle, update};
 use crate::page::{Diff, DiffViewState, Loaded, Show};
+use crate::plugin::{DIFF_BODY_FOCUS, FocusKey, SOURCE_FOCUS};
 use crate::render::icons::{IconStyle, Icons};
-use crate::render::metrics::Focus;
 use crate::render::theme::Theme;
 use crate::util::input::{Key, Mouse, MouseKind};
 use crate::view::view;
@@ -468,12 +468,15 @@ pub(crate) fn commit_search(app: &mut App, needle: &str) {
     );
 }
 
-pub(crate) fn diff_focus_of(app: &App) -> Focus {
-    app.loaded.focus()
+pub(crate) fn diff_focus_of(app: &App) -> Option<FocusKey> {
+    app.focus
 }
 
 pub(crate) fn focus_content(app: &mut App) {
-    app.loaded.set_focus(Focus::Content);
+    app.focus = Some(match &app.loaded {
+        Loaded::Show(_) => SOURCE_FOCUS,
+        Loaded::Diff(_) => DIFF_BODY_FOCUS,
+    });
 }
 
 pub(crate) fn press(app: &App, keys: &[Key]) -> App {

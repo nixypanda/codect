@@ -5,8 +5,8 @@
 //! a component, the shell, or the runtime. `theme`, `icons`, `layout`, `text`,
 //! and `highlight` resolve styling and geometry; `block` and `empty` are the
 //! shared pane and popup chrome that components and pages both draw inside.
-//! `metrics` owns [`Focus`] and the responsive width constants, which were
-//! previously app state and forced this layer to depend upward.
+//! `metrics` owns the responsive width constants, which were previously app
+//! state and forced this layer to depend upward.
 
 pub(crate) mod block;
 pub(crate) mod empty;

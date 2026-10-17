@@ -2,8 +2,11 @@ use super::*;
 use crate::component::overlay::Overlay;
 use crate::component::text_input::TextInput;
 use crate::page::show::{ShowHighlights, VisibleRow};
-use crate::page::{DiffSide, Loaded, ShowFocus};
-use crate::plugin::{COMMITS_PANE, NEW_PANE, OLD_PANE, SOURCE_PANE, TREE_PANE};
+use crate::page::{DiffSide, Loaded, focus_default, focus_ring};
+use crate::plugin::{
+    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE, SOURCE_FOCUS, SOURCE_PANE,
+    TREE_FOCUS, TREE_PANE,
+};
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
 use crate::test_support::{
@@ -470,12 +473,12 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     };
     let (mut clicked, mut commands) = update(Msg::Mouse(click(4, 12)), &app);
     coalesce_commit_loads(&mut clicked, &mut commands);
-    assert_eq!(diff_focus_of(&clicked), Focus::Commits);
+    assert_eq!(diff_focus_of(&clicked), Some(DIFF_BAND_FOCUS));
     assert!(matches!(commands.as_slice(), [Cmd::Step { index: 1, .. }]));
 
     let (mut wheeled, mut commands) = update(Msg::Mouse(scroll(4, 12, false)), &app);
     coalesce_commit_loads(&mut wheeled, &mut commands);
-    assert_eq!(diff_focus_of(&wheeled), Focus::Commits);
+    assert_eq!(diff_focus_of(&wheeled), Some(DIFF_BAND_FOCUS));
     assert!(matches!(commands.as_slice(), [Cmd::Step { index: 3, .. }]));
 
     let mut narrow = app.clone();
@@ -488,7 +491,7 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     assert!(matches!(commands.as_slice(), [Cmd::Step { index: 1, .. }]));
 
     let (files, commands) = update(Msg::Mouse(click(4, 3)), &app);
-    assert_eq!(diff_focus_of(&files), Focus::Tree);
+    assert_eq!(diff_focus_of(&files), Some(TREE_FOCUS));
     assert!(commands.is_empty());
 }
 
@@ -814,8 +817,8 @@ fn settle_skips_highlighting_when_the_body_is_hidden() {
         height: 30,
     };
     app.tree.cursor = 0;
+    app.focus = Some(TREE_FOCUS);
     if let Loaded::Show(show) = &mut app.loaded {
-        show.focus = ShowFocus::Tree;
         show.highlight = ShowHighlights::default();
     }
     let settled = settle(app);
@@ -951,17 +954,17 @@ fn a_wider_tree_still_leaves_a_usable_body() {
 fn tab_toggles_the_tree_and_both_diff_panes() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
     let (step, _) = update(Msg::Key(Key::Tab), &app);
-    assert!(diff_ref(&step).focus_is_diff());
+    assert_eq!(diff_focus_of(&step), Some(DIFF_BODY_FOCUS));
     let (step, _) = update(Msg::Key(Key::Tab), &step);
-    assert_eq!(diff_focus_of(&step), Focus::Tree);
+    assert_eq!(diff_focus_of(&step), Some(TREE_FOCUS));
     let (step, _) = update(Msg::Key(Key::BackTab), &step);
-    assert!(diff_ref(&step).focus_is_diff());
+    assert_eq!(diff_focus_of(&step), Some(DIFF_BODY_FOCUS));
 
     let app = two_files();
     let (step, _) = update(Msg::Key(Key::Tab), &app);
-    assert_eq!(show_ref(&step).focus, ShowFocus::Body);
+    assert_eq!(step.focus, Some(SOURCE_FOCUS));
     let (step, _) = update(Msg::Key(Key::BackTab), &step);
-    assert_eq!(show_ref(&step).focus, ShowFocus::Tree);
+    assert_eq!(step.focus, Some(TREE_FOCUS));
 }
 
 #[test]
@@ -1271,7 +1274,7 @@ fn clicking_a_file_selects_it() {
     let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     assert_eq!(selected(&next).as_deref(), Some("b.rs"));
     assert_eq!(next.tree.cursor, 1);
-    assert!(matches!(next.loaded, Loaded::Show(ref show) if show.focus == ShowFocus::Tree));
+    assert_eq!(next.focus, Some(TREE_FOCUS));
 }
 
 #[test]
@@ -1499,7 +1502,7 @@ fn the_wheel_scrolls_the_content_and_focuses_it() {
         "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
     )]);
     let (down, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &app);
-    assert!(matches!(down.loaded, Loaded::Show(ref show) if show.focus == ShowFocus::Body));
+    assert_eq!(down.focus, Some(SOURCE_FOCUS));
     assert_eq!(show_ref(&down).body.scroll, 3);
     assert_eq!(
         show_ref(&down).body.cursor_line,
@@ -1519,11 +1522,11 @@ fn the_wheel_scrolls_a_diff_and_clicking_it_focuses() {
         Some("1\n2\n3\n4\n5\n6\n7\n8\n9\nX\n"),
     )]);
     let (scrolled, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &app);
-    assert!(diff_ref(&scrolled).focus_is_diff());
+    assert_eq!(diff_focus_of(&scrolled), Some(DIFF_BODY_FOCUS));
     assert!(diff_ref(&scrolled).body_scroll() > 0);
 
     let (clicked, _) = update(Msg::Mouse(click(CONTENT_X, 5)), &app);
-    assert!(diff_ref(&clicked).focus_is_diff());
+    assert_eq!(diff_focus_of(&clicked), Some(DIFF_BODY_FOCUS));
     assert_eq!(diff_ref(&clicked).body_scroll(), 0);
 }
 
@@ -1545,7 +1548,7 @@ fn a_click_on_the_header_or_a_divider_does_nothing() {
     let mut body_focused = app.clone();
     focus_content(&mut body_focused);
     let (divider, _) = update(Msg::Mouse(click(29, 5)), &body_focused);
-    assert!(matches!(divider.loaded, Loaded::Show(ref show) if show.focus == ShowFocus::Body));
+    assert_eq!(divider.focus, Some(SOURCE_FOCUS));
     assert_eq!(divider.workspace.selected, app.workspace.selected);
 }
 
@@ -2723,7 +2726,7 @@ fn a_fold_override_survives_a_reload_and_a_selection_change() {
     );
 
     let mut tree = reloaded;
-    tree.loaded.set_focus(Focus::Tree);
+    tree.focus = Some(TREE_FOCUS);
     let down = press(&tree, &[Key::Char('j')]);
     assert_eq!(selected(&down).as_deref(), Some("b.rs"));
     let up = press(&down, &[Key::Char('k')]);
@@ -3250,11 +3253,11 @@ fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
     let tree = folder_app();
     assert_eq!(crate::command::pending_prefix(&tree, Key::Char('z')), None);
     assert!(
-        crate::command::prefix_groups_in_scope(&tree.loaded, Some(Focus::Tree)).is_empty(),
+        crate::command::prefix_groups_in_scope(&tree.loaded, Some(TREE_FOCUS)).is_empty(),
         "the tree focus has no prefix in scope"
     );
     assert_eq!(
-        crate::command::prefix_groups_in_scope(&show.loaded, Some(Focus::Content)).len(),
+        crate::command::prefix_groups_in_scope(&show.loaded, Some(SOURCE_FOCUS)).len(),
         1
     );
     for app in [
@@ -3264,7 +3267,7 @@ fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
         assert_eq!(crate::command::pending_prefix(&app, Key::Char('z')), None);
         assert!(app.loaded.prefix_groups().is_empty());
         assert!(
-            crate::command::prefix_groups_in_scope(&app.loaded, Some(Focus::Content)).is_empty()
+            crate::command::prefix_groups_in_scope(&app.loaded, Some(DIFF_BODY_FOCUS)).is_empty()
         );
     }
 }
@@ -3498,56 +3501,59 @@ fn loaded_panes_lists_the_tree_then_the_view_bodies() {
 }
 
 #[test]
-fn loaded_focus_key_maps_each_focus() {
-    use crate::plugin::{DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, SOURCE_FOCUS, TREE_FOCUS};
+fn the_source_and_diff_sides_share_one_focus_stop() {
+    let show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
+    assert_eq!(
+        focus_ring(&show.loaded.panes()),
+        vec![TREE_FOCUS, SOURCE_FOCUS]
+    );
 
-    let mut show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
-    assert_eq!(show.loaded.focus_key(), Some(TREE_FOCUS));
-    show.loaded.set_focus(Focus::Content);
-    assert_eq!(show.loaded.focus_key(), Some(SOURCE_FOCUS));
+    // The range's two sides share one body focus key, so the ring has two stops.
+    let range = diff_app(vec![file_diff("a.rs", Some("x\n"), Some("y\n"))]);
+    assert_eq!(
+        focus_ring(&range.loaded.panes()),
+        vec![TREE_FOCUS, DIFF_BODY_FOCUS]
+    );
+    let (step, _) = update(Msg::Key(Key::Tab), &range);
+    assert_eq!(diff_focus_of(&step), Some(DIFF_BODY_FOCUS));
+    let (step, _) = update(Msg::Key(Key::Tab), &step);
+    assert_eq!(diff_focus_of(&step), Some(TREE_FOCUS));
 
-    let mut range = diff_app(vec![file_diff("a.rs", Some("x\n"), Some("y\n"))]);
-    range.loaded.set_focus(Focus::Tree);
-    assert_eq!(range.loaded.focus_key(), Some(TREE_FOCUS));
-    range.loaded.set_focus(Focus::Content);
-    assert_eq!(range.loaded.focus_key(), Some(DIFF_BODY_FOCUS));
-
-    let mut commits = commits_app(3);
-    commits.loaded.set_focus(Focus::Commits);
-    assert_eq!(commits.loaded.focus_key(), Some(DIFF_BAND_FOCUS));
-    commits.loaded.set_focus(Focus::Content);
-    assert_eq!(commits.loaded.focus_key(), Some(DIFF_BODY_FOCUS));
-    commits.loaded.set_focus(Focus::Tree);
-    assert_eq!(commits.loaded.focus_key(), Some(TREE_FOCUS));
+    // The commits band comes first, then the navigator, then the shared body.
+    let commits = commits_app(3);
+    assert_eq!(
+        focus_ring(&commits.loaded.panes()),
+        vec![DIFF_BAND_FOCUS, TREE_FOCUS, DIFF_BODY_FOCUS]
+    );
 }
 
 #[test]
 fn body_visible_truth_table() {
-    let at = |app: &mut App, width: u16, focus: Focus| {
+    let at = |app: &mut App, width: u16, focus: FocusKey| {
         app.size = Size { width, height: 8 };
-        app.loaded.set_focus(focus);
+        app.focus = Some(focus);
     };
 
     let mut show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
-    at(&mut show, 40, Focus::Tree);
+    at(&mut show, 40, TREE_FOCUS);
     assert!(!body_is_visible(&show), "narrow tree focus hides the body");
-    at(&mut show, 40, Focus::Content);
+    at(&mut show, 40, SOURCE_FOCUS);
     assert!(body_is_visible(&show), "narrow body focus shows the body");
-    at(&mut show, 80, Focus::Tree);
+    at(&mut show, 80, TREE_FOCUS);
     assert!(body_is_visible(&show), "wide always shows the body");
-    at(&mut show, 80, Focus::Content);
+    at(&mut show, 80, SOURCE_FOCUS);
     assert!(body_is_visible(&show));
 
     let mut commits = commits_app(3);
-    at(&mut commits, 40, Focus::Commits);
+    at(&mut commits, 40, DIFF_BAND_FOCUS);
     assert!(
         body_is_visible(&commits),
         "the band focus keeps the body visible"
     );
-    at(&mut commits, 80, Focus::Commits);
+    at(&mut commits, 80, DIFF_BAND_FOCUS);
     assert!(body_is_visible(&commits));
 
-    at(&mut show, 39, Focus::Content);
+    at(&mut show, 39, SOURCE_FOCUS);
     assert!(!body_is_visible(&show), "too narrow is never visible");
     show.size = Size {
         width: 80,
@@ -4089,4 +4095,146 @@ fn set_search_refreshes_visible_rows_before_matching() {
         "the search sees only the visible rows"
     );
     assert_eq!(search.matches[0].line, 13);
+}
+
+#[test]
+fn tab_cycles_tree_and_source_body() {
+    let app = two_files();
+    assert_eq!(app.focus, Some(TREE_FOCUS));
+
+    let (step, _) = update(Msg::Key(Key::Tab), &app);
+    assert_eq!(step.focus, Some(SOURCE_FOCUS));
+    let (step, _) = update(Msg::Key(Key::Tab), &step);
+    assert_eq!(
+        step.focus,
+        Some(TREE_FOCUS),
+        "Tab from the body wraps to the tree"
+    );
+}
+
+#[test]
+fn shift_tab_cycles_from_the_tree() {
+    let app = two_files();
+    let (step, _) = update(Msg::Key(Key::BackTab), &app);
+    assert_eq!(
+        step.focus,
+        Some(SOURCE_FOCUS),
+        "Shift-Tab from the tree wraps to the body"
+    );
+    let (step, _) = update(Msg::Key(Key::BackTab), &step);
+    assert_eq!(step.focus, Some(TREE_FOCUS));
+}
+
+#[test]
+fn the_focus_ring_wraps_in_the_commits_view() {
+    let app = commits_app(3);
+    assert_eq!(app.focus, Some(DIFF_BAND_FOCUS));
+
+    let (step, _) = update(Msg::Key(Key::Tab), &app);
+    assert_eq!(step.focus, Some(TREE_FOCUS));
+    let (step, _) = update(Msg::Key(Key::Tab), &step);
+    assert_eq!(step.focus, Some(DIFF_BODY_FOCUS));
+    let (step, _) = update(Msg::Key(Key::Tab), &step);
+    assert_eq!(step.focus, Some(DIFF_BAND_FOCUS), "the ring wraps");
+
+    let (back, _) = update(Msg::Key(Key::BackTab), &app);
+    assert_eq!(
+        back.focus,
+        Some(DIFF_BODY_FOCUS),
+        "backward wraps to the body"
+    );
+}
+
+#[test]
+fn focus_defaults_to_the_navigator() {
+    let show = two_files();
+    assert_eq!(show.focus, Some(TREE_FOCUS));
+    assert_eq!(focus_default(&show.loaded.panes()), Some(TREE_FOCUS));
+
+    let range = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+    assert_eq!(range.focus, Some(TREE_FOCUS));
+
+    // With no navigator, the first body pane is the default.
+    let body_only = [crate::render::layout::PaneSpec {
+        id: SOURCE_PANE,
+        placement: crate::render::layout::Placement::Body,
+        focus: SOURCE_FOCUS,
+    }];
+    assert_eq!(focus_default(&body_only), Some(SOURCE_FOCUS));
+    assert_eq!(focus_default(&[]), None);
+}
+
+#[test]
+fn focus_normalises_when_the_band_disappears() {
+    let app = commits_app(3);
+    assert_eq!(app.focus, Some(DIFF_BAND_FOCUS));
+
+    let (next, _) = update(
+        Msg::DiffLoaded {
+            request: diff_request(),
+            result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
+        },
+        &app,
+    );
+    assert!(
+        !next
+            .loaded
+            .panes()
+            .iter()
+            .any(|spec| spec.focus == DIFF_BAND_FOCUS),
+        "the band is gone"
+    );
+    assert_eq!(
+        next.focus,
+        Some(TREE_FOCUS),
+        "focus falls back to the navigator"
+    );
+}
+
+#[test]
+fn mouse_focuses_the_hit_pane_for_every_event_kind() {
+    let mut app = commits_app(3);
+    app.size = Size {
+        width: 100,
+        height: 20,
+    };
+
+    for mouse in [click(2, 3), scroll(2, 3, false), scroll(2, 3, true)] {
+        let mut start = app.clone();
+        start.focus = Some(SOURCE_FOCUS);
+        let (next, _) = update(Msg::Mouse(mouse), &start);
+        assert_eq!(next.focus, Some(TREE_FOCUS), "tree event {mouse:?}");
+    }
+
+    for mouse in [click(50, 3), scroll(50, 3, false), scroll(50, 3, true)] {
+        let (next, _) = update(Msg::Mouse(mouse), &app);
+        assert_eq!(next.focus, Some(DIFF_BODY_FOCUS), "body event {mouse:?}");
+    }
+
+    for mouse in [click(50, 12), scroll(50, 12, false), scroll(50, 12, true)] {
+        let mut start = app.clone();
+        start.focus = Some(TREE_FOCUS);
+        let (next, _) = update(Msg::Mouse(mouse), &start);
+        assert_eq!(next.focus, Some(DIFF_BAND_FOCUS), "band event {mouse:?}");
+    }
+}
+
+#[test]
+fn a_band_click_outside_the_inner_rect_only_moves_focus() {
+    let mut app = commits_app(3);
+    app.size = Size {
+        width: 100,
+        height: 20,
+    };
+    app.focus = Some(TREE_FOCUS);
+    let cursor = commits_ref(&app).cursor();
+
+    // Row 10 is the band's top border: inside the outer rect, not the inner.
+    let (next, _) = update(Msg::Mouse(click(50, 10)), &app);
+    assert_eq!(next.focus, Some(DIFF_BAND_FOCUS));
+    assert_eq!(
+        commits_ref(&next).cursor(),
+        cursor,
+        "a border click does not select a commit"
+    );
 }

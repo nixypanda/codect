@@ -5,11 +5,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, layout_focus};
+use crate::app::App;
 use crate::component::overlay::Overlay;
 use crate::page::{Loaded, mode_label};
+use crate::plugin::{DIFF_BAND_FOCUS, TREE_FOCUS};
 use crate::render::layout::VisualRowKind;
-use crate::render::metrics::Focus;
 use crate::render::text::clip_line;
 use crate::render::theme::{Rgb, Theme};
 
@@ -194,19 +194,19 @@ fn hints(app: &App) -> String {
     if prompt_active(app) {
         return "Enter apply   Esc cancel ".to_owned();
     }
-    match layout_focus(app) {
-        Focus::Commits => "j/k choose commit   Tab files   Ctrl-P commands   ? help ".to_owned(),
-        Focus::Tree => {
-            "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ".to_owned()
+    if app.focus == Some(DIFF_BAND_FOCUS) {
+        return "j/k choose commit   Tab files   Ctrl-P commands   ? help ".to_owned();
+    }
+    if app.focus == Some(TREE_FOCUS) {
+        return "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ".to_owned();
+    }
+    match app.loaded {
+        Loaded::Show(_) => {
+            "wheel / j k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned()
         }
-        Focus::Content => match app.loaded {
-            Loaded::Show(_) => {
-                "wheel / j k scroll   / search   Ctrl-P commands   Tab tree   ? help ".to_owned()
-            }
-            Loaded::Diff(_) => {
-                "wheel / j k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned()
-            }
-        },
+        Loaded::Diff(_) => {
+            "wheel / j k scroll   / search   n/N match   Ctrl-P commands   ? help ".to_owned()
+        }
     }
 }
 

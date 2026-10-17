@@ -8,7 +8,6 @@
 //! tasks:
 //!
 //! - [`NavigatorResize`] is the eventual resize request.
-//! - [`Focus`] is today's normalized focus until 3.1/3.2 introduce `FocusKey`.
 //!
 //! The vocabulary is wired into the request queue across tasks 2.2/2.3/3.x, so
 //! several variants are constructed only by tests until then. One allowance
@@ -18,7 +17,7 @@
 use base::{ProjectionMode, RepoPath, Selection};
 
 use crate::command::CommandId;
-use crate::render::metrics::Focus;
+use crate::plugin::FocusKey;
 use crate::workspace::{FileSet, Query};
 
 /// A navigator width change.
@@ -49,7 +48,7 @@ pub(crate) enum Request {
     SetSearch(String),
     CommitSearch,
     ClearSearch,
-    Focus(Focus),
+    Focus(FocusKey),
     FocusDefault,
     CycleFocus { forward: bool },
     ResizeNavigator(NavigatorResize),
@@ -69,7 +68,7 @@ mod tests {
     use crate::command::{CommandId, Owner};
     use crate::component::overlay::Overlay;
     use crate::page::{Loaded, OutMsg};
-    use crate::render::metrics::Focus;
+    use crate::plugin::{SOURCE_FOCUS, TREE_FOCUS};
     use crate::route::{DiffRequest, ShowRequest};
     use crate::test_support::{
         diff_app, diff_request, file_diff, folder_app, show_app, show_ref, show_request,
@@ -337,17 +336,17 @@ mod tests {
     #[test]
     fn focus_and_cycle_focus_move_the_focus() {
         let mut app = folder_app();
-        assert_eq!(app.loaded.focus(), Focus::Tree);
+        assert_eq!(app.focus, Some(TREE_FOCUS));
 
         run(&mut app, Request::CycleFocus { forward: true });
-        assert_eq!(app.loaded.focus(), Focus::Content);
+        assert_eq!(app.focus, Some(SOURCE_FOCUS));
 
-        run(&mut app, Request::Focus(Focus::Tree));
-        assert_eq!(app.loaded.focus(), Focus::Tree);
+        run(&mut app, Request::Focus(TREE_FOCUS));
+        assert_eq!(app.focus, Some(TREE_FOCUS));
 
-        run(&mut app, Request::Focus(Focus::Content));
+        run(&mut app, Request::Focus(SOURCE_FOCUS));
         run(&mut app, Request::FocusDefault);
-        assert_eq!(app.loaded.focus(), Focus::Tree, "the navigator is default");
+        assert_eq!(app.focus, Some(TREE_FOCUS), "the navigator is default");
     }
 
     #[test]
