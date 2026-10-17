@@ -9,15 +9,10 @@
 pub(crate) mod commit_picker;
 pub(crate) mod overlay;
 pub(crate) mod text_input;
-pub(crate) mod tree;
 
-use crate::render::icons::Icons;
 use crate::render::theme::Theme;
-use crate::workspace::Workspace;
 
 pub(crate) struct RenderCtx<'a> {
     pub theme: &'a Theme,
-    pub icons: &'a Icons,
-    pub workspace: &'a Workspace,
     pub busy: bool,
 }

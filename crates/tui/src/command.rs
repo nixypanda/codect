@@ -164,36 +164,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             0,
         ),
         spec(
-            Owner::Tree,
-            "wider",
-            "Widen file tree",
-            "]",
-            vec![anywhere(KeySeq::Key(Key::Char(']')))],
-            true,
-            None,
-            330,
-        ),
-        spec(
-            Owner::Tree,
-            "narrower",
-            "Narrow file tree",
-            "[",
-            vec![anywhere(KeySeq::Key(Key::Char('[')))],
-            true,
-            None,
-            340,
-        ),
-        spec(
-            Owner::Tree,
-            "reset",
-            "Reset file tree",
-            "\\",
-            vec![anywhere(KeySeq::Key(Key::Char('\\')))],
-            true,
-            None,
-            350,
-        ),
-        spec(
             Owner::Overlay,
             "modes.open",
             "Switch types / signatures / tests",
@@ -254,6 +224,10 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             0,
         ),
     ];
+
+    // The tree plugin owns its three commands; the legacy palette and which-key
+    // read them through this shared registry until task 4.7 removes the bridge.
+    commands.extend(crate::tree::commands());
 
     match loaded {
         Loaded::Show(_) => {
@@ -503,7 +477,7 @@ fn scope_matches(scope: KeyScope, focus: Option<FocusKey>) -> bool {
 mod tests {
     use super::*;
     use crate::plugin::{DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, TREE_FOCUS};
-    use crate::test_support::{commits_app, diff_app, file_diff, folder_app, loaded};
+    use crate::test_support::{commits_app, diff_app, file_diff, folder_app};
 
     fn test_command(name: &'static str, bindings: Vec<Binding>) -> CommandSpec {
         spec(Owner::Kernel, name, "", "", bindings, false, None, 0)
@@ -597,8 +571,10 @@ mod tests {
         let range = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
         let commits = commits_app(3);
 
-        for loaded in [loaded(&show), loaded(&range), loaded(&commits)] {
-            let specs = raw_commands(loaded);
+        // The plugin-set union: the tree plugin's commands plus the legacy
+        // registry, exactly as the kernel collects them.
+        for app in [&show, &range, &commits] {
+            let specs = crate::kernel::app::collect_specs(app).commands;
             for focus in [
                 Some(TREE_FOCUS),
                 Some(SOURCE_FOCUS),
@@ -614,14 +590,15 @@ mod tests {
             }
         }
 
-        let folds = |loaded: &Loaded| -> usize {
-            raw_commands(loaded)
+        let folds = |app: &crate::test_support::App| -> usize {
+            crate::kernel::app::collect_specs(app)
+                .commands
                 .iter()
                 .filter(|spec| spec.id.owner == Owner::Show && spec.id.name.starts_with("fold."))
                 .count()
         };
-        assert_eq!(folds(loaded(&show)), 7);
-        assert_eq!(folds(loaded(&range)), 0);
-        assert_eq!(folds(loaded(&commits)), 0);
+        assert_eq!(folds(&show), 7);
+        assert_eq!(folds(&range), 0);
+        assert_eq!(folds(&commits), 0);
     }
 }

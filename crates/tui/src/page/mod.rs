@@ -106,22 +106,28 @@ impl Loaded {
         }
     }
 
-    /// The panes the loaded kind shows, in registration order: the tree first,
-    /// then the view's body panes and its band.
+    /// The view's body panes, in registration order. The navigator the tree
+    /// plugin owns is not among them; the tree declares it.
     pub(crate) fn panes(&self) -> Vec<PaneSpec> {
         match self {
-            Self::Show(_) => vec![TREE_SPEC, SOURCE_SPEC],
-            Self::Diff(diff) => diff_panes(matches!(diff.view, DiffViewState::Commits(_))),
+            Self::Show(_) => vec![SOURCE_SPEC],
+            Self::Diff(diff) => {
+                let mut panes = vec![OLD_SPEC, NEW_SPEC];
+                if matches!(diff.view, DiffViewState::Commits(_)) {
+                    panes.push(COMMITS_SPEC);
+                }
+                panes
+            }
         }
     }
 
-    /// The distinct focus keys this kind shows, navigator first. Unlike
-    /// [`Self::panes`], this does not allocate, so the per-step focus
-    /// normalisation stays off the hot path.
+    /// The distinct focus keys this kind shows. Unlike [`Self::panes`], this
+    /// does not allocate, so the per-step focus normalisation stays off the hot
+    /// path. The navigator belongs to the tree plugin.
     pub(crate) fn focus_keys(&self) -> &'static [FocusKey] {
-        static SHOW: [FocusKey; 2] = [TREE_FOCUS, SOURCE_FOCUS];
-        static RANGE: [FocusKey; 2] = [TREE_FOCUS, DIFF_BODY_FOCUS];
-        static COMMITS: [FocusKey; 3] = [TREE_FOCUS, DIFF_BODY_FOCUS, DIFF_BAND_FOCUS];
+        static SHOW: [FocusKey; 1] = [SOURCE_FOCUS];
+        static RANGE: [FocusKey; 1] = [DIFF_BODY_FOCUS];
+        static COMMITS: [FocusKey; 2] = [DIFF_BODY_FOCUS, DIFF_BAND_FOCUS];
         match self {
             Self::Show(_) => &SHOW,
             Self::Diff(diff) => match diff.view {

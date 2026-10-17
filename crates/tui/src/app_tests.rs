@@ -18,10 +18,10 @@ use crate::test_support::{
     base_app, buffer_row, buffer_text, cell_x_of, click, commit_search, commit_steps, commits_app,
     commits_ref, commits_request, declaration_less, diff_app, diff_focus_of, diff_ref,
     diff_request, dropped_container_outline, file_diff, focus_content, folder_app, item,
-    merge_base_range_app, multi_method_outline, nested_outline, press, render, row_with, scroll,
-    select_file, selected, show_app, show_app_mode, show_ref, show_request, snapshot_range_app,
-    source_outline, source_outline_with, tail_palette_entries, test_function_outline,
-    tests_filter_outline, two_files, two_function_outline,
+    merge_base_range_app, multi_method_outline, nested_outline, panes, press, render, row_with,
+    scroll, select_file, selected, show_app, show_app_mode, show_ref, show_request,
+    snapshot_range_app, source_outline, source_outline_with, tail_palette_entries,
+    test_function_outline, tests_filter_outline, two_files, two_function_outline,
 };
 use crate::test_support::{App, legacy_msg};
 use crate::workspace::BadgeTone;
@@ -34,9 +34,12 @@ use ratatui::style::Color;
 
 use crate::action::{Action, CommitsAction, GlobalAction, RangeAction, ShowAction};
 use crate::component::overlay;
-use crate::component::tree::RowKind;
-use crate::kernel::plugin::{FocusKey, PluginSet, QueryChange, Request, Size};
+use crate::kernel::command::{CommandId, Owner};
+use crate::kernel::plugin::{
+    Event, FocusKey, Input, NavigatorResize, Out, Plugin, PluginSet, QueryChange, Request, Size,
+};
 use crate::render::icons::Icons;
+use crate::tree::RowKind;
 use crate::util::input::Key;
 use engine::EngineError;
 
@@ -135,9 +138,8 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
         source_outline("b.rs", "b\n"),
         source_outline("c.rs", "c\n"),
     ]);
-    app.plugins.legacy.tree.cursor = app
+    app.plugins.tree.cursor = app
         .plugins
-        .legacy
         .tree
         .row_of_file(&RepoPath::new("b.rs").unwrap())
         .unwrap();
@@ -241,7 +243,7 @@ fn an_empty_reload_clears_the_selection_and_the_tree_cursor() {
     );
 
     assert!(next.workspace.selected.is_none());
-    assert_eq!(next.plugins.legacy.tree.cursor, 0);
+    assert_eq!(next.plugins.tree.cursor, 0);
 }
 
 #[test]
@@ -262,7 +264,7 @@ fn a_diff_reload_applies_the_fallback_selection_within_the_update() {
 
     assert_eq!(selected(&next).as_deref(), Some("b.rs"));
     assert_eq!(
-        next.plugins.legacy.tree.cursor, 0,
+        next.plugins.tree.cursor, 0,
         "the fallback is revealed in the tree"
     );
 }
@@ -380,7 +382,6 @@ fn empty_projections_are_still_explorable_in_the_tree() {
     ]);
     let labels: Vec<&str> = app
         .plugins
-        .legacy
         .tree
         .rows
         .iter()
@@ -438,7 +439,6 @@ fn a_diff_tree_contains_only_changed_paths() {
     ]);
     let labels: Vec<&str> = app
         .plugins
-        .legacy
         .tree
         .rows
         .iter()
@@ -456,16 +456,15 @@ fn tree_rows_follow_raw_path_order_and_are_nested() {
     ]);
     let labels: Vec<&str> = app
         .plugins
-        .legacy
         .tree
         .rows
         .iter()
         .map(|row| row.label.as_str())
         .collect();
     assert_eq!(labels, vec!["a.rs", "src", "lib.rs", "main.rs"]);
-    assert_eq!(app.plugins.legacy.tree.rows[0].depth, 0);
-    assert_eq!(app.plugins.legacy.tree.rows[1].depth, 0);
-    assert_eq!(app.plugins.legacy.tree.rows[2].depth, 1);
+    assert_eq!(app.plugins.tree.rows[0].depth, 0);
+    assert_eq!(app.plugins.tree.rows[1].depth, 0);
+    assert_eq!(app.plugins.tree.rows[2].depth, 1);
 }
 
 #[test]
@@ -475,16 +474,15 @@ fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
         source_outline("src/lib.rs", "l\n"),
         source_outline("src/main.rs", "m\n"),
     ]);
-    app.plugins.legacy.tree.cursor = 1;
+    app.plugins.tree.cursor = 1;
     assert!(matches!(
-        app.plugins.legacy.tree.current_row().unwrap().kind,
+        app.plugins.tree.current_row().unwrap().kind,
         RowKind::Directory { .. }
     ));
 
     let (collapsed, _) = update(Msg::Key(Key::Enter), &app);
     let labels: Vec<&str> = collapsed
         .plugins
-        .legacy
         .tree
         .rows
         .iter()
@@ -492,7 +490,7 @@ fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
         .collect();
     assert_eq!(labels, vec!["a.rs", "src"]);
     assert!(matches!(
-        collapsed.plugins.legacy.tree.rows[1].kind,
+        collapsed.plugins.tree.rows[1].kind,
         RowKind::Directory {
             expanded: false,
             ..
@@ -502,7 +500,6 @@ fn collapsing_a_directory_hides_its_children_and_expanding_restores_them() {
     let (expanded, _) = update(Msg::Key(Key::Right), &collapsed);
     let labels: Vec<&str> = expanded
         .plugins
-        .legacy
         .tree
         .rows
         .iter()
@@ -517,10 +514,10 @@ fn left_on_a_directory_row_folds_it() {
         source_outline("a.rs", "a\n"),
         source_outline("src/lib.rs", "l\n"),
     ]);
-    app.plugins.legacy.tree.cursor = 1;
+    app.plugins.tree.cursor = 1;
     let (folded, _) = update(Msg::Key(Key::Left), &app);
     assert!(matches!(
-        folded.plugins.legacy.tree.rows[1].kind,
+        folded.plugins.tree.rows[1].kind,
         RowKind::Directory {
             expanded: false,
             ..
@@ -944,7 +941,7 @@ fn settle_skips_highlighting_when_the_body_is_hidden() {
         width: 60,
         height: 30,
     };
-    app.plugins.legacy.tree.cursor = 0;
+    app.plugins.tree.cursor = 0;
     app.focus = Some(TREE_FOCUS);
     if let Loaded::Show(show) = &mut app.plugins.legacy.loaded {
         show.highlight = ShowHighlights::default();
@@ -1105,10 +1102,7 @@ fn help_toggles_and_swallows_navigation() {
     assert_eq!(help.plugins.legacy.overlay, Some(Overlay::Help));
 
     let (still, _) = update(Msg::Key(Key::Char('j')), &help);
-    assert_eq!(
-        still.plugins.legacy.tree.cursor,
-        help.plugins.legacy.tree.cursor
-    );
+    assert_eq!(still.plugins.tree.cursor, help.plugins.tree.cursor);
     assert_eq!(still.plugins.legacy.overlay, Some(Overlay::Help));
 
     let (closed, _) = update(Msg::Key(Key::Esc), &help);
@@ -1452,7 +1446,7 @@ fn page_keys_move_the_cursor_in_the_tree_and_the_body_cursor() {
         source_outline("b.rs", "x\n"),
     ]);
     let (down, _) = update(Msg::Key(Key::PageDown), &app);
-    assert!(down.plugins.legacy.tree.cursor > app.plugins.legacy.tree.cursor);
+    assert!(down.plugins.tree.cursor > app.plugins.tree.cursor);
 
     let mut body = app.clone();
     focus_content(&mut body);
@@ -1485,7 +1479,7 @@ fn clicking_a_file_selects_it() {
     let app = two_files();
     let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     assert_eq!(selected(&next).as_deref(), Some("b.rs"));
-    assert_eq!(next.plugins.legacy.tree.cursor, 1);
+    assert_eq!(next.plugins.tree.cursor, 1);
     assert_eq!(next.focus, Some(TREE_FOCUS));
 }
 
@@ -1498,7 +1492,6 @@ fn clicking_a_directory_folds_it() {
     let (folded, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     let labels: Vec<&str> = folded
         .plugins
-        .legacy
         .tree
         .rows
         .iter()
@@ -1513,16 +1506,16 @@ fn the_wheel_scrolls_the_tree_without_moving_the_selection() {
         .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
         .collect();
     let app = show_app(files);
-    assert_eq!(app.plugins.legacy.tree.scroll, 0);
+    assert_eq!(app.plugins.tree.scroll, 0);
     assert_eq!(selected(&app).as_deref(), Some("f00.rs"));
 
     let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
     assert_eq!(
-        scrolled.plugins.legacy.tree.scroll, 3,
+        scrolled.plugins.tree.scroll, 3,
         "the wheel moves the viewport"
     );
     assert_eq!(
-        scrolled.plugins.legacy.tree.cursor, 0,
+        scrolled.plugins.tree.cursor, 0,
         "the wheel does not move the cursor"
     );
     assert_eq!(
@@ -1532,10 +1525,7 @@ fn the_wheel_scrolls_the_tree_without_moving_the_selection() {
     );
 
     let (up, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, true)), &scrolled);
-    assert_eq!(
-        up.plugins.legacy.tree.scroll, 0,
-        "scrolling up clamps at the top"
-    );
+    assert_eq!(up.plugins.tree.scroll, 0, "scrolling up clamps at the top");
 }
 
 #[test]
@@ -1545,12 +1535,12 @@ fn moving_the_tree_cursor_after_a_scroll_reveals_it() {
         .collect();
     let app = show_app(files);
     let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
-    assert_eq!(scrolled.plugins.legacy.tree.scroll, 3);
+    assert_eq!(scrolled.plugins.tree.scroll, 3);
 
     let moved = press(&scrolled, &[Key::Char('j'); 30]);
-    assert_eq!(moved.plugins.legacy.tree.cursor, 30);
+    assert_eq!(moved.plugins.tree.cursor, 30);
     assert_eq!(
-        moved.plugins.legacy.tree.scroll, 5,
+        moved.plugins.tree.scroll, 5,
         "the viewport follows the cursor"
     );
 }
@@ -1625,7 +1615,7 @@ fn shrinking_the_tree_keeps_the_cursor_visible() {
         .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
         .collect();
     let app = press(&show_app(files), &[Key::Char('G')]);
-    assert_eq!(app.plugins.legacy.tree.cursor, 39);
+    assert_eq!(app.plugins.tree.cursor, 39);
 
     let (resized, _) = update(
         Msg::Resize {
@@ -1635,11 +1625,11 @@ fn shrinking_the_tree_keeps_the_cursor_visible() {
         &app,
     );
     let resized = settle(resized);
-    let height = resized.plugins.legacy.tree.viewport;
+    let height = resized.plugins.tree.viewport;
     assert!(height >= 1, "the tree still has a viewport");
     assert!(
-        resized.plugins.legacy.tree.scroll <= resized.plugins.legacy.tree.cursor
-            && resized.plugins.legacy.tree.cursor < resized.plugins.legacy.tree.scroll + height,
+        resized.plugins.tree.scroll <= resized.plugins.tree.cursor
+            && resized.plugins.tree.cursor < resized.plugins.tree.scroll + height,
         "the cursor stays inside the viewport after a shrink"
     );
 }
@@ -1660,10 +1650,10 @@ fn a_selection_scrolls_the_hidden_tree_to_the_file() {
 
     let height = tree_viewport_height(&app);
     assert!(height >= 1, "a hidden tree still has a drawing height");
-    assert_eq!(app.plugins.legacy.tree.cursor, 39);
+    assert_eq!(app.plugins.tree.cursor, 39);
     assert!(
-        app.plugins.legacy.tree.scroll <= app.plugins.legacy.tree.cursor
-            && app.plugins.legacy.tree.cursor < app.plugins.legacy.tree.scroll + height,
+        app.plugins.tree.scroll <= app.plugins.tree.cursor
+            && app.plugins.tree.cursor < app.plugins.tree.scroll + height,
         "the hidden tree is scrolled to the revealed file"
     );
 }
@@ -1675,7 +1665,7 @@ fn growing_the_tree_keeps_a_scrolled_away_viewport() {
         .collect();
     let app = show_app(files);
     let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
-    assert_eq!(scrolled.plugins.legacy.tree.scroll, 3);
+    assert_eq!(scrolled.plugins.tree.scroll, 3);
 
     let (resized, _) = update(
         Msg::Resize {
@@ -1686,7 +1676,7 @@ fn growing_the_tree_keeps_a_scrolled_away_viewport() {
     );
     let resized = settle(resized);
     assert_eq!(
-        resized.plugins.legacy.tree.scroll, 3,
+        resized.plugins.tree.scroll, 3,
         "growing the tree does not re-reveal a scrolled-away cursor"
     );
 }
@@ -1698,11 +1688,11 @@ fn a_tree_click_uses_the_scrolled_offset() {
         .collect();
     let app = show_app(files);
     let (scrolled, _) = update(Msg::Mouse(scroll(TREE_X, TREE_Y, false)), &app);
-    assert_eq!(scrolled.plugins.legacy.tree.scroll, 3);
+    assert_eq!(scrolled.plugins.tree.scroll, 3);
 
     let (clicked, _) = update(Msg::Mouse(click(TREE_X, TREE_Y)), &scrolled);
     assert_eq!(
-        clicked.plugins.legacy.tree.cursor, 3,
+        clicked.plugins.tree.cursor, 3,
         "the click maps to the scrolled row"
     );
     assert_eq!(selected(&clicked).as_deref(), Some("f03.rs"));
@@ -1762,10 +1752,7 @@ fn mouse_is_ignored_while_an_overlay_is_open() {
     let mut app = two_files();
     app.plugins.legacy.overlay = Some(Overlay::Help);
     let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
-    assert_eq!(
-        next.plugins.legacy.tree.cursor,
-        app.plugins.legacy.tree.cursor
-    );
+    assert_eq!(next.plugins.tree.cursor, app.plugins.tree.cursor);
     assert_eq!(next.workspace.selected, app.workspace.selected);
 }
 
@@ -1773,10 +1760,7 @@ fn mouse_is_ignored_while_an_overlay_is_open() {
 fn a_click_on_the_header_or_a_divider_does_nothing() {
     let app = two_files();
     let (header, _) = update(Msg::Mouse(click(5, 0)), &app);
-    assert_eq!(
-        header.plugins.legacy.tree.cursor,
-        app.plugins.legacy.tree.cursor
-    );
+    assert_eq!(header.plugins.tree.cursor, app.plugins.tree.cursor);
 
     let mut body_focused = app.clone();
     focus_content(&mut body_focused);
@@ -3802,13 +3786,7 @@ fn responsive_boundaries_pick_the_right_layout() {
 #[test]
 fn loaded_panes_lists_the_tree_then_the_view_bodies() {
     let ids = |app: &App| -> Vec<crate::plugin::PaneId> {
-        app.plugins
-            .legacy
-            .loaded
-            .panes()
-            .iter()
-            .map(|spec| spec.id)
-            .collect()
+        panes(app).iter().map(|spec| spec.id).collect()
     };
 
     let show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
@@ -3825,17 +3803,41 @@ fn loaded_panes_lists_the_tree_then_the_view_bodies() {
 }
 
 #[test]
+fn the_tree_plugin_owns_its_pane_and_the_legacy_plugin_does_not() {
+    for app in [
+        show_app(vec![source_outline("a.rs", "pub fn a();\n")]),
+        diff_app(vec![file_diff("a.rs", Some("x\n"), Some("y\n"))]),
+        commits_app(3),
+    ] {
+        let union = panes(&app);
+        let tree = union.iter().filter(|spec| spec.id == TREE_PANE).count();
+        assert_eq!(tree, 1, "the union owns TREE_PANE exactly once");
+
+        let specs = crate::kernel::app::Specs::panes_only(&app);
+        let overlay = app.plugins.overlay_pane();
+        let busy = app.plugins.busy();
+        let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+        let legacy = app.plugins.legacy.panes(&cx);
+        assert!(
+            legacy.iter().all(|spec| spec.id != TREE_PANE),
+            "Legacy no longer declares the tree pane: {legacy:?}"
+        );
+        assert!(
+            legacy.iter().all(|spec| spec.focus != TREE_FOCUS),
+            "Legacy no longer declares the tree focus"
+        );
+    }
+}
+
+#[test]
 fn the_source_and_diff_sides_share_one_focus_stop() {
     let show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
-    assert_eq!(
-        focus_ring(&show.plugins.legacy.loaded.panes()),
-        vec![TREE_FOCUS, SOURCE_FOCUS]
-    );
+    assert_eq!(focus_ring(&panes(&show)), vec![TREE_FOCUS, SOURCE_FOCUS]);
 
     // The range's two sides share one body focus key, so the ring has two stops.
     let range = diff_app(vec![file_diff("a.rs", Some("x\n"), Some("y\n"))]);
     assert_eq!(
-        focus_ring(&range.plugins.legacy.loaded.panes()),
+        focus_ring(&panes(&range)),
         vec![TREE_FOCUS, DIFF_BODY_FOCUS]
     );
     let (step, _) = update(Msg::Key(Key::Tab), &range);
@@ -3846,7 +3848,7 @@ fn the_source_and_diff_sides_share_one_focus_stop() {
     // The commits band comes first, then the navigator, then the shared body.
     let commits = commits_app(3);
     assert_eq!(
-        focus_ring(&commits.plugins.legacy.loaded.panes()),
+        focus_ring(&panes(&commits)),
         vec![DIFF_BAND_FOCUS, TREE_FOCUS, DIFF_BODY_FOCUS]
     );
 }
@@ -3932,7 +3934,6 @@ fn non_utf8_path_components_render_escaped() {
     let app = show_app(vec![file]);
     let labels: Vec<String> = app
         .plugins
-        .legacy
         .tree
         .rows
         .iter()
@@ -4480,10 +4481,7 @@ fn the_focus_ring_wraps_in_the_commits_view() {
 fn focus_defaults_to_the_navigator() {
     let show = two_files();
     assert_eq!(show.focus, Some(TREE_FOCUS));
-    assert_eq!(
-        focus_default(&show.plugins.legacy.loaded.panes()),
-        Some(TREE_FOCUS)
-    );
+    assert_eq!(focus_default(&panes(&show)), Some(TREE_FOCUS));
 
     let range = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
     assert_eq!(range.focus, Some(TREE_FOCUS));
@@ -4573,4 +4571,150 @@ fn a_band_click_outside_the_inner_rect_only_moves_focus() {
         cursor,
         "a border click does not select a commit"
     );
+}
+
+// -- the tree plugin ---------------------------------------------------------
+
+#[test]
+fn the_tree_input_is_pane_scoped() {
+    let mut app = two_files();
+    let specs = crate::kernel::app::Specs::panes_only(&app);
+    let overlay = app.plugins.overlay_pane();
+    let busy = app.plugins.busy();
+    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+
+    let unhandled = app
+        .plugins
+        .tree
+        .input(SOURCE_PANE, Input::Key(Key::Char('j')), &cx);
+    assert!(!unhandled.handled, "the tree ignores another pane's keys");
+
+    let before = app.plugins.tree.cursor;
+    let handled = app
+        .plugins
+        .tree
+        .input(TREE_PANE, Input::Key(Key::Char('j')), &cx);
+    assert!(handled.handled);
+    assert!(app.plugins.tree.cursor > before);
+
+    let unbound = app
+        .plugins
+        .tree
+        .input(TREE_PANE, Input::Key(Key::Char('x')), &cx);
+    assert!(!unbound.handled, "an unbound key is unhandled");
+}
+
+#[test]
+fn files_changed_selects_the_nearest_visible_file() {
+    let mut app = show_app(vec![
+        source_outline("a.rs", "a\n"),
+        source_outline("b.rs", "b\n"),
+        source_outline("c.rs", "c\n"),
+    ]);
+    app.plugins.tree.cursor = app
+        .plugins
+        .tree
+        .row_of_file(&RepoPath::new("c.rs").unwrap())
+        .unwrap();
+
+    // Drop the selection and shrink the set to `[a, b]`. The tree cursor stays
+    // past the end, so the fallback picks the nearest visible file at or after
+    // the hint, then the last.
+    app.workspace.selected = None;
+    app.workspace.files = crate::kernel::workspace::FileSet {
+        paths: std::sync::Arc::from(vec![
+            RepoPath::new("a.rs").unwrap(),
+            RepoPath::new("b.rs").unwrap(),
+        ]),
+        ..Default::default()
+    };
+
+    let specs = crate::kernel::app::Specs::panes_only(&app);
+    let overlay = app.plugins.overlay_pane();
+    let busy = app.plugins.busy();
+    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    let outs = app.plugins.tree.on_event(&Event::FilesChanged, &cx);
+
+    assert!(
+        matches!(
+            outs.as_slice(),
+            [Out::Kernel(Request::Select(Some(path)))]
+                if path == &RepoPath::new("b.rs").unwrap()
+        ),
+        "the fallback selects the nearest visible file"
+    );
+}
+
+#[test]
+fn a_selection_change_reveals_the_file_in_the_tree() {
+    let files: Vec<SourceOutline> = (0..40)
+        .map(|index| source_outline(&format!("f{index:02}.rs"), "x\n"))
+        .collect();
+    let mut app = show_app(files);
+    app.workspace.selected = Some(RepoPath::new("f39.rs").unwrap());
+
+    let specs = crate::kernel::app::Specs::panes_only(&app);
+    let overlay = app.plugins.overlay_pane();
+    let busy = app.plugins.busy();
+    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    app.plugins.tree.on_event(&Event::SelectionChanged, &cx);
+
+    assert_eq!(app.plugins.tree.cursor, 39);
+}
+
+#[test]
+fn the_tree_runs_its_resize_commands_and_legacy_does_not() {
+    let mut app = two_files();
+    let specs = crate::kernel::app::Specs::panes_only(&app);
+    let overlay = app.plugins.overlay_pane();
+    let busy = app.plugins.busy();
+    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+
+    let tree_command = |name: &'static str| CommandId {
+        owner: Owner::Tree,
+        name,
+    };
+    let wider = app.plugins.tree.run(tree_command("wider"), &cx);
+    assert!(matches!(
+        wider.as_slice(),
+        [Out::Kernel(Request::ResizeNavigator(
+            NavigatorResize::Wider
+        ))]
+    ));
+    let narrower = app.plugins.tree.run(tree_command("narrower"), &cx);
+    assert!(matches!(
+        narrower.as_slice(),
+        [Out::Kernel(Request::ResizeNavigator(
+            NavigatorResize::Narrower
+        ))]
+    ));
+    let reset = app.plugins.tree.run(tree_command("reset"), &cx);
+    assert!(matches!(
+        reset.as_slice(),
+        [Out::Kernel(Request::ResizeNavigator(
+            NavigatorResize::Reset
+        ))]
+    ));
+    assert!(
+        app.plugins
+            .tree
+            .run(tree_command("unknown"), &cx)
+            .is_empty()
+    );
+
+    // The legacy plugin must not also map a tree command, or the resize runs
+    // twice.
+    let guarded = app.plugins.legacy.run(tree_command("wider"), &cx);
+    assert!(
+        guarded.is_empty(),
+        "the legacy plugin must not double-run a tree command"
+    );
+
+    let mut cmds = Vec::new();
+    apply_request(
+        &mut app,
+        Request::RunCommand(tree_command("wider")),
+        &mut cmds,
+    );
+    assert_eq!(app.chrome.tree_percent, TREE_DEFAULT_PERCENT + TREE_STEP);
 }

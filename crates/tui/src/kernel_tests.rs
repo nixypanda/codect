@@ -26,6 +26,7 @@ use crate::util::input::{Key, Mouse, MouseKind};
 fn legacy_cmd(cmd: PluginsCmd) -> Cmd {
     match cmd {
         crate::plugins::PluginsCmd::Legacy(cmd) => cmd,
+        crate::plugins::PluginsCmd::Tree(never) => match never {},
     }
 }
 

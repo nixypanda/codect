@@ -270,8 +270,9 @@ pub(crate) fn base_app_with(request: LoadRequest, theme: Theme, icons: Icons) ->
     .0
 }
 
-pub(crate) fn loaded(app: &App) -> &Loaded {
-    &app.plugins.legacy.loaded
+/// The plugin-set union of pane specs, as the kernel's layout collects it.
+pub(crate) fn panes(app: &App) -> Vec<crate::render::layout::PaneSpec> {
+    crate::kernel::app::Specs::panes_only(app).panes
 }
 
 pub(crate) fn legacy_msg(msg: LegacyMsg) -> Msg {

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use base::{AreaSet, DiffRowKind, FileDiff, RepoPath, SourceOutline};
+use base::{AreaSet, DiffRowKind, FileDiff, SourceOutline};
 use engine::{Engine, EngineError};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -18,13 +18,12 @@ use crate::api::Cmd;
 use crate::command;
 use crate::component::commit_picker;
 use crate::component::overlay::{self, Overlay};
-use crate::component::tree::{self, RowKind, Tree};
 use crate::kernel::chrome::{Chip, ChipTone, Segment, SegmentTone};
-use crate::kernel::command::CommandSpec;
+use crate::kernel::command::{CommandId, CommandSpec, Owner};
 use crate::kernel::cx::Cx;
 use crate::kernel::help::HelpEntry;
 use crate::kernel::layout::PaneGeometry;
-use crate::kernel::nav::{Nav, page_step};
+use crate::kernel::nav::Nav;
 use crate::kernel::plugin::{
     Event, HintTarget, Input, MouseInput, Out, OverlaySpec, PaneId, Plugin, PluginId, Reply,
     Request,
@@ -34,9 +33,7 @@ use crate::page::{
     Commits, Ctx as PageCtx, Diff, DiffSide, DiffViewState, Loaded, OutMsg, Paging, Range, Show,
     ShowBody, ViewCtx, diff as diff_page, show as show_page,
 };
-use crate::plugin::{
-    COMMITS_PANE, DIFF_BAND_FOCUS, NEW_PANE, OLD_PANE, SOURCE_PANE, TREE_FOCUS, TREE_PANE,
-};
+use crate::plugin::{COMMITS_PANE, DIFF_BAND_FOCUS, NEW_PANE, OLD_PANE, SOURCE_PANE, TREE_FOCUS};
 use crate::render::layout::{VisualRow, commit_offset};
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::util::input::{Key, MouseKind};
@@ -80,7 +77,6 @@ pub enum Msg {
 #[derive(Clone)]
 pub struct Legacy {
     pub loaded: Loaded,
-    pub tree: Tree,
     pub overlay: Option<Overlay>,
 }
 
@@ -128,7 +124,6 @@ impl Legacy {
         };
         Self {
             loaded,
-            tree: Tree::default(),
             overlay: None,
         }
     }
@@ -140,14 +135,6 @@ impl Legacy {
             height: cx.size.height,
             focus: cx.focus,
         }
-    }
-
-    fn tree_viewport_height(&self, cx: &Cx) -> usize {
-        cx.layout_if_focused(TREE_FOCUS)
-            .slots
-            .iter()
-            .find(|slot| slot.pane == TREE_PANE)
-            .map_or(0, |slot| slot.geometry.inner.height as usize)
     }
 
     fn commits_inner(&self, cx: &Cx) -> Option<Rect> {
@@ -251,19 +238,13 @@ impl Legacy {
             Action::Global(GlobalAction::Finder) => self.open_finder(cx),
             Action::Global(GlobalAction::Search) => self.open_overlay(Overlay::search()),
             Action::Global(GlobalAction::TreeWider) => {
-                vec![Out::Kernel(Request::ResizeNavigator(
-                    crate::request::NavigatorResize::Wider,
-                ))]
+                vec![Out::Kernel(Request::RunCommand(command_id("wider")))]
             }
             Action::Global(GlobalAction::TreeNarrower) => {
-                vec![Out::Kernel(Request::ResizeNavigator(
-                    crate::request::NavigatorResize::Narrower,
-                ))]
+                vec![Out::Kernel(Request::RunCommand(command_id("narrower")))]
             }
             Action::Global(GlobalAction::TreeReset) => {
-                vec![Out::Kernel(Request::ResizeNavigator(
-                    crate::request::NavigatorResize::Reset,
-                ))]
+                vec![Out::Kernel(Request::RunCommand(command_id("reset")))]
             }
             Action::Show(ShowAction::EditRevision) => {
                 self.route_show(show_page::Msg::EditRevision, cx)
@@ -343,16 +324,6 @@ impl Legacy {
         }
     }
 
-    fn tree_apply(&mut self, msg: tree::Msg, cx: &Cx) -> Vec<Out<Cmd>> {
-        let height = self.tree_viewport_height(cx);
-        let selected = self.tree.update(msg, &cx.workspace.files.paths, height);
-        if let Some(tree::OutMsg::Selected(path)) = selected {
-            vec![Out::Kernel(Request::Select(Some(path)))]
-        } else {
-            Vec::new()
-        }
-    }
-
     fn key_input(&mut self, pane: PaneId, key: Key, cx: &Cx) -> Reply<Cmd> {
         if pane == LEGACY_OVERLAY {
             if self.loaded.prompt_active() {
@@ -363,18 +334,6 @@ impl Legacy {
                 };
             }
             return self.overlay_key(key, cx);
-        }
-        if pane == TREE_PANE {
-            return match tree_key(key) {
-                Some(msg) => {
-                    let outs = self.tree_apply(msg, cx);
-                    Reply {
-                        handled: true,
-                        outs,
-                    }
-                }
-                None => Reply::unhandled(),
-            };
         }
         if pane == SOURCE_PANE {
             if key == Key::Enter {
@@ -417,16 +376,16 @@ impl Legacy {
     }
 
     fn nav_input(&mut self, pane: PaneId, nav: Nav, cx: &Cx) -> Vec<Out<Cmd>> {
+        // The tree owns its own nav; only the view's body and band are ours.
+        if pane != SOURCE_PANE && pane != OLD_PANE && pane != NEW_PANE && pane != COMMITS_PANE {
+            return Vec::new();
+        }
         let action = match nav {
             Nav::Top => GlobalAction::Top,
             Nav::Bottom => GlobalAction::Bottom,
             Nav::PageUp => GlobalAction::PageUp,
             Nav::PageDown => GlobalAction::PageDown,
         };
-        if pane == TREE_PANE {
-            let step = page_step(cx.size.height);
-            return self.tree_apply(tree_nav_msg(action, step), cx);
-        }
         self.route_page_action(action, cx)
     }
 
@@ -451,20 +410,6 @@ impl Legacy {
             return match msg {
                 Some(msg) => self.route_diff(diff_page::Msg::Commit(msg), cx),
                 None => Vec::new(),
-            };
-        }
-        if pane == TREE_PANE {
-            return match event.kind {
-                MouseKind::Click => {
-                    let index = self.tree.scroll + usize::from(event.row.saturating_sub(inner.y));
-                    if index < self.tree.rows.len() {
-                        self.tree_apply(tree::Msg::Click(index), cx)
-                    } else {
-                        Vec::new()
-                    }
-                }
-                MouseKind::ScrollUp => self.tree_apply(tree::Msg::Scroll(-MOUSE_SCROLL_STEP), cx),
-                MouseKind::ScrollDown => self.tree_apply(tree::Msg::Scroll(MOUSE_SCROLL_STEP), cx),
             };
         }
         if pane == SOURCE_PANE {
@@ -534,36 +479,9 @@ impl Legacy {
         }
     }
 
-    fn on_files_changed(&mut self, cx: &Cx) -> Vec<Out<Cmd>> {
-        let hint = self.tree.cursor;
-        self.tree.sync(&cx.workspace.files.paths);
-        match cx.workspace.selected.clone() {
-            Some(path) => {
-                let height = self.tree_viewport_height(cx);
-                self.tree.reveal(&path, height);
-                Vec::new()
-            }
-            None => match nearest_visible(&self.tree, hint) {
-                Some(path) => vec![Out::Kernel(Request::Select(Some(path)))],
-                None => {
-                    if let Some(index) = self.tree.first_file_row() {
-                        self.tree.cursor = index;
-                    }
-                    Vec::new()
-                }
-            },
-        }
-    }
-
     fn on_selection_changed(&mut self, cx: &Cx) {
-        match cx.workspace.selected.as_ref() {
-            Some(path) => {
-                let height = self.tree_viewport_height(cx);
-                self.tree.reveal(path, height);
-                self.loaded.reset_body_scroll(Some(path));
-            }
-            None => self.loaded.reset_body_scroll(None),
-        }
+        self.loaded
+            .reset_body_scroll(cx.workspace.selected.as_ref());
     }
 
     fn diff_rows(&self) -> &[VisualRow] {
@@ -618,6 +536,9 @@ impl Plugin for Legacy {
 
     fn commands(&self, cx: &Cx) -> Vec<CommandSpec> {
         command::commands(&self.loaded, cx.focus)
+            .into_iter()
+            .filter(|spec| spec.id.owner != Owner::Tree)
+            .collect()
     }
 
     fn help(&self, _cx: &Cx) -> Vec<HelpEntry> {
@@ -647,9 +568,7 @@ impl Plugin for Legacy {
                     return Some("j/k choose commit   Tab files   Ctrl-P commands   ? help ");
                 }
                 if focus == TREE_FOCUS {
-                    return Some(
-                        "click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help ",
-                    );
+                    return None;
                 }
                 Some(match self.loaded {
                     Loaded::Show(_) => {
@@ -747,8 +666,6 @@ impl Plugin for Legacy {
     ) {
         let ctx = crate::component::RenderCtx {
             theme: cx.theme,
-            icons: cx.icons,
-            workspace: cx.workspace,
             busy: cx.busy,
         };
         let vctx = ViewCtx {
@@ -758,9 +675,7 @@ impl Plugin for Legacy {
         };
         let outer = geometry.outer;
         let edge = geometry.edge;
-        if pane == TREE_PANE {
-            tree::render(&self.tree, &ctx, frame, outer, focused, edge);
-        } else if pane == SOURCE_PANE {
+        if pane == SOURCE_PANE {
             if let Loaded::Show(show) = &self.loaded {
                 show_page::view(show, cx.workspace, &vctx, frame, outer, focused, edge);
             }
@@ -841,7 +756,10 @@ impl Plugin for Legacy {
         }
     }
 
-    fn run(&mut self, command: crate::kernel::command::CommandId, cx: &Cx) -> Vec<Out<Cmd>> {
+    fn run(&mut self, command: CommandId, cx: &Cx) -> Vec<Out<Cmd>> {
+        if command.owner == Owner::Tree {
+            return Vec::new();
+        }
         match command::action_for(command.name) {
             Some(action) => self.apply_action(action, cx),
             None => Vec::new(),
@@ -907,7 +825,7 @@ impl Plugin for Legacy {
 
     fn on_event(&mut self, event: &Event, cx: &Cx) -> Vec<Out<Cmd>> {
         match event {
-            Event::FilesChanged => self.on_files_changed(cx),
+            Event::FilesChanged => Vec::new(),
             Event::SelectionChanged => {
                 self.on_selection_changed(cx);
                 Vec::new()
@@ -994,8 +912,6 @@ impl Plugin for Legacy {
             cx.theme,
             selected.as_ref(),
         );
-        let height = self.tree_viewport_height(cx);
-        self.tree.fit_viewport(height);
     }
 
     fn perform(engine: &Engine, cmd: Cmd) -> Msg {
@@ -1029,40 +945,11 @@ fn convert(outs: Vec<OutMsg>) -> Vec<Out<Cmd>> {
         .collect()
 }
 
-fn tree_key(key: Key) -> Option<tree::Msg> {
-    match key {
-        Key::Down | Key::Char('j') => Some(tree::Msg::Move(1)),
-        Key::Up | Key::Char('k') => Some(tree::Msg::Move(-1)),
-        Key::Right | Key::Char('l') => Some(tree::Msg::Open),
-        Key::Left | Key::Char('h') => Some(tree::Msg::Close),
-        Key::Enter => Some(tree::Msg::Toggle),
-        _ => None,
+fn command_id(name: &'static str) -> CommandId {
+    CommandId {
+        owner: Owner::Tree,
+        name,
     }
-}
-
-fn tree_nav_msg(action: GlobalAction, step: u16) -> tree::Msg {
-    match action {
-        GlobalAction::Top => tree::Msg::ToTop,
-        GlobalAction::Bottom => tree::Msg::ToBottom,
-        GlobalAction::PageUp => tree::Msg::Page(-i32::from(step)),
-        _ => tree::Msg::Page(i32::from(step)),
-    }
-}
-
-fn nearest_visible(tree: &Tree, hint: usize) -> Option<RepoPath> {
-    let file_rows: Vec<usize> = tree
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| matches!(row.kind, RowKind::File { .. }))
-        .map(|(index, _)| index)
-        .collect();
-    let chosen = file_rows
-        .iter()
-        .copied()
-        .find(|&index| index >= hint)
-        .or_else(|| file_rows.last().copied())?;
-    Some(tree.rows[chosen].kind.path().clone())
 }
 
 /// The old `interpret`: run an effect against the engine and build its message.

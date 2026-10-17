@@ -37,6 +37,7 @@ mod request;
 mod route;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod tree;
 mod util;
 mod workspace;
 

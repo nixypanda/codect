@@ -147,14 +147,13 @@ macro_rules! plugin_set {
                 &self,
                 pane: $crate::kernel::plugin::PaneId,
             ) -> $crate::kernel::plugin::OverlaySpec {
-                let mut found = None;
                 $(
                     $(#[$field_meta])*
-                    if found.is_none() {
-                        found = Some($crate::kernel::plugin::Plugin::overlay_spec(&self.$field, pane));
+                    if pane.owner == <$ty as $crate::kernel::plugin::Plugin>::ID {
+                        return $crate::kernel::plugin::Plugin::overlay_spec(&self.$field, pane);
                     }
                 )*
-                found.unwrap_or($crate::kernel::plugin::OverlaySpec::MODAL)
+                $crate::kernel::plugin::OverlaySpec::MODAL
             }
 
             fn overlay_pane(&self) -> Option<$crate::kernel::plugin::PaneId> {
@@ -329,6 +328,7 @@ macro_rules! plugin_set {
                     {
                         let id = <$ty as $crate::kernel::plugin::Plugin>::ID;
                         let mut own: Vec<<$ty as $crate::kernel::plugin::Plugin>::Cmd> = Vec::new();
+                        #[allow(unreachable_code)]
                         for cmd in pending {
                             #[allow(irrefutable_let_patterns)]
                             if let $cmd_name::$variant(cmd) = cmd {

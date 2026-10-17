@@ -7,18 +7,20 @@ pub mod legacy;
 
 use crate::api::Cmd;
 use crate::kernel::app::{App, Chrome, Kernel};
-use crate::kernel::focus::focus_default;
 use crate::kernel::keymap::Keymap;
 use crate::kernel::workspace::{FileSet, NO_CHANGES, NO_FILES, Query, Scope, Workspace};
+use crate::plugin::TREE_FOCUS;
 use crate::render::icons::Icons;
 use crate::render::theme::Theme;
 use crate::route::{DiffRequest, LoadRequest, ShowRequest};
+use crate::tree::Tree;
 
 pub use legacy::Legacy;
 
 crate::plugin_set! {
     /// Every plugin `codect tui` ships, in registration order.
     pub struct Plugins: PluginsMsg, PluginsCmd {
+        tree: Tree = crate::tree::Tree,
         legacy: Legacy = crate::plugins::legacy::Legacy,
     }
 }
@@ -66,7 +68,8 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
     };
 
     let legacy = Legacy::new(request.clone());
-    let focus = focus_default(&legacy.loaded.panes());
+    let tree = Tree::default();
+    let focus = Some(TREE_FOCUS);
     let workspace = Workspace {
         query,
         files: FileSet {
@@ -76,7 +79,7 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         selected: None,
         search: None,
     };
-    let plugins = Plugins { legacy };
+    let plugins = Plugins { tree, legacy };
     plugins.assert_unique_ids();
     let kernel = Kernel {
         root,
