@@ -172,6 +172,22 @@ impl Loaded {
         }
     }
 
+    /// The distinct focus keys this kind shows, navigator first. Unlike
+    /// [`Self::panes`], this does not allocate, so the per-step focus
+    /// normalisation stays off the hot path.
+    pub(crate) fn focus_keys(&self) -> &'static [FocusKey] {
+        static SHOW: [FocusKey; 2] = [TREE_FOCUS, SOURCE_FOCUS];
+        static RANGE: [FocusKey; 2] = [TREE_FOCUS, DIFF_BODY_FOCUS];
+        static COMMITS: [FocusKey; 3] = [TREE_FOCUS, DIFF_BODY_FOCUS, DIFF_BAND_FOCUS];
+        match self {
+            Self::Show(_) => &SHOW,
+            Self::Diff(diff) => match diff.view {
+                DiffViewState::Range(_) => &RANGE,
+                DiffViewState::Commits(_) => &COMMITS,
+            },
+        }
+    }
+
     pub fn prompt_active(&self) -> bool {
         match self {
             Self::Show(show) => show.prompt.is_some(),

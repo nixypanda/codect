@@ -268,8 +268,8 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
         }
         Msg::Resize { width, height } => {
             next.size = Size { width, height };
-            let selected = next.workspace.selected.clone();
-            next.loaded.clamp_scroll(height, selected.as_ref());
+            let selected = next.workspace.selected.as_ref();
+            next.loaded.clamp_scroll(height, selected);
         }
         Msg::Tick => {
             next.chrome.spinner = next.chrome.spinner.wrapping_add(1);
@@ -337,12 +337,9 @@ pub fn update(msg: Msg, app: &App) -> (App, Vec<Cmd>) {
 
     // Focus normalisation (section 4.7 step 6): a focus that names no current
     // pane falls back to the default.
-    let panes = next.loaded.panes();
-    if !next
-        .focus
-        .is_some_and(|focus| panes.iter().any(|spec| spec.focus == focus))
-    {
-        next.focus = focus_default(&panes);
+    let keys = next.loaded.focus_keys();
+    if !next.focus.is_some_and(|focus| keys.contains(&focus)) {
+        next.focus = keys.first().copied();
     }
 
     (next, cmds)
