@@ -19,7 +19,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::action::GlobalAction;
 use crate::api::{Cmd, HistoryPayload};
 use crate::component::commit_picker::{self, CommitPicker};
-use crate::component::text_input::TextInput;
 use crate::plugin::{DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE};
 use crate::render::block::pane_block;
 use crate::render::empty::render_empty;
@@ -41,7 +40,6 @@ use crate::workspace::{
 
 use super::{
     Ctx, OutMsg, Paging, Scope, ViewCtx, diff_panes, page_step, scroll_by, scroll_offset_to,
-    text_edit,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,10 +48,22 @@ pub enum DiffSide {
     Target,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DiffPrompt {
-    pub side: DiffSide,
-    pub input: TextInput,
+impl DiffSide {
+    /// The tag the prompt echoes back with the revision the user typed.
+    pub(crate) const fn prompt_tag(self) -> u8 {
+        match self {
+            Self::Base => 0,
+            Self::Target => 1,
+        }
+    }
+
+    pub(crate) const fn from_prompt_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::Base),
+            1 => Some(Self::Target),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,7 +107,6 @@ pub struct Diff {
     pub loaded_mode: ProjectionMode,
     pub merge_base: bool,
     pub paging: Paging,
-    pub prompt: Option<DiffPrompt>,
     pub view: DiffViewState,
     generation: u64,
     rows: Arc<DiffRows>,
@@ -174,7 +183,6 @@ impl Diff {
             loaded_mode: mode,
             merge_base,
             paging: Paging::Loading,
-            prompt: None,
             view,
             generation: 0,
             rows: Arc::new(DiffRows::default()),
@@ -431,8 +439,11 @@ pub enum Msg {
     Scroll(i32),
     Action(GlobalAction),
     RevealMatch(SearchMatch),
-    Prompt(Key),
     EditSide(DiffSide),
+    PromptSubmitted {
+        tag: u8,
+        value: String,
+    },
     SwitchView(DiffView),
     Commit(commit_picker::Msg),
     Requery(QueryChange),
@@ -467,18 +478,18 @@ pub fn update(msg: Msg, page: &mut Diff, workspace: &Workspace, ctx: &Ctx) -> Ve
             }
             Vec::new()
         }
-        Msg::Prompt(key) => prompt_key(page, key, workspace),
         Msg::EditSide(side) => {
-            let value = match side {
-                DiffSide::Base => page.base.clone(),
-                DiffSide::Target => page.target.clone(),
+            let (label, initial) = match side {
+                DiffSide::Base => ("base", page.base.clone()),
+                DiffSide::Target => ("target", page.target.clone()),
             };
-            page.prompt = Some(DiffPrompt {
-                side,
-                input: TextInput::new(value),
-            });
-            Vec::new()
+            vec![OutMsg::Request(Request::OpenPrompt {
+                label,
+                initial,
+                tag: side.prompt_tag(),
+            })]
         }
+        Msg::PromptSubmitted { tag, value } => prompt_submitted(page, tag, value, workspace),
         Msg::SwitchView(view) => switch_view(page, view, workspace),
         Msg::Commit(msg) => {
             if let DiffViewState::Commits(commits) = &mut page.view {
@@ -595,37 +606,20 @@ fn switch_view(page: &mut Diff, view: DiffView, workspace: &Workspace) -> Vec<Ou
     vec![OutMsg::Effect(Cmd::Diff(request))]
 }
 
-fn prompt_key(page: &mut Diff, key: Key, workspace: &Workspace) -> Vec<OutMsg> {
-    let Some(mut prompt) = page.prompt.take() else {
+fn prompt_submitted(page: &mut Diff, tag: u8, value: String, workspace: &Workspace) -> Vec<OutMsg> {
+    if value.is_empty() {
+        return Vec::new();
+    }
+    let Some(side) = DiffSide::from_prompt_tag(tag) else {
         return Vec::new();
     };
-    let mut reopen = true;
-    let mut effect = None;
-    match key {
-        Key::Esc => reopen = false,
-        Key::Enter => {
-            reopen = false;
-            let value = prompt.input.value();
-            if !value.is_empty() {
-                let mut request = page.request(workspace.query.scope.selection.clone());
-                match prompt.side {
-                    DiffSide::Base => request.base = value,
-                    DiffSide::Target => request.target = value,
-                }
-                page.paging = Paging::Loading;
-                effect = Some(Cmd::Diff(request));
-            }
-        }
-        key => {
-            if let Some(edit) = text_edit(key) {
-                prompt.input.edit(edit);
-            }
-        }
+    let mut request = page.request(workspace.query.scope.selection.clone());
+    match side {
+        DiffSide::Base => request.base = value,
+        DiffSide::Target => request.target = value,
     }
-    if reopen {
-        page.prompt = Some(prompt);
-    }
-    effect.into_iter().map(OutMsg::Effect).collect()
+    page.paging = Paging::Loading;
+    vec![OutMsg::Effect(Cmd::Diff(request))]
 }
 
 fn commit_key(key: Key) -> Option<commit_picker::Msg> {
@@ -657,7 +651,6 @@ fn loaded(
             page.target = request.target;
             page.loaded_mode = request.mode;
             page.merge_base = request.merge_base;
-            page.prompt = None;
             if !matches!(page.view, DiffViewState::Range(_)) {
                 page.view = DiffViewState::Range(Range::empty());
             }
@@ -700,7 +693,6 @@ fn history_loaded(
     page.target = request.target;
     page.loaded_mode = request.mode;
     page.merge_base = request.merge_base;
-    page.prompt = None;
     let selection = request.selection;
     let preferred = match &page.view {
         DiffViewState::Commits(commits) => commits
@@ -912,16 +904,6 @@ pub(crate) fn view(
         ));
     }
     frame.render_widget(Paragraph::new(lines), inner);
-}
-
-pub(crate) fn prompt_view(page: &Diff, theme: &Theme, frame: &mut Frame, area: Rect) {
-    if let Some(prompt) = &page.prompt {
-        let label = match prompt.side {
-            DiffSide::Base => "base",
-            DiffSide::Target => "target",
-        };
-        crate::component::text_input::render_prompt(frame, area, label, &prompt.input, theme);
-    }
 }
 
 fn pane_title(side: Side, revision: &str, merge_base: bool, pane_width: u16) -> String {

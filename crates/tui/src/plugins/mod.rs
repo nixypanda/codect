@@ -5,10 +5,12 @@
 pub mod legacy;
 
 use crate::api::Cmd;
+use crate::help::Help;
 use crate::kernel::app::{App, Chrome, Kernel};
 use crate::kernel::keymap::Keymap;
 use crate::kernel::workspace::{FileSet, NO_CHANGES, NO_FILES, Query, Scope, Workspace};
 use crate::plugin::TREE_FOCUS;
+use crate::prompt::Prompt;
 use crate::render::icons::Icons;
 use crate::render::theme::Theme;
 use crate::route::{DiffRequest, LoadRequest, ShowRequest};
@@ -22,6 +24,8 @@ crate::plugin_set! {
     pub struct Plugins: PluginsMsg, PluginsCmd {
         tree: Tree = crate::tree::Tree,
         which_key: WhichKey = crate::which_key::WhichKey,
+        prompt: Prompt = crate::prompt::Prompt,
+        help: Help = crate::help::Help,
         legacy: Legacy = crate::plugins::legacy::Legacy,
     }
 }
@@ -71,6 +75,8 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
     let legacy = Legacy::new(request.clone());
     let tree = Tree::default();
     let which_key = WhichKey::default();
+    let prompt = Prompt::default();
+    let help = Help;
     let focus = Some(TREE_FOCUS);
     let workspace = Workspace {
         query,
@@ -84,6 +90,8 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
     let plugins = Plugins {
         tree,
         which_key,
+        prompt,
+        help,
         legacy,
     };
     plugins.assert_unique_ids();

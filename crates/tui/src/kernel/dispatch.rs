@@ -16,7 +16,8 @@ use crate::util::input::{Key, Mouse};
 /// The depth a request cascade may reach before the kernel gives up.
 const REQUEST_DEPTH_LIMIT: u8 = 16;
 
-/// Apply `outs` whose requests nest at `depth`.
+/// Apply `outs` whose requests nest at `depth`, attributing every request to
+/// the plugin that produced it.
 pub(crate) fn process_wrapped<S: PluginSet>(
     app: &mut App<S>,
     outs: Vec<(PluginId, Out<S::Cmd>)>,
@@ -24,29 +25,38 @@ pub(crate) fn process_wrapped<S: PluginSet>(
     depth: u8,
     specs: &Specs,
 ) {
-    process_outs(
-        app,
-        outs.into_iter().map(|(_, out)| out),
-        cmds,
-        depth,
-        specs,
-    );
+    for (from, out) in outs {
+        process_out(app, from, out, cmds, depth, specs);
+    }
 }
 
-/// Apply `outs`, preserving interleaved order: a request is applied where it
-/// appeared relative to its sibling effects.
+/// Apply `outs` from a pane's input handler, preserving interleaved order: a
+/// request is applied where it appeared relative to its sibling effects. The
+/// pane's owner is the emitter, as section 4.4 requires.
 pub(crate) fn process_outs<S: PluginSet>(
     app: &mut App<S>,
     outs: impl IntoIterator<Item = Out<S::Cmd>>,
     cmds: &mut Vec<S::Cmd>,
     depth: u8,
     specs: &Specs,
+    from: PluginId,
 ) {
     for out in outs {
-        match out {
-            Out::Effect(cmd) => cmds.push(cmd),
-            Out::Kernel(request) => apply_request(app, request, cmds, depth, specs),
-        }
+        process_out(app, from, out, cmds, depth, specs);
+    }
+}
+
+fn process_out<S: PluginSet>(
+    app: &mut App<S>,
+    from: PluginId,
+    out: Out<S::Cmd>,
+    cmds: &mut Vec<S::Cmd>,
+    depth: u8,
+    specs: &Specs,
+) {
+    match out {
+        Out::Effect(cmd) => cmds.push(cmd),
+        Out::Kernel(request) => apply_request_from(app, request, cmds, depth, specs, from),
     }
 }
 
@@ -101,7 +111,7 @@ fn plugin_input<S: PluginSet>(
     plugins.input(pane, input, &cx)
 }
 
-/// Apply a kernel request and any requests its handlers produce.
+/// Apply a kernel-owned request and any requests its handlers produce.
 pub(crate) fn apply_request<S: PluginSet>(
     app: &mut App<S>,
     request: Request,
@@ -109,12 +119,26 @@ pub(crate) fn apply_request<S: PluginSet>(
     depth: u8,
     specs: &Specs,
 ) {
+    apply_request_from(app, request, cmds, depth, specs, KERNEL);
+}
+
+const KERNEL: PluginId = PluginId("kernel");
+
+/// Apply a request produced by `from` and any requests its handlers produce.
+fn apply_request_from<S: PluginSet>(
+    app: &mut App<S>,
+    request: Request,
+    cmds: &mut Vec<S::Cmd>,
+    depth: u8,
+    specs: &Specs,
+    from: PluginId,
+) {
     if depth >= REQUEST_DEPTH_LIMIT {
         debug_assert!(false, "request cascade exceeded depth");
         app.kernel.diagnostic = Some(Diagnostic::new("request depth exceeded".to_owned()));
         return;
     }
-    apply_one(app, request, cmds, depth, specs);
+    apply_one(app, request, cmds, depth, specs, from);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -124,6 +148,7 @@ fn apply_one<S: PluginSet>(
     cmds: &mut Vec<S::Cmd>,
     depth: u8,
     specs: &Specs,
+    from: PluginId,
 ) {
     match request {
         Request::Quit => app.kernel.chrome.quit = true,
@@ -212,6 +237,30 @@ fn apply_one<S: PluginSet>(
                 app.kernel.overlay = None;
             }
         }
+        Request::OpenPrompt {
+            label,
+            initial,
+            tag,
+        } => broadcast(
+            app,
+            Event::PromptRequested {
+                from,
+                label,
+                initial,
+                tag,
+            },
+            cmds,
+            depth,
+            specs,
+        ),
+        Request::SubmitPrompt { to, tag, value } => send_to(
+            app,
+            to,
+            Event::PromptSubmitted { tag, value },
+            cmds,
+            depth,
+            specs,
+        ),
         Request::CancelPrefix => {
             if app.kernel.keymap.pending.take().is_some() {
                 broadcast(app, Event::PrefixCleared, cmds, depth, specs);
@@ -321,7 +370,8 @@ fn send_nav<S: PluginSet>(
         return;
     };
     let reply = plugin_input(app, pane, Input::Nav(nav), specs);
-    process_outs(app, reply.outs, cmds, depth + 1, specs);
+    let from = app.plugins.pane_owner(pane).unwrap_or(pane.owner);
+    process_outs(app, reply.outs, cmds, depth + 1, specs, from);
 }
 
 fn reveal_next<S: PluginSet>(
@@ -371,7 +421,8 @@ pub(crate) fn dispatch_key<S: PluginSet>(
         }
         let reply = plugin_input(app, pane, Input::Key(key), specs);
         let handled = reply.handled;
-        process_outs(app, reply.outs, cmds, 1, specs);
+        let from = app.plugins.pane_owner(pane).unwrap_or(pane.owner);
+        process_outs(app, reply.outs, cmds, 1, specs, from);
         if handled || spec.modal {
             return;
         }
@@ -411,7 +462,8 @@ pub(crate) fn dispatch_key<S: PluginSet>(
     {
         let reply = plugin_input(app, pane, Input::Key(key), specs);
         let handled = reply.handled;
-        process_outs(app, reply.outs, cmds, 1, specs);
+        let from = app.plugins.pane_owner(pane).unwrap_or(pane.owner);
+        process_outs(app, reply.outs, cmds, 1, specs, from);
         if handled {
             return;
         }
@@ -475,5 +527,6 @@ pub(crate) fn dispatch_mouse<S: PluginSet>(
         geometry,
     });
     let reply = plugin_input(app, pane, input, specs);
-    process_outs(app, reply.outs, cmds, 1, specs);
+    let from = app.plugins.pane_owner(pane).unwrap_or(pane.owner);
+    process_outs(app, reply.outs, cmds, 1, specs, from);
 }

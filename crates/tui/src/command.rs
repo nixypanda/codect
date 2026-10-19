@@ -205,16 +205,6 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
         ),
         spec(
             Owner::Overlay,
-            "help.toggle",
-            "Help",
-            "?",
-            vec![anywhere(KeySeq::Key(Key::Char('?')))],
-            true,
-            None,
-            380,
-        ),
-        spec(
-            Owner::Overlay,
             "palette.open",
             "",
             "",
@@ -225,9 +215,10 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
         ),
     ];
 
-    // The tree plugin owns its three commands; the legacy palette and which-key
-    // read them through this shared registry until task 4.7 removes the bridge.
+    // The extracted plugins own their commands; the legacy palette reads them
+    // through this shared registry until task 4.7 removes the bridge.
     commands.extend(crate::tree::commands());
+    commands.extend(crate::help::commands());
 
     match loaded {
         Loaded::Show(_) => {

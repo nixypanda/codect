@@ -34,8 +34,8 @@ use crate::page::{
     ShowBody, ViewCtx, diff as diff_page, show as show_page,
 };
 use crate::plugin::{
-    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FINDER_PANE, HELP_PANE, MODES_PANE, NEW_PANE,
-    OLD_PANE, PALETTE_PANE, PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE,
+    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FINDER_PANE, MODES_PANE, NEW_PANE, OLD_PANE,
+    PALETTE_PANE, PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE,
 };
 use crate::render::layout::{VisualRow, commit_offset};
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
@@ -49,7 +49,6 @@ const MOUSE_SCROLL_STEP: i32 = 3;
 
 fn overlay_pane(overlay: &Overlay) -> PaneId {
     match overlay {
-        Overlay::Help => HELP_PANE,
         Overlay::Scope(_) => SCOPE_PANE,
         Overlay::Mode { .. } => MODES_PANE,
         Overlay::Palette(_) => PALETTE_PANE,
@@ -110,7 +109,6 @@ impl Legacy {
                 folds: Default::default(),
                 fold_state: Default::default(),
                 visible_rows: Default::default(),
-                prompt: None,
             }),
             LoadRequest::Diff {
                 base,
@@ -158,10 +156,7 @@ impl Legacy {
         let Loaded::Show(show) = &mut self.loaded else {
             return Vec::new();
         };
-        let had_prompt = show.prompt.is_some();
-        let mut outs = convert(show_page::update(msg, show, cx.workspace, &ctx));
-        push_prompt_transition(&mut outs, had_prompt, show.prompt.is_some());
-        outs
+        convert(show_page::update(msg, show, cx.workspace, &ctx))
     }
 
     fn route_diff(&mut self, msg: diff_page::Msg, cx: &Cx) -> Vec<Out<Cmd>> {
@@ -169,23 +164,13 @@ impl Legacy {
         let Loaded::Diff(diff) = &mut self.loaded else {
             return Vec::new();
         };
-        let had_prompt = diff.prompt.is_some();
-        let mut outs = convert(diff_page::update(msg, diff, cx.workspace, &ctx));
-        push_prompt_transition(&mut outs, had_prompt, diff.prompt.is_some());
-        outs
+        convert(diff_page::update(msg, diff, cx.workspace, &ctx))
     }
 
     fn route_page_action(&mut self, action: GlobalAction, cx: &Cx) -> Vec<Out<Cmd>> {
         match &self.loaded {
             Loaded::Show(_) => self.route_show(show_page::Msg::Action(action), cx),
             Loaded::Diff(_) => self.route_diff(diff_page::Msg::Action(action), cx),
-        }
-    }
-
-    fn route_prompt(&mut self, key: Key, cx: &Cx) -> Vec<Out<Cmd>> {
-        match &self.loaded {
-            Loaded::Show(_) => self.route_show(show_page::Msg::Prompt(key), cx),
-            Loaded::Diff(_) => self.route_diff(diff_page::Msg::Prompt(key), cx),
         }
     }
 
@@ -203,12 +188,8 @@ impl Legacy {
         }
     }
 
-    /// The pane of the open overlay: the prompt's while a revision prompt is
-    /// active, else the open overlay variant's.
+    /// The pane of the open overlay this plugin owns, if any.
     pub(crate) fn overlay_pane(&self) -> Option<PaneId> {
-        if self.loaded.prompt_active() {
-            return Some(PROMPT_PANE);
-        }
         self.overlay.as_ref().map(overlay_pane)
     }
 
@@ -262,7 +243,9 @@ impl Legacy {
 
     pub(crate) fn apply_action(&mut self, action: Action, cx: &Cx) -> Vec<Out<Cmd>> {
         match action {
-            Action::Global(GlobalAction::Help) => self.open_overlay(Overlay::help()),
+            Action::Global(GlobalAction::Help) => {
+                vec![Out::Kernel(Request::RunCommand(help_command_id()))]
+            }
             Action::Global(GlobalAction::Scope) => {
                 let mut outs = self.open_overlay(Overlay::scope());
                 outs.push(Out::Effect(Cmd::LoadAreas));
@@ -362,13 +345,6 @@ impl Legacy {
 
     fn key_input(&mut self, pane: PaneId, key: Key, cx: &Cx) -> Reply<Cmd> {
         if self.is_open_overlay(pane) {
-            if self.loaded.prompt_active() {
-                let outs = self.route_prompt(key, cx);
-                return Reply {
-                    handled: true,
-                    outs,
-                };
-            }
             return self.overlay_key(key, cx);
         }
         if pane == SOURCE_PANE {
@@ -573,7 +549,7 @@ impl Plugin for Legacy {
     fn commands(&self, cx: &Cx) -> Vec<CommandSpec> {
         command::commands(&self.loaded, cx.focus)
             .into_iter()
-            .filter(|spec| spec.id.owner != Owner::Tree)
+            .filter(|spec| !matches!(spec.id.owner, Owner::Tree | Owner::Help))
             .collect()
     }
 
@@ -589,9 +565,6 @@ impl Plugin for Legacy {
         if !self.is_open_overlay(pane) {
             return None;
         }
-        if self.loaded.prompt_active() {
-            return Some("Enter apply   Esc cancel ");
-        }
         match &self.overlay {
             Some(Overlay::Scope(_)) => Some("↑↓ choose   Enter select   Esc close "),
             Some(Overlay::Mode { .. }) => Some("↑↓ choose   Enter apply   Esc close "),
@@ -599,7 +572,6 @@ impl Plugin for Legacy {
                 Some("type to filter   ↑↓ choose   Enter open   Esc close ")
             }
             Some(Overlay::Search(_)) => Some("type to search   Enter next   Esc cancel "),
-            Some(Overlay::Help) => Some("Esc close "),
             None => None,
         }
     }
@@ -649,13 +621,6 @@ impl Plugin for Legacy {
     }
 
     fn overlay_spec(&self, pane: PaneId) -> OverlaySpec {
-        if pane == PROMPT_PANE && self.loaded.prompt_active() {
-            return OverlaySpec {
-                captures_text: true,
-                modal: true,
-                keeps_ctrl_jk: false,
-            };
-        }
         let captures_text = self
             .overlay
             .as_ref()
@@ -669,17 +634,11 @@ impl Plugin for Legacy {
     }
 
     /// The unextracted overlay owners this plugin still answers for; each moves
-    /// to its own plugin in tasks 4.4–4.9.
+    /// to its own plugin in tasks 4.7–4.8.
     fn owns_pane(&self, pane: PaneId) -> bool {
         matches!(
             pane,
-            HELP_PANE
-                | SCOPE_PANE
-                | MODES_PANE
-                | PALETTE_PANE
-                | FINDER_PANE
-                | SEARCH_PANE
-                | PROMPT_PANE
+            SCOPE_PANE | MODES_PANE | PALETTE_PANE | FINDER_PANE | SEARCH_PANE
         )
     }
 
@@ -753,13 +712,6 @@ impl Plugin for Legacy {
         if !self.is_open_overlay(pane) {
             return;
         }
-        if self.loaded.prompt_active() {
-            match &self.loaded {
-                Loaded::Show(show) => show_page::prompt_view(show, cx.theme, frame, area),
-                Loaded::Diff(diff) => diff_page::prompt_view(diff, cx.theme, frame, area),
-            }
-            return;
-        }
         let Some(state) = &self.overlay else {
             return;
         };
@@ -793,7 +745,7 @@ impl Plugin for Legacy {
     }
 
     fn run(&mut self, command: CommandId, cx: &Cx) -> Vec<Out<Cmd>> {
-        if command.owner == Owner::Tree {
+        if matches!(command.owner, Owner::Tree | Owner::Help) {
             return Vec::new();
         }
         match command::action_for(command.name) {
@@ -810,6 +762,7 @@ impl Plugin for Legacy {
                 if installed {
                     outs.push(Out::Kernel(Request::ClearDiagnostic));
                     outs.push(Out::Kernel(Request::CancelPrefix));
+                    outs.push(Out::Kernel(Request::CloseOverlay(PROMPT_PANE)));
                 }
                 outs
             }
@@ -819,6 +772,7 @@ impl Plugin for Legacy {
                 if installed {
                     outs.push(Out::Kernel(Request::ClearDiagnostic));
                     outs.push(Out::Kernel(Request::CancelPrefix));
+                    outs.push(Out::Kernel(Request::CloseOverlay(PROMPT_PANE)));
                 }
                 outs
             }
@@ -827,6 +781,7 @@ impl Plugin for Legacy {
                 let mut outs = self.route_diff(diff_page::Msg::HistoryLoaded(request, result), cx);
                 if installed {
                     outs.push(Out::Kernel(Request::ClearDiagnostic));
+                    outs.push(Out::Kernel(Request::CloseOverlay(PROMPT_PANE)));
                 }
                 outs
             }
@@ -874,13 +829,33 @@ impl Plugin for Legacy {
                 Vec::new()
             }
             Event::OverlayClosed(pane) => {
-                if self.is_open_overlay(*pane) && !self.loaded.prompt_active() {
+                if self.is_open_overlay(*pane) {
                     self.overlay = None;
                 }
                 Vec::new()
             }
             Event::RevealMatch(matched) => self.route_reveal_match(*matched, cx),
             Event::Requery(change) => self.route_requery(change.clone(), cx),
+            Event::PromptSubmitted { tag, value } => {
+                if matches!(self.loaded, Loaded::Show(_)) {
+                    self.route_show(
+                        show_page::Msg::PromptSubmitted {
+                            tag: *tag,
+                            value: value.clone(),
+                        },
+                        cx,
+                    )
+                } else {
+                    self.route_diff(
+                        diff_page::Msg::PromptSubmitted {
+                            tag: *tag,
+                            value: value.clone(),
+                        },
+                        cx,
+                    )
+                }
+            }
+            Event::PromptRequested { .. } => Vec::new(),
         }
     }
 
@@ -975,24 +950,18 @@ fn convert(outs: Vec<OutMsg>) -> Vec<Out<Cmd>> {
         .collect()
 }
 
-/// Keep the kernel overlay slot in step with the prompt: a page message that
-/// opens or closes the revision prompt asks for the prompt's pane accordingly.
-fn push_prompt_transition(outs: &mut Vec<Out<Cmd>>, had_prompt: bool, has_prompt: bool) {
-    if had_prompt == has_prompt {
-        return;
-    }
-    let request = if has_prompt {
-        Request::OpenOverlay(PROMPT_PANE)
-    } else {
-        Request::CloseOverlay(PROMPT_PANE)
-    };
-    outs.push(Out::Kernel(request));
-}
-
 fn command_id(name: &'static str) -> CommandId {
     CommandId {
         owner: Owner::Tree,
         name,
+    }
+}
+
+/// The palette bridge's handle on the help plugin's command.
+fn help_command_id() -> CommandId {
+    CommandId {
+        owner: Owner::Help,
+        name: "help.toggle",
     }
 }
 

@@ -22,7 +22,6 @@ use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarStat
 
 use crate::action::{GlobalAction, ShowAction};
 use crate::api::Cmd;
-use crate::component::text_input::TextInput;
 use crate::render::block::pane_block;
 use crate::render::empty::render_empty;
 use crate::render::highlight::{self, StyledLine};
@@ -36,9 +35,7 @@ use crate::workspace::{
     FileSet, NO_FILES, Query, SearchMatch, SearchPane, Workspace, collect_matches,
 };
 
-use super::{
-    Ctx, OutMsg, Paging, Scope, ViewCtx, mode_label, page_step, scroll_offset_to, text_edit,
-};
+use super::{Ctx, OutMsg, Paging, Scope, ViewCtx, mode_label, page_step, scroll_offset_to};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShowBody {
@@ -176,7 +173,6 @@ pub struct Show {
     pub folds: ShowFolds,
     pub fold_state: FoldState,
     pub(crate) visible_rows: VisibleRows,
-    pub prompt: Option<TextInput>,
 }
 
 impl Show {
@@ -598,6 +594,9 @@ fn viewport(height: u16) -> usize {
 
 pub(crate) const MARKER_CLICK_WIDTH: u16 = 2;
 
+/// The tag the revision prompt echoes back with its value.
+pub(crate) const REVISION_PROMPT_TAG: u8 = 0;
+
 #[derive(Debug)]
 pub enum Msg {
     Key(Key),
@@ -606,8 +605,8 @@ pub enum Msg {
     BodyClick { row: usize, marker: bool },
     Action(GlobalAction),
     RevealMatch(SearchMatch),
-    Prompt(Key),
     EditRevision,
+    PromptSubmitted { tag: u8, value: String },
     Requery(QueryChange),
     Loaded(ShowRequest, Result<Arc<[SourceOutline]>, Box<EngineError>>),
 }
@@ -638,11 +637,12 @@ pub fn update(msg: Msg, page: &mut Show, workspace: &Workspace, ctx: &Ctx) -> Ve
             page.move_cursor_to_source_line(matched.line, ctx.height);
             Vec::new()
         }
-        Msg::Prompt(key) => prompt_key(page, key, workspace),
-        Msg::EditRevision => {
-            page.prompt = Some(TextInput::new(page.revision.clone()));
-            Vec::new()
-        }
+        Msg::EditRevision => vec![OutMsg::Request(Request::OpenPrompt {
+            label: "revision",
+            initial: page.revision.clone(),
+            tag: REVISION_PROMPT_TAG,
+        })],
+        Msg::PromptSubmitted { tag, value } => prompt_submitted(page, tag, value, workspace),
         Msg::Requery(change) => {
             page.paging = Paging::Loading;
             let request = match change {
@@ -855,34 +855,14 @@ fn scroll_body(page: &mut Show, delta: i32) {
     page.body.scroll = next;
 }
 
-fn prompt_key(page: &mut Show, key: Key, workspace: &Workspace) -> Vec<OutMsg> {
-    let Some(mut input) = page.prompt.take() else {
+fn prompt_submitted(page: &mut Show, tag: u8, value: String, workspace: &Workspace) -> Vec<OutMsg> {
+    if tag != REVISION_PROMPT_TAG || value.is_empty() {
         return Vec::new();
-    };
-    let mut reopen = true;
-    let mut effect = None;
-    match key {
-        Key::Esc => reopen = false,
-        Key::Enter => {
-            reopen = false;
-            let value = input.value();
-            if !value.is_empty() {
-                page.paging = Paging::Loading;
-                let mut request = page.request(workspace.query.scope.selection.clone());
-                request.revision = value;
-                effect = Some(Cmd::Show(request));
-            }
-        }
-        key => {
-            if let Some(edit) = text_edit(key) {
-                input.edit(edit);
-            }
-        }
     }
-    if reopen {
-        page.prompt = Some(input);
-    }
-    effect.into_iter().map(OutMsg::Effect).collect()
+    page.paging = Paging::Loading;
+    let mut request = page.request(workspace.query.scope.selection.clone());
+    request.revision = value;
+    vec![OutMsg::Effect(Cmd::Show(request))]
 }
 
 fn loaded(
@@ -899,7 +879,6 @@ fn loaded(
             page.highlight.clear();
             page.folds.clear();
             page.visible_rows = VisibleRows::default();
-            page.prompt = None;
             page.body = ShowBody {
                 scroll: 0,
                 hscroll: 0,
@@ -1032,12 +1011,6 @@ pub(crate) fn view(
             inner,
             &mut state,
         );
-    }
-}
-
-pub(crate) fn prompt_view(page: &Show, theme: &Theme, frame: &mut Frame, area: Rect) {
-    if let Some(input) = &page.prompt {
-        crate::component::text_input::render_prompt(frame, area, "revision", input, theme);
     }
 }
 

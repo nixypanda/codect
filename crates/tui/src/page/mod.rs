@@ -19,7 +19,6 @@ use base::RepoPath;
 
 use crate::action::Action;
 use crate::api::Cmd;
-use crate::component::text_input::Edit;
 use crate::plugin::{
     COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FocusKey, NEW_PANE, OLD_PANE, SOURCE_FOCUS,
     SOURCE_PANE, TREE_FOCUS, TREE_PANE,
@@ -27,7 +26,6 @@ use crate::plugin::{
 use crate::render::layout::{PaneSpec, Placement, VisualRow};
 use crate::render::theme::Theme;
 use crate::request::Request;
-use crate::util::input::Key;
 
 #[allow(unused_imports)]
 pub(crate) use crate::kernel::focus::{focus_default, focus_ring};
@@ -137,13 +135,6 @@ impl Loaded {
         }
     }
 
-    pub fn prompt_active(&self) -> bool {
-        match self {
-            Self::Show(show) => show.prompt.is_some(),
-            Self::Diff(diff) => diff.prompt.is_some(),
-        }
-    }
-
     pub fn clamp_scroll(&mut self, height: u16, selected: Option<&RepoPath>) {
         match self {
             Self::Show(show) => {
@@ -234,17 +225,4 @@ pub struct ViewCtx<'a> {
     pub theme: &'a Theme,
     pub busy: bool,
     pub tree_empty: bool,
-}
-
-pub(super) fn text_edit(key: Key) -> Option<Edit> {
-    match key {
-        Key::Char(character) => Some(Edit::Insert(character)),
-        Key::Backspace => Some(Edit::Backspace),
-        Key::Delete => Some(Edit::Delete),
-        Key::Left => Some(Edit::Left),
-        Key::Right => Some(Edit::Right),
-        Key::Home => Some(Edit::Home),
-        Key::End => Some(Edit::End),
-        _ => None,
-    }
 }

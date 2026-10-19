@@ -3,7 +3,7 @@ use crate::component::overlay::Overlay;
 use crate::component::text_input::TextInput;
 use crate::kernel::app::{Diagnostic, Msg, settle, update};
 use crate::page::show::{ShowHighlights, VisibleRow};
-use crate::page::{DiffSide, Loaded, focus_default, focus_ring};
+use crate::page::{Loaded, focus_default, focus_ring};
 use crate::plugin::{
     COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FINDER_PANE, HELP_PANE, MODES_PANE, NEW_PANE,
     OLD_PANE, PALETTE_PANE, PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE,
@@ -1101,24 +1101,24 @@ fn tab_toggles_the_tree_and_both_diff_panes() {
 fn help_toggles_and_swallows_navigation() {
     let app = two_files();
     let (help, _) = update(Msg::Key(Key::Char('?')), &app);
-    assert_eq!(help.plugins.legacy.overlay, Some(Overlay::Help));
     assert_eq!(help.kernel.overlay, Some(HELP_PANE));
 
     let (still, _) = update(Msg::Key(Key::Char('j')), &help);
     assert_eq!(still.plugins.tree.cursor, help.plugins.tree.cursor);
-    assert_eq!(still.plugins.legacy.overlay, Some(Overlay::Help));
+    assert_eq!(still.kernel.overlay, Some(HELP_PANE));
 
     let (closed, _) = update(Msg::Key(Key::Esc), &help);
-    assert_eq!(closed.plugins.legacy.overlay, None);
+    assert_eq!(closed.kernel.overlay, None);
 }
 
 #[test]
 fn revision_prompt_prefills_the_current_revision() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('r')), &app);
-    let prompt = show_ref(&opened).prompt.as_ref().expect("prompt");
-    assert_eq!(prompt.text, "HEAD");
-    assert_eq!(prompt.cursor, 4);
+    let prompt = opened.plugins.prompt.open.as_ref().expect("prompt");
+    assert_eq!(prompt.input.text, "HEAD");
+    assert_eq!(prompt.input.cursor, 4);
+    assert_eq!(prompt.label, "revision");
 }
 
 #[test]
@@ -1135,7 +1135,7 @@ fn confirming_a_revision_emits_a_load_with_that_revision() {
         state = next;
     }
     let (applied, cmds) = update(Msg::Key(Key::Enter), &state);
-    assert!(show_ref(&applied).prompt.is_none());
+    assert!(applied.plugins.prompt.open.is_none());
     assert_eq!(
         cmds,
         vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
@@ -1150,7 +1150,7 @@ fn escaping_a_revision_prompt_emits_nothing() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('r')), &app);
     let (closed, cmds) = update(Msg::Key(Key::Esc), &opened);
-    assert!(show_ref(&closed).prompt.is_none());
+    assert!(closed.plugins.prompt.open.is_none());
     assert!(cmds.is_empty());
 }
 
@@ -1162,7 +1162,7 @@ fn a_cancelled_prompt_does_not_wedge_input() {
     let before = show_ref(&app).body.cursor_line;
 
     let (opened, _) = update(Msg::Key(Key::Char('r')), &app);
-    assert!(show_ref(&opened).prompt.is_some(), "r opens the prompt");
+    assert!(opened.plugins.prompt.open.is_some(), "r opens the prompt");
     assert_eq!(
         opened.kernel.overlay,
         Some(PROMPT_PANE),
@@ -1170,7 +1170,7 @@ fn a_cancelled_prompt_does_not_wedge_input() {
     );
 
     let (cancelled, _) = update(Msg::Key(Key::Esc), &opened);
-    assert!(show_ref(&cancelled).prompt.is_none(), "Esc cancels it");
+    assert!(cancelled.plugins.prompt.open.is_none(), "Esc cancels it");
     assert_eq!(
         cancelled.kernel.overlay, None,
         "the overlay slot clears with the prompt"
@@ -1195,7 +1195,7 @@ fn a_cancelled_prompt_does_not_wedge_input() {
         emptied = next;
     }
     let (empty_cancelled, cmds) = update(Msg::Key(Key::Enter), &emptied);
-    assert!(show_ref(&empty_cancelled).prompt.is_none());
+    assert!(empty_cancelled.plugins.prompt.open.is_none());
     assert!(cmds.is_empty(), "an empty value emits no load");
     assert_eq!(
         empty_cancelled.kernel.overlay, None,
@@ -1208,9 +1208,12 @@ fn a_cancelled_prompt_does_not_wedge_input() {
     for key in [Key::Char('b'), Key::Char('t')] {
         let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
         let (opened, _) = update(Msg::Key(key), &app);
-        assert!(diff_ref(&opened).prompt.is_some(), "{key:?} opens a prompt");
+        assert!(
+            opened.plugins.prompt.open.is_some(),
+            "{key:?} opens a prompt"
+        );
         let (cancelled, _) = update(Msg::Key(Key::Esc), &opened);
-        assert!(diff_ref(&cancelled).prompt.is_none());
+        assert!(cancelled.plugins.prompt.open.is_none());
         assert_eq!(
             cancelled.kernel.overlay, None,
             "the diff prompt clears on Esc"
@@ -1225,22 +1228,25 @@ fn diff_revision_keys_target_base_and_target_fields() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("b\n"))]);
     let (base, _) = update(Msg::Key(Key::Char('b')), &app);
     assert_eq!(
-        diff_ref(&base).prompt.as_ref().map(|p| p.side),
-        Some(DiffSide::Base)
+        base.plugins.prompt.open.as_ref().map(|p| p.label),
+        Some("base")
     );
     let (target, _) = update(Msg::Key(Key::Char('t')), &app);
     assert_eq!(
-        diff_ref(&target).prompt.as_ref().map(|p| p.side),
-        Some(DiffSide::Target)
+        target.plugins.prompt.open.as_ref().map(|p| p.label),
+        Some("target")
     );
 }
 
 #[test]
 fn the_revision_prompt_renders_its_label_and_text() {
     let mut app = two_files();
-    if let Loaded::Show(show) = &mut app.plugins.legacy.loaded {
-        show.prompt = Some(TextInput::new("HEAD~2"));
-    }
+    app.plugins.prompt.open = Some(crate::prompt::Open {
+        from: crate::plugins::legacy::LEGACY,
+        tag: 0,
+        label: "revision",
+        input: TextInput::new("HEAD~2"),
+    });
     app.kernel.overlay = Some(PROMPT_PANE);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("revision"), "{text}");
@@ -1752,7 +1758,6 @@ fn the_wheel_scrolls_a_diff_and_clicking_it_focuses() {
 #[test]
 fn mouse_is_ignored_while_an_overlay_is_open() {
     let mut app = two_files();
-    app.plugins.legacy.overlay = Some(Overlay::Help);
     app.kernel.overlay = Some(HELP_PANE);
     let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     assert_eq!(next.plugins.tree.cursor, app.plugins.tree.cursor);
@@ -3181,7 +3186,6 @@ fn an_unhandled_key_falls_through_a_non_modal_overlay() {
 
     let (next, _) = update(Msg::Key(Key::Char('?')), &app);
     assert_eq!(next.kernel.overlay, Some(HELP_PANE));
-    assert_eq!(next.plugins.legacy.overlay, Some(Overlay::Help));
 }
 
 #[test]
@@ -3203,7 +3207,7 @@ fn q_quits_from_help_and_from_the_mode_picker() {
     let app = two_files();
 
     let (help, _) = update(Msg::Key(Key::Char('?')), &app);
-    assert_eq!(help.plugins.legacy.overlay, Some(Overlay::Help));
+    assert_eq!(help.kernel.overlay, Some(HELP_PANE));
     let (quit_help, _) = update(Msg::Key(Key::Char('q')), &help);
     assert!(quit_help.chrome.quit, "q quits from help");
 
@@ -3949,7 +3953,6 @@ fn a_long_diff_line_is_wrapped_inside_its_pane() {
 #[test]
 fn the_help_overlay_lists_the_keys() {
     let mut app = two_files();
-    app.plugins.legacy.overlay = Some(Overlay::Help);
     app.kernel.overlay = Some(HELP_PANE);
     let text = buffer_text(&render(&app, 100, 32));
     assert!(text.contains("help"), "{text}");
@@ -4002,11 +4005,10 @@ fn the_canvas_is_opaque_in_every_flavor() {
     use crate::render::theme::{Capability, Flavor};
 
     for flavor in [Flavor::Dark, Flavor::Light] {
-        for overlay in [None, Some(Overlay::Help)] {
+        for overlay in [None, Some(HELP_PANE)] {
             let mut app = two_files();
             app.chrome.theme = Theme::new(flavor, Capability::TrueColor);
-            app.plugins.legacy.overlay = overlay.clone();
-            app.kernel.overlay = overlay.map(|_| HELP_PANE);
+            app.kernel.overlay = overlay;
             let buffer = render(&app, 100, 20);
             for y in 0..buffer.area.height {
                 for x in 0..buffer.area.width {

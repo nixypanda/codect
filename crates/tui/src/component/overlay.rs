@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::action::Action;
 use crate::page::{available_modes, mode_label};
 use crate::render::block::{popup_block, scrim};
-use crate::render::layout::{centered, window_offset};
+use crate::render::layout::window_offset;
 use crate::render::theme::Theme;
 use crate::util::fuzzy;
 use crate::util::input::Key;
@@ -85,7 +85,6 @@ impl ScopeChooser {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Overlay {
-    Help,
     Scope(ScopeChooser),
     Mode { cursor: usize },
     Palette(PaletteState),
@@ -116,10 +115,6 @@ pub enum OutMsg {
 }
 
 impl Overlay {
-    pub fn help() -> Self {
-        Self::Help
-    }
-
     pub fn scope() -> Self {
         Self::Scope(ScopeChooser::loading())
     }
@@ -183,14 +178,6 @@ impl Overlay {
     /// so a non-modal overlay falls through to the kernel keymap.
     pub fn key(&mut self, key: Key, ctx: &Ctx) -> Option<Vec<OutMsg>> {
         match self {
-            Self::Help => {
-                let handled = key == Key::Esc || key == Key::Char('?');
-                Some(if handled {
-                    vec![OutMsg::Close]
-                } else {
-                    Vec::new()
-                })
-            }
             Self::Scope(chooser) => Some(scope_key(chooser, key)),
             Self::Mode { cursor } => Some(mode_key(cursor, key, ctx.mode)),
             Self::Palette(state) => Some(palette_key(state, key, ctx.entries)),
@@ -452,7 +439,6 @@ pub(crate) struct RenderCtx<'a> {
 pub(crate) fn render(state: &Overlay, ctx: &RenderCtx, frame: &mut Frame, area: Rect) {
     let theme = ctx.theme;
     match state {
-        Overlay::Help => render_help(frame, area, theme),
         Overlay::Scope(chooser) => render_scope(frame, area, chooser, theme),
         Overlay::Mode { cursor } => render_mode(frame, area, *cursor, ctx.mode, theme),
         Overlay::Palette(state) => render_palette(frame, area, state, ctx, theme),
@@ -552,51 +538,6 @@ fn render_scope(frame: &mut Frame, area: Rect, chooser: &ScopeChooser, theme: &T
             theme.fg(theme.palette.danger),
         )));
     }
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let popup = centered(area, 56, 31);
-    if popup.width == 0 || popup.height == 0 {
-        return;
-    }
-    scrim(frame, area);
-    frame.render_widget(Clear, popup);
-    let block = popup_block("help", theme);
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let lines = vec![
-        Line::from(section("Move", theme)),
-        key_line("↑ ↓ / k j", "move the tree or body cursor", theme),
-        key_line("← → / h l", "fold the tree or pan sideways", theme),
-        key_line("g / G", "jump to the top or bottom", theme),
-        Line::from(""),
-        Line::from(section("Fold", theme)),
-        key_line("Enter / za", "toggle the fold at the cursor", theme),
-        key_line("zo / zc", "open or close the fold", theme),
-        key_line("zO / zC", "open or close recursively", theme),
-        key_line("zR / zM", "unfold all / fold all", theme),
-        Line::from(""),
-        Line::from(section("Find", theme)),
-        key_line("Ctrl-P", "open the command palette", theme),
-        key_line("Ctrl-F", "find a file by name", theme),
-        key_line("/ then n / N", "search the view and step matches", theme),
-        Line::from(""),
-        Line::from(section("View", theme)),
-        key_line("Tab", "switch tree and content", theme),
-        key_line("m / s", "switch mode or change scope", theme),
-        key_line("r / b / t", "edit the revision, base, or target", theme),
-        key_line("[ / ] / \\", "resize or reset the tree", theme),
-        key_line("? / Esc", "toggle help or dismiss", theme),
-        key_line("q / Ctrl-C", "quit", theme),
-        Line::from(""),
-        Line::from(section("Mouse", theme)),
-        key_line("click", "select a file or fold a directory", theme),
-        key_line("gutter + / -", "fold or unfold a declaration", theme),
-        key_line("click line", "move the source cursor", theme),
-        key_line("wheel", "scroll the tree or the content", theme),
-    ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -822,18 +763,4 @@ fn matched_style(matched: bool, selected: bool, theme: &Theme) -> Style {
             .fg(theme.palette.match_fg)
             .add_modifier(Modifier::BOLD)
     }
-}
-
-fn section(title: &str, theme: &Theme) -> Span<'static> {
-    Span::styled(
-        format!(" {title}"),
-        theme.fg(theme.palette.accent).add_modifier(Modifier::BOLD),
-    )
-}
-
-fn key_line(keys: &str, description: &str, theme: &Theme) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("   {keys:<12}"), theme.fg(theme.palette.text)),
-        Span::styled(description.to_owned(), theme.fg(theme.palette.text_dim)),
-    ])
 }

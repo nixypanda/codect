@@ -28,10 +28,12 @@ mod command;
 mod component;
 #[cfg(test)]
 mod golden;
+mod help;
 mod kernel;
 mod page;
 mod plugin;
 mod plugins;
+mod prompt;
 mod render;
 mod request;
 mod route;

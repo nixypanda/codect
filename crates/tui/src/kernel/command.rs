@@ -16,6 +16,7 @@ pub enum Owner {
     Diff,
     Tree,
     Overlay,
+    Help,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,5 +137,6 @@ fn owner_name(owner: Owner) -> &'static str {
         Owner::Diff => "diff",
         Owner::Tree => "tree",
         Owner::Overlay => "overlay",
+        Owner::Help => "help",
     }
 }

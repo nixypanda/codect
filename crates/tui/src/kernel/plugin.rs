@@ -136,11 +136,24 @@ pub enum Request {
 
     Focus(FocusKey),
     FocusDefault,
-    CycleFocus { forward: bool },
+    CycleFocus {
+        forward: bool,
+    },
     ResizeNavigator(NavigatorResize),
 
     OpenOverlay(PaneId),
     CloseOverlay(PaneId),
+
+    OpenPrompt {
+        label: &'static str,
+        initial: String,
+        tag: u8,
+    },
+    SubmitPrompt {
+        to: PluginId,
+        tag: u8,
+        value: String,
+    },
 
     CancelPrefix,
     RunCommand(crate::kernel::command::CommandId),
@@ -175,6 +188,16 @@ pub enum Event {
     OverlayClosed(PaneId),
     RevealMatch(SearchMatch),
     Requery(QueryChange),
+    PromptRequested {
+        from: PluginId,
+        label: &'static str,
+        initial: String,
+        tag: u8,
+    },
+    PromptSubmitted {
+        tag: u8,
+        value: String,
+    },
 }
 
 /// Who an event goes to.
