@@ -85,3 +85,12 @@ portable-pty = "0.9"
 # Benchmark-only dependency. Confined to `tui`'s `bench` feature via a
 # `required-features` bench target, so it never enters a normal build.
 criterion = { version = "0.8", features = ["html_reports"] }
+
+# The terminal frontend is split across `tui-core`, `tui`, and `tui-diff`.
+# Thin LTO recovers the cross-crate inlining the single-crate build had; without
+# it the frame/update benchmarks regress well past the plan's 10% budget.
+[profile.release]
+lto = "thin"
+
+[profile.bench]
+lto = "thin"
