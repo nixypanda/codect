@@ -18,7 +18,7 @@ pub enum Edit {
     End,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TextInput {
     pub text: String,
     pub cursor: usize,

@@ -1,14 +1,14 @@
 //! The `Legacy` plugin: everything the shell owned before the plugins were
-//! extracted. It wraps `Loaded`, `Tree`, and the `Overlay` enum and delegates
-//! to today's functions, so tasks 4.2–4.9 can peel one surface at a time.
+//! extracted. It wraps `Loaded` and delegates to today's functions, so tasks
+//! 4.5–4.6 can peel one surface at a time.
 //!
 //! It declares the current panes and commands, routes pane input, and emits
 //! kernel requests for every shared-state change (quit, focus, selection,
-//! search, the overlay slot).
+//! search).
 
 use std::sync::Arc;
 
-use base::{AreaSet, DiffRowKind, FileDiff, SourceOutline};
+use base::{DiffRowKind, FileDiff, SourceOutline};
 use engine::{Engine, EngineError};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -17,7 +17,6 @@ use crate::action::{Action, CommitsAction, GlobalAction, RangeAction, ShowAction
 use crate::api::Cmd;
 use crate::command;
 use crate::component::commit_picker;
-use crate::component::overlay::{self, Overlay};
 use crate::kernel::chrome::{Chip, ChipTone, Segment, SegmentTone};
 use crate::kernel::command::{CommandId, CommandSpec, Owner};
 use crate::kernel::cx::Cx;
@@ -25,8 +24,7 @@ use crate::kernel::help::HelpEntry;
 use crate::kernel::layout::PaneGeometry;
 use crate::kernel::nav::Nav;
 use crate::kernel::plugin::{
-    Event, FocusKey, HintTarget, Input, MouseInput, Out, OverlaySpec, PaneId, Plugin, PluginId,
-    Reply, Request,
+    Event, FocusKey, HintTarget, Input, MouseInput, Out, PaneId, Plugin, PluginId, Reply, Request,
 };
 use crate::page::diff::Side;
 use crate::page::{
@@ -34,8 +32,8 @@ use crate::page::{
     ShowBody, ViewCtx, diff as diff_page, show as show_page,
 };
 use crate::plugin::{
-    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FINDER_PANE, MODES_PANE, NEW_PANE, OLD_PANE,
-    PALETTE_PANE, PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE,
+    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE, PROMPT_PANE, SOURCE_FOCUS,
+    SOURCE_PANE,
 };
 use crate::render::layout::{VisualRow, commit_offset};
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
@@ -47,17 +45,7 @@ pub const LEGACY: PluginId = PluginId("legacy");
 
 const MOUSE_SCROLL_STEP: i32 = 3;
 
-fn overlay_pane(overlay: &Overlay) -> PaneId {
-    match overlay {
-        Overlay::Scope(_) => SCOPE_PANE,
-        Overlay::Mode { .. } => MODES_PANE,
-        Overlay::Palette(_) => PALETTE_PANE,
-        Overlay::Finder(_) => FINDER_PANE,
-        Overlay::Search(_) => SEARCH_PANE,
-    }
-}
-
-/// The five effect results the runtime folds back.
+/// The three effect results the runtime folds back.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum Msg {
@@ -77,14 +65,12 @@ pub enum Msg {
         index: usize,
         result: Result<Arc<[FileDiff]>, Box<EngineError>>,
     },
-    AreasLoaded(Result<AreaSet, Box<EngineError>>),
 }
 
 /// The legacy plugin's state.
 #[derive(Clone)]
 pub struct Legacy {
     pub loaded: Loaded,
-    pub overlay: Option<Overlay>,
 }
 
 impl Legacy {
@@ -128,10 +114,7 @@ impl Legacy {
                 merge_base,
             )),
         };
-        Self {
-            loaded,
-            overlay: None,
-        }
+        Self { loaded }
     }
 
     // -- helpers ------------------------------------------------------------
@@ -188,16 +171,6 @@ impl Legacy {
         }
     }
 
-    /// The pane of the open overlay this plugin owns, if any.
-    pub(crate) fn overlay_pane(&self) -> Option<PaneId> {
-        self.overlay.as_ref().map(overlay_pane)
-    }
-
-    /// Whether `pane` is the overlay this plugin has open, if any.
-    fn is_open_overlay(&self, pane: PaneId) -> bool {
-        self.overlay_pane() == Some(pane)
-    }
-
     /// The focus hint for the view panes this plugin draws for.
     fn focus_hints(&self, focus: FocusKey) -> Option<&'static str> {
         match self.loaded {
@@ -214,49 +187,11 @@ impl Legacy {
         }
     }
 
-    /// Open `overlay` and ask the kernel to place it in the overlay slot.
-    fn open_overlay(&mut self, overlay: Overlay) -> Vec<Out<Cmd>> {
-        let pane = overlay_pane(&overlay);
-        self.overlay = Some(overlay);
-        vec![Out::Kernel(Request::OpenOverlay(pane))]
-    }
-
-    fn open_palette(&mut self, cx: &Cx) -> Vec<Out<Cmd>> {
-        let entries = self.loaded.palette_entries();
-        let palette = Overlay::palette(&overlay::Ctx {
-            visible: &cx.workspace.files.paths,
-            entries: &entries,
-            mode: cx.workspace.query.mode,
-        });
-        self.open_overlay(palette)
-    }
-
-    fn open_finder(&mut self, cx: &Cx) -> Vec<Out<Cmd>> {
-        let entries = self.loaded.palette_entries();
-        let finder = Overlay::finder(&overlay::Ctx {
-            visible: &cx.workspace.files.paths,
-            entries: &entries,
-            mode: cx.workspace.query.mode,
-        });
-        self.open_overlay(finder)
-    }
-
     pub(crate) fn apply_action(&mut self, action: Action, cx: &Cx) -> Vec<Out<Cmd>> {
         match action {
             Action::Global(GlobalAction::Help) => {
                 vec![Out::Kernel(Request::RunCommand(help_command_id()))]
             }
-            Action::Global(GlobalAction::Scope) => {
-                let mut outs = self.open_overlay(Overlay::scope());
-                outs.push(Out::Effect(Cmd::LoadAreas));
-                outs
-            }
-            Action::Global(GlobalAction::Mode) => {
-                self.open_overlay(Overlay::mode(cx.workspace.query.mode))
-            }
-            Action::Global(GlobalAction::Palette) => self.open_palette(cx),
-            Action::Global(GlobalAction::Finder) => self.open_finder(cx),
-            Action::Global(GlobalAction::Search) => self.open_overlay(Overlay::search()),
             Action::Global(GlobalAction::TreeWider) => {
                 vec![Out::Kernel(Request::RunCommand(command_id("wider")))]
             }
@@ -287,66 +222,7 @@ impl Legacy {
         }
     }
 
-    fn apply_overlay_outs(&mut self, outs: Vec<overlay::OutMsg>, cx: &Cx) -> Vec<Out<Cmd>> {
-        let mut result = Vec::new();
-        for out in outs {
-            match out {
-                overlay::OutMsg::Close => {
-                    if let Some(open) = self.overlay.take() {
-                        result.push(Out::Kernel(Request::CloseOverlay(overlay_pane(&open))));
-                    }
-                }
-                overlay::OutMsg::Selection(selection) => {
-                    result.push(Out::Kernel(Request::Requery(
-                        crate::request::QueryChange::Scope(selection),
-                    )));
-                }
-                overlay::OutMsg::Mode(mode) => {
-                    result.push(Out::Kernel(Request::Requery(
-                        crate::request::QueryChange::Mode(mode),
-                    )));
-                }
-                overlay::OutMsg::Action(action) => result.extend(self.apply_action(action, cx)),
-                overlay::OutMsg::File(path) => {
-                    result.push(Out::Kernel(Request::Select(Some(path))));
-                }
-                overlay::OutMsg::Search(needle) => {
-                    result.push(Out::Kernel(Request::SetSearch(needle)));
-                }
-                overlay::OutMsg::SearchCommit => {
-                    result.push(Out::Kernel(Request::CommitSearch));
-                }
-            }
-        }
-        result
-    }
-
-    fn overlay_key(&mut self, key: Key, cx: &Cx) -> Reply<Cmd> {
-        let entries = self.loaded.palette_entries();
-        let octx = overlay::Ctx {
-            visible: &cx.workspace.files.paths,
-            entries: &entries,
-            mode: cx.workspace.query.mode,
-        };
-        let Some(overlay) = &mut self.overlay else {
-            return Reply::unhandled();
-        };
-        match overlay.key(key, &octx) {
-            Some(outs) => {
-                let outs = self.apply_overlay_outs(outs, cx);
-                Reply {
-                    handled: true,
-                    outs,
-                }
-            }
-            None => Reply::unhandled(),
-        }
-    }
-
     fn key_input(&mut self, pane: PaneId, key: Key, cx: &Cx) -> Reply<Cmd> {
-        if self.is_open_overlay(pane) {
-            return self.overlay_key(key, cx);
-        }
         if pane == SOURCE_PANE {
             if key == Key::Enter {
                 let outs = self.route_show(show_page::Msg::Fold(ShowAction::ToggleFold), cx);
@@ -549,7 +425,7 @@ impl Plugin for Legacy {
     fn commands(&self, cx: &Cx) -> Vec<CommandSpec> {
         command::commands(&self.loaded, cx.focus)
             .into_iter()
-            .filter(|spec| !matches!(spec.id.owner, Owner::Tree | Owner::Help))
+            .filter(|spec| matches!(spec.id.owner, Owner::Kernel | Owner::Show | Owner::Diff))
             .collect()
     }
 
@@ -558,21 +434,9 @@ impl Plugin for Legacy {
     }
 
     fn hints(&self, target: HintTarget, _cx: &Cx) -> Option<&'static str> {
-        let pane = match target {
-            HintTarget::Overlay(pane) => pane,
-            HintTarget::Focus(focus) => return self.focus_hints(focus),
-        };
-        if !self.is_open_overlay(pane) {
-            return None;
-        }
-        match &self.overlay {
-            Some(Overlay::Scope(_)) => Some("↑↓ choose   Enter select   Esc close "),
-            Some(Overlay::Mode { .. }) => Some("↑↓ choose   Enter apply   Esc close "),
-            Some(Overlay::Palette(_)) | Some(Overlay::Finder(_)) => {
-                Some("type to filter   ↑↓ choose   Enter open   Esc close ")
-            }
-            Some(Overlay::Search(_)) => Some("type to search   Enter next   Esc cancel "),
-            None => None,
+        match target {
+            HintTarget::Focus(focus) => self.focus_hints(focus),
+            HintTarget::Overlay(_) => None,
         }
     }
 
@@ -618,28 +482,6 @@ impl Plugin for Legacy {
             }];
         }
         Vec::new()
-    }
-
-    fn overlay_spec(&self, pane: PaneId) -> OverlaySpec {
-        let captures_text = self
-            .overlay
-            .as_ref()
-            .filter(|_| self.is_open_overlay(pane))
-            .is_some_and(Overlay::captures_text);
-        OverlaySpec {
-            captures_text,
-            modal: true,
-            keeps_ctrl_jk: false,
-        }
-    }
-
-    /// The unextracted overlay owners this plugin still answers for; each moves
-    /// to its own plugin in tasks 4.7–4.8.
-    fn owns_pane(&self, pane: PaneId) -> bool {
-        matches!(
-            pane,
-            SCOPE_PANE | MODES_PANE | PALETTE_PANE | FINDER_PANE | SEARCH_PANE
-        )
     }
 
     /// The view focus keys whose plugins are not extracted yet.
@@ -708,28 +550,6 @@ impl Plugin for Legacy {
         }
     }
 
-    fn render_overlay(&self, pane: PaneId, area: Rect, cx: &Cx, frame: &mut Frame) {
-        if !self.is_open_overlay(pane) {
-            return;
-        }
-        let Some(state) = &self.overlay else {
-            return;
-        };
-        let entries = self.loaded.palette_entries();
-        let rctx = overlay::RenderCtx {
-            theme: cx.theme,
-            mode: cx.workspace.query.mode,
-            entries: &entries,
-            visible: &cx.workspace.files.paths,
-            matches: cx
-                .workspace
-                .search
-                .as_ref()
-                .map_or(0, |search| search.matches.len()),
-        };
-        overlay::render(state, &rctx, frame, area);
-    }
-
     fn input(&mut self, pane: PaneId, input: Input, cx: &Cx) -> Reply<Cmd> {
         match input {
             Input::Key(key) => self.key_input(pane, key, cx),
@@ -745,7 +565,7 @@ impl Plugin for Legacy {
     }
 
     fn run(&mut self, command: CommandId, cx: &Cx) -> Vec<Out<Cmd>> {
-        if matches!(command.owner, Owner::Tree | Owner::Help) {
+        if !matches!(command.owner, Owner::Kernel | Owner::Show | Owner::Diff) {
             return Vec::new();
         }
         match command::action_for(command.name) {
@@ -803,14 +623,6 @@ impl Plugin for Legacy {
                 }
                 outs
             }
-            Msg::AreasLoaded(result) => {
-                let outs = if let Some(overlay) = &mut self.overlay {
-                    overlay.update(overlay::Msg::AreasLoaded(result))
-                } else {
-                    Vec::new()
-                };
-                self.apply_overlay_outs(outs, cx)
-            }
         }
     }
 
@@ -828,12 +640,7 @@ impl Plugin for Legacy {
                     .clamp_scroll(cx.size.height, cx.workspace.selected.as_ref());
                 Vec::new()
             }
-            Event::OverlayClosed(pane) => {
-                if self.is_open_overlay(*pane) {
-                    self.overlay = None;
-                }
-                Vec::new()
-            }
+            Event::OverlayClosed(_) => Vec::new(),
             Event::RevealMatch(matched) => self.route_reveal_match(*matched, cx),
             Event::Requery(change) => self.route_requery(change.clone(), cx),
             Event::PromptSubmitted { tag, value } => {
@@ -1031,6 +838,5 @@ fn interpret(engine: &Engine, cmd: Cmd) -> Msg {
                 .map_err(Box::new);
             Msg::StepLoaded { index, result }
         }
-        Cmd::LoadAreas => Msg::AreasLoaded(engine.load_areas().map_err(Box::new)),
     }
 }

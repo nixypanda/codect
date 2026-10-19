@@ -10,8 +10,8 @@ use base::{
 use engine::CommitStep;
 use ratatui::style::{Color, Modifier};
 
-use crate::action::{Action, GlobalAction};
 use crate::kernel::app::{App as GenericApp, Msg as GenericMsg, settle, update};
+use crate::kernel::cx::Cx;
 use crate::kernel::dispatch::apply_request;
 use crate::kernel::plugin::{PluginSet, Request};
 use crate::kernel::view::view;
@@ -22,6 +22,7 @@ use crate::plugins::{KernelOptions, Plugins, PluginsMsg, build};
 use crate::render::icons::{IconStyle, Icons};
 use crate::render::theme::Theme;
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
+use crate::scope_chooser::Msg as ScopeMsg;
 use crate::util::input::{Key, Mouse, MouseKind};
 
 pub(crate) type App = GenericApp<Plugins>;
@@ -279,6 +280,28 @@ pub(crate) fn legacy_msg(msg: LegacyMsg) -> Msg {
     Msg::Plugin(PluginsMsg::Legacy(msg))
 }
 
+pub(crate) fn scope_msg(msg: ScopeMsg) -> Msg {
+    Msg::Plugin(PluginsMsg::Scope(msg))
+}
+
+/// Build the kernel's `Cx` for `app` and call `f` with it.
+pub(crate) fn with_cx<R>(app: &App, f: impl FnOnce(&Cx) -> R) -> R {
+    let specs = crate::kernel::app::collect_specs(app);
+    let cx =
+        crate::kernel::app::cx_for(&app.kernel, app.kernel.overlay, app.plugins.busy(), &specs);
+    f(&cx)
+}
+
+/// The palette commands as `(label, hint)`, in palette order.
+pub(crate) fn palette_entries(app: &App) -> Vec<(&'static str, &'static str)> {
+    with_cx(app, |cx| {
+        cx.palette_commands()
+            .into_iter()
+            .map(|spec| (spec.label, spec.hint))
+            .collect()
+    })
+}
+
 pub(crate) fn step(app: &App, msg: Msg) -> App {
     settle(update(msg, app).0)
 }
@@ -414,30 +437,18 @@ pub(crate) fn merge_base_range_app() -> App {
     settle(next)
 }
 
-pub(crate) fn tail_palette_entries() -> Vec<(Action, &'static str, &'static str)> {
+pub(crate) fn tail_palette_entries() -> Vec<(&'static str, &'static str)> {
     vec![
-        (Action::Global(GlobalAction::Finder), "Find file", "Ctrl-F"),
-        (Action::Global(GlobalAction::Search), "Search in view", "/"),
-        (Action::Global(GlobalAction::NextPane), "Switch pane", "Tab"),
-        (
-            Action::Global(GlobalAction::TreeWider),
-            "Widen file tree",
-            "]",
-        ),
-        (
-            Action::Global(GlobalAction::TreeNarrower),
-            "Narrow file tree",
-            "[",
-        ),
-        (
-            Action::Global(GlobalAction::TreeReset),
-            "Reset file tree",
-            "\\",
-        ),
-        (Action::Global(GlobalAction::Top), "Jump to top", "g"),
-        (Action::Global(GlobalAction::Bottom), "Jump to bottom", "G"),
-        (Action::Global(GlobalAction::Help), "Help", "?"),
-        (Action::Global(GlobalAction::Quit), "Quit", "q"),
+        ("Find file", "Ctrl-F"),
+        ("Search in view", "/"),
+        ("Switch pane", "Tab"),
+        ("Widen file tree", "]"),
+        ("Narrow file tree", "["),
+        ("Reset file tree", "\\"),
+        ("Jump to top", "g"),
+        ("Jump to bottom", "G"),
+        ("Help", "?"),
+        ("Quit", "q"),
     ]
 }
 

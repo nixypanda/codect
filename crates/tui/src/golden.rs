@@ -25,10 +25,11 @@ use crate::plugins::legacy::Msg as LegacyMsg;
 use crate::render::icons::{IconStyle, Icons};
 use crate::render::theme::{Capability, Flavor, Theme};
 use crate::route::LoadRequest;
+use crate::scope_chooser::Msg as ScopeMsg;
 use crate::test_support::{
     ATTRIBUTED_SOURCE, App, NESTED_SOURCE, after_batch_effects, area_set, attributed_child_outline,
     base_app_with, commits_app, diff_app, diff_request, dropped_container_outline, file_diff,
-    golden_document, legacy_msg, nested_outline, press, render, show_app, show_app_mode,
+    golden_document, legacy_msg, nested_outline, press, render, scope_msg, show_app, show_app_mode,
     show_request, source_outline, step, tests_filter_outline, two_files,
 };
 use crate::util::input::Key;
@@ -300,7 +301,7 @@ fn build_show_mode_picker() -> App {
 fn build_show_scope_chooser() -> App {
     step(
         &press(&two_files(), &[Key::Char('s')]),
-        legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))),
+        scope_msg(ScopeMsg::AreasLoaded(Ok(area_set()))),
     )
 }
 

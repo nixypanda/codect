@@ -15,7 +15,11 @@ pub enum Owner {
     Show,
     Diff,
     Tree,
-    Overlay,
+    Palette,
+    Finder,
+    Modes,
+    Scope,
+    Search,
     Help,
 }
 
@@ -136,7 +140,11 @@ fn owner_name(owner: Owner) -> &'static str {
         Owner::Show => "show",
         Owner::Diff => "diff",
         Owner::Tree => "tree",
-        Owner::Overlay => "overlay",
+        Owner::Palette => "palette",
+        Owner::Finder => "finder",
+        Owner::Modes => "modes",
+        Owner::Scope => "scope",
+        Owner::Search => "search",
         Owner::Help => "help",
     }
 }

@@ -23,11 +23,20 @@ use crate::test_support::{
 };
 use crate::util::input::{Key, Mouse, MouseKind};
 
-fn legacy_cmd(cmd: PluginsCmd) -> Cmd {
+fn legacy_cmd(cmd: PluginsCmd) -> Option<Cmd> {
     match cmd {
-        crate::plugins::PluginsCmd::Legacy(cmd) => cmd,
+        crate::plugins::PluginsCmd::Legacy(cmd) => Some(cmd),
         crate::plugins::PluginsCmd::Tree(never) => match never {},
         crate::plugins::PluginsCmd::WhichKey(never) => match never {},
+        crate::plugins::PluginsCmd::Prompt(never) => match never {},
+        crate::plugins::PluginsCmd::Help(never) => match never {},
+        crate::plugins::PluginsCmd::Palette(never) => match never {},
+        crate::plugins::PluginsCmd::Finder(never) => match never {},
+        crate::plugins::PluginsCmd::Search(never) => match never {},
+        crate::plugins::PluginsCmd::Modes(never) => match never {},
+        crate::plugins::PluginsCmd::Scope(cmd) => match cmd {
+            crate::scope_chooser::Cmd::LoadAreas => None,
+        },
     }
 }
 
@@ -35,7 +44,7 @@ fn run(app: &mut App, request: Request) -> Vec<Cmd> {
     let specs = crate::kernel::app::collect_specs(app);
     let mut cmds = Vec::new();
     crate::kernel::dispatch::apply_request(app, request, &mut cmds, 0, &specs);
-    cmds.into_iter().map(legacy_cmd).collect()
+    cmds.into_iter().filter_map(legacy_cmd).collect()
 }
 
 // -- request semantics ------------------------------------------------------
@@ -337,20 +346,18 @@ fn replacing_an_overlay_notifies_its_owner() {
     run(
         &mut app,
         Request::RunCommand(crate::kernel::command::CommandId {
-            owner: crate::kernel::command::Owner::Overlay,
-            name: "scope.open",
+            owner: crate::kernel::command::Owner::Scope,
+            name: "open",
         }),
     );
     assert_eq!(app.kernel.overlay, Some(crate::plugin::SCOPE_PANE));
-    assert!(matches!(
-        app.plugins.legacy.overlay,
-        Some(crate::component::overlay::Overlay::Scope(_))
-    ));
+    assert!(app.plugins.scope.areas.is_none());
+    app.plugins.scope.areas = Some(crate::test_support::area_set());
 
     run(&mut app, Request::OpenOverlay(crate::plugin::HELP_PANE));
     assert_eq!(app.kernel.overlay, Some(crate::plugin::HELP_PANE));
     assert!(
-        app.plugins.legacy.overlay.is_none(),
+        app.plugins.scope.areas.is_none(),
         "the replaced owner receives OverlayClosed"
     );
 }

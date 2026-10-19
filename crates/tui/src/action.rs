@@ -10,8 +10,6 @@
 pub enum GlobalAction {
     Quit,
     Help,
-    Scope,
-    Mode,
     TreeWider,
     TreeNarrower,
     TreeReset,
@@ -19,9 +17,6 @@ pub enum GlobalAction {
     Bottom,
     PageUp,
     PageDown,
-    Palette,
-    Finder,
-    Search,
     NextMatch,
     PreviousMatch,
     NextPane,

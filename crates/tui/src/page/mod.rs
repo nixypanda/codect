@@ -17,6 +17,7 @@
 
 use base::RepoPath;
 
+#[cfg(test)]
 use crate::action::Action;
 use crate::api::Cmd;
 use crate::plugin::{
@@ -30,7 +31,7 @@ use crate::request::Request;
 #[allow(unused_imports)]
 pub(crate) use crate::kernel::focus::{focus_default, focus_ring};
 pub(crate) use crate::kernel::nav::{page_step, scroll_by, scroll_offset_to};
-pub(crate) use crate::kernel::workspace::{Scope, available_modes, mode_label};
+pub(crate) use crate::kernel::workspace::{Scope, mode_label};
 
 pub(crate) mod diff;
 pub(crate) mod show;
@@ -164,6 +165,7 @@ impl Loaded {
         }
     }
 
+    #[cfg(test)]
     pub fn palette_entries(&self) -> Vec<(Action, &'static str, &'static str)> {
         crate::command::palette_entries(self)
     }

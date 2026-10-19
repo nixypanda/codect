@@ -1,19 +1,24 @@
 //! The built-in plugins and the registry.
 //!
-//! Tasks 4.3–4.9 extract the rest and add them to the registry in field order.
+//! Tasks 4.9–4.10 extract the rest and add them to the registry in field order.
 
 pub mod legacy;
 
 use crate::api::Cmd;
+use crate::finder::Finder;
 use crate::help::Help;
 use crate::kernel::app::{App, Chrome, Kernel};
 use crate::kernel::keymap::Keymap;
 use crate::kernel::workspace::{FileSet, NO_CHANGES, NO_FILES, Query, Scope, Workspace};
+use crate::mode_picker::ModePicker;
+use crate::palette::Palette;
 use crate::plugin::TREE_FOCUS;
 use crate::prompt::Prompt;
 use crate::render::icons::Icons;
 use crate::render::theme::Theme;
 use crate::route::{DiffRequest, LoadRequest, ShowRequest};
+use crate::scope_chooser::ScopeChooser;
+use crate::search_input::SearchInput;
 use crate::tree::Tree;
 use crate::which_key::WhichKey;
 
@@ -26,6 +31,11 @@ crate::plugin_set! {
         which_key: WhichKey = crate::which_key::WhichKey,
         prompt: Prompt = crate::prompt::Prompt,
         help: Help = crate::help::Help,
+        palette: Palette = crate::palette::Palette,
+        finder: Finder = crate::finder::Finder,
+        search: Search = crate::search_input::SearchInput,
+        modes: Modes = crate::mode_picker::ModePicker,
+        scope: Scope = crate::scope_chooser::ScopeChooser,
         legacy: Legacy = crate::plugins::legacy::Legacy,
     }
 }
@@ -77,6 +87,11 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
     let which_key = WhichKey::default();
     let prompt = Prompt::default();
     let help = Help;
+    let palette = Palette::default();
+    let finder = Finder::default();
+    let search = SearchInput::default();
+    let modes = ModePicker::default();
+    let scope = ScopeChooser::default();
     let focus = Some(TREE_FOCUS);
     let workspace = Workspace {
         query,
@@ -92,6 +107,11 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         which_key,
         prompt,
         help,
+        palette,
+        finder,
+        search,
+        modes,
+        scope,
         legacy,
     };
     plugins.assert_unique_ids();

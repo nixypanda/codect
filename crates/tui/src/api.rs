@@ -23,5 +23,4 @@ pub enum Cmd {
         index: usize,
         step: CommitStep,
     },
-    LoadAreas,
 }

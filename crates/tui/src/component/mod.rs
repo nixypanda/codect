@@ -7,7 +7,6 @@
 //! points downward: `render` and `util` below, app and view above.
 
 pub(crate) mod commit_picker;
-pub(crate) mod overlay;
 pub(crate) mod text_input;
 
 use crate::render::theme::Theme;

@@ -14,5 +14,6 @@ pub(crate) mod highlight;
 pub(crate) mod icons;
 pub(crate) mod layout;
 pub(crate) mod metrics;
+pub(crate) mod ranked_list;
 pub(crate) mod text;
 pub(crate) mod theme;

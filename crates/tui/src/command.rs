@@ -163,60 +163,10 @@ fn raw_commands(loaded: &Loaded) -> Vec<CommandSpec> {
             None,
             0,
         ),
-        spec(
-            Owner::Overlay,
-            "modes.open",
-            "Switch types / signatures / tests",
-            "m",
-            vec![anywhere(KeySeq::Key(Key::Char('m')))],
-            true,
-            None,
-            100,
-        ),
-        spec(
-            Owner::Overlay,
-            "scope.open",
-            "Change scope",
-            "s",
-            vec![anywhere(KeySeq::Key(Key::Char('s')))],
-            true,
-            None,
-            110,
-        ),
-        spec(
-            Owner::Overlay,
-            "finder.open",
-            "Find file",
-            "Ctrl-F",
-            vec![anywhere(KeySeq::Key(Key::CtrlF))],
-            true,
-            None,
-            300,
-        ),
-        spec(
-            Owner::Overlay,
-            "search.open",
-            "Search in view",
-            "/",
-            vec![anywhere(KeySeq::Key(Key::Char('/')))],
-            true,
-            None,
-            310,
-        ),
-        spec(
-            Owner::Overlay,
-            "palette.open",
-            "",
-            "",
-            vec![anywhere(KeySeq::Key(Key::CtrlP))],
-            false,
-            None,
-            0,
-        ),
     ];
 
     // The extracted plugins own their commands; the legacy palette reads them
-    // through this shared registry until task 4.7 removes the bridge.
+    // through the kernel's collected registry.
     commands.extend(crate::tree::commands());
     commands.extend(crate::help::commands());
 
@@ -346,12 +296,7 @@ pub(crate) fn action_for(name: &str) -> Option<Action> {
         "wider" => Action::Global(GlobalAction::TreeWider),
         "narrower" => Action::Global(GlobalAction::TreeNarrower),
         "reset" => Action::Global(GlobalAction::TreeReset),
-        "modes.open" => Action::Global(GlobalAction::Mode),
-        "scope.open" => Action::Global(GlobalAction::Scope),
-        "finder.open" => Action::Global(GlobalAction::Finder),
-        "search.open" => Action::Global(GlobalAction::Search),
         "help.toggle" => Action::Global(GlobalAction::Help),
-        "palette.open" => Action::Global(GlobalAction::Palette),
         "revision.edit" => Action::Show(ShowAction::EditRevision),
         "fold.toggle" => Action::Show(ShowAction::ToggleFold),
         "fold.open" => Action::Show(ShowAction::OpenFold),
@@ -365,18 +310,6 @@ pub(crate) fn action_for(name: &str) -> Option<Action> {
         "view.commits" => Action::Range(RangeAction::SwitchToCommits),
         "view.range" => Action::Commits(CommitsAction::SwitchToRange),
         _ => return None,
-    })
-}
-
-/// The first `Anywhere` command bound to `key`, matching today's
-/// `command_for`.
-pub(crate) fn action_for_key(loaded: &Loaded, focus: Option<FocusKey>, key: Key) -> Option<Action> {
-    commands(loaded, focus).into_iter().find_map(|spec| {
-        spec.bindings
-            .iter()
-            .any(|binding| binding.scope == KeyScope::Anywhere && binding.seq == KeySeq::Key(key))
-            .then(|| action_for(spec.id.name))
-            .flatten()
     })
 }
 

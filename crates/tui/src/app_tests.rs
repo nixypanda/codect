@@ -1,30 +1,30 @@
 use crate::api::Cmd;
-use crate::component::overlay::Overlay;
 use crate::component::text_input::TextInput;
 use crate::kernel::app::{Diagnostic, Msg, settle, update};
 use crate::page::show::{ShowHighlights, VisibleRow};
 use crate::page::{Loaded, focus_default, focus_ring};
 use crate::plugin::{
-    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FINDER_PANE, HELP_PANE, MODES_PANE, NEW_PANE,
-    OLD_PANE, PALETTE_PANE, PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE,
-    TREE_FOCUS, TREE_PANE, WHICH_KEY_PANE,
+    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, HELP_PANE, MODES_PANE, NEW_PANE, OLD_PANE,
+    PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE, TREE_FOCUS, TREE_PANE,
+    WHICH_KEY_PANE,
 };
 use crate::plugins::PluginsCmd;
 use crate::plugins::legacy::Msg as LegacyMsg;
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
+use crate::scope_chooser::Msg as ScopeMsg;
 use crate::test_support::{
     ATTRIBUTED_SOURCE, NESTED_SOURCE, area_set, assert_view_consistent, attributed_child_outline,
     base_app, buffer_row, buffer_text, cell_x_of, click, commit_search, commit_steps, commits_app,
     commits_ref, commits_request, declaration_less, diff_app, diff_focus_of, diff_ref,
     diff_request, dropped_container_outline, file_diff, focus_content, folder_app, item,
-    merge_base_range_app, multi_method_outline, nested_outline, panes, press, render, row_with,
-    scroll, select_file, selected, show_app, show_app_mode, show_ref, show_request,
-    snapshot_range_app, source_outline, source_outline_with, tail_palette_entries,
+    merge_base_range_app, multi_method_outline, nested_outline, palette_entries, panes, press,
+    render, row_with, scroll, select_file, selected, show_app, show_app_mode, show_ref,
+    show_request, snapshot_range_app, source_outline, source_outline_with, tail_palette_entries,
     test_function_outline, tests_filter_outline, two_files, two_function_outline,
 };
-use crate::test_support::{App, legacy_msg};
+use crate::test_support::{App, legacy_msg, scope_msg, with_cx};
 use crate::workspace::BadgeTone;
 use crate::workspace::{Search, SearchMatch, SearchPane, collect_matches};
 use base::{
@@ -33,8 +33,7 @@ use base::{
 };
 use ratatui::style::Color;
 
-use crate::action::{Action, CommitsAction, GlobalAction, RangeAction, ShowAction};
-use crate::component::overlay;
+use crate::action::{Action, RangeAction, ShowAction};
 use crate::kernel::command::{CommandId, Owner};
 use crate::kernel::plugin::{
     Event, FocusKey, Input, NavigatorResize, Out, Plugin, PluginSet, QueryChange, Request, Size,
@@ -86,8 +85,10 @@ fn coalesce_commit_loads(app: &mut App, cmds: &mut Vec<PluginsCmd>) {
     cmds.extend(effects);
 }
 
-fn command_for(key: Key, app: &App) -> Option<Action> {
-    crate::command::action_for_key(&app.plugins.legacy.loaded, app.kernel.focus, key)
+fn command_for(key: Key, app: &App) -> Option<CommandId> {
+    with_cx(app, |cx| {
+        crate::kernel::keymap::command_for_key(cx.commands(), key, app.focus)
+    })
 }
 
 fn tree_viewport_height(app: &App) -> usize {
@@ -973,12 +974,11 @@ fn mode_picker_defers_the_mode_change_until_selection() {
     let app = two_files();
     let (opened, cmds) = update(Msg::Key(Key::Char('m')), &app);
     assert!(cmds.is_empty());
-    assert!(matches!(
-        opened.plugins.legacy.overlay,
-        Some(Overlay::Mode { .. })
-    ));
+    assert_eq!(opened.kernel.overlay, Some(MODES_PANE));
+    assert_eq!(opened.plugins.modes.cursor, 0);
 
     let (down, _) = update(Msg::Key(Key::Down), &opened);
+    assert_eq!(down.plugins.modes.cursor, 1);
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
 
     assert_eq!(app.workspace.query.mode, ProjectionMode::Types);
@@ -987,7 +987,7 @@ fn mode_picker_defers_the_mode_change_until_selection() {
         ProjectionMode::Types,
         "mode changes on load"
     );
-    assert_eq!(chosen.plugins.legacy.overlay, None);
+    assert_eq!(chosen.kernel.overlay, None);
     assert_eq!(
         cmds,
         vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
@@ -1014,10 +1014,10 @@ fn mode_picker_on_a_diff_keeps_the_diff_shape() {
 
 #[test]
 fn the_mode_picker_lists_the_modes() {
-    let mut app = two_files();
-    app.plugins.legacy.overlay = Some(Overlay::mode(ProjectionMode::Types));
-    app.kernel.overlay = Some(MODES_PANE);
-    let text = buffer_text(&render(&app, 100, 20));
+    let app = two_files();
+    let opened = press(&app, &[Key::Char('m')]);
+    assert_eq!(opened.kernel.overlay, Some(MODES_PANE));
+    let text = buffer_text(&render(&opened, 100, 20));
     assert!(text.contains("types"), "{text}");
     assert!(text.contains("signatures"), "{text}");
     assert!(text.contains("tests"), "{text}");
@@ -1257,21 +1257,26 @@ fn the_revision_prompt_renders_its_label_and_text() {
 fn scope_key_opens_the_chooser_and_requests_areas() {
     let app = two_files();
     let (opened, cmds) = update(Msg::Key(Key::Char('s')), &app);
-    assert!(matches!(
-        opened.plugins.legacy.overlay,
-        Some(Overlay::Scope(_))
-    ));
     assert_eq!(opened.kernel.overlay, Some(SCOPE_PANE));
-    assert_eq!(cmds, vec![PluginsCmd::Legacy(Cmd::LoadAreas)]);
+    assert!(
+        opened.plugins.scope.areas.is_none(),
+        "the chooser starts loading"
+    );
+    assert_eq!(opened.plugins.scope.cursor, 0);
+    assert_eq!(opened.plugins.scope.error, None);
+    assert_eq!(
+        cmds,
+        vec![PluginsCmd::Scope(crate::scope_chooser::Cmd::LoadAreas)]
+    );
 }
 
 #[test]
 fn choosing_all_from_the_chooser_loads_everything() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('s')), &app);
-    let (loaded, _) = update(legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))), &opened);
+    let (loaded, _) = update(scope_msg(ScopeMsg::AreasLoaded(Ok(area_set()))), &opened);
+    assert!(loaded.plugins.scope.areas.is_some());
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &loaded);
-    assert_eq!(chosen.plugins.legacy.overlay, None);
     assert_eq!(chosen.kernel.overlay, None);
     assert_eq!(
         cmds,
@@ -1286,10 +1291,9 @@ fn choosing_all_from_the_chooser_loads_everything() {
 fn selecting_an_area_loads_that_area() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('s')), &app);
-    let (loaded, _) = update(legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))), &opened);
+    let (loaded, _) = update(scope_msg(ScopeMsg::AreasLoaded(Ok(area_set()))), &opened);
     let (down, _) = update(Msg::Key(Key::Down), &loaded);
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
-    assert_eq!(chosen.plugins.legacy.overlay, None);
     assert_eq!(chosen.kernel.overlay, None);
     let expected = Selection::new(vec![SelectionGroup::Area(
         Area::new("core", [RepoPath::new("src/core").unwrap()]).unwrap(),
@@ -1311,33 +1315,32 @@ fn a_config_error_keeps_the_chooser_open_with_a_message() {
         name: "x".to_owned(),
     });
     let (loaded, _) = update(
-        legacy_msg(LegacyMsg::AreasLoaded(Err(Box::new(error)))),
+        scope_msg(ScopeMsg::AreasLoaded(Err(Box::new(error)))),
         &opened,
     );
-    match loaded.plugins.legacy.overlay {
-        Some(Overlay::Scope(chooser)) => assert!(chooser.error.is_some()),
-        other => panic!("expected a scope chooser, got {other:?}"),
-    }
+    assert_eq!(loaded.kernel.overlay, Some(SCOPE_PANE));
+    assert!(loaded.plugins.scope.error.is_some());
 }
 
 #[test]
 fn literal_path_entry_builds_a_path_selection() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('s')), &app);
-    let (loaded, _) = update(legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))), &opened);
+    let (loaded, _) = update(scope_msg(ScopeMsg::AreasLoaded(Ok(area_set()))), &opened);
     let mut state = loaded;
     for _ in 0..3 {
         let (next, _) = update(Msg::Key(Key::Down), &state);
         state = next;
     }
     let (input, _) = update(Msg::Key(Key::Enter), &state);
+    assert!(input.plugins.scope.input.is_some());
     let mut typed = input;
     for character in "src/lib.rs".chars() {
         let (next, _) = update(Msg::Key(Key::Char(character)), &typed);
         typed = next;
     }
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &typed);
-    assert_eq!(chosen.plugins.legacy.overlay, None);
+    assert_eq!(chosen.kernel.overlay, None);
     let expected = Selection::new(vec![SelectionGroup::Path(
         RepoPath::new("src/lib.rs").unwrap(),
     )]);
@@ -1354,10 +1357,7 @@ fn literal_path_entry_builds_a_path_selection() {
 fn search_finds_matches_and_steps_them() {
     let app = show_app(vec![source_outline("a.rs", "alpha\nbeta\nalpha again\n")]);
     let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
-    assert!(matches!(
-        opened.plugins.legacy.overlay,
-        Some(Overlay::Search(_))
-    ));
+    assert_eq!(opened.kernel.overlay, Some(SEARCH_PANE));
 
     let mut state = opened;
     for character in "alpha".chars() {
@@ -1376,7 +1376,7 @@ fn search_finds_matches_and_steps_them() {
     );
 
     let (committed, _) = update(Msg::Key(Key::Enter), &state);
-    assert_eq!(committed.plugins.legacy.overlay, None);
+    assert_eq!(committed.kernel.overlay, None);
     let (stepped, _) = update(Msg::Key(Key::Char('n')), &committed);
     assert_eq!(stepped.workspace.search.as_ref().unwrap().cursor, 1);
     let (back, _) = update(Msg::Key(Key::Char('N')), &stepped);
@@ -1412,33 +1412,20 @@ fn q_types_into_a_search_input_instead_of_quitting() {
     let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
     let (typed, _) = update(Msg::Key(Key::Char('q')), &opened);
     assert!(!typed.chrome.quit);
-    match &typed.plugins.legacy.overlay {
-        Some(Overlay::Search(state)) => assert_eq!(state.input.text, "q"),
-        other => panic!("expected a search overlay, got {other:?}"),
-    }
+    assert_eq!(typed.plugins.search.input.text, "q");
+    assert_eq!(typed.kernel.overlay, Some(SEARCH_PANE));
 }
 
 #[test]
 fn the_palette_and_finder_render_their_lists() {
-    let mut app = two_files();
-    app.plugins.legacy.overlay = Some(Overlay::palette(&overlay::Ctx {
-        visible: &app.workspace.files.paths,
-        entries: &app.plugins.legacy.loaded.palette_entries(),
-        mode: app.workspace.query.mode,
-    }));
-    app.kernel.overlay = Some(PALETTE_PANE);
-    let text = buffer_text(&render(&app, 100, 20));
+    let app = two_files();
+    let palette = press(&app, &[Key::CtrlP]);
+    let text = buffer_text(&render(&palette, 100, 20));
     assert!(text.contains("commands"), "{text}");
     assert!(text.contains("Switch types"), "{text}");
 
-    let mut app = two_files();
-    app.plugins.legacy.overlay = Some(Overlay::finder(&overlay::Ctx {
-        visible: &app.workspace.files.paths,
-        entries: &app.plugins.legacy.loaded.palette_entries(),
-        mode: app.workspace.query.mode,
-    }));
-    app.kernel.overlay = Some(FINDER_PANE);
-    let text = buffer_text(&render(&app, 100, 20));
+    let finder = press(&app, &[Key::CtrlF]);
+    let text = buffer_text(&render(&finder, 100, 20));
     assert!(text.contains("find file"), "{text}");
     assert!(text.contains("a.rs"), "{text}");
 }
@@ -3192,11 +3179,8 @@ fn an_unhandled_key_falls_through_a_non_modal_overlay() {
 fn ctrl_c_quits_with_a_capturing_overlay_open() {
     let app = two_files();
     let (opened, _) = update(Msg::Key(Key::Char('/')), &app);
-    assert!(matches!(
-        opened.plugins.legacy.overlay,
-        Some(Overlay::Search(_))
-    ));
     assert_eq!(opened.kernel.overlay, Some(SEARCH_PANE));
+    assert_eq!(opened.plugins.search.input.text, "");
 
     let (quit, _) = update(Msg::Key(Key::CtrlC), &opened);
     assert!(quit.chrome.quit, "Ctrl-C quits even from a search input");
@@ -3212,10 +3196,7 @@ fn q_quits_from_help_and_from_the_mode_picker() {
     assert!(quit_help.chrome.quit, "q quits from help");
 
     let (mode, _) = update(Msg::Key(Key::Char('m')), &app);
-    assert!(matches!(
-        mode.plugins.legacy.overlay,
-        Some(Overlay::Mode { .. })
-    ));
+    assert_eq!(mode.kernel.overlay, Some(MODES_PANE));
     let (quit_mode, _) = update(Msg::Key(Key::Char('q')), &mode);
     assert!(quit_mode.chrome.quit, "q quits from the mode picker");
 }
@@ -3226,10 +3207,8 @@ fn ctrl_j_and_ctrl_k_type_into_a_text_capturing_overlay() {
     let (search, _) = update(Msg::Key(Key::Char('/')), &app);
     let (j, _) = update(Msg::Key(Key::CtrlJ), &search);
     let (jk, _) = update(Msg::Key(Key::CtrlK), &j);
-    match &jk.plugins.legacy.overlay {
-        Some(Overlay::Search(state)) => assert_eq!(state.input.text, "jk"),
-        other => panic!("expected a search overlay, got {other:?}"),
-    }
+    assert_eq!(jk.plugins.search.input.text, "jk");
+    assert_eq!(jk.kernel.overlay, Some(SEARCH_PANE));
 }
 
 #[test]
@@ -3305,155 +3284,76 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
     let merge_base = merge_base_range_app();
     let commits = commits_app(3);
 
-    // The accessor is exactly the registry's `palette == true` subset, sorted
-    // by (rank, registration order).
+    // The kernel accessor is exactly the collected registry's `palette == true`
+    // subset, sorted by (rank, registration order).
     for app in [&show, &range, &snapshot, &merge_base, &commits] {
-        let mut specs: Vec<crate::command::CommandSpec> =
-            crate::command::commands(&app.plugins.legacy.loaded, app.focus)
+        let expected = with_cx(app, |cx| {
+            let mut specs: Vec<&crate::kernel::command::CommandSpec> =
+                cx.commands().iter().filter(|spec| spec.palette).collect();
+            specs.sort_by_key(|spec| spec.rank);
+            specs
                 .into_iter()
-                .filter(|spec| spec.palette)
-                .collect();
-        specs.sort_by_key(|spec| spec.rank);
-        let expected: Vec<_> = specs
-            .iter()
-            .map(|spec| {
-                (
-                    crate::command::action_for(spec.id.name).expect("known command"),
-                    spec.label,
-                    spec.hint,
-                )
-            })
-            .collect();
-        assert_eq!(app.plugins.legacy.loaded.palette_entries(), expected);
+                .map(|spec| (spec.label, spec.hint))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(palette_entries(app), expected);
     }
 
     let mut show_expected = vec![
-        (
-            Action::Global(GlobalAction::Mode),
-            "Switch types / signatures / tests",
-            "m",
-        ),
-        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
-        (Action::Show(ShowAction::EditRevision), "Edit revision", "r"),
-        (Action::Show(ShowAction::ToggleFold), "Toggle fold", "za"),
-        (Action::Show(ShowAction::OpenFold), "Open fold", "zo"),
-        (Action::Show(ShowAction::CloseFold), "Close fold", "zc"),
-        (
-            Action::Show(ShowAction::OpenRecursive),
-            "Open fold recursively",
-            "zO",
-        ),
-        (
-            Action::Show(ShowAction::CloseRecursive),
-            "Close fold recursively",
-            "zC",
-        ),
-        (Action::Show(ShowAction::OpenAll), "Open all folds", "zR"),
-        (Action::Show(ShowAction::CloseAll), "Close all folds", "zM"),
+        ("Switch types / signatures / tests", "m"),
+        ("Change scope", "s"),
+        ("Edit revision", "r"),
+        ("Toggle fold", "za"),
+        ("Open fold", "zo"),
+        ("Close fold", "zc"),
+        ("Open fold recursively", "zO"),
+        ("Close fold recursively", "zC"),
+        ("Open all folds", "zR"),
+        ("Close all folds", "zM"),
     ];
     show_expected.extend(tail_palette_entries());
-    assert_eq!(show.plugins.legacy.loaded.palette_entries().len(), 20);
-    assert_eq!(show.plugins.legacy.loaded.palette_entries(), show_expected);
+    assert_eq!(palette_entries(&show).len(), 20);
+    assert_eq!(palette_entries(&show), show_expected);
 
     let mut range_expected = vec![
-        (
-            Action::Global(GlobalAction::Mode),
-            "Switch types / signatures / tests",
-            "m",
-        ),
-        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
-        (
-            Action::Range(RangeAction::EditBase),
-            "Edit base revision",
-            "b",
-        ),
-        (
-            Action::Range(RangeAction::EditTarget),
-            "Edit target revision",
-            "t",
-        ),
-        (
-            Action::Range(RangeAction::SwitchToCommits),
-            "Switch to commits view",
-            "",
-        ),
+        ("Switch types / signatures / tests", "m"),
+        ("Change scope", "s"),
+        ("Edit base revision", "b"),
+        ("Edit target revision", "t"),
+        ("Switch to commits view", ""),
     ];
     range_expected.extend(tail_palette_entries());
-    assert_eq!(range.plugins.legacy.loaded.palette_entries().len(), 15);
-    assert_eq!(
-        range.plugins.legacy.loaded.palette_entries(),
-        range_expected
-    );
+    assert_eq!(palette_entries(&range).len(), 15);
+    assert_eq!(palette_entries(&range), range_expected);
 
     let mut snapshot_expected = vec![
-        (
-            Action::Global(GlobalAction::Mode),
-            "Switch types / signatures / tests",
-            "m",
-        ),
-        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
-        (
-            Action::Range(RangeAction::EditBase),
-            "Edit base revision",
-            "b",
-        ),
-        (
-            Action::Range(RangeAction::EditTarget),
-            "Edit target revision",
-            "t",
-        ),
+        ("Switch types / signatures / tests", "m"),
+        ("Change scope", "s"),
+        ("Edit base revision", "b"),
+        ("Edit target revision", "t"),
     ];
     snapshot_expected.extend(tail_palette_entries());
-    assert_eq!(snapshot.plugins.legacy.loaded.palette_entries().len(), 14);
-    assert_eq!(
-        snapshot.plugins.legacy.loaded.palette_entries(),
-        snapshot_expected
-    );
+    assert_eq!(palette_entries(&snapshot).len(), 14);
+    assert_eq!(palette_entries(&snapshot), snapshot_expected);
 
     let mut merge_base_expected = vec![
-        (
-            Action::Global(GlobalAction::Mode),
-            "Switch types / signatures / tests",
-            "m",
-        ),
-        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
-        (
-            Action::Range(RangeAction::EditBase),
-            "Edit base revision",
-            "b",
-        ),
-        (
-            Action::Range(RangeAction::EditTarget),
-            "Edit target revision",
-            "t",
-        ),
+        ("Switch types / signatures / tests", "m"),
+        ("Change scope", "s"),
+        ("Edit base revision", "b"),
+        ("Edit target revision", "t"),
     ];
     merge_base_expected.extend(tail_palette_entries());
-    assert_eq!(merge_base.plugins.legacy.loaded.palette_entries().len(), 14);
-    assert_eq!(
-        merge_base.plugins.legacy.loaded.palette_entries(),
-        merge_base_expected
-    );
+    assert_eq!(palette_entries(&merge_base).len(), 14);
+    assert_eq!(palette_entries(&merge_base), merge_base_expected);
 
     let mut commits_expected = vec![
-        (
-            Action::Global(GlobalAction::Mode),
-            "Switch types / signatures / tests",
-            "m",
-        ),
-        (Action::Global(GlobalAction::Scope), "Change scope", "s"),
-        (
-            Action::Commits(CommitsAction::SwitchToRange),
-            "Switch to range view",
-            "",
-        ),
+        ("Switch types / signatures / tests", "m"),
+        ("Change scope", "s"),
+        ("Switch to range view", ""),
     ];
     commits_expected.extend(tail_palette_entries());
-    assert_eq!(commits.plugins.legacy.loaded.palette_entries().len(), 13);
-    assert_eq!(
-        commits.plugins.legacy.loaded.palette_entries(),
-        commits_expected
-    );
+    assert_eq!(palette_entries(&commits).len(), 13);
+    assert_eq!(palette_entries(&commits), commits_expected);
 }
 
 #[test]
@@ -3464,14 +3364,16 @@ fn command_lookup_reproduces_the_key_table() {
         commits_app(3),
     ];
     for app in &apps {
-        for spec in crate::command::commands(&app.plugins.legacy.loaded, app.focus) {
+        for spec in with_cx(app, |cx| cx.commands().to_vec()) {
             for binding in &spec.bindings {
-                if let (crate::command::KeySeq::Key(key), crate::command::KeyScope::Anywhere) =
-                    (binding.seq, binding.scope)
+                if let (
+                    crate::kernel::command::KeySeq::Key(key),
+                    crate::kernel::command::KeyScope::Anywhere,
+                ) = (binding.seq, binding.scope)
                 {
                     assert_eq!(
                         command_for(key, app),
-                        Some(crate::command::action_for(spec.id.name).expect("known command")),
+                        Some(spec.id),
                         "{:?} must bind {key:?}",
                         spec.id
                     );
@@ -3562,49 +3464,45 @@ fn every_palette_entry_dispatches_its_registered_binding() {
         diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]),
         commits_app(3),
     ] {
-        let specs = crate::command::commands(&app.plugins.legacy.loaded, app.focus);
-        let entries = app.plugins.legacy.loaded.palette_entries();
-        for spec in &specs {
-            let listed = entries.iter().any(|(action, label, hint)| {
-                *action == crate::command::action_for(spec.id.name).expect("known command")
-                    && *label == spec.label
-                    && *hint == spec.hint
-            });
-            assert_eq!(listed, spec.palette, "palette membership for {:?}", spec.id);
+        let palette = palette_entries(&app);
+        with_cx(&app, |cx| {
+            let specs = cx.commands();
+            for spec in specs {
+                let listed = palette
+                    .iter()
+                    .any(|(label, hint)| *label == spec.label && *hint == spec.hint);
+                assert_eq!(listed, spec.palette, "palette membership for {:?}", spec.id);
 
-            for binding in &spec.bindings {
-                match binding.seq {
-                    crate::command::KeySeq::Key(key)
-                        if binding.scope == crate::command::KeyScope::Anywhere =>
-                    {
-                        assert_eq!(
-                            command_for(key, &app),
-                            Some(crate::command::action_for(spec.id.name).expect("known command"))
-                        );
+                for binding in &spec.bindings {
+                    match binding.seq {
+                        crate::kernel::command::KeySeq::Key(key)
+                            if crate::kernel::command::scope_matches(binding.scope, app.focus) =>
+                        {
+                            assert_eq!(
+                                crate::kernel::keymap::command_for_key(specs, key, app.focus),
+                                Some(spec.id),
+                            );
+                        }
+                        crate::kernel::command::KeySeq::Prefixed(_, _)
+                            if !crate::kernel::command::scope_matches(binding.scope, app.focus) =>
+                        {
+                            // The fold prefix is scoped to the show body; it is
+                            // not armed while another focus is active.
+                        }
+                        crate::kernel::command::KeySeq::Prefixed(prefix, second) => {
+                            let band = cx.prefix_group(prefix).expect("a prefix group");
+                            let binding = band
+                                .bindings
+                                .iter()
+                                .find(|(key, _, _)| *key == second)
+                                .expect("a band binding");
+                            assert_eq!(binding.2, spec.id);
+                        }
+                        _ => {}
                     }
-                    crate::command::KeySeq::Prefixed(prefix, second) => {
-                        let group = app
-                            .plugins
-                            .legacy
-                            .loaded
-                            .prefix_groups()
-                            .into_iter()
-                            .find(|group| group.key == prefix)
-                            .expect("a prefix group");
-                        let band = group
-                            .bindings
-                            .iter()
-                            .find(|binding| binding.key == second)
-                            .expect("a band binding");
-                        assert_eq!(
-                            band.action,
-                            crate::command::action_for(spec.id.name).expect("known command")
-                        );
-                    }
-                    _ => {}
                 }
             }
-        }
+        });
     }
 }
 

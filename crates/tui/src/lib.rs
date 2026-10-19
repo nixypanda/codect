@@ -44,6 +44,12 @@ mod util;
 mod which_key;
 mod workspace;
 
+mod finder;
+mod mode_picker;
+mod palette;
+mod scope_chooser;
+mod search_input;
+
 #[cfg(test)]
 mod app_tests;
 #[cfg(test)]
