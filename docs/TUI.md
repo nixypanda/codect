@@ -162,6 +162,13 @@ cargo build -p cli --no-default-features
 
 `tui` then becomes an unknown command, and no terminal dependency is linked.
 
+The explorer also builds without the diff plugin, which is a default-on feature
+of `tui`:
+
+```sh
+cargo build -p tui --no-default-features
+```
+
 The explorer can also be built without its optional diff views, in which case
 `codect tui diff` is unavailable but `codect tui show` is unchanged:
 
