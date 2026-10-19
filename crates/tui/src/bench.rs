@@ -22,22 +22,22 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
-use crate::diff::{DiffViewState, Msg as DiffMsg, VisualRow};
-use crate::kernel::app::{
-    App, Msg as KernelMsg, collect_specs, cx_for, settle as kernel_settle, update as kernel_update,
-};
-use crate::kernel::plugin::PluginSet;
 use crate::plugins::{KernelOptions, Plugins, PluginsMsg, build};
-use crate::render::highlight::StyledLine;
-use crate::render::icons::{IconStyle, Icons};
-use crate::render::theme::{Capability, Flavor, Theme};
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::source::Msg as SourceMsg;
+use tui_core::app::{
+    App, Msg as KernelMsg, collect_specs, cx_for, settle as kernel_settle, update as kernel_update,
+};
+use tui_core::plugin::PluginSet;
+use tui_core::render::highlight::StyledLine;
+use tui_core::render::icons::{IconStyle, Icons};
+use tui_core::render::theme::{Capability, Flavor, Theme};
+use tui_diff::{DiffViewState, Msg as DiffMsg, VisualRow};
 
 pub type Model = App<Plugins>;
 pub type Msg = KernelMsg<PluginsMsg>;
 
-pub use crate::util::input::Key;
+pub use tui_core::util::input::Key;
 
 pub fn terminal(width: u16, height: u16) -> Terminal<TestBackend> {
     Terminal::new(TestBackend::new(width, height)).expect("test terminal")
@@ -45,7 +45,7 @@ pub fn terminal(width: u16, height: u16) -> Terminal<TestBackend> {
 
 pub fn draw(model: &Model, terminal: &mut Terminal<TestBackend>) {
     terminal
-        .draw(|frame| crate::kernel::view::view(model, frame))
+        .draw(|frame| tui_core::view::view(model, frame))
         .expect("draw a frame");
 }
 
@@ -60,7 +60,7 @@ pub fn buffer_diff(previous: &Buffer, current: &Buffer) -> usize {
 }
 
 pub fn highlight(text: &str, language: Language) -> Vec<StyledLine> {
-    crate::render::highlight::highlight(text, language, &truecolor_dark())
+    tui_core::render::highlight::highlight(text, language, &truecolor_dark())
 }
 
 pub fn compute_diff_rows(model: &Model) -> Vec<VisualRow> {
@@ -68,7 +68,7 @@ pub fn compute_diff_rows(model: &Model) -> Vec<VisualRow> {
     let overlay = model.kernel.overlay;
     let busy = model.plugins.busy();
     let cx = cx_for(&model.kernel, overlay, busy, &specs);
-    model.plugins.diff.compute_rows(&cx)
+    tui_diff::bench::compute_rows(&model.plugins.diff, &cx)
 }
 
 pub fn update(msg: Msg, model: &Model) -> (Model, Vec<crate::plugins::PluginsCmd>) {

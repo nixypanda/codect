@@ -10,17 +10,17 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::kernel::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq, Owner};
-use crate::kernel::cx::Cx;
-use crate::kernel::help::{HelpEntry, VIEW};
-use crate::kernel::plugin::{
+use crate::plugin::MODES_PANE;
+use tui_core::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq};
+use tui_core::cx::Cx;
+use tui_core::help::{HelpEntry, VIEW};
+use tui_core::plugin::{
     Event, HintTarget, Input, Never, Out, OverlaySpec, PaneId, Plugin, PluginId, QueryChange,
     Reply, Request,
 };
-use crate::kernel::workspace::{available_modes, mode_label};
-use crate::plugin::MODES_PANE;
-use crate::render::block::{popup_block, scrim};
-use crate::util::input::Key;
+use tui_core::render::block::{popup_block, scrim};
+use tui_core::util::input::Key;
+use tui_core::workspace::{available_modes, mode_label};
 
 /// The plugin's id.
 pub const MODES: PluginId = PluginId("modes");
@@ -34,7 +34,7 @@ pub struct ModePicker {
 fn commands() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: CommandId {
-            owner: Owner::Modes,
+            owner: MODES,
             name: "open",
         },
         label: "Switch types / signatures / tests",
@@ -125,7 +125,7 @@ impl Plugin for ModePicker {
     }
 
     fn run(&mut self, command: CommandId, cx: &Cx) -> Vec<Out<Never>> {
-        if command.owner != Owner::Modes {
+        if command.owner != MODES {
             return Vec::new();
         }
         match command.name {
@@ -196,8 +196,8 @@ fn render_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::app::{Msg, update};
     use crate::test_support::{press, two_files};
+    use tui_core::app::{Msg, update};
 
     #[test]
     fn m_opens_at_the_current_mode_and_enter_requeries() {

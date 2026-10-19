@@ -13,13 +13,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::kernel::cx::Cx;
-use crate::render::block::pane_block;
-use crate::render::empty::render_empty;
-use crate::render::layout::Edge;
-use crate::render::text::truncate_ellipsis;
-use crate::render::theme::{Rgb, Theme};
 use crate::workspace::BadgeTone;
+use tui_core::cx::Cx;
+use tui_core::layout::Edge;
+use tui_core::render::block::pane_block;
+use tui_core::render::empty::render_empty;
+use tui_core::render::text::truncate_ellipsis;
+use tui_core::render::theme::{Rgb, Theme};
 
 use super::{RowKind, Tree, TreeRow};
 

@@ -9,19 +9,19 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::component::text_input::{Edit, TextInput, input_line};
-use crate::kernel::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq, Owner};
-use crate::kernel::cx::Cx;
-use crate::kernel::help::{FIND, HelpEntry};
-use crate::kernel::plugin::{
+use crate::plugin::FINDER_PANE;
+use tui_core::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq};
+use tui_core::cx::Cx;
+use tui_core::help::{FIND, HelpEntry};
+use tui_core::layout::window_offset;
+use tui_core::plugin::{
     Event, HintTarget, Input, Never, Out, OverlaySpec, PaneId, Plugin, PluginId, Reply, Request,
 };
-use crate::plugin::FINDER_PANE;
-use crate::render::block::{popup_block, scrim};
-use crate::render::layout::window_offset;
-use crate::render::ranked_list::{Ranked, ranked_line};
-use crate::util::fuzzy;
-use crate::util::input::Key;
+use tui_core::render::block::{popup_block, scrim};
+use tui_core::util::fuzzy;
+use tui_core::util::input::Key;
+use tui_core::widgets::ranked_list::{Ranked, ranked_line};
+use tui_core::widgets::text_input::{Edit, TextInput, input_line};
 
 /// The plugin's id.
 pub const FINDER: PluginId = PluginId("finder");
@@ -84,7 +84,7 @@ impl Finder {
 fn commands() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: CommandId {
-            owner: Owner::Finder,
+            owner: FINDER,
             name: "open",
         },
         label: "Find file",
@@ -186,7 +186,7 @@ impl Plugin for Finder {
     }
 
     fn run(&mut self, command: CommandId, cx: &Cx) -> Vec<Out<Never>> {
-        if command.owner != Owner::Finder {
+        if command.owner != FINDER {
             return Vec::new();
         }
         match command.name {
@@ -265,8 +265,8 @@ fn render_finder(state: &Finder, area: Rect, cx: &Cx, frame: &mut Frame) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::app::{Msg, update};
     use crate::test_support::{press, selected, two_files};
+    use tui_core::app::{Msg, update};
 
     #[test]
     fn ctrl_f_lists_every_file_and_enter_selects_the_highlighted_one() {

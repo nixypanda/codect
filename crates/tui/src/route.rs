@@ -8,8 +8,9 @@
 
 use base::{ProjectionMode, Selection};
 
-pub use crate::diff::DiffRequest;
 pub use crate::source::ShowRequest;
+#[cfg(feature = "diff")]
+pub use tui_diff::{DiffRequest, DiffView};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LoadRequest {
@@ -18,6 +19,7 @@ pub enum LoadRequest {
         mode: ProjectionMode,
         selection: Selection,
     },
+    #[cfg(feature = "diff")]
     Diff {
         base: String,
         target: String,
@@ -26,10 +28,4 @@ pub enum LoadRequest {
         view: DiffView,
         merge_base: bool,
     },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DiffView {
-    Range,
-    Commits,
 }

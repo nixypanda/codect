@@ -4,28 +4,36 @@
 //! and the golden frames construct the same fixtures from one place.
 
 use base::{
-    Area, AreaSet, FileDiff, ItemKind, ProjectedFile, ProjectedItem, ProjectionMode, RepoPath,
-    Selection, SourceOutline, SourceSpan, SupportedPath, assemble_outline,
+    Area, AreaSet, ItemKind, ProjectedItem, ProjectionMode, RepoPath, Selection, SourceOutline,
+    SourceSpan, SupportedPath, assemble_outline,
 };
+#[cfg(feature = "diff")]
+use base::{FileDiff, ProjectedFile};
+#[cfg(feature = "diff")]
 use engine::CommitStep;
 use ratatui::style::{Color, Modifier};
 
-use crate::kernel::app::{App as GenericApp, Msg as GenericMsg, settle, update};
-use crate::kernel::cx::Cx;
-use crate::kernel::dispatch::apply_request;
-use crate::kernel::plugin::{PluginSet, Request};
-use crate::kernel::view::view;
-use crate::plugin::{DIFF_BODY_FOCUS, SOURCE_FOCUS};
+#[cfg(feature = "diff")]
+use crate::plugin::DIFF_BODY_FOCUS;
+use crate::plugin::SOURCE_FOCUS;
 use crate::plugins::{KernelOptions, Plugins, PluginsMsg, build};
-use crate::render::icons::{IconStyle, Icons};
-use crate::render::theme::Theme;
-use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
+#[cfg(feature = "diff")]
+use crate::route::{DiffRequest, DiffView};
+use crate::route::{LoadRequest, ShowRequest};
 use crate::scope_chooser::Msg as ScopeMsg;
 use crate::source::Msg as SourceMsg;
-use crate::util::input::{Key, Mouse, MouseKind};
+use tui_core::app::{App as GenericApp, Msg as GenericMsg, settle, update};
+use tui_core::cx::Cx;
+use tui_core::dispatch::apply_request;
+use tui_core::plugin::{PluginSet, Request};
+use tui_core::render::icons::{IconStyle, Icons};
+use tui_core::render::theme::Theme;
+use tui_core::util::input::{Key, Mouse, MouseKind};
+use tui_core::view::view;
 
 pub(crate) type App = GenericApp<Plugins>;
 pub(crate) type Msg = GenericMsg<PluginsMsg>;
+#[cfg(feature = "diff")]
 pub(crate) type Cmd = crate::plugins::PluginsCmd;
 
 pub(crate) fn item(text: &str) -> ProjectedItem {
@@ -43,6 +51,7 @@ pub(crate) fn supported(path: &str) -> SupportedPath {
     SupportedPath::new(RepoPath::new(path).expect("valid path")).expect("test path is supported")
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn projected_file(path: &str, text: &str) -> ProjectedFile {
     let path = supported(path);
     if text.is_empty() {
@@ -219,6 +228,7 @@ pub(crate) fn show_request() -> ShowRequest {
     }
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn diff_request() -> DiffRequest {
     DiffRequest {
         base: "HEAD~1".to_owned(),
@@ -230,6 +240,7 @@ pub(crate) fn diff_request() -> DiffRequest {
     }
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn commits_request() -> DiffRequest {
     DiffRequest {
         view: DiffView::Commits,
@@ -237,6 +248,7 @@ pub(crate) fn commits_request() -> DiffRequest {
     }
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
     match (old, new) {
         (None, Some(text)) => FileDiff::Added {
@@ -271,15 +283,17 @@ pub(crate) fn base_app_with(request: LoadRequest, theme: Theme, icons: Icons) ->
 }
 
 /// The plugin-set union of pane specs, as the kernel's layout collects it.
-pub(crate) fn panes(app: &App) -> Vec<crate::render::layout::PaneSpec> {
-    crate::kernel::app::Specs::panes_only(app).panes
+#[cfg(feature = "diff")]
+pub(crate) fn panes(app: &App) -> Vec<tui_core::layout::PaneSpec> {
+    tui_core::app::Specs::panes_only(app).panes
 }
 
 pub(crate) fn source_msg(msg: SourceMsg) -> Msg {
     Msg::Plugin(PluginsMsg::Source(msg))
 }
 
-pub(crate) fn diff_msg(msg: crate::diff::Msg) -> Msg {
+#[cfg(feature = "diff")]
+pub(crate) fn diff_msg(msg: tui_diff::Msg) -> Msg {
     Msg::Plugin(PluginsMsg::Diff(msg))
 }
 
@@ -289,9 +303,8 @@ pub(crate) fn scope_msg(msg: ScopeMsg) -> Msg {
 
 /// Build the kernel's `Cx` for `app` and call `f` with it.
 pub(crate) fn with_cx<R>(app: &App, f: impl FnOnce(&Cx) -> R) -> R {
-    let specs = crate::kernel::app::collect_specs(app);
-    let cx =
-        crate::kernel::app::cx_for(&app.kernel, app.kernel.overlay, app.plugins.busy(), &specs);
+    let specs = tui_core::app::collect_specs(app);
+    let cx = tui_core::app::cx_for(&app.kernel, app.kernel.overlay, app.plugins.busy(), &specs);
     f(&cx)
 }
 
@@ -333,6 +346,7 @@ pub(crate) fn show_app_mode(files: Vec<SourceOutline>, mode: ProjectionMode) -> 
     settle(next)
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn diff_app(diffs: Vec<FileDiff>) -> App {
     let app = base_app(LoadRequest::Diff {
         base: "HEAD~1".to_owned(),
@@ -343,7 +357,7 @@ pub(crate) fn diff_app(diffs: Vec<FileDiff>) -> App {
         merge_base: false,
     });
     let (next, _) = update(
-        diff_msg(crate::diff::Msg::DiffLoaded {
+        diff_msg(tui_diff::Msg::DiffLoaded {
             request: diff_request(),
             result: Ok(diffs.into()),
         }),
@@ -352,6 +366,7 @@ pub(crate) fn diff_app(diffs: Vec<FileDiff>) -> App {
     settle(next)
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn commit_steps(count: usize) -> Vec<CommitStep> {
     use git::{HashKind, ObjectId};
     (0..count)
@@ -369,6 +384,7 @@ pub(crate) fn commit_steps(count: usize) -> Vec<CommitStep> {
         .collect()
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn commits_app(count: usize) -> App {
     let app = base_app(LoadRequest::Diff {
         base: "HEAD~1".to_owned(),
@@ -379,7 +395,7 @@ pub(crate) fn commits_app(count: usize) -> App {
         merge_base: false,
     });
     let (next, _) = update(
-        diff_msg(crate::diff::Msg::HistoryLoaded {
+        diff_msg(tui_diff::Msg::HistoryLoaded {
             request: commits_request(),
             result: Ok((
                 commit_steps(count).into(),
@@ -391,6 +407,7 @@ pub(crate) fn commits_app(count: usize) -> App {
     settle(next)
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn snapshot_range_app() -> App {
     let request = DiffRequest {
         base: ":index".to_owned(),
@@ -406,7 +423,7 @@ pub(crate) fn snapshot_range_app() -> App {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        diff_msg(crate::diff::Msg::DiffLoaded {
+        diff_msg(tui_diff::Msg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", None, Some("a\n"))].into()),
         }),
@@ -415,6 +432,7 @@ pub(crate) fn snapshot_range_app() -> App {
     settle(next)
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn merge_base_range_app() -> App {
     let request = DiffRequest {
         base: "main".to_owned(),
@@ -431,7 +449,7 @@ pub(crate) fn merge_base_range_app() -> App {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        diff_msg(crate::diff::Msg::DiffLoaded {
+        diff_msg(tui_diff::Msg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
         }),
@@ -440,6 +458,7 @@ pub(crate) fn merge_base_range_app() -> App {
     settle(next)
 }
 
+#[cfg(feature = "diff")]
 pub(crate) fn tail_palette_entries() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Find file", "Ctrl-F"),
@@ -459,13 +478,15 @@ pub(crate) fn show_ref(app: &App) -> &crate::source::SourceView {
     &app.plugins.source
 }
 
-pub(crate) fn diff_ref(app: &App) -> &crate::diff::DiffPlugin {
+#[cfg(feature = "diff")]
+pub(crate) fn diff_ref(app: &App) -> &tui_diff::DiffPlugin {
     &app.plugins.diff
 }
 
-pub(crate) fn commits_ref(app: &App) -> &crate::diff::CommitPicker {
+#[cfg(feature = "diff")]
+pub(crate) fn commits_ref(app: &App) -> &tui_diff::CommitPicker {
     match &app.plugins.diff.view {
-        crate::diff::DiffViewState::Commits(commits) => &commits.picker,
+        tui_diff::DiffViewState::Commits(commits) => &commits.picker,
         _ => panic!("expected commits"),
     }
 }
@@ -484,65 +505,69 @@ pub(crate) fn select_file(app: &mut App, path: RepoPath) {
 }
 
 /// Commit a search through the kernel request path, as the search input does.
+#[cfg(feature = "diff")]
 pub(crate) fn commit_search(app: &mut App, needle: &str) {
     apply(app, Request::SetSearch(needle.to_owned()));
 }
 
 fn apply(app: &mut App, request: Request) {
-    let specs = crate::kernel::app::collect_specs(app);
+    let specs = tui_core::app::collect_specs(app);
     apply_request(app, request, &mut Vec::new(), 0, &specs);
 }
 
 /// Run the plugin `after_batch` hook and return the effects it produced.
+#[cfg(feature = "diff")]
 pub(crate) fn after_batch_effects(app: &mut App, pending: &[Cmd]) -> Vec<Cmd> {
-    let specs = crate::kernel::app::collect_specs(app);
+    let specs = tui_core::app::collect_specs(app);
     let outs = {
         let kernel = &app.kernel;
         let overlay = app.kernel.overlay;
         let busy = app.plugins.busy();
-        let cx = crate::kernel::app::cx_for(kernel, overlay, busy, &specs);
+        let cx = tui_core::app::cx_for(kernel, overlay, busy, &specs);
         app.plugins.after_batch(pending, &cx)
     };
     let mut cmds = Vec::new();
-    crate::kernel::dispatch::process_wrapped(app, outs, &mut cmds, 0, &specs);
+    tui_core::dispatch::process_wrapped(app, outs, &mut cmds, 0, &specs);
     cmds
 }
 
-pub(crate) fn diff_focus_of(app: &App) -> Option<crate::kernel::plugin::FocusKey> {
+#[cfg(feature = "diff")]
+pub(crate) fn diff_focus_of(app: &App) -> Option<tui_core::plugin::FocusKey> {
     app.kernel.focus
 }
 
 pub(crate) fn focus_content(app: &mut App) {
-    app.kernel.focus = Some(if app.kernel.active_view == crate::plugin::SOURCE_VIEW {
-        SOURCE_FOCUS
-    } else {
-        DIFF_BODY_FOCUS
-    });
+    #[cfg(feature = "diff")]
+    if app.kernel.active_view.owner == crate::plugin::DIFF {
+        app.kernel.focus = Some(DIFF_BODY_FOCUS);
+        return;
+    }
+    app.kernel.focus = Some(SOURCE_FOCUS);
 }
 
 /// Whether the registry offers a palette entry owned by `owner` with `name`.
 pub(crate) fn has_palette_entry(
     app: &App,
-    owner: crate::kernel::command::Owner,
+    owner: tui_core::plugin::PluginId,
     name: &'static str,
 ) -> bool {
     with_cx(app, |cx| {
         cx.palette_commands()
             .iter()
-            .any(|spec| spec.id == crate::kernel::command::CommandId { owner, name })
+            .any(|spec| spec.id == tui_core::command::CommandId { owner, name })
     })
 }
 
 /// The collected spec for a command, if the current view declares it.
 pub(crate) fn command_spec(
     app: &App,
-    owner: crate::kernel::command::Owner,
+    owner: tui_core::plugin::PluginId,
     name: &'static str,
-) -> Option<crate::kernel::command::CommandSpec> {
+) -> Option<tui_core::command::CommandSpec> {
     with_cx(app, |cx| {
         cx.commands()
             .iter()
-            .find(|spec| spec.id == crate::kernel::command::CommandId { owner, name })
+            .find(|spec| spec.id == tui_core::command::CommandId { owner, name })
             .cloned()
     })
 }

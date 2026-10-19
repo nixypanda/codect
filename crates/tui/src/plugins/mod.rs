@@ -2,29 +2,38 @@
 //!
 //! Registration order is behaviour: events are broadcast in field order, and a
 //! command's registration order breaks rank ties. The order is fixed here and
-//! in section 4.5 of the plugin plan.
+//! in section 4.5 of the plugin plan. The optional `diff` plugin is the last
+//! field and compiles away with the `diff` feature.
 
-use crate::diff::{Cmd as DiffCmd, DiffPlugin};
+#[cfg(feature = "diff")]
+use tui_diff::{Cmd as DiffCmd, DiffPlugin};
+
 use crate::finder::Finder;
 use crate::help::Help;
-use crate::kernel::app::{App, Chrome, Kernel};
-use crate::kernel::keymap::Keymap;
-use crate::kernel::plugin::Size;
-use crate::kernel::workspace::{FileSet, NO_CHANGES, NO_FILES, Query, Scope, Workspace};
 use crate::mode_picker::ModePicker;
 use crate::palette::Palette;
-use crate::plugin::{COMPARE_VIEW, HISTORY_VIEW, SOURCE_VIEW, TREE_FOCUS};
+#[cfg(feature = "diff")]
+use crate::plugin::{COMPARE_VIEW, HISTORY_VIEW};
+use crate::plugin::{SOURCE_VIEW, TREE_FOCUS};
 use crate::prompt::Prompt;
-use crate::render::icons::Icons;
-use crate::render::theme::Theme;
-use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
+#[cfg(feature = "diff")]
+use crate::route::{DiffRequest, DiffView};
+use crate::route::{LoadRequest, ShowRequest};
 use crate::scope_chooser::ScopeChooser;
 use crate::search_input::SearchInput;
 use crate::source::{Cmd as SourceCmd, SourceView};
 use crate::tree::Tree;
 use crate::which_key::WhichKey;
+use tui_core::app::{App, Chrome, Kernel};
+use tui_core::keymap::Keymap;
+use tui_core::plugin::Size;
+use tui_core::render::icons::Icons;
+use tui_core::render::theme::Theme;
+#[cfg(feature = "diff")]
+use tui_core::workspace::NO_CHANGES;
+use tui_core::workspace::{FileSet, NO_FILES, Query, Scope, Workspace};
 
-crate::plugin_set! {
+tui_core::plugin_set! {
     /// Every plugin `codect tui` ships, in registration order.
     pub struct Plugins: PluginsMsg, PluginsCmd {
         tree: Tree = crate::tree::Tree,
@@ -37,7 +46,8 @@ crate::plugin_set! {
         modes: Modes = crate::mode_picker::ModePicker,
         scope: Scope = crate::scope_chooser::ScopeChooser,
         source: Source = crate::source::SourceView,
-        diff: Diff = crate::diff::DiffPlugin,
+        #[cfg(feature = "diff")]
+        diff: Diff = tui_diff::DiffPlugin,
     }
 }
 
@@ -66,13 +76,21 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
 
     let empty = match &request {
         LoadRequest::Show { .. } => NO_FILES,
+        #[cfg(feature = "diff")]
         LoadRequest::Diff { .. } => NO_CHANGES,
     };
     let query = match &request {
         LoadRequest::Show {
             mode, selection, ..
-        }
-        | LoadRequest::Diff {
+        } => Query {
+            mode: *mode,
+            scope: Scope {
+                selection: selection.clone(),
+                label: scope_label,
+            },
+        },
+        #[cfg(feature = "diff")]
+        LoadRequest::Diff {
             mode, selection, ..
         } => Query {
             mode: *mode,
@@ -83,14 +101,26 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         },
     };
 
-    let (source, diff, active_view, startup) = match request {
+    #[cfg(feature = "diff")]
+    let diff = match &request {
+        LoadRequest::Show { .. } => DiffPlugin::inactive(),
+        LoadRequest::Diff {
+            base,
+            target,
+            mode,
+            view,
+            merge_base,
+            ..
+        } => DiffPlugin::new(base.clone(), target.clone(), *mode, *view, *merge_base),
+    };
+
+    let (source, active_view, startup) = match request {
         LoadRequest::Show {
             revision,
             mode,
             selection,
         } => (
             SourceView::new(revision.clone(), mode),
-            DiffPlugin::inactive(),
             SOURCE_VIEW,
             PluginsCmd::Source(SourceCmd::Load(ShowRequest {
                 revision,
@@ -98,6 +128,7 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
                 selection,
             })),
         ),
+        #[cfg(feature = "diff")]
         LoadRequest::Diff {
             base,
             target,
@@ -107,8 +138,8 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
             merge_base,
         } => {
             let request = DiffRequest {
-                base: base.clone(),
-                target: target.clone(),
+                base,
+                target,
                 mode,
                 selection,
                 view,
@@ -122,12 +153,7 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
                 DiffView::Range => COMPARE_VIEW,
                 DiffView::Commits => HISTORY_VIEW,
             };
-            (
-                SourceView::inactive(),
-                DiffPlugin::new(base, target, mode, view, merge_base),
-                active_view,
-                PluginsCmd::Diff(cmd),
-            )
+            (SourceView::inactive(), active_view, PluginsCmd::Diff(cmd))
         }
     };
 
@@ -161,6 +187,7 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         modes,
         scope,
         source,
+        #[cfg(feature = "diff")]
         diff,
     };
     plugins.assert_unique_ids();

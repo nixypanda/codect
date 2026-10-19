@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use base::{FoldRegion, ProjectionMode, RepoPath, SourceOutline};
 
-use crate::kernel::nav::scroll_offset_to;
-use crate::kernel::search::{SearchMatch, SearchPane, collect_matches};
-use crate::kernel::workspace::{Workspace, mode_label};
-use crate::render::highlight::{self, Run};
-use crate::render::theme::Theme;
+use tui_core::nav::scroll_offset_to;
+use tui_core::render::highlight::{self, Run};
+use tui_core::render::theme::Theme;
+use tui_core::search::{SearchMatch, SearchPane, collect_matches};
+use tui_core::workspace::{Workspace, mode_label};
 
 use super::SourceView;
 use super::folds::FoldState;

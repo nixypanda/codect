@@ -6,13 +6,13 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::kernel::cx::Cx;
-use crate::kernel::search::SearchPane;
-use crate::render::block::pane_block;
-use crate::render::empty::render_empty;
-use crate::render::highlight;
-use crate::render::layout::Edge;
-use crate::render::theme::Theme;
+use tui_core::cx::Cx;
+use tui_core::layout::Edge;
+use tui_core::render::block::pane_block;
+use tui_core::render::empty::render_empty;
+use tui_core::render::highlight;
+use tui_core::render::theme::Theme;
+use tui_core::search::SearchPane;
 
 use super::SourceView;
 use super::rows::{VisibleRow, fold_suffix};

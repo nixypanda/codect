@@ -16,16 +16,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::kernel::command::PrefixGroupView;
-use crate::kernel::cx::Cx;
-use crate::kernel::plugin::{
+use crate::plugin::WHICH_KEY_PANE;
+use tui_core::command::PrefixGroupView;
+use tui_core::cx::Cx;
+use tui_core::layout::window_offset;
+use tui_core::plugin::{
     Event, HintTarget, Input, Never, Out, OverlaySpec, PaneId, Plugin, PluginId, Reply, Request,
 };
-use crate::plugin::WHICH_KEY_PANE;
-use crate::render::block::popup_block;
-use crate::render::layout::window_offset;
-use crate::render::theme::Theme;
-use crate::util::input::Key;
+use tui_core::render::block::popup_block;
+use tui_core::render::theme::Theme;
+use tui_core::util::input::Key;
 
 /// The plugin's id.
 pub const WHICH_KEY: PluginId = PluginId("which-key");

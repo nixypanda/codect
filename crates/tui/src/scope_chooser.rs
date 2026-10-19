@@ -12,17 +12,17 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::component::text_input::{Edit, TextInput};
-use crate::kernel::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq, Owner};
-use crate::kernel::cx::Cx;
-use crate::kernel::help::{HelpEntry, VIEW};
-use crate::kernel::plugin::{
+use crate::plugin::SCOPE_PANE;
+use tui_core::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq};
+use tui_core::cx::Cx;
+use tui_core::help::{HelpEntry, VIEW};
+use tui_core::plugin::{
     Event, HintTarget, Input, Out, OverlaySpec, PaneId, Plugin, PluginId, QueryChange, Reply,
     Request,
 };
-use crate::plugin::SCOPE_PANE;
-use crate::render::block::{popup_block, scrim};
-use crate::util::input::Key;
+use tui_core::render::block::{popup_block, scrim};
+use tui_core::util::input::Key;
+use tui_core::widgets::text_input::{Edit, TextInput};
 
 /// The plugin's id.
 pub const SCOPE: PluginId = PluginId("scope");
@@ -81,7 +81,7 @@ impl Default for ScopeChooser {
 fn commands() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: CommandId {
-            owner: Owner::Scope,
+            owner: SCOPE,
             name: "open",
         },
         label: "Change scope",
@@ -152,7 +152,7 @@ impl Plugin for ScopeChooser {
     }
 
     fn run(&mut self, command: CommandId, _cx: &Cx) -> Vec<Out<Cmd>> {
-        if command.owner != Owner::Scope {
+        if command.owner != SCOPE {
             return Vec::new();
         }
         match command.name {
@@ -351,8 +351,8 @@ fn render_scope(chooser: &ScopeChooser, area: Rect, cx: &Cx, frame: &mut Frame) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::app::{Msg as KernelMsg, update};
     use crate::test_support::{area_set, press, scope_msg, selected, two_files};
+    use tui_core::app::{Msg as KernelMsg, update};
 
     #[test]
     fn s_opens_the_loading_chooser_and_requests_areas() {

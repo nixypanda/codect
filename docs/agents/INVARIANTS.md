@@ -67,16 +67,26 @@ Guarded by: `editors/nvim/tests/test_schema.lua` and CLI golden documents under
   formats. Language node names never appear in `base`.
 - `gix` types never leave `git`.
 - `engine` does not depend on `clap`, `miette`, `ratatui`, or `crossterm`.
-- `tui` does not depend on `clap` or `miette`, discover repositories, parse
-  arguments, or read `.codect.toml`.
+- The terminal frontend is three crates: `tui-core` (kernel, plugin contract,
+  design system), `tui` (built-in plugins and the registry), and `tui-diff`
+  (the optional compare and history views).
+- `tui-core` depends on no plugin crate and names no plugin: no plugin type,
+  plugin id string, or plugin module appears in it. Guarded by
+  `just check-tui-core-boundary` and the kernel boundary scan.
+- `tui-diff` depends on `tui-core` only among the TUI crates; it never depends
+  on `tui`.
+- `tui` builds and passes its tests with `--no-default-features` (no diff), and
+  the no-diff tree contains no `tui-diff`. Guarded by `just check-tui-nodiff`.
+- None of the three depends on `clap` or `miette`, discovers repositories,
+  parses arguments, or reads `.codect.toml`.
 - Building `cli --no-default-features` links none of `ratatui`, `crossterm`,
   `terminal-colorsaurus`, `syntect`, or `two-face`.
 - Only the approved `gix` features are enabled: `revision`, `dirwalk` (which
   brings `attributes` and `excludes`), `sha1`, `sha256`, `auto-chain-error`,
   and `pack-cache-lru-static`.
 
-Guarded by: `just check-workspace-nodefault` and the `cargo tree` audit in
-`just check`.
+Guarded by: `just check-workspace-nodefault`, `just check-tui-nodiff`, `just
+check-tui-core-boundary`, and the `cargo tree` audit in `just check`.
 
 ## Safety and robustness
 

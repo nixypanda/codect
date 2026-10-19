@@ -68,7 +68,7 @@ format-workspace:
     cargo fmt --all
 
 # Run all workspace checks (TECHNICAL_DESIGN.md 18.1).
-check-workspace: check-workspace-format check-workspace-clippy check-bench-tui test-workspace build-workspace check-workspace-features check-workspace-nodefault
+check-workspace: check-workspace-format check-workspace-clippy check-bench-tui test-workspace build-workspace check-workspace-features check-workspace-nodefault check-tui-core-boundary check-tui-nodiff
 
 check-workspace-format:
     cargo fmt --all --check
@@ -87,6 +87,20 @@ check-workspace-nodefault:
     @if cargo tree -p cli --no-default-features | grep -Eq '(ratatui|crossterm|terminal-colorsaurus)'; then \
         echo "error: ratatui/crossterm/terminal-colorsaurus leaked into the no-default-features build" >&2; \
         exit 1; \
+    fi
+
+# The explorer builds and tests without the diff plugin.
+check-tui-nodiff:
+    cargo build -p tui --no-default-features
+    cargo test -p tui --no-default-features
+    @if cargo tree -p tui --no-default-features --prefix none | grep -Eq '^tui-diff '; then \
+        echo "error: tui-diff leaked into the no-diff build" >&2; exit 1; \
+    fi
+
+# The kernel depends on no plugin crate.
+check-tui-core-boundary:
+    @if cargo tree -p tui-core -e normal --prefix none | grep -Eq '^tui(-diff)? '; then \
+        echo "error: tui-core depends on a plugin crate" >&2; exit 1; \
     fi
 
 # Run workspace coverage.

@@ -9,13 +9,13 @@ use engine::Engine;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::component::text_input::{Edit, TextInput, render_prompt};
-use crate::kernel::cx::Cx;
-use crate::kernel::plugin::{
+use crate::plugin::PROMPT_PANE;
+use tui_core::cx::Cx;
+use tui_core::plugin::{
     Event, HintTarget, Input, Never, Out, OverlaySpec, PaneId, Plugin, PluginId, Reply, Request,
 };
-use crate::plugin::PROMPT_PANE;
-use crate::util::input::Key;
+use tui_core::util::input::Key;
+use tui_core::widgets::text_input::{Edit, TextInput, render_prompt};
 
 /// The plugin's id.
 pub const PROMPT: PluginId = PluginId("prompt");

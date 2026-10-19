@@ -7,12 +7,12 @@ use base::{RepoPath, SourceOutline};
 use engine::EngineError;
 use ratatui::layout::Position;
 
-use crate::kernel::cx::Cx;
-use crate::kernel::nav::{Nav, page_step};
-use crate::kernel::plugin::{Event, MouseInput, Out, QueryChange, Request};
-use crate::kernel::search::{SearchMatch, SearchPane};
-use crate::kernel::workspace::{FileSet, NO_FILES, Query, Scope};
-use crate::util::input::{Key, MouseKind};
+use tui_core::cx::Cx;
+use tui_core::nav::{Nav, page_step};
+use tui_core::plugin::{Event, MouseInput, Out, QueryChange, Request};
+use tui_core::search::{SearchMatch, SearchPane};
+use tui_core::util::input::{Key, MouseKind};
+use tui_core::workspace::{FileSet, NO_FILES, Query, Scope};
 
 use super::ShowRequest;
 use super::rows::{ShowBody, show_visible};

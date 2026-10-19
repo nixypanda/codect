@@ -15,25 +15,35 @@
 use std::fs;
 use std::path::Path;
 
-use base::{FileDiff, ProjectionMode, Selection, SelectionError, SourceOutline};
+#[cfg(feature = "diff")]
+use base::FileDiff;
+use base::{ProjectionMode, Selection, SelectionError, SourceOutline};
 use engine::EngineError;
 
-use crate::diff::Cmd as DiffCmd;
-use crate::diff::Msg as DiffMsg;
-use crate::kernel::app::{Msg, settle, update};
+#[cfg(feature = "diff")]
 use crate::plugins::PluginsCmd;
-use crate::render::icons::{IconStyle, Icons};
-use crate::render::theme::{Capability, Flavor, Theme};
 use crate::route::LoadRequest;
 use crate::scope_chooser::Msg as ScopeMsg;
 use crate::source::Msg as SourceMsg;
 use crate::test_support::{
-    ATTRIBUTED_SOURCE, App, NESTED_SOURCE, after_batch_effects, area_set, attributed_child_outline,
-    base_app_with, commits_app, diff_app, diff_msg, diff_request, dropped_container_outline,
-    file_diff, golden_document, nested_outline, press, render, scope_msg, show_app, show_app_mode,
-    show_request, source_msg, source_outline, step, tests_filter_outline, two_files,
+    ATTRIBUTED_SOURCE, App, NESTED_SOURCE, area_set, attributed_child_outline, base_app_with,
+    dropped_container_outline, golden_document, nested_outline, press, render, scope_msg, show_app,
+    show_app_mode, show_request, source_msg, source_outline, step, tests_filter_outline, two_files,
 };
-use crate::util::input::Key;
+#[cfg(feature = "diff")]
+use crate::test_support::{
+    after_batch_effects, commits_app, diff_app, diff_msg, diff_request, file_diff,
+};
+use tui_core::app::Msg;
+#[cfg(feature = "diff")]
+use tui_core::app::{settle, update};
+use tui_core::render::icons::{IconStyle, Icons};
+use tui_core::render::theme::{Capability, Flavor, Theme};
+use tui_core::util::input::Key;
+#[cfg(feature = "diff")]
+use tui_diff::Cmd as DiffCmd;
+#[cfg(feature = "diff")]
+use tui_diff::Msg as DiffMsg;
 
 /// One golden frame: a name, the render size, and a builder that returns the
 /// settled model to render.
@@ -122,18 +132,27 @@ fn scenarios() -> Vec<Scenario> {
         scenario("show_diagnostic", 100, 30, build_show_diagnostic),
         scenario("show_busy", 100, 30, build_show_busy),
         scenario("show_icons", 100, 30, build_show_icons),
+        #[cfg(feature = "diff")]
         scenario("diff_range", 120, 30, build_diff_range),
+        #[cfg(feature = "diff")]
         scenario("diff_range_narrow", 60, 24, build_diff_range_narrow),
+        #[cfg(feature = "diff")]
         scenario("diff_range_search", 120, 30, build_diff_range_search),
+        #[cfg(feature = "diff")]
         scenario("diff_base_prompt", 120, 30, build_diff_base_prompt),
+        #[cfg(feature = "diff")]
         scenario("diff_merge_base", 120, 30, build_diff_merge_base),
+        #[cfg(feature = "diff")]
         scenario("diff_commits", 120, 30, build_diff_commits),
+        #[cfg(feature = "diff")]
         scenario("diff_commits_narrow", 60, 24, build_diff_commits_narrow),
+        #[cfg(feature = "diff")]
         scenario("diff_commits_step", 120, 30, build_diff_commits_step),
         scenario("too_small", 30, 6, build_too_small),
         scenario("too_small_overlay", 30, 6, build_too_small_overlay),
         scenario("light_theme", 100, 30, build_light_theme),
         scenario("show_fold_attributes", 100, 30, build_show_fold_attributes),
+        #[cfg(feature = "diff")]
         scenario("diff_badges", 120, 30, build_diff_badges),
         scenario("show_which_key_run", 100, 30, build_show_which_key_run),
         scenario("show_search_wrap", 100, 30, build_show_search_wrap),
@@ -185,6 +204,7 @@ fn load_show(theme: Theme, icons: Icons, files: Vec<SourceOutline>) -> App {
     )
 }
 
+#[cfg(feature = "diff")]
 fn three_diffs() -> Vec<FileDiff> {
     vec![
         file_diff("added.rs", None, Some("added\n")),
@@ -335,14 +355,17 @@ fn build_show_icons() -> App {
     )
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_range() -> App {
     resize(&diff_app(three_diffs()), 120, 30)
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_range_narrow() -> App {
     press(&resize(&diff_app(three_diffs()), 60, 24), &[Key::Tab])
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_range_search() -> App {
     let app = resize(
         &diff_app(vec![file_diff(
@@ -365,6 +388,7 @@ fn build_diff_range_search() -> App {
     )
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_base_prompt() -> App {
     press(
         &resize(&diff_app(three_diffs()), 120, 30),
@@ -372,6 +396,7 @@ fn build_diff_base_prompt() -> App {
     )
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_merge_base() -> App {
     let mut request = diff_request();
     request.merge_base = true;
@@ -397,14 +422,17 @@ fn build_diff_merge_base() -> App {
     resize(&app, 120, 30)
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_commits() -> App {
     resize(&commits_app(5), 120, 30)
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_commits_narrow() -> App {
     resize(&commits_app(5), 60, 24)
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_commits_step() -> App {
     let app = press(&resize(&commits_app(5), 120, 30), &[Key::Char('j')]);
     // The step effect is coalesced by the runtime, not by `update`; run it here
@@ -449,6 +477,7 @@ fn build_show_fold_attributes() -> App {
     )
 }
 
+#[cfg(feature = "diff")]
 fn build_diff_badges() -> App {
     let diffs = vec![
         file_diff("a.rs", None, Some("a\n")),

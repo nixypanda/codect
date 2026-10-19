@@ -11,16 +11,16 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::kernel::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq, Owner};
-use crate::kernel::cx::Cx;
-use crate::kernel::plugin::{
+use crate::plugin::HELP_PANE;
+use tui_core::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq};
+use tui_core::cx::Cx;
+use tui_core::layout::centered;
+use tui_core::plugin::{
     Event, HintTarget, Input, Never, Out, OverlaySpec, PaneId, Plugin, PluginId, Reply, Request,
 };
-use crate::plugin::HELP_PANE;
-use crate::render::block::{popup_block, scrim};
-use crate::render::layout::centered;
-use crate::render::theme::Theme;
-use crate::util::input::Key;
+use tui_core::render::block::{popup_block, scrim};
+use tui_core::render::theme::Theme;
+use tui_core::util::input::Key;
 
 /// The plugin's id.
 pub const HELP: PluginId = PluginId("help");
@@ -33,7 +33,7 @@ pub struct Help;
 pub(crate) fn commands() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: CommandId {
-            owner: Owner::Help,
+            owner: HELP,
             name: "help.toggle",
         },
         label: "Help",
@@ -98,7 +98,7 @@ impl Plugin for Help {
     }
 
     fn run(&mut self, command: CommandId, _cx: &Cx) -> Vec<Out<Never>> {
-        if command.owner != Owner::Help {
+        if command.owner != HELP {
             return Vec::new();
         }
         match command.name {

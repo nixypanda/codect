@@ -3,8 +3,8 @@
 //! It owns the loaded revision, the outline set, the body cursor and scrolls,
 //! the fold overrides, and the derived visible rows. It never owns the selected
 //! path, the search, the mode, or the scope: those live on the kernel's
-//! [`crate::kernel::workspace::Workspace`], and the view reads them through
-//! [`crate::kernel::cx::Cx`].
+//! [`tui_core::workspace::Workspace`], and the view reads them through
+//! [`tui_core::cx::Cx`].
 //!
 //! The body cursor always names a visible row's source line, so the `tests`-mode
 //! filter (which can hide the cursor's line) anchors it to the nearest visible
@@ -26,16 +26,16 @@ use base::{ProjectionMode, SourceOutline};
 use engine::{Engine, EngineError};
 use ratatui::Frame;
 
-use crate::kernel::chrome::{Chip, ChipTone, Segment, SegmentTone};
-use crate::kernel::command::{Binding, CommandId, CommandSpec, Group, KeyScope, KeySeq, Owner};
-use crate::kernel::cx::Cx;
-use crate::kernel::help::{HelpEntry, HelpSection, MOUSE, VIEW};
-use crate::kernel::layout::{PaneGeometry, PaneSpec, Placement};
-use crate::kernel::plugin::{
+use crate::plugin::{SOURCE, SOURCE_FOCUS, SOURCE_PANE};
+use tui_core::chrome::{Chip, ChipTone, Segment, SegmentTone};
+use tui_core::command::{Binding, CommandId, CommandSpec, Group, KeyScope, KeySeq};
+use tui_core::cx::Cx;
+use tui_core::help::{HelpEntry, HelpSection, MOUSE, VIEW};
+use tui_core::layout::{PaneGeometry, PaneSpec, Placement};
+use tui_core::plugin::{
     Event, FocusKey, HintTarget, Input, Out, PaneId, Plugin, PluginId, Reply, Request,
 };
-use crate::plugin::{SOURCE, SOURCE_FOCUS, SOURCE_PANE};
-use crate::util::input::Key;
+use tui_core::util::input::Key;
 
 use folds::{Fold, fold_command};
 pub(crate) use folds::{FoldState, ShowFolds, ShowHighlights};
@@ -104,6 +104,7 @@ impl SourceView {
     }
 
     /// Build an inactive view for a session of another kind.
+    #[cfg_attr(not(feature = "diff"), allow(dead_code))]
     pub(crate) fn inactive() -> Self {
         Self {
             revision: String::new(),
@@ -142,7 +143,7 @@ impl SourceView {
 fn commands() -> Vec<CommandSpec> {
     let mut specs = vec![CommandSpec {
         id: CommandId {
-            owner: Owner::Show,
+            owner: SOURCE,
             name: "revision.edit",
         },
         label: "Edit revision",
@@ -178,7 +179,7 @@ fn commands() -> Vec<CommandSpec> {
     ] {
         specs.push(CommandSpec {
             id: CommandId {
-                owner: Owner::Show,
+                owner: SOURCE,
                 name,
             },
             label,
@@ -375,7 +376,7 @@ impl Plugin for SourceView {
     }
 
     fn run(&mut self, command: CommandId, cx: &Cx) -> Vec<Out<Cmd>> {
-        if command.owner != Owner::Show || !cx.is_active_view(SOURCE) {
+        if command.owner != SOURCE || !cx.is_active_view(SOURCE) {
             return Vec::new();
         }
         if command.name == "revision.edit" {
@@ -404,7 +405,7 @@ impl Plugin for SourceView {
         update::on_event(self, event, cx)
     }
 
-    fn search(&mut self, needle: &str, cx: &Cx) -> Vec<crate::kernel::search::SearchMatch> {
+    fn search(&mut self, needle: &str, cx: &Cx) -> Vec<tui_core::search::SearchMatch> {
         if !cx.is_active_view(SOURCE) {
             return Vec::new();
         }

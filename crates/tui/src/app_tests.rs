@@ -1,32 +1,34 @@
-use crate::component::text_input::TextInput;
-use crate::diff::Msg as DiffMsg;
-use crate::kernel::app::{Diagnostic, Msg, settle, update};
-use crate::kernel::focus::{focus_default, focus_ring};
+#[cfg(feature = "diff")]
 use crate::plugin::{
-    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, HELP_PANE, MODES_PANE, NEW_PANE, OLD_PANE,
-    PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE, TREE_FOCUS, TREE_PANE,
-    WHICH_KEY_PANE,
+    COMMITS_PANE, DIFF, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE, TREE,
+};
+use crate::plugin::{
+    HELP_PANE, MODES_PANE, PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE, SOURCE_FOCUS, SOURCE_PANE,
+    TREE_FOCUS, TREE_PANE, WHICH_KEY_PANE,
 };
 use crate::plugins::PluginsCmd;
-use crate::render::icons::IconStyle;
-use crate::render::theme::Theme;
-use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
+#[cfg(feature = "diff")]
+use crate::route::{DiffRequest, DiffView};
+use crate::route::{LoadRequest, ShowRequest};
 use crate::scope_chooser::Msg as ScopeMsg;
 use crate::source::Msg as SourceMsg;
 use crate::source::{ShowHighlights, VisibleRow};
 use crate::test_support::{
-    ATTRIBUTED_SOURCE, NESTED_SOURCE, area_set, assert_view_consistent, attributed_child_outline,
-    base_app, buffer_row, buffer_text, cell_x_of, click, commit_search, commit_steps, commits_app,
-    commits_ref, commits_request, declaration_less, diff_app, diff_focus_of, diff_ref,
-    diff_request, dropped_container_outline, file_diff, focus_content, folder_app, item,
-    merge_base_range_app, multi_method_outline, nested_outline, palette_entries, panes, press,
-    render, row_with, scroll, select_file, selected, show_app, show_app_mode, show_ref,
-    show_request, snapshot_range_app, source_outline, source_outline_with, tail_palette_entries,
-    test_function_outline, tests_filter_outline, two_files, two_function_outline,
+    ATTRIBUTED_SOURCE, App, NESTED_SOURCE, area_set, assert_view_consistent,
+    attributed_child_outline, base_app, buffer_row, buffer_text, cell_x_of, click, command_spec,
+    declaration_less, dropped_container_outline, focus_content, folder_app, has_palette_entry,
+    item, multi_method_outline, nested_outline, palette_entries, press, render, row_with,
+    scope_msg, scroll, select_file, selected, show_app, show_app_mode, show_ref, show_request,
+    source_msg, source_outline, source_outline_with, test_function_outline, tests_filter_outline,
+    two_files, two_function_outline, with_cx,
 };
+#[cfg(feature = "diff")]
 use crate::test_support::{
-    App, command_spec, diff_msg, has_palette_entry, scope_msg, source_msg, with_cx,
+    commit_search, commit_steps, commits_app, commits_ref, commits_request, diff_app,
+    diff_focus_of, diff_msg, diff_ref, diff_request, file_diff, merge_base_range_app, panes,
+    snapshot_range_app, tail_palette_entries,
 };
+#[cfg(feature = "diff")]
 use crate::workspace::BadgeTone;
 use crate::workspace::{Search, SearchMatch, SearchPane, collect_matches};
 use base::{
@@ -34,15 +36,23 @@ use base::{
     assemble_outline,
 };
 use ratatui::style::Color;
+use tui_core::app::{Diagnostic, Msg, settle, update};
+#[cfg(feature = "diff")]
+use tui_core::focus::{focus_default, focus_ring};
+use tui_core::render::icons::IconStyle;
+use tui_core::render::theme::Theme;
+use tui_core::widgets::text_input::TextInput;
+#[cfg(feature = "diff")]
+use tui_diff::Msg as DiffMsg;
 
-use crate::kernel::command::{CommandId, Owner};
-use crate::kernel::plugin::{
-    Event, FocusKey, Input, NavigatorResize, Out, Plugin, PluginSet, QueryChange, Request, Size,
-};
-use crate::render::icons::Icons;
 use crate::tree::RowKind;
-use crate::util::input::Key;
 use engine::EngineError;
+use tui_core::command::CommandId;
+use tui_core::plugin::{Event, Input, Out, Plugin, PluginSet, QueryChange, Request, Size};
+#[cfg(feature = "diff")]
+use tui_core::plugin::{FocusKey, NavigatorResize};
+use tui_core::render::icons::Icons;
+use tui_core::util::input::Key;
 
 const TEST_SOURCE: &str = "#[test]\nfn decode_source() {\n    let hidden = 42;\n}\n";
 
@@ -53,30 +63,37 @@ const TREE_STEP: u16 = 5;
 const DIAGNOSTIC_TICKS: u8 = 40;
 
 fn apply_request(app: &mut App, request: Request, cmds: &mut Vec<PluginsCmd>) {
-    let specs = crate::kernel::app::collect_specs(app);
-    crate::kernel::dispatch::apply_request(app, request, cmds, 0, &specs);
+    let specs = tui_core::app::collect_specs(app);
+    tui_core::dispatch::apply_request(app, request, cmds, 0, &specs);
 }
 
-fn apply_command(app: &mut App, owner: Owner, name: &'static str, cmds: &mut Vec<PluginsCmd>) {
+fn apply_command(
+    app: &mut App,
+    owner: tui_core::plugin::PluginId,
+    name: &'static str,
+    cmds: &mut Vec<PluginsCmd>,
+) {
     apply_request(app, Request::RunCommand(CommandId { owner, name }), cmds);
 }
 
+#[cfg(feature = "diff")]
 fn coalesce_commit_loads(app: &mut App, cmds: &mut Vec<PluginsCmd>) {
     let effects = crate::test_support::after_batch_effects(app, cmds);
     cmds.extend(effects);
 }
 
+#[cfg(feature = "diff")]
 fn command_for(key: Key, app: &App) -> Option<CommandId> {
     with_cx(app, |cx| {
-        crate::kernel::keymap::command_for_key(cx.commands(), key, app.focus)
+        tui_core::keymap::command_for_key(cx.commands(), key, app.focus)
     })
 }
 
 fn tree_viewport_height(app: &App) -> usize {
-    let specs = crate::kernel::app::collect_specs(app);
+    let specs = tui_core::app::collect_specs(app);
     let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
-    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    let cx = tui_core::app::cx_for(&app.kernel, overlay, busy, &specs);
     cx.layout_if_focused(TREE_FOCUS)
         .slots
         .iter()
@@ -84,11 +101,12 @@ fn tree_viewport_height(app: &App) -> usize {
         .map_or(0, |slot| slot.geometry.inner.height as usize)
 }
 
+#[cfg(feature = "diff")]
 fn body_is_visible(app: &App) -> bool {
-    let specs = crate::kernel::app::collect_specs(app);
+    let specs = tui_core::app::collect_specs(app);
     let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
-    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    let cx = tui_core::app::cx_for(&app.kernel, overlay, busy, &specs);
     cx.body_visible()
 }
 
@@ -161,6 +179,7 @@ fn a_reload_retains_the_selection_and_resets_the_show_body() {
     assert_eq!(show.body.cursor_line, 1);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_reload_retains_the_selection_and_resets_the_diff_body() {
     let mut app = diff_app(vec![file_diff(
@@ -227,6 +246,7 @@ fn an_empty_reload_clears_the_selection_and_the_tree_cursor() {
     assert_eq!(next.plugins.tree.cursor, 0);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_diff_reload_applies_the_fallback_selection_within_the_update() {
     let app = diff_app(vec![
@@ -256,6 +276,7 @@ fn a_show_file_set_has_no_badges() {
     assert!(app.workspace.files.badges.is_empty());
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_diff_file_set_badges_added_modified_and_deleted() {
     let app = diff_app(vec![
@@ -291,6 +312,7 @@ fn an_empty_show_session_renders_the_no_files_empty_text() {
     assert!(text.contains("No source files in this scope."), "{text}");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn an_empty_diff_session_renders_the_no_changes_empty_text() {
     let app = diff_app(Vec::new());
@@ -312,6 +334,7 @@ fn a_busy_empty_show_renders_the_loading_state() {
     assert!(text.contains("Projecting files…"), "{text}");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_busy_empty_diff_renders_the_loading_state() {
     let app = base_app(LoadRequest::Diff {
@@ -412,6 +435,7 @@ fn a_declaration_less_file_is_visible_and_renders_its_full_source() {
     assert!(text.contains("use std::fmt;"), "{text}");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_diff_tree_contains_only_changed_paths() {
     let app = diff_app(vec![
@@ -506,6 +530,7 @@ fn left_on_a_directory_row_folds_it() {
     ));
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn empty_commit_history_installs_a_diff_and_focuses_commits() {
     let app = base_app(LoadRequest::Diff {
@@ -533,6 +558,7 @@ fn empty_commit_history_installs_a_diff_and_focuses_commits() {
     assert_eq!(commits_ref(&unchanged).cursor(), 0);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn commit_picker_renders_rows_and_selected_revision_labels() {
     let app = commits_app(12);
@@ -549,6 +575,7 @@ fn commit_picker_renders_rows_and_selected_revision_labels() {
     let _ = &mut empty;
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     let mut app = commits_app(12);
@@ -561,7 +588,7 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     assert_eq!(diff_focus_of(&clicked), Some(DIFF_BAND_FOCUS));
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 1, .. })]
+        [PluginsCmd::Diff(tui_diff::Cmd::Step { index: 1, .. })]
     ));
 
     let (mut wheeled, mut commands) = update(Msg::Mouse(scroll(4, 12, false)), &app);
@@ -569,7 +596,7 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     assert_eq!(diff_focus_of(&wheeled), Some(DIFF_BAND_FOCUS));
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 3, .. })]
+        [PluginsCmd::Diff(tui_diff::Cmd::Step { index: 3, .. })]
     ));
 
     let mut narrow = app.clone();
@@ -581,7 +608,7 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     coalesce_commit_loads(&mut narrow_clicked, &mut commands);
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 1, .. })]
+        [PluginsCmd::Diff(tui_diff::Cmd::Step { index: 1, .. })]
     ));
 
     let (files, commands) = update(Msg::Mouse(click(4, 3)), &app);
@@ -589,6 +616,7 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     assert!(commands.is_empty());
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_displayed_step() {
     let mut app = commits_app(6);
@@ -610,7 +638,7 @@ fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_dis
     coalesce_commit_loads(&mut app, &mut commands);
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 3, .. })]
+        [PluginsCmd::Diff(tui_diff::Cmd::Step { index: 3, .. })]
     ));
     assert_eq!(diff_ref(&app).diffs(), displayed.as_slice());
     assert_eq!(diff_ref(&app).revisions(), displayed_labels);
@@ -646,6 +674,7 @@ fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_dis
     assert!(failed.diagnostic.is_some());
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn commit_navigation_back_to_loaded_step_cancels_batched_projection() {
     let mut app = commits_app(3);
@@ -661,6 +690,7 @@ fn commit_navigation_back_to_loaded_step_cancels_batched_projection() {
     assert_eq!(commits_ref(&app).target(), None);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
     // Load the next step so the picker cursor sits past step 0.
@@ -671,7 +701,7 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
     coalesce_commit_loads(&mut app, &mut commands);
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 1, .. })]
+        [PluginsCmd::Diff(tui_diff::Cmd::Step { index: 1, .. })]
     ));
     let (app, _) = update(
         diff_msg(DiffMsg::StepLoaded {
@@ -690,7 +720,7 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
         Request::Requery(QueryChange::Scope(new_selection.clone())),
     );
     let request = match commands.as_slice() {
-        [PluginsCmd::Diff(crate::diff::Cmd::History(request))] => request.clone(),
+        [PluginsCmd::Diff(tui_diff::Cmd::History(request))] => request.clone(),
         other => panic!("expected one diff request, got {other:?}"),
     };
     assert_eq!(request.selection, new_selection);
@@ -710,23 +740,24 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
     let step = commands
         .iter()
         .find_map(|cmd| match cmd {
-            PluginsCmd::Diff(crate::diff::Cmd::Step { request, .. }) => Some(request),
+            PluginsCmd::Diff(tui_diff::Cmd::Step { request, .. }) => Some(request),
             _ => None,
         })
         .expect("a pending commit step load");
     assert_eq!(step.selection, new_selection);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn palette_switches_between_range_and_commit_views() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
-    assert!(has_palette_entry(&app, Owner::Diff, "view.commits"));
+    assert!(has_palette_entry(&app, DIFF, "view.commits"));
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
+    apply_command(&mut next, DIFF, "view.commits", &mut commands);
     assert_eq!(
         commands,
-        vec![PluginsCmd::Diff(crate::diff::Cmd::History(DiffRequest {
+        vec![PluginsCmd::Diff(tui_diff::Cmd::History(DiffRequest {
             view: DiffView::Commits,
             ..diff_request()
         }))]
@@ -734,6 +765,7 @@ fn palette_switches_between_range_and_commit_views() {
     assert_eq!(diff_ref(&next).revisions(), diff_ref(&app).revisions());
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_snapshot_range_cannot_switch_to_commits() {
     let request = DiffRequest {
@@ -758,15 +790,16 @@ fn a_snapshot_range_cannot_switch_to_commits() {
     );
     let app = settle(next);
 
-    assert!(!has_palette_entry(&app, Owner::Diff, "view.commits"));
+    assert!(!has_palette_entry(&app, DIFF, "view.commits"));
 
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
+    apply_command(&mut next, DIFF, "view.commits", &mut commands);
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
     let request = DiffRequest {
@@ -799,20 +832,21 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
             .merge_base
     );
 
-    assert!(!has_palette_entry(&app, Owner::Diff, "view.commits"));
+    assert!(!has_palette_entry(&app, DIFF, "view.commits"));
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
+    apply_command(&mut next, DIFF, "view.commits", &mut commands);
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_refused_commit_switch_leaves_paging_ready() {
     let app = snapshot_range_app();
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
+    apply_command(&mut next, DIFF, "view.commits", &mut commands);
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
     assert!(
@@ -821,12 +855,13 @@ fn a_refused_commit_switch_leaves_paging_ready() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_merge_base_switch_refusal_leaves_paging_ready() {
     let app = merge_base_range_app();
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
+    apply_command(&mut next, DIFF, "view.commits", &mut commands);
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
     assert!(
@@ -887,14 +922,15 @@ fn settle_skips_highlighting_when_the_body_is_hidden() {
 
 #[test]
 fn the_highlight_cache_is_bounded() {
-    let mut cache: crate::util::cache::BoundedCache<usize> =
-        crate::util::cache::BoundedCache::default();
-    for index in 0..(crate::util::cache::CAP + 10) {
+    let mut cache: tui_core::util::cache::BoundedCache<usize> =
+        tui_core::util::cache::BoundedCache::default();
+    for index in 0..(tui_core::util::cache::CAP + 10) {
         let path = RepoPath::new(format!("f{index}.rs")).expect("valid path");
         cache.insert(path, index);
     }
     assert!(!cache.contains_key(&RepoPath::new("f0.rs").expect("valid path")));
-    let newest = RepoPath::new(format!("f{}.rs", crate::util::cache::CAP + 9)).expect("valid path");
+    let newest =
+        RepoPath::new(format!("f{}.rs", tui_core::util::cache::CAP + 9)).expect("valid path");
     assert!(cache.contains_key(&newest));
 }
 
@@ -926,6 +962,7 @@ fn mode_picker_defers_the_mode_change_until_selection() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn mode_picker_on_a_diff_keeps_the_diff_shape() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
@@ -934,7 +971,7 @@ fn mode_picker_on_a_diff_keeps_the_diff_shape() {
     let (_, cmds) = update(Msg::Key(Key::Enter), &down);
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Diff(crate::diff::Cmd::Range(DiffRequest {
+        vec![PluginsCmd::Diff(tui_diff::Cmd::Range(DiffRequest {
             mode: ProjectionMode::Signatures,
             ..diff_request()
         }))]
@@ -1009,6 +1046,7 @@ fn a_wider_tree_still_leaves_a_usable_body() {
     assert!(text.contains("pub fn a();"), "{text}");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn tab_toggles_the_tree_and_both_diff_panes() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
@@ -1083,6 +1121,7 @@ fn escaping_a_revision_prompt_emits_nothing() {
     assert!(cmds.is_empty());
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_cancelled_prompt_does_not_wedge_input() {
     // A show revision prompt: Esc cancels it.
@@ -1152,6 +1191,7 @@ fn a_cancelled_prompt_does_not_wedge_input() {
     }
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn diff_revision_keys_target_base_and_target_fields() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("b\n"))]);
@@ -1282,6 +1322,7 @@ fn literal_path_entry_builds_a_path_selection() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn search_finds_matches_and_steps_them() {
     let app = show_app(vec![source_outline("a.rs", "alpha\nbeta\nalpha again\n")]);
@@ -1312,6 +1353,7 @@ fn search_finds_matches_and_steps_them() {
     assert_eq!(back.workspace.search.as_ref().unwrap().cursor, 0);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn switching_files_recomputes_a_committed_search() {
     let mut app = show_app(vec![
@@ -1655,6 +1697,7 @@ fn the_wheel_scrolls_the_content_and_focuses_it() {
     assert_eq!(show_ref(&up).body.cursor_line, 1);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn the_wheel_scrolls_a_diff_and_clicking_it_focuses() {
     let app = diff_app(vec![file_diff(
@@ -1740,6 +1783,7 @@ fn narrow_chrome_keeps_context_and_the_selected_path() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn the_status_bar_counts_diff_changes() {
     let app = diff_app(vec![file_diff(
@@ -2125,6 +2169,7 @@ fn a_single_line_region_folds_with_zero_hidden_lines() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_match_inside_a_fold_resolves_to_the_fold_row() {
     let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
@@ -2145,6 +2190,7 @@ fn a_match_inside_a_fold_resolves_to_the_fold_row() {
     assert_eq!(show.visible_row_for_source_line(7), None);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn stepping_to_a_match_inside_a_fold_opens_the_enclosing_regions() {
     let source = "impl Widget {\n    fn size(&self) -> usize {\n        let needle = 1;\n        needle\n    }\n}\n";
@@ -2192,6 +2238,7 @@ fn stepping_to_a_match_inside_a_fold_opens_the_enclosing_regions() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn stepping_to_a_match_moves_the_cursor_to_the_match_row() {
     let mut lines: Vec<String> = (1..=30).map(|n| format!("line {n}")).collect();
@@ -2471,6 +2518,7 @@ fn types_mode_keeps_marker_rows_for_dropped_declarations() {
     assert!(text.contains("hidden in types"), "{text}");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn tests_mode_search_ignores_hidden_dropped_matches_and_reveals_retained_ones() {
     let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
@@ -2893,10 +2941,10 @@ fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
         ("fold.open_all", "zR"),
         ("fold.close_all", "zM"),
     ] {
-        let spec = command_spec(&app, Owner::Show, name).expect("a fold command");
+        let spec = command_spec(&app, SOURCE, name).expect("a fold command");
         assert_eq!(spec.hint, hint);
         assert!(
-            has_palette_entry(&app, Owner::Show, name),
+            has_palette_entry(&app, SOURCE, name),
             "missing palette entry for {hint}"
         );
     }
@@ -2905,7 +2953,7 @@ fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
     focus_content(&mut focused);
     let mut cmds = Vec::new();
     let mut via_palette = focused.clone();
-    apply_command(&mut via_palette, Owner::Show, "fold.close_all", &mut cmds);
+    apply_command(&mut via_palette, SOURCE, "fold.close_all", &mut cmds);
     let via_keys = press(&focused, &[Key::Char('z'), Key::Char('M')]);
     assert_eq!(show_ref(&via_palette).line_count(), 1);
     assert_eq!(
@@ -3024,7 +3072,7 @@ fn ctrl_j_and_ctrl_k_keep_their_j_k_alias_outside_the_band() {
 fn the_band_bindings_match_their_palette_entries() {
     let app = folder_app();
     let (group, bindings) = with_cx(&app, |cx| {
-        crate::kernel::keymap::prefix_group(cx.commands(), 'z', Some(SOURCE_FOCUS))
+        tui_core::keymap::prefix_group(cx.commands(), 'z', Some(SOURCE_FOCUS))
             .expect("the fold group")
     });
 
@@ -3193,6 +3241,7 @@ fn closing_the_band_clears_the_pending_prefix() {
     assert_eq!(reloaded.keymap.pending, None, "a reload clears it");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
     let show = folder_app();
@@ -3205,7 +3254,7 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
     // subset, sorted by (rank, registration order).
     for app in [&show, &range, &snapshot, &merge_base, &commits] {
         let expected = with_cx(app, |cx| {
-            let mut specs: Vec<&crate::kernel::command::CommandSpec> =
+            let mut specs: Vec<&tui_core::command::CommandSpec> =
                 cx.commands().iter().filter(|spec| spec.palette).collect();
             specs.sort_by_key(|spec| spec.rank);
             specs
@@ -3273,6 +3322,7 @@ fn the_palette_is_the_ranked_palette_subset_in_registry_order() {
     assert_eq!(palette_entries(&commits), commits_expected);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn command_lookup_reproduces_the_key_table() {
     let apps = [
@@ -3284,8 +3334,8 @@ fn command_lookup_reproduces_the_key_table() {
         for spec in with_cx(app, |cx| cx.commands().to_vec()) {
             for binding in &spec.bindings {
                 if let (
-                    crate::kernel::command::KeySeq::Key(key),
-                    crate::kernel::command::KeyScope::Anywhere,
+                    tui_core::command::KeySeq::Key(key),
+                    tui_core::command::KeyScope::Anywhere,
                 ) = (binding.seq, binding.scope)
                 {
                     assert_eq!(
@@ -3310,12 +3360,13 @@ fn command_lookup_reproduces_the_key_table() {
     }
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
     let mut show = folder_app();
     focus_content(&mut show);
     let (group, bindings) = with_cx(&show, |cx| {
-        crate::kernel::keymap::prefix_group(cx.commands(), 'z', Some(SOURCE_FOCUS))
+        tui_core::keymap::prefix_group(cx.commands(), 'z', Some(SOURCE_FOCUS))
             .expect("the fold group")
     });
     assert_eq!(group.prefix, 'z');
@@ -3328,14 +3379,14 @@ fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
     // The prefix only parks while the show body holds focus.
     let prefix = |app: &App, focus: Option<FocusKey>| {
         with_cx(app, |cx| {
-            crate::kernel::keymap::has_prefix(cx.commands(), 'z', focus)
+            tui_core::keymap::has_prefix(cx.commands(), 'z', focus)
         })
     };
     assert!(prefix(&show, show.kernel.focus));
     let tree = folder_app();
     assert!(!prefix(&tree, tree.kernel.focus));
     assert!(
-        with_cx(&tree, |cx| crate::kernel::keymap::prefix_group(
+        with_cx(&tree, |cx| tui_core::keymap::prefix_group(
             cx.commands(),
             'z',
             Some(TREE_FOCUS)
@@ -3344,7 +3395,7 @@ fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
         "the tree focus has no prefix in scope"
     );
     assert!(
-        with_cx(&show, |cx| crate::kernel::keymap::prefix_group(
+        with_cx(&show, |cx| tui_core::keymap::prefix_group(
             cx.commands(),
             'z',
             Some(SOURCE_FOCUS)
@@ -3357,7 +3408,7 @@ fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
     ] {
         assert!(!prefix(&app, app.kernel.focus));
         assert!(
-            with_cx(&app, |cx| crate::kernel::keymap::prefix_group(
+            with_cx(&app, |cx| tui_core::keymap::prefix_group(
                 cx.commands(),
                 'z',
                 Some(DIFF_BODY_FOCUS)
@@ -3367,6 +3418,7 @@ fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
     }
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn every_palette_entry_dispatches_its_registered_binding() {
     for app in [
@@ -3385,21 +3437,21 @@ fn every_palette_entry_dispatches_its_registered_binding() {
 
                 for binding in &spec.bindings {
                     match binding.seq {
-                        crate::kernel::command::KeySeq::Key(key)
-                            if crate::kernel::command::scope_matches(binding.scope, app.focus) =>
+                        tui_core::command::KeySeq::Key(key)
+                            if tui_core::command::scope_matches(binding.scope, app.focus) =>
                         {
                             assert_eq!(
-                                crate::kernel::keymap::command_for_key(specs, key, app.focus),
+                                tui_core::keymap::command_for_key(specs, key, app.focus),
                                 Some(spec.id),
                             );
                         }
-                        crate::kernel::command::KeySeq::Prefixed(_, _)
-                            if !crate::kernel::command::scope_matches(binding.scope, app.focus) =>
+                        tui_core::command::KeySeq::Prefixed(_, _)
+                            if !tui_core::command::scope_matches(binding.scope, app.focus) =>
                         {
                             // The fold prefix is scoped to the show body; it is
                             // not armed while another focus is active.
                         }
-                        crate::kernel::command::KeySeq::Prefixed(prefix, second) => {
+                        tui_core::command::KeySeq::Prefixed(prefix, second) => {
                             let band = cx.prefix_group(prefix).expect("a prefix group");
                             let binding = band
                                 .bindings
@@ -3445,7 +3497,7 @@ fn the_focused_body_draws_the_cursor_row() {
 
 #[test]
 fn the_tree_keeps_a_quiet_selected_row_when_the_body_has_focus() {
-    use crate::render::theme::{Capability, Flavor};
+    use tui_core::render::theme::{Capability, Flavor};
 
     for flavor in [Flavor::Dark, Flavor::Light] {
         let mut app = two_files();
@@ -3494,6 +3546,7 @@ fn nerd_icons_render_and_leave_labels_intact() {
     assert!(nerd_text.contains("main.rs"), "the label survives");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_wide_terminal_shows_both_diff_sides_with_revision_labels() {
     let app = diff_app(vec![file_diff(
@@ -3508,6 +3561,7 @@ fn a_wide_terminal_shows_both_diff_sides_with_revision_labels() {
     assert!(text.contains("new line"), "new side missing: {text}");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_narrow_diff_stacks_old_over_new_when_focused() {
     let mut app = diff_app(vec![file_diff(
@@ -3550,6 +3604,7 @@ fn an_empty_result_renders_a_clear_empty_state() {
     assert!(text.contains("No source files in this scope."), "{text}");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_diff_with_no_rows_renders_a_clear_empty_state() {
     let app = diff_app(Vec::new());
@@ -3582,6 +3637,7 @@ fn responsive_boundaries_pick_the_right_layout() {
     assert!(buffer_text(&render(&app, 100, 7)).contains("terminal too small"));
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn loaded_panes_lists_the_tree_then_the_view_bodies() {
     let ids = |app: &App| -> Vec<crate::plugin::PaneId> {
@@ -3601,6 +3657,7 @@ fn loaded_panes_lists_the_tree_then_the_view_bodies() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn the_tree_plugin_owns_its_pane_and_the_views_do_not() {
     for app in [
@@ -3612,11 +3669,11 @@ fn the_tree_plugin_owns_its_pane_and_the_views_do_not() {
         let tree = union.iter().filter(|spec| spec.id == TREE_PANE).count();
         assert_eq!(tree, 1, "the union owns TREE_PANE exactly once");
 
-        let specs = crate::kernel::app::Specs::panes_only(&app);
+        let specs = tui_core::app::Specs::panes_only(&app);
         let overlay = app.kernel.overlay;
         let busy = app.plugins.busy();
-        let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
-        let views: Vec<crate::render::layout::PaneSpec> = app
+        let cx = tui_core::app::cx_for(&app.kernel, overlay, busy, &specs);
+        let views: Vec<tui_core::layout::PaneSpec> = app
             .plugins
             .source
             .panes(&cx)
@@ -3634,6 +3691,7 @@ fn the_tree_plugin_owns_its_pane_and_the_views_do_not() {
     }
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn the_source_and_diff_sides_share_one_focus_stop() {
     let show = show_app(vec![source_outline("a.rs", "pub fn a();\n")]);
@@ -3658,6 +3716,7 @@ fn the_source_and_diff_sides_share_one_focus_stop() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn body_visible_truth_table() {
     let at = |app: &mut App, width: u16, focus: FocusKey| {
@@ -3710,7 +3769,7 @@ fn horizontal_scroll_shifts_the_visible_columns() {
 
 #[test]
 fn the_show_pane_carries_syntax_colors() {
-    if !crate::render::theme::colors_enabled() {
+    if !tui_core::render::theme::colors_enabled() {
         return;
     }
     let app = show_app(vec![source_outline("a.rs", "pub struct User;\n")]);
@@ -3751,6 +3810,7 @@ fn non_utf8_path_components_render_escaped() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_long_diff_line_is_wrapped_inside_its_pane() {
     let long = "y".repeat(300);
@@ -3781,9 +3841,10 @@ fn the_help_overlay_lists_the_keys() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_changed_diff_row_gets_delta_backgrounds() {
-    if !crate::render::theme::colors_enabled() {
+    if !tui_core::render::theme::colors_enabled() {
         return;
     }
     let app = diff_app(vec![file_diff(
@@ -3816,7 +3877,7 @@ fn a_changed_diff_row_gets_delta_backgrounds() {
 
 #[test]
 fn the_canvas_is_opaque_in_every_flavor() {
-    use crate::render::theme::{Capability, Flavor};
+    use tui_core::render::theme::{Capability, Flavor};
 
     for flavor in [Flavor::Dark, Flavor::Light] {
         for overlay in [None, Some(HELP_PANE)] {
@@ -3840,7 +3901,7 @@ fn the_canvas_is_opaque_in_every_flavor() {
 
 #[test]
 fn the_canvas_takes_the_light_palette_background() {
-    use crate::render::theme::{Capability, Flavor};
+    use tui_core::render::theme::{Capability, Flavor};
 
     let mut app = two_files();
     let light = Theme::new(Flavor::Light, Capability::TrueColor);
@@ -3860,7 +3921,7 @@ fn the_canvas_takes_the_light_palette_background() {
 
 #[test]
 fn clip_line_slices_by_display_width() {
-    use crate::render::text::clip_line;
+    use tui_core::render::text::clip_line;
     assert_eq!(clip_line("abcdef", 2, 3), "cde");
     assert_eq!(clip_line("abcdef", 0, 0), "");
     assert_eq!(clip_line("abcdef", 10, 3), "");
@@ -3871,7 +3932,7 @@ fn clip_line_slices_by_display_width() {
 
 #[test]
 fn window_offset_keeps_the_cursor_visible() {
-    use crate::render::layout::window_offset;
+    use tui_core::layout::window_offset;
     assert_eq!(window_offset(0, 100, 10), 0);
     assert_eq!(window_offset(9, 100, 10), 0);
     assert_eq!(window_offset(10, 100, 10), 1);
@@ -3969,6 +4030,7 @@ fn search_ranges_marks_only_the_global_cursor_match() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn search_matches_tags_the_owning_pane() {
     let show = show_app(vec![source_outline("a.rs", "needle\n")]);
@@ -4056,6 +4118,7 @@ fn the_shell_advances_the_search_cursor_with_wrap_around() {
     assert_eq!(search_of(&back).cursor, 1, "retreating wraps to the last");
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn commit_search_reveals_the_current_match_on_the_diff_pane() {
     let target: String = (1..=40)
@@ -4083,6 +4146,7 @@ fn commit_search_reveals_the_current_match_on_the_diff_pane() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn query_loaded_commits_the_workspace_query() {
     let app = two_files();
@@ -4155,6 +4219,7 @@ fn a_scope_requery_keeps_the_loaded_mode() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_mode_requery_keeps_the_scope() {
     let selection = Selection::new(vec![SelectionGroup::Path(RepoPath::new("b.rs").unwrap())]);
@@ -4191,6 +4256,7 @@ fn a_mode_requery_keeps_the_scope() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn search_survives_a_mode_reload_and_resyncs() {
     let mut app = show_app(vec![source_outline("a.rs", "alpha\n")]);
@@ -4219,6 +4285,7 @@ fn search_survives_a_mode_reload_and_resyncs() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn set_search_refreshes_visible_rows_before_matching() {
     let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
@@ -4262,6 +4329,7 @@ fn shift_tab_cycles_from_the_tree() {
     assert_eq!(step.focus, Some(TREE_FOCUS));
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn the_focus_ring_wraps_in_the_commits_view() {
     let app = commits_app(3);
@@ -4282,6 +4350,7 @@ fn the_focus_ring_wraps_in_the_commits_view() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn focus_defaults_to_the_navigator() {
     let show = two_files();
@@ -4292,15 +4361,16 @@ fn focus_defaults_to_the_navigator() {
     assert_eq!(range.focus, Some(TREE_FOCUS));
 
     // With no navigator, the first body pane is the default.
-    let body_only = [crate::render::layout::PaneSpec {
+    let body_only = [tui_core::layout::PaneSpec {
         id: SOURCE_PANE,
-        placement: crate::render::layout::Placement::Body,
+        placement: tui_core::layout::Placement::Body,
         focus: SOURCE_FOCUS,
     }];
     assert_eq!(focus_default(&body_only), Some(SOURCE_FOCUS));
     assert_eq!(focus_default(&[]), None);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn focus_normalises_when_the_band_disappears() {
     let app = commits_app(3);
@@ -4326,6 +4396,7 @@ fn focus_normalises_when_the_band_disappears() {
     );
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn mouse_focuses_the_hit_pane_for_every_event_kind() {
     let mut app = commits_app(3);
@@ -4354,6 +4425,7 @@ fn mouse_focuses_the_hit_pane_for_every_event_kind() {
     }
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn a_band_click_outside_the_inner_rect_only_moves_focus() {
     let mut app = commits_app(3);
@@ -4379,10 +4451,10 @@ fn a_band_click_outside_the_inner_rect_only_moves_focus() {
 #[test]
 fn the_tree_input_is_pane_scoped() {
     let mut app = two_files();
-    let specs = crate::kernel::app::Specs::panes_only(&app);
+    let specs = tui_core::app::Specs::panes_only(&app);
     let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
-    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    let cx = tui_core::app::cx_for(&app.kernel, overlay, busy, &specs);
 
     let unhandled = app
         .plugins
@@ -4422,7 +4494,7 @@ fn files_changed_selects_the_nearest_visible_file() {
     // past the end, so the fallback picks the nearest visible file at or after
     // the hint, then the last.
     app.workspace.selected = None;
-    app.workspace.files = crate::kernel::workspace::FileSet {
+    app.workspace.files = tui_core::workspace::FileSet {
         paths: std::sync::Arc::from(vec![
             RepoPath::new("a.rs").unwrap(),
             RepoPath::new("b.rs").unwrap(),
@@ -4430,10 +4502,10 @@ fn files_changed_selects_the_nearest_visible_file() {
         ..Default::default()
     };
 
-    let specs = crate::kernel::app::Specs::panes_only(&app);
+    let specs = tui_core::app::Specs::panes_only(&app);
     let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
-    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    let cx = tui_core::app::cx_for(&app.kernel, overlay, busy, &specs);
     let outs = app.plugins.tree.on_event(&Event::FilesChanged, &cx);
 
     assert!(
@@ -4454,27 +4526,25 @@ fn a_selection_change_reveals_the_file_in_the_tree() {
     let mut app = show_app(files);
     app.workspace.selected = Some(RepoPath::new("f39.rs").unwrap());
 
-    let specs = crate::kernel::app::Specs::panes_only(&app);
+    let specs = tui_core::app::Specs::panes_only(&app);
     let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
-    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    let cx = tui_core::app::cx_for(&app.kernel, overlay, busy, &specs);
     app.plugins.tree.on_event(&Event::SelectionChanged, &cx);
 
     assert_eq!(app.plugins.tree.cursor, 39);
 }
 
+#[cfg(feature = "diff")]
 #[test]
 fn the_tree_runs_its_resize_commands_and_the_views_do_not() {
     let mut app = two_files();
-    let specs = crate::kernel::app::Specs::panes_only(&app);
+    let specs = tui_core::app::Specs::panes_only(&app);
     let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
-    let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
+    let cx = tui_core::app::cx_for(&app.kernel, overlay, busy, &specs);
 
-    let tree_command = |name: &'static str| CommandId {
-        owner: Owner::Tree,
-        name,
-    };
+    let tree_command = |name: &'static str| CommandId { owner: TREE, name };
     let wider = app.plugins.tree.run(tree_command("wider"), &cx);
     assert!(matches!(
         wider.as_slice(),

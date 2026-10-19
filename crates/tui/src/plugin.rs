@@ -1,23 +1,18 @@
-//! The pane vocabulary: plugin, pane, and focus identifiers.
+//! The pane vocabulary: plugin, pane, focus, and view identifiers.
 //!
-//! These are plain values. The layout, the focus ring, and the pages use them
+//! These are plain values. The layout, the focus ring, and the plugins use them
 //! to name a region without naming a type; a `PaneId`'s owner is the plugin
 //! that draws it, and several panes may share one `FocusKey` (the diff's two
-//! sides do).
-//!
-//! The identifier types live in [`crate::kernel::plugin`]; this module
-//! re-exports them and holds the built-in pane constants until Phase 5.
+//! sides do). The identifier types come from [`tui_core::plugin`]; the
+//! constants here are the built-in plugins' addresses.
 
-pub(crate) use crate::kernel::plugin::{FocusKey, PaneId, PluginId, ViewId};
+pub(crate) use tui_core::plugin::{FocusKey, PaneId, PluginId, ViewId};
 
 /// The tree plugin's id.
 pub(crate) const TREE: PluginId = PluginId("tree");
 
 /// The source view plugin's id.
 pub(crate) const SOURCE: PluginId = PluginId("source");
-
-/// The diff plugin's id.
-pub(crate) const DIFF: PluginId = PluginId("diff");
 
 /// The which-key band plugin's id.
 pub(crate) const WHICH_KEY: PluginId = PluginId("which-key");
@@ -53,24 +48,6 @@ pub(crate) const TREE_PANE: PaneId = PaneId {
 pub(crate) const SOURCE_PANE: PaneId = PaneId {
     owner: SOURCE,
     slot: 0,
-};
-
-/// The base side of a diff: `Body`.
-pub(crate) const OLD_PANE: PaneId = PaneId {
-    owner: DIFF,
-    slot: 0,
-};
-
-/// The target side of a diff: `Body`.
-pub(crate) const NEW_PANE: PaneId = PaneId {
-    owner: DIFF,
-    slot: 1,
-};
-
-/// The commits band: `Band`.
-pub(crate) const COMMITS_PANE: PaneId = PaneId {
-    owner: DIFF,
-    slot: 2,
 };
 
 /// The which-key band's overlay pane.
@@ -133,32 +110,15 @@ pub(crate) const SOURCE_FOCUS: FocusKey = FocusKey {
     slot: 0,
 };
 
-/// The diff body's focus key, shared by both sides.
-pub(crate) const DIFF_BODY_FOCUS: FocusKey = FocusKey {
-    owner: DIFF,
-    slot: 0,
-};
-
-/// The commits band's focus key.
-pub(crate) const DIFF_BAND_FOCUS: FocusKey = FocusKey {
-    owner: DIFF,
-    slot: 1,
-};
-
 /// The source view's only view.
 pub(crate) const SOURCE_VIEW: ViewId = ViewId {
     owner: SOURCE,
     slot: 0,
 };
 
-/// The diff plugin's compare view.
-pub(crate) const COMPARE_VIEW: ViewId = ViewId {
-    owner: DIFF,
-    slot: 0,
-};
-
-/// The diff plugin's history view.
-pub(crate) const HISTORY_VIEW: ViewId = ViewId {
-    owner: DIFF,
-    slot: 1,
+#[cfg(feature = "diff")]
+#[allow(unused_imports)]
+pub(crate) use tui_diff::{
+    COMMITS_PANE, COMPARE_VIEW, DIFF, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, HISTORY_VIEW, NEW_PANE,
+    OLD_PANE,
 };

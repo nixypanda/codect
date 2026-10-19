@@ -1,9 +1,9 @@
 //! The terminal frontend.
 //!
-//! This crate is the only layer that touches the terminal. The kernel
-//! ([`kernel`]) owns the run loop, the terminal lifecycle, the frame, and the
-//! shared state; every UI surface is a plugin ([`plugins`]). The public `run`
-//! builds the registry and hands it to the kernel runtime.
+//! This crate owns the built-in plugins and the registry; the kernel, the
+//! plugin contract, and the design system live in `tui-core`, and the compare
+//! and history views in `tui-diff` (behind the default-on `diff` feature). The
+//! public `run` builds the registry and hands it to the kernel runtime.
 //!
 //! # Boundaries
 //!
@@ -18,39 +18,34 @@ use std::io::IsTerminal;
 
 use engine::Engine;
 
-pub use render::icons::IconStyle;
-use render::theme::Theme;
-pub use route::{DiffView, LoadRequest};
+pub use tui_core::TuiError;
+pub use tui_core::render::icons::IconStyle;
 
-mod component;
-#[cfg(test)]
-mod golden;
-mod help;
-mod kernel;
-mod plugin;
-mod plugins;
-mod prompt;
-mod render;
-mod route;
-#[cfg(test)]
-pub(crate) mod test_support;
-mod tree;
-mod util;
-mod which_key;
-mod workspace;
-
-mod diff;
-mod finder;
-mod mode_picker;
-mod palette;
-mod scope_chooser;
-mod search_input;
-mod source;
+#[cfg(feature = "diff")]
+pub use route::DiffView;
+pub use route::LoadRequest;
+use tui_core::render::theme::Theme;
 
 #[cfg(test)]
 mod app_tests;
+mod finder;
 #[cfg(test)]
-mod kernel_tests;
+mod golden;
+mod help;
+mod mode_picker;
+mod palette;
+mod plugin;
+mod plugins;
+mod prompt;
+mod route;
+mod scope_chooser;
+mod search_input;
+mod source;
+#[cfg(test)]
+pub(crate) mod test_support;
+mod tree;
+mod which_key;
+mod workspace;
 
 #[cfg(feature = "bench")]
 #[doc(hidden)]
@@ -64,23 +59,11 @@ pub struct TuiOptions {
     pub icons: IconStyle,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum TuiError {
-    #[error("standard input and standard output must be terminals")]
-    NotATerminal,
-
-    #[error("the terminal could not be used")]
-    Terminal(#[source] std::io::Error),
-
-    #[error(transparent)]
-    Engine(#[from] engine::EngineError),
-}
-
 pub fn run(engine: Engine, options: TuiOptions) -> Result<(), TuiError> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(TuiError::NotATerminal);
     }
-    kernel::runtime::install_panic_hook();
+    tui_core::runtime::install_panic_hook();
     // Query the terminal's background before the event reader is first polled:
     // `terminal-colorsaurus` reads the reply from standard input itself, and the
     // query briefly consumes any keystroke typed during startup.
@@ -92,7 +75,7 @@ pub fn run(engine: Engine, options: TuiOptions) -> Result<(), TuiError> {
         width: 0,
         height: 0,
         theme,
-        icons: render::icons::Icons::new(options.icons),
+        icons: tui_core::render::icons::Icons::new(options.icons),
     });
-    kernel::runtime::run(&engine, app, startup)
+    tui_core::run(&engine, app, startup)
 }

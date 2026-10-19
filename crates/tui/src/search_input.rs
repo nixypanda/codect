@@ -9,15 +9,15 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::component::text_input::{Edit, TextInput, input_line};
-use crate::kernel::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq, Owner};
-use crate::kernel::cx::Cx;
-use crate::kernel::help::{FIND, HelpEntry};
-use crate::kernel::plugin::{
+use crate::plugin::SEARCH_PANE;
+use tui_core::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq};
+use tui_core::cx::Cx;
+use tui_core::help::{FIND, HelpEntry};
+use tui_core::plugin::{
     Event, HintTarget, Input, Never, Out, OverlaySpec, PaneId, Plugin, PluginId, Reply, Request,
 };
-use crate::plugin::SEARCH_PANE;
-use crate::util::input::Key;
+use tui_core::util::input::Key;
+use tui_core::widgets::text_input::{Edit, TextInput, input_line};
 
 /// The plugin's id.
 pub const SEARCH: PluginId = PluginId("search");
@@ -37,7 +37,7 @@ impl SearchInput {
 fn commands() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: CommandId {
-            owner: Owner::Search,
+            owner: SEARCH,
             name: "open",
         },
         label: "Search in view",
@@ -127,7 +127,7 @@ impl Plugin for SearchInput {
     }
 
     fn run(&mut self, command: CommandId, _cx: &Cx) -> Vec<Out<Never>> {
-        if command.owner != Owner::Search {
+        if command.owner != SEARCH {
             return Vec::new();
         }
         match command.name {
@@ -159,7 +159,7 @@ fn render_search(state: &SearchInput, area: Rect, cx: &Cx, frame: &mut Frame) {
         width,
         height: 1,
     };
-    crate::render::block::scrim(frame, area);
+    tui_core::render::block::scrim(frame, area);
     frame.render_widget(Clear, popup);
 
     let mut spans = input_line("/ ", &state.input, cx.theme).spans;
@@ -188,8 +188,8 @@ fn render_search(state: &SearchInput, area: Rect, cx: &Cx, frame: &mut Frame) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::app::{Msg, update};
     use crate::test_support::{press, show_app, source_outline};
+    use tui_core::app::{Msg, update};
 
     #[test]
     fn typing_sets_the_search_live_and_enter_commits() {

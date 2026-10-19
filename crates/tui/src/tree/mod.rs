@@ -17,17 +17,17 @@ use base::RepoPath;
 use engine::Engine;
 use ratatui::Frame;
 
-use crate::kernel::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq, Owner};
-use crate::kernel::cx::Cx;
-use crate::kernel::help::{HelpEntry, MOUSE, VIEW};
-use crate::kernel::layout::{PaneGeometry, PaneSpec, Placement};
-use crate::kernel::nav::{Nav, page_step};
-use crate::kernel::plugin::{
+use crate::plugin::{TREE, TREE_FOCUS, TREE_PANE};
+use tui_core::command::{Binding, CommandId, CommandSpec, KeyScope, KeySeq};
+use tui_core::cx::Cx;
+use tui_core::help::{HelpEntry, MOUSE, VIEW};
+use tui_core::layout::{PaneGeometry, PaneSpec, Placement};
+use tui_core::nav::{Nav, page_step};
+use tui_core::plugin::{
     Event, FocusKey, HintTarget, Input, MouseInput, NavigatorResize, Never, Out, PaneId, Plugin,
     PluginId, Reply, Request,
 };
-use crate::plugin::{TREE_FOCUS, TREE_PANE};
-use crate::util::input::{Key, MouseKind};
+use tui_core::util::input::{Key, MouseKind};
 
 const MOUSE_SCROLL_STEP: i32 = 3;
 
@@ -335,10 +335,7 @@ fn tree_spec(
     rank: u16,
 ) -> CommandSpec {
     CommandSpec {
-        id: CommandId {
-            owner: Owner::Tree,
-            name,
-        },
+        id: CommandId { owner: TREE, name },
         label,
         hint,
         bindings: vec![Binding {
@@ -493,7 +490,7 @@ impl Plugin for Tree {
     }
 
     fn run(&mut self, command: CommandId, _cx: &Cx) -> Vec<Out<Never>> {
-        if command.owner != Owner::Tree {
+        if command.owner != TREE {
             return Vec::new();
         }
         let resize = match command.name {

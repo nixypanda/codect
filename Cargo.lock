@@ -3336,15 +3336,39 @@ version = "0.1.0"
 dependencies = [
  "base",
  "criterion",
- "crossterm",
  "engine",
  "git",
+ "ratatui",
+ "tempfile",
+ "tui-core",
+ "tui-diff",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "tui-core"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "crossterm",
+ "engine",
  "ratatui",
  "syntect",
  "tempfile",
  "terminal-colorsaurus",
  "thiserror 2.0.20",
  "two-face",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "tui-diff"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "engine",
+ "ratatui",
+ "tui-core",
  "unicode-width 0.2.2",
 ]
 

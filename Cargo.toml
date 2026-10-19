@@ -8,6 +8,8 @@ members = [
     "crates/lang-python",
     "crates/lang-rust",
     "crates/engine",
+    "crates/tui-core",
+    "crates/tui-diff",
     "crates/tui",
     "crates/cli",
 ]
@@ -28,6 +30,8 @@ lang-haskell = { path = "crates/lang-haskell" }
 lang-python = { path = "crates/lang-python" }
 lang-rust = { path = "crates/lang-rust" }
 engine = { path = "crates/engine" }
+tui-core = { path = "crates/tui-core" }
+tui-diff = { path = "crates/tui-diff" }
 tui = { path = "crates/tui" }
 
 # Runtime dependencies.

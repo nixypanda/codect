@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use base::{FoldRegion, ProjectionMode, RepoPath};
 
-use crate::kernel::cx::Cx;
-use crate::render::highlight::{self, StyledLine};
-use crate::render::theme::Theme;
-use crate::util::cache::BoundedCache;
+use tui_core::cx::Cx;
+use tui_core::render::highlight::{self, StyledLine};
+use tui_core::render::theme::Theme;
+use tui_core::util::cache::BoundedCache;
 
 use super::SourceView;
 use super::rows::VisibleRow;

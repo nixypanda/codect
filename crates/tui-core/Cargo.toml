@@ -1,0 +1,26 @@
+[package]
+name = "tui-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Exposes `testing`: fake plugins and `Cx` builders for the other TUI crates'
+# tests. Never enabled by default, so a normal build does not compile it.
+testing = []
+
+[dependencies]
+base.workspace = true
+engine.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+terminal-colorsaurus.workspace = true
+unicode-width.workspace = true
+syntect.workspace = true
+two-face.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
