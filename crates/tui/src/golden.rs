@@ -18,19 +18,20 @@ use std::path::Path;
 use base::{FileDiff, ProjectionMode, Selection, SelectionError, SourceOutline};
 use engine::EngineError;
 
-use crate::api::Cmd;
+use crate::diff::Cmd as DiffCmd;
+use crate::diff::Msg as DiffMsg;
 use crate::kernel::app::{Msg, settle, update};
 use crate::plugins::PluginsCmd;
-use crate::plugins::legacy::Msg as LegacyMsg;
 use crate::render::icons::{IconStyle, Icons};
 use crate::render::theme::{Capability, Flavor, Theme};
 use crate::route::LoadRequest;
 use crate::scope_chooser::Msg as ScopeMsg;
+use crate::source::Msg as SourceMsg;
 use crate::test_support::{
     ATTRIBUTED_SOURCE, App, NESTED_SOURCE, after_batch_effects, area_set, attributed_child_outline,
-    base_app_with, commits_app, diff_app, diff_request, dropped_container_outline, file_diff,
-    golden_document, legacy_msg, nested_outline, press, render, scope_msg, show_app, show_app_mode,
-    show_request, source_outline, step, tests_filter_outline, two_files,
+    base_app_with, commits_app, diff_app, diff_msg, diff_request, dropped_container_outline,
+    file_diff, golden_document, nested_outline, press, render, scope_msg, show_app, show_app_mode,
+    show_request, source_msg, source_outline, step, tests_filter_outline, two_files,
 };
 use crate::util::input::Key;
 
@@ -177,7 +178,7 @@ fn load_show(theme: Theme, icons: Icons, files: Vec<SourceOutline>) -> App {
     );
     step(
         &app,
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: show_request(),
             result: Ok(files.into()),
         }),
@@ -315,7 +316,7 @@ fn build_show_diagnostic() -> App {
     });
     step(
         &two_files(),
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: show_request(),
             result: Err(Box::new(error)),
         }),
@@ -388,7 +389,7 @@ fn build_diff_merge_base() -> App {
     );
     let app = step(
         &app,
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(DiffMsg::DiffLoaded {
             request,
             result: Ok(three_diffs().into()),
         }),
@@ -413,12 +414,12 @@ fn build_diff_commits_step() -> App {
     let index = cmds
         .iter()
         .find_map(|cmd| match cmd {
-            PluginsCmd::Legacy(Cmd::Step { index, .. }) => Some(*index),
+            PluginsCmd::Diff(DiffCmd::Step { index, .. }) => Some(*index),
             _ => None,
         })
         .expect("a commit step effect");
     let result = Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into());
-    settle(update(legacy_msg(LegacyMsg::StepLoaded { index, result }), &model).0)
+    settle(update(diff_msg(DiffMsg::StepLoaded { index, result }), &model).0)
 }
 
 fn build_too_small() -> App {
@@ -511,7 +512,7 @@ fn build_show_reload_last() -> App {
     let app = press(&two_files(), &[Key::Char('j')]);
     step(
         &app,
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: show_request(),
             result: Ok(vec![source_outline("a.rs", "a\n")].into()),
         }),

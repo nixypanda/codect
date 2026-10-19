@@ -1,7 +1,5 @@
 //! Scrolling vocabulary shared by the kernel and the panes.
 
-use crate::action::GlobalAction;
-
 /// A page-sized navigation the kernel sends to the focused pane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Nav {
@@ -16,13 +14,13 @@ pub fn page_step(height: u16) -> u16 {
     (height.saturating_sub(3) / 2).max(1)
 }
 
-/// Apply a scroll action to `current`, clamped to `max`.
-pub fn scroll_by(action: GlobalAction, current: u16, step: u16, max: u16) -> u16 {
-    match action {
-        GlobalAction::Top => 0,
-        GlobalAction::Bottom => max,
-        GlobalAction::PageUp => current.saturating_sub(step),
-        _ => current.saturating_add(step).min(max),
+/// Apply a scroll navigation to `current`, clamped to `max`.
+pub fn scroll_by(nav: Nav, current: u16, step: u16, max: u16) -> u16 {
+    match nav {
+        Nav::Top => 0,
+        Nav::Bottom => max,
+        Nav::PageUp => current.saturating_sub(step),
+        Nav::PageDown => current.saturating_add(step).min(max),
     }
 }
 

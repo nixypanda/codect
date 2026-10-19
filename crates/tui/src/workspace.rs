@@ -6,6 +6,7 @@
 
 #[allow(unused_imports)]
 pub(crate) use crate::kernel::search::{Search, SearchMatch, SearchPane, collect_matches};
+#[allow(unused_imports)]
 pub(crate) use crate::kernel::workspace::{
     BadgeTone, EmptyText, FileSet, NO_CHANGES, NO_FILES, Query, Workspace,
 };

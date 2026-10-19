@@ -14,7 +14,7 @@ use crate::kernel::layout::{
     BodyLayout, MIN_HEIGHT, PaneGeometry, PaneSpec, Placement, SIDE_BY_SIDE_MIN_WIDTH,
     SINGLE_PANE_MIN_WIDTH, body_layout, frame_areas,
 };
-use crate::kernel::plugin::{FocusKey, PaneId, PluginId, Size};
+use crate::kernel::plugin::{FocusKey, PaneId, PluginId, Size, ViewId};
 use crate::kernel::workspace::Workspace;
 use crate::render::icons::Icons;
 use crate::render::theme::Theme;
@@ -27,6 +27,7 @@ pub struct Cx<'a> {
     pub root: &'a str,
     pub workspace: &'a Workspace,
     pub focus: Option<FocusKey>,
+    pub active_view: ViewId,
     pub overlay: Option<PaneId>,
     pub pending_prefix: Option<char>,
     pub busy: bool,
@@ -46,6 +47,7 @@ impl<'a> Cx<'a> {
         root: &'a str,
         workspace: &'a Workspace,
         focus: Option<FocusKey>,
+        active_view: ViewId,
         overlay: Option<PaneId>,
         pending_prefix: Option<char>,
         busy: bool,
@@ -62,6 +64,7 @@ impl<'a> Cx<'a> {
             root,
             workspace,
             focus,
+            active_view,
             overlay,
             pending_prefix,
             busy,
@@ -73,11 +76,9 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// Whether `owner`'s view is the active one. In this phase each plugin's
-    /// declarations are always active.
+    /// Whether `owner`'s view is the active one.
     pub fn is_active_view(&self, owner: PluginId) -> bool {
-        let _ = owner;
-        true
+        self.active_view.owner == owner
     }
 
     pub fn commands(&self) -> &[CommandSpec] {

@@ -12,7 +12,7 @@
 /// ```ignore
 /// plugin_set! {
 ///     pub struct Plugins: PluginsMsg, PluginsCmd {
-///         legacy: Legacy = some_plugin_crate::Legacy,
+///         example: Example = some_plugin_crate::Example,
 ///     }
 /// }
 /// ```
@@ -525,6 +525,10 @@ mod tests {
             "/repo",
             &workspace,
             None,
+            crate::kernel::plugin::ViewId {
+                owner: PluginId("first"),
+                slot: 0,
+            },
             None,
             None,
             false,
@@ -553,6 +557,10 @@ mod tests {
             },
             workspace: workspace(),
             focus: None,
+            active_view: crate::kernel::plugin::ViewId {
+                owner: PluginId("first"),
+                slot: 0,
+            },
             overlay: None,
             keymap: Keymap::default(),
             diagnostic: None,

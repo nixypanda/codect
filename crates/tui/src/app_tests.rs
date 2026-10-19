@@ -1,19 +1,19 @@
-use crate::api::Cmd;
 use crate::component::text_input::TextInput;
+use crate::diff::Msg as DiffMsg;
 use crate::kernel::app::{Diagnostic, Msg, settle, update};
-use crate::page::show::{ShowHighlights, VisibleRow};
-use crate::page::{Loaded, focus_default, focus_ring};
+use crate::kernel::focus::{focus_default, focus_ring};
 use crate::plugin::{
     COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, HELP_PANE, MODES_PANE, NEW_PANE, OLD_PANE,
     PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE, TREE_FOCUS, TREE_PANE,
     WHICH_KEY_PANE,
 };
 use crate::plugins::PluginsCmd;
-use crate::plugins::legacy::Msg as LegacyMsg;
 use crate::render::icons::IconStyle;
 use crate::render::theme::Theme;
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::scope_chooser::Msg as ScopeMsg;
+use crate::source::Msg as SourceMsg;
+use crate::source::{ShowHighlights, VisibleRow};
 use crate::test_support::{
     ATTRIBUTED_SOURCE, NESTED_SOURCE, area_set, assert_view_consistent, attributed_child_outline,
     base_app, buffer_row, buffer_text, cell_x_of, click, commit_search, commit_steps, commits_app,
@@ -24,7 +24,9 @@ use crate::test_support::{
     show_request, snapshot_range_app, source_outline, source_outline_with, tail_palette_entries,
     test_function_outline, tests_filter_outline, two_files, two_function_outline,
 };
-use crate::test_support::{App, legacy_msg, scope_msg, with_cx};
+use crate::test_support::{
+    App, command_spec, diff_msg, has_palette_entry, scope_msg, source_msg, with_cx,
+};
 use crate::workspace::BadgeTone;
 use crate::workspace::{Search, SearchMatch, SearchPane, collect_matches};
 use base::{
@@ -33,7 +35,6 @@ use base::{
 };
 use ratatui::style::Color;
 
-use crate::action::{Action, RangeAction, ShowAction};
 use crate::kernel::command::{CommandId, Owner};
 use crate::kernel::plugin::{
     Event, FocusKey, Input, NavigatorResize, Out, Plugin, PluginSet, QueryChange, Request, Size,
@@ -56,28 +57,8 @@ fn apply_request(app: &mut App, request: Request, cmds: &mut Vec<PluginsCmd>) {
     crate::kernel::dispatch::apply_request(app, request, cmds, 0, &specs);
 }
 
-fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<PluginsCmd>, depth: u8) {
-    use crate::kernel::plugin::{Out, PluginId};
-    let specs = crate::kernel::app::collect_specs(app);
-    let outs = {
-        let overlay = app.kernel.overlay;
-        let busy = app.plugins.busy();
-        let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
-        app.plugins.legacy.apply_action(action, &cx)
-    };
-    let wrapped: Vec<(PluginId, Out<PluginsCmd>)> = outs
-        .into_iter()
-        .map(|out| {
-            (
-                crate::plugins::legacy::LEGACY,
-                match out {
-                    Out::Effect(cmd) => Out::Effect(PluginsCmd::Legacy(cmd)),
-                    Out::Kernel(request) => Out::Kernel(request),
-                },
-            )
-        })
-        .collect();
-    crate::kernel::dispatch::process_wrapped(app, wrapped, cmds, depth, &specs);
+fn apply_command(app: &mut App, owner: Owner, name: &'static str, cmds: &mut Vec<PluginsCmd>) {
+    apply_request(app, Request::RunCommand(CommandId { owner, name }), cmds);
 }
 
 fn coalesce_commit_loads(app: &mut App, cmds: &mut Vec<PluginsCmd>) {
@@ -115,7 +96,7 @@ fn body_is_visible(app: &App) -> bool {
 fn a_loaded_result_installs_files_and_preserves_the_selection() {
     let app = two_files();
     let (next, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -148,7 +129,7 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
     app.workspace.selected = Some(RepoPath::new("b.rs").unwrap());
 
     let (next, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: show_request(),
             result: Ok(vec![source_outline("a.rs", "a\n"), source_outline("c.rs", "c\n")].into()),
         }),
@@ -160,14 +141,13 @@ fn a_reload_that_drops_the_selected_file_picks_the_nearest_visible_one() {
 #[test]
 fn a_reload_retains_the_selection_and_resets_the_show_body() {
     let mut app = show_app(vec![source_outline("a.rs", "one\ntwo\nthree\n")]);
-    if let Loaded::Show(show) = &mut app.plugins.legacy.loaded {
-        show.body.scroll = 2;
-        show.body.hscroll = 1;
-        show.body.cursor_line = 3;
-    }
+    let show = &mut app.plugins.source;
+    show.body.scroll = 2;
+    show.body.hscroll = 1;
+    show.body.cursor_line = 3;
 
     let (next, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: show_request(),
             result: Ok(vec![source_outline("a.rs", "one\ntwo\nthree\n")].into()),
         }),
@@ -188,12 +168,11 @@ fn a_reload_retains_the_selection_and_resets_the_diff_body() {
         Some("1\n2\n3\n4\n5\n6\n"),
         Some("1\n2\n3\n4\n5\nX\n"),
     )]);
-    if let Loaded::Diff(diff) = &mut app.plugins.legacy.loaded {
-        diff.set_body_scroll(3);
-    }
+    let diff = &mut app.plugins.diff;
+    diff.set_body_scroll(3);
 
     let (next, _) = update(
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(DiffMsg::DiffLoaded {
             request: diff_request(),
             result: Ok(vec![file_diff(
                 "a.rs",
@@ -219,7 +198,7 @@ fn a_reload_that_drops_the_selection_falls_back_to_the_last_file() {
     assert_eq!(selected(&app).as_deref(), Some("b.rs"));
 
     let (next, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: show_request(),
             result: Ok(vec![source_outline("a.rs", "a\n")].into()),
         }),
@@ -237,7 +216,7 @@ fn a_reload_that_drops_the_selection_falls_back_to_the_last_file() {
 fn an_empty_reload_clears_the_selection_and_the_tree_cursor() {
     let app = two_files();
     let (next, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: show_request(),
             result: Ok(Vec::new().into()),
         }),
@@ -257,7 +236,7 @@ fn a_diff_reload_applies_the_fallback_selection_within_the_update() {
     assert_eq!(selected(&app).as_deref(), Some("a.rs"));
 
     let (next, _) = update(
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(DiffMsg::DiffLoaded {
             request: diff_request(),
             result: Ok(vec![file_diff("b.rs", Some("b\n"), Some("B\n"))].into()),
         }),
@@ -356,7 +335,7 @@ fn a_failed_reload_keeps_the_last_model_and_shows_a_diagnostic() {
         name: "x".to_owned(),
     });
     let (next, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -538,7 +517,7 @@ fn empty_commit_history_installs_a_diff_and_focuses_commits() {
         merge_base: false,
     });
     let (next, commands) = update(
-        legacy_msg(LegacyMsg::HistoryLoaded {
+        diff_msg(DiffMsg::HistoryLoaded {
             request: commits_request(),
             result: Ok((Vec::new().into(), Vec::new().into())),
         }),
@@ -582,7 +561,7 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     assert_eq!(diff_focus_of(&clicked), Some(DIFF_BAND_FOCUS));
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Legacy(Cmd::Step { index: 1, .. })]
+        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 1, .. })]
     ));
 
     let (mut wheeled, mut commands) = update(Msg::Mouse(scroll(4, 12, false)), &app);
@@ -590,7 +569,7 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     assert_eq!(diff_focus_of(&wheeled), Some(DIFF_BAND_FOCUS));
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Legacy(Cmd::Step { index: 3, .. })]
+        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 3, .. })]
     ));
 
     let mut narrow = app.clone();
@@ -602,7 +581,7 @@ fn commit_picker_mouse_uses_drawn_geometry_and_loads_selected_step() {
     coalesce_commit_loads(&mut narrow_clicked, &mut commands);
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Legacy(Cmd::Step { index: 1, .. })]
+        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 1, .. })]
     ));
 
     let (files, commands) = update(Msg::Mouse(click(4, 3)), &app);
@@ -631,13 +610,13 @@ fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_dis
     coalesce_commit_loads(&mut app, &mut commands);
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Legacy(Cmd::Step { index: 3, .. })]
+        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 3, .. })]
     ));
     assert_eq!(diff_ref(&app).diffs(), displayed.as_slice());
     assert_eq!(diff_ref(&app).revisions(), displayed_labels);
 
     let (loaded, _) = update(
-        legacy_msg(LegacyMsg::StepLoaded {
+        diff_msg(DiffMsg::StepLoaded {
             index: 3,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("new\n"))].into()),
         }),
@@ -649,7 +628,7 @@ fn batched_commit_navigation_loads_only_the_final_step_and_failure_keeps_the_dis
     assert_eq!(loaded.workspace.selected, app.workspace.selected);
 
     let (failed, commands) = update(
-        legacy_msg(LegacyMsg::StepLoaded {
+        diff_msg(DiffMsg::StepLoaded {
             index: 3,
             result: Err(Box::new(EngineError::Selection(
                 base::SelectionError::UnknownArea {
@@ -692,10 +671,10 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
     coalesce_commit_loads(&mut app, &mut commands);
     assert!(matches!(
         commands.as_slice(),
-        [PluginsCmd::Legacy(Cmd::Step { index: 1, .. })]
+        [PluginsCmd::Diff(crate::diff::Cmd::Step { index: 1, .. })]
     ));
     let (app, _) = update(
-        legacy_msg(LegacyMsg::StepLoaded {
+        diff_msg(DiffMsg::StepLoaded {
             index: 1,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("B\n"))].into()),
         }),
@@ -711,7 +690,7 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
         Request::Requery(QueryChange::Scope(new_selection.clone())),
     );
     let request = match commands.as_slice() {
-        [PluginsCmd::Legacy(Cmd::Diff(request))] => request.clone(),
+        [PluginsCmd::Diff(crate::diff::Cmd::History(request))] => request.clone(),
         other => panic!("expected one diff request, got {other:?}"),
     };
     assert_eq!(request.selection, new_selection);
@@ -719,7 +698,7 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
     // The pending step folded from that history load must carry the incoming
     // scope, not the stale committed one.
     let (_, commands) = update(
-        legacy_msg(LegacyMsg::HistoryLoaded {
+        diff_msg(DiffMsg::HistoryLoaded {
             request,
             result: Ok((
                 commit_steps(3).into(),
@@ -731,7 +710,7 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
     let step = commands
         .iter()
         .find_map(|cmd| match cmd {
-            PluginsCmd::Legacy(Cmd::Step { request, .. }) => Some(request),
+            PluginsCmd::Diff(crate::diff::Cmd::Step { request, .. }) => Some(request),
             _ => None,
         })
         .expect("a pending commit step load");
@@ -741,25 +720,13 @@ fn a_scope_change_reloads_the_pending_commit_step_with_the_new_scope() {
 #[test]
 fn palette_switches_between_range_and_commit_views() {
     let app = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
-    assert!(
-        app.plugins
-            .legacy
-            .loaded
-            .palette_entries()
-            .iter()
-            .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
-    );
+    assert!(has_palette_entry(&app, Owner::Diff, "view.commits"));
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_action(
-        &mut next,
-        Action::Range(RangeAction::SwitchToCommits),
-        &mut commands,
-        0,
-    );
+    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
     assert_eq!(
         commands,
-        vec![PluginsCmd::Legacy(Cmd::Diff(DiffRequest {
+        vec![PluginsCmd::Diff(crate::diff::Cmd::History(DiffRequest {
             view: DiffView::Commits,
             ..diff_request()
         }))]
@@ -783,7 +750,7 @@ fn a_snapshot_range_cannot_switch_to_commits() {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(DiffMsg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", None, Some("a\n"))].into()),
         }),
@@ -791,23 +758,11 @@ fn a_snapshot_range_cannot_switch_to_commits() {
     );
     let app = settle(next);
 
-    assert!(
-        !app.plugins
-            .legacy
-            .loaded
-            .palette_entries()
-            .iter()
-            .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
-    );
+    assert!(!has_palette_entry(&app, Owner::Diff, "view.commits"));
 
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_action(
-        &mut next,
-        Action::Range(RangeAction::SwitchToCommits),
-        &mut commands,
-        0,
-    );
+    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
 }
@@ -829,7 +784,7 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(DiffMsg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
         }),
@@ -844,22 +799,10 @@ fn a_merge_base_range_preserves_the_mode_and_cannot_switch_to_commits() {
             .merge_base
     );
 
-    assert!(
-        !app.plugins
-            .legacy
-            .loaded
-            .palette_entries()
-            .iter()
-            .any(|(action, ..)| *action == Action::Range(RangeAction::SwitchToCommits))
-    );
+    assert!(!has_palette_entry(&app, Owner::Diff, "view.commits"));
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_action(
-        &mut next,
-        Action::Range(RangeAction::SwitchToCommits),
-        &mut commands,
-        0,
-    );
+    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
 }
@@ -869,17 +812,11 @@ fn a_refused_commit_switch_leaves_paging_ready() {
     let app = snapshot_range_app();
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_action(
-        &mut next,
-        Action::Range(RangeAction::SwitchToCommits),
-        &mut commands,
-        0,
-    );
+    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
-    assert_eq!(
-        next.plugins.legacy.loaded.paging(),
-        crate::page::Paging::Ready,
+    assert!(
+        !next.plugins.diff.loading,
         "the refusal returns before paging is set to Loading"
     );
 }
@@ -889,17 +826,11 @@ fn a_merge_base_switch_refusal_leaves_paging_ready() {
     let app = merge_base_range_app();
     let mut next = app.clone();
     let mut commands = Vec::new();
-    apply_action(
-        &mut next,
-        Action::Range(RangeAction::SwitchToCommits),
-        &mut commands,
-        0,
-    );
+    apply_command(&mut next, Owner::Diff, "view.commits", &mut commands);
     assert!(commands.is_empty(), "no first-parent load may be issued");
     assert!(next.diagnostic.is_some(), "the refusal is explained");
-    assert_eq!(
-        next.plugins.legacy.loaded.paging(),
-        crate::page::Paging::Ready,
+    assert!(
+        !next.plugins.diff.loading,
         "the refusal returns before paging is set to Loading"
     );
 }
@@ -911,9 +842,8 @@ fn navigation_defers_highlighting_until_settle() {
         source_outline("b.rs", "pub fn b();\n"),
     ]);
     let mut fresh = app.clone();
-    if let Loaded::Show(show) = &mut fresh.plugins.legacy.loaded {
-        show.highlight = ShowHighlights::default();
-    }
+    let show = &mut fresh.plugins.source;
+    show.highlight = ShowHighlights::default();
     assert!(
         show_ref(&fresh)
             .active_lines(fresh.workspace.selected.as_ref())
@@ -945,9 +875,8 @@ fn settle_skips_highlighting_when_the_body_is_hidden() {
     };
     app.plugins.tree.cursor = 0;
     app.focus = Some(TREE_FOCUS);
-    if let Loaded::Show(show) = &mut app.plugins.legacy.loaded {
-        show.highlight = ShowHighlights::default();
-    }
+    let show = &mut app.plugins.source;
+    show.highlight = ShowHighlights::default();
     let settled = settle(app);
     assert!(
         show_ref(&settled)
@@ -990,7 +919,7 @@ fn mode_picker_defers_the_mode_change_until_selection() {
     assert_eq!(chosen.kernel.overlay, None);
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             mode: ProjectionMode::Signatures,
             ..show_request()
         }))]
@@ -1005,7 +934,7 @@ fn mode_picker_on_a_diff_keeps_the_diff_shape() {
     let (_, cmds) = update(Msg::Key(Key::Enter), &down);
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Diff(DiffRequest {
+        vec![PluginsCmd::Diff(crate::diff::Cmd::Range(DiffRequest {
             mode: ProjectionMode::Signatures,
             ..diff_request()
         }))]
@@ -1032,7 +961,7 @@ fn the_mode_picker_reaches_tests_and_clamps_at_the_last_mode() {
     let (_, cmds) = update(Msg::Key(Key::Enter), &down_again);
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             mode: ProjectionMode::Tests,
             ..show_request()
         }))]
@@ -1042,7 +971,7 @@ fn the_mode_picker_reaches_tests_and_clamps_at_the_last_mode() {
     let (_, cmds) = update(Msg::Key(Key::Enter), &clamped);
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             mode: ProjectionMode::Tests,
             ..show_request()
         }))]
@@ -1138,7 +1067,7 @@ fn confirming_a_revision_emits_a_load_with_that_revision() {
     assert!(applied.plugins.prompt.open.is_none());
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             revision: "HEAD~2".to_owned(),
             ..show_request()
         }))]
@@ -1242,7 +1171,7 @@ fn diff_revision_keys_target_base_and_target_fields() {
 fn the_revision_prompt_renders_its_label_and_text() {
     let mut app = two_files();
     app.plugins.prompt.open = Some(crate::prompt::Open {
-        from: crate::plugins::legacy::LEGACY,
+        from: crate::plugin::SOURCE,
         tag: 0,
         label: "revision",
         input: TextInput::new("HEAD~2"),
@@ -1280,7 +1209,7 @@ fn choosing_all_from_the_chooser_loads_everything() {
     assert_eq!(chosen.kernel.overlay, None);
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             selection: Selection::all(),
             ..show_request()
         }))]
@@ -1300,7 +1229,7 @@ fn selecting_an_area_loads_that_area() {
     )]);
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             selection: expected,
             ..show_request()
         }))]
@@ -1346,7 +1275,7 @@ fn literal_path_entry_builds_a_path_selection() {
     )]);
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             selection: expected,
             ..show_request()
         }))]
@@ -1844,7 +1773,7 @@ fn a_load_marks_the_model_busy_until_it_completes() {
     assert!(loading.is_busy(), "an emitted load is busy");
 
     let (done, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -2119,9 +2048,7 @@ fn is_open_honors_default_open_and_a_sticky_override() {
         true,
     )]);
     let selected = app.kernel.workspace.selected.clone();
-    let Loaded::Show(show) = &mut app.plugins.legacy.loaded else {
-        panic!("expected a show");
-    };
+    let show = &mut app.plugins.source;
     show.ensure_visible_rows(selected.as_ref());
     let regions = show
         .folds
@@ -2162,9 +2089,7 @@ fn a_collapsed_container_hides_a_nested_collapse_entirely() {
         true,
     )]);
     let selected = app.kernel.workspace.selected.clone();
-    let Loaded::Show(show) = &mut app.plugins.legacy.loaded else {
-        panic!("expected a show");
-    };
+    let show = &mut app.plugins.source;
     show.fold_state.set(&path, "impl Widget", false);
     show.ensure_visible_rows(selected.as_ref());
 
@@ -2897,7 +2822,7 @@ fn a_reload_closes_the_which_key_band() {
     assert_eq!(armed.kernel.overlay, Some(WHICH_KEY_PANE));
 
     let (reloaded, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -2926,7 +2851,7 @@ fn a_fold_override_survives_a_reload_and_a_selection_change() {
     assert_eq!(show_ref(&opened).line_count(), 6);
 
     let (reloaded, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -2959,20 +2884,19 @@ fn a_fold_override_survives_a_reload_and_a_selection_change() {
 #[test]
 fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
     let app = folder_app();
-    let entries = app.plugins.legacy.loaded.palette_entries();
-    for (action, hint) in [
-        (ShowAction::ToggleFold, "za"),
-        (ShowAction::OpenFold, "zo"),
-        (ShowAction::CloseFold, "zc"),
-        (ShowAction::OpenRecursive, "zO"),
-        (ShowAction::CloseRecursive, "zC"),
-        (ShowAction::OpenAll, "zR"),
-        (ShowAction::CloseAll, "zM"),
+    for (name, hint) in [
+        ("fold.toggle", "za"),
+        ("fold.open", "zo"),
+        ("fold.close", "zc"),
+        ("fold.open_recursive", "zO"),
+        ("fold.close_recursive", "zC"),
+        ("fold.open_all", "zR"),
+        ("fold.close_all", "zM"),
     ] {
+        let spec = command_spec(&app, Owner::Show, name).expect("a fold command");
+        assert_eq!(spec.hint, hint);
         assert!(
-            entries
-                .iter()
-                .any(|(entry, _, key)| *entry == Action::Show(action) && *key == hint),
+            has_palette_entry(&app, Owner::Show, name),
             "missing palette entry for {hint}"
         );
     }
@@ -2981,12 +2905,7 @@ fn palette_fold_entries_dispatch_the_same_effect_as_the_keys() {
     focus_content(&mut focused);
     let mut cmds = Vec::new();
     let mut via_palette = focused.clone();
-    apply_action(
-        &mut via_palette,
-        Action::Show(ShowAction::CloseAll),
-        &mut cmds,
-        0,
-    );
+    apply_command(&mut via_palette, Owner::Show, "fold.close_all", &mut cmds);
     let via_keys = press(&focused, &[Key::Char('z'), Key::Char('M')]);
     assert_eq!(show_ref(&via_palette).line_count(), 1);
     assert_eq!(
@@ -3104,20 +3023,18 @@ fn ctrl_j_and_ctrl_k_keep_their_j_k_alias_outside_the_band() {
 #[test]
 fn the_band_bindings_match_their_palette_entries() {
     let app = folder_app();
-    let groups = app.plugins.legacy.loaded.prefix_groups();
-    let entries = app.plugins.legacy.loaded.palette_entries();
-    let folds = groups
-        .iter()
-        .find(|group| group.name == "fold")
-        .expect("the fold group");
+    let (group, bindings) = with_cx(&app, |cx| {
+        crate::kernel::keymap::prefix_group(cx.commands(), 'z', Some(SOURCE_FOCUS))
+            .expect("the fold group")
+    });
 
-    for binding in &folds.bindings {
-        let hint = format!("{}{}", folds.key, binding.key);
+    for binding in &bindings {
+        let hint = format!("{}{}", group.prefix, binding.key);
         assert_eq!(binding.hint, hint, "the hint must be the full keystroke");
         assert!(
-            entries.iter().any(|(action, label, entry_hint)| {
-                *action == binding.action && *label == binding.label && *entry_hint == binding.hint
-            }),
+            palette_entries(&app)
+                .iter()
+                .any(|(label, entry_hint)| *label == binding.label && *entry_hint == binding.hint),
             "no palette entry matches the band binding {hint}"
         );
     }
@@ -3264,7 +3181,7 @@ fn closing_the_band_clears_the_pending_prefix() {
     // A reload closes the band and drops the prefix.
     let band = press(&app, &[Key::Char('z')]);
     let (reloaded, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -3397,62 +3314,55 @@ fn command_lookup_reproduces_the_key_table() {
 fn prefix_groups_are_the_fold_group_only_in_the_show_body() {
     let mut show = folder_app();
     focus_content(&mut show);
-    let groups = show.plugins.legacy.loaded.prefix_groups();
-    assert_eq!(groups.len(), 1, "one prefix group");
-    assert_eq!(groups[0].key, 'z');
-    assert_eq!(groups[0].name, "fold");
-    let keys: Vec<char> = groups[0].bindings.iter().map(|b| b.key).collect();
+    let (group, bindings) = with_cx(&show, |cx| {
+        crate::kernel::keymap::prefix_group(cx.commands(), 'z', Some(SOURCE_FOCUS))
+            .expect("the fold group")
+    });
+    assert_eq!(group.prefix, 'z');
+    assert_eq!(group.name, "fold");
+    let keys: Vec<char> = bindings.iter().map(|b| b.key).collect();
     assert_eq!(keys, ['a', 'o', 'c', 'O', 'C', 'R', 'M']);
-    let hints: Vec<&str> = groups[0].bindings.iter().map(|b| b.hint).collect();
+    let hints: Vec<&str> = bindings.iter().map(|b| b.hint).collect();
     assert_eq!(hints, ["za", "zo", "zc", "zO", "zC", "zR", "zM"]);
 
     // The prefix only parks while the show body holds focus.
-    assert_eq!(
-        crate::command::pending_prefix(
-            &show.plugins.legacy.loaded,
-            show.kernel.focus,
-            Key::Char('z')
-        ),
-        Some('z')
-    );
+    let prefix = |app: &App, focus: Option<FocusKey>| {
+        with_cx(app, |cx| {
+            crate::kernel::keymap::has_prefix(cx.commands(), 'z', focus)
+        })
+    };
+    assert!(prefix(&show, show.kernel.focus));
     let tree = folder_app();
-    assert_eq!(
-        crate::command::pending_prefix(
-            &tree.plugins.legacy.loaded,
-            tree.kernel.focus,
-            Key::Char('z')
-        ),
-        None
-    );
+    assert!(!prefix(&tree, tree.kernel.focus));
     assert!(
-        crate::command::prefix_groups_in_scope(&tree.plugins.legacy.loaded, Some(TREE_FOCUS))
-            .is_empty(),
+        with_cx(&tree, |cx| crate::kernel::keymap::prefix_group(
+            cx.commands(),
+            'z',
+            Some(TREE_FOCUS)
+        ))
+        .is_none(),
         "the tree focus has no prefix in scope"
     );
-    assert_eq!(
-        crate::command::prefix_groups_in_scope(&show.plugins.legacy.loaded, Some(SOURCE_FOCUS))
-            .len(),
-        1
+    assert!(
+        with_cx(&show, |cx| crate::kernel::keymap::prefix_group(
+            cx.commands(),
+            'z',
+            Some(SOURCE_FOCUS)
+        ))
+        .is_some()
     );
     for app in [
         diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]),
         commits_app(3),
     ] {
-        assert_eq!(
-            crate::command::pending_prefix(
-                &app.plugins.legacy.loaded,
-                app.kernel.focus,
-                Key::Char('z')
-            ),
-            None
-        );
-        assert!(app.plugins.legacy.loaded.prefix_groups().is_empty());
+        assert!(!prefix(&app, app.kernel.focus));
         assert!(
-            crate::command::prefix_groups_in_scope(
-                &app.plugins.legacy.loaded,
+            with_cx(&app, |cx| crate::kernel::keymap::prefix_group(
+                cx.commands(),
+                'z',
                 Some(DIFF_BODY_FOCUS)
-            )
-            .is_empty()
+            ))
+            .is_none()
         );
     }
 }
@@ -3692,7 +3602,7 @@ fn loaded_panes_lists_the_tree_then_the_view_bodies() {
 }
 
 #[test]
-fn the_tree_plugin_owns_its_pane_and_the_legacy_plugin_does_not() {
+fn the_tree_plugin_owns_its_pane_and_the_views_do_not() {
     for app in [
         show_app(vec![source_outline("a.rs", "pub fn a();\n")]),
         diff_app(vec![file_diff("a.rs", Some("x\n"), Some("y\n"))]),
@@ -3706,14 +3616,20 @@ fn the_tree_plugin_owns_its_pane_and_the_legacy_plugin_does_not() {
         let overlay = app.kernel.overlay;
         let busy = app.plugins.busy();
         let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
-        let legacy = app.plugins.legacy.panes(&cx);
+        let views: Vec<crate::render::layout::PaneSpec> = app
+            .plugins
+            .source
+            .panes(&cx)
+            .into_iter()
+            .chain(app.plugins.diff.panes(&cx))
+            .collect();
         assert!(
-            legacy.iter().all(|spec| spec.id != TREE_PANE),
-            "Legacy no longer declares the tree pane: {legacy:?}"
+            views.iter().all(|spec| spec.id != TREE_PANE),
+            "the views no longer declare the tree pane: {views:?}"
         );
         assert!(
-            legacy.iter().all(|spec| spec.focus != TREE_FOCUS),
-            "Legacy no longer declares the tree focus"
+            views.iter().all(|spec| spec.focus != TREE_FOCUS),
+            "the views no longer declare the tree focus"
         );
     }
 }
@@ -4173,7 +4089,7 @@ fn query_loaded_commits_the_workspace_query() {
     assert_eq!(app.workspace.query.mode, ProjectionMode::Types);
 
     let (committed, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -4192,7 +4108,7 @@ fn query_loaded_commits_the_workspace_query() {
         name: "x".to_owned(),
     });
     let (failed, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Tests,
                 ..show_request()
@@ -4212,7 +4128,7 @@ fn query_loaded_commits_the_workspace_query() {
 fn a_scope_requery_keeps_the_loaded_mode() {
     let app = two_files();
     let (mut loaded, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -4230,7 +4146,7 @@ fn a_scope_requery_keeps_the_loaded_mode() {
     );
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             mode: ProjectionMode::Signatures,
             selection,
             ..show_request()
@@ -4248,7 +4164,7 @@ fn a_mode_requery_keeps_the_scope() {
         selection: selection.clone(),
     });
     let (mut loaded, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 revision: "HEAD".to_owned(),
                 mode: ProjectionMode::Types,
@@ -4266,7 +4182,7 @@ fn a_mode_requery_keeps_the_scope() {
     );
     assert_eq!(
         cmds,
-        vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
+        vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
             revision: "HEAD".to_owned(),
             mode: ProjectionMode::Tests,
             selection,
@@ -4282,7 +4198,7 @@ fn search_survives_a_mode_reload_and_resyncs() {
     assert_eq!(search_of(&app).matches[0].line, 1);
 
     let (reloaded, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 mode: ProjectionMode::Signatures,
                 ..show_request()
@@ -4391,18 +4307,14 @@ fn focus_normalises_when_the_band_disappears() {
     assert_eq!(app.focus, Some(DIFF_BAND_FOCUS));
 
     let (next, _) = update(
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(DiffMsg::DiffLoaded {
             request: diff_request(),
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
         }),
         &app,
     );
     assert!(
-        !next
-            .plugins
-            .legacy
-            .loaded
-            .panes()
+        !panes(&next)
             .iter()
             .any(|spec| spec.focus == DIFF_BAND_FOCUS),
         "the band is gone"
@@ -4552,7 +4464,7 @@ fn a_selection_change_reveals_the_file_in_the_tree() {
 }
 
 #[test]
-fn the_tree_runs_its_resize_commands_and_legacy_does_not() {
+fn the_tree_runs_its_resize_commands_and_the_views_do_not() {
     let mut app = two_files();
     let specs = crate::kernel::app::Specs::panes_only(&app);
     let overlay = app.kernel.overlay;
@@ -4591,12 +4503,16 @@ fn the_tree_runs_its_resize_commands_and_legacy_does_not() {
             .is_empty()
     );
 
-    // The legacy plugin must not also map a tree command, or the resize runs
-    // twice.
-    let guarded = app.plugins.legacy.run(tree_command("wider"), &cx);
+    // The views must not also map a tree command, or the resize runs twice.
+    let guarded = app.plugins.source.run(tree_command("wider"), &cx);
     assert!(
         guarded.is_empty(),
-        "the legacy plugin must not double-run a tree command"
+        "the source view must not double-run a tree command"
+    );
+    let guarded = app.plugins.diff.run(tree_command("wider"), &cx);
+    assert!(
+        guarded.is_empty(),
+        "the diff view must not double-run a tree command"
     );
 
     let mut cmds = Vec::new();

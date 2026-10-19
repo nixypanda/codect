@@ -29,7 +29,7 @@ pub const HELP: PluginId = PluginId("help");
 #[derive(Clone, Debug, Default)]
 pub struct Help;
 
-/// The help command, shared with the legacy palette bridge.
+/// The help command; the palette reads it back through the kernel registry.
 pub(crate) fn commands() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: CommandId {

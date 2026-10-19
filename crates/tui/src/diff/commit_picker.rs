@@ -13,13 +13,15 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use crate::render::block::pane_block;
 use crate::render::empty::render_empty;
-use crate::render::layout::{Edge, commit_offset};
+use crate::render::layout::Edge;
 use crate::render::text::truncate_ellipsis;
+use crate::render::theme::Theme;
 
-use super::RenderCtx;
+use super::layout::commit_offset;
 
 #[derive(Clone, Debug)]
 pub enum CommitList {
@@ -46,11 +48,6 @@ pub enum Msg {
     Select(usize),
     Loaded(usize),
     Failed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OutMsg {
-    StepRequested(usize),
 }
 
 impl CommitPicker {
@@ -120,15 +117,15 @@ impl CommitPicker {
         self.steps_slice().len()
     }
 
-    pub fn update(&mut self, msg: Msg) -> Option<OutMsg> {
+    pub fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Move(delta) => {
                 let next = self.offset_by(delta);
-                self.select(next)
+                self.select(next);
             }
             Msg::Page(delta) => {
                 let next = self.offset_by(delta);
-                self.select(next)
+                self.select(next);
             }
             Msg::ToTop => self.select(0),
             Msg::ToBottom => self.select(self.len().saturating_sub(1)),
@@ -139,13 +136,11 @@ impl CommitPicker {
                     *cursor = index.min(len.saturating_sub(1));
                     *target = None;
                 }
-                None
             }
             Msg::Failed => {
                 if let CommitList::Steps { target, .. } = &mut self.list {
                     *target = None;
                 }
-                None
             }
         }
     }
@@ -164,9 +159,9 @@ impl CommitPicker {
         next.min(len - 1)
     }
 
-    fn select(&mut self, index: usize) -> Option<OutMsg> {
+    fn select(&mut self, index: usize) {
         if self.is_empty() {
-            return None;
+            return;
         }
         let index = index.min(self.len() - 1);
         let cursor = self.cursor();
@@ -174,31 +169,30 @@ impl CommitPicker {
             if let CommitList::Steps { target, .. } = &mut self.list {
                 *target = None;
             }
-            return None;
+            return;
         }
         if let CommitList::Steps { target, .. } = &mut self.list {
             *target = Some(index);
         }
-        Some(OutMsg::StepRequested(index))
     }
 }
 
 pub(crate) fn render(
     state: &CommitPicker,
-    ctx: &RenderCtx,
+    theme: &Theme,
+    busy: bool,
     frame: &mut Frame,
     area: Rect,
     focused: bool,
     edge: Edge,
 ) {
-    let theme = ctx.theme;
     let block = pane_block(" Commits ", focused, theme, edge);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let steps = state.steps_slice();
     if steps.is_empty() {
-        let (title, detail) = if ctx.busy {
+        let (title, detail) = if busy {
             ("Loading", "Loading commits…")
         } else {
             ("No commits", "No commits in the selected range.")
@@ -233,7 +227,7 @@ pub(crate) fn render(
         let subject = truncate_ellipsis(&step.subject, (inner.width as usize).saturating_sub(used));
         let mut row = format!("{prefix}{subject}");
         let padding = (inner.width as usize)
-            .saturating_sub(unicode_width::UnicodeWidthStr::width(row.as_str()) + position.len());
+            .saturating_sub(UnicodeWidthStr::width(row.as_str()) + position.len());
         row.push_str(&" ".repeat(padding));
         row.push_str(&position);
         lines.push(Line::from(Span::styled(

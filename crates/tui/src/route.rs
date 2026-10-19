@@ -1,13 +1,15 @@
-//! The route: what a session opens with, and the concrete requests derived from
-//! it.
+//! The route: what a session opens with.
 //!
 //! This is the Elm SPA's `Route.elm`. A session is pinned to exactly one kind of
 //! projection — `show` or `diff` — and never switches. The command line builds a
-//! [`LoadRequest`]; the frontend turns the current page state into
-//! [`ShowRequest`] or [`DiffRequest`] values the engine can run. A diff
-//! request's `merge_base` flag only applies to the range view.
+//! [`LoadRequest`]; the frontend turns the current view state into a
+//! [`ShowRequest`] or [`DiffRequest`] value the engine can run. A diff request's
+//! `merge_base` flag only applies to the range view.
 
 use base::{ProjectionMode, Selection};
+
+pub use crate::diff::DiffRequest;
+pub use crate::source::ShowRequest;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LoadRequest {
@@ -30,21 +32,4 @@ pub enum LoadRequest {
 pub enum DiffView {
     Range,
     Commits,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ShowRequest {
-    pub revision: String,
-    pub mode: ProjectionMode,
-    pub selection: Selection,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DiffRequest {
-    pub base: String,
-    pub target: String,
-    pub mode: ProjectionMode,
-    pub selection: Selection,
-    pub view: DiffView,
-    pub merge_base: bool,
 }

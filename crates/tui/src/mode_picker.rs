@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(chosen.kernel.overlay, None);
         assert!(matches!(
             cmds.as_slice(),
-            [crate::plugins::PluginsCmd::Legacy(_)]
+            [crate::plugins::PluginsCmd::Source(_)]
         ));
     }
 

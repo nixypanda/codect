@@ -22,15 +22,17 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
-use crate::kernel::app::{App, Msg as KernelMsg, settle as kernel_settle, update as kernel_update};
-use crate::page::{DiffViewState, Loaded};
-use crate::plugins::legacy::Msg as LegacyMsg;
+use crate::diff::{DiffViewState, Msg as DiffMsg, VisualRow};
+use crate::kernel::app::{
+    App, Msg as KernelMsg, collect_specs, cx_for, settle as kernel_settle, update as kernel_update,
+};
+use crate::kernel::plugin::PluginSet;
 use crate::plugins::{KernelOptions, Plugins, PluginsMsg, build};
 use crate::render::highlight::StyledLine;
 use crate::render::icons::{IconStyle, Icons};
-use crate::render::layout::VisualRow;
 use crate::render::theme::{Capability, Flavor, Theme};
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
+use crate::source::Msg as SourceMsg;
 
 pub type Model = App<Plugins>;
 pub type Msg = KernelMsg<PluginsMsg>;
@@ -62,16 +64,11 @@ pub fn highlight(text: &str, language: Language) -> Vec<StyledLine> {
 }
 
 pub fn compute_diff_rows(model: &Model) -> Vec<VisualRow> {
-    match &model.plugins.legacy.loaded {
-        Loaded::Diff(diff) => diff.compute_rows(
-            model.kernel.size.width,
-            model.kernel.size.height,
-            model.kernel.chrome.tree_percent,
-            &model.kernel.chrome.theme,
-            model.kernel.workspace.selected.as_ref(),
-        ),
-        Loaded::Show(_) => Vec::new(),
-    }
+    let specs = collect_specs(model);
+    let overlay = model.kernel.overlay;
+    let busy = model.plugins.busy();
+    let cx = cx_for(&model.kernel, overlay, busy, &specs);
+    model.plugins.diff.compute_rows(&cx)
 }
 
 pub fn update(msg: Msg, model: &Model) -> (Model, Vec<crate::plugins::PluginsCmd>) {
@@ -83,9 +80,10 @@ pub fn settle(model: Model) -> Model {
 }
 
 pub fn set_body_scroll(model: &mut Model, scroll: u16) {
-    match &mut model.plugins.legacy.loaded {
-        Loaded::Show(show) => show.body.scroll = scroll,
-        Loaded::Diff(diff) => diff.set_body_scroll(scroll),
+    if model.kernel.active_view == crate::plugin::SOURCE_VIEW {
+        model.plugins.source.body.scroll = scroll;
+    } else {
+        model.plugins.diff.set_body_scroll(scroll);
     }
 }
 
@@ -197,7 +195,7 @@ pub fn show_model(
     );
     settle(apply(
         model,
-        Msg::Plugin(PluginsMsg::Legacy(LegacyMsg::ShowLoaded {
+        Msg::Plugin(PluginsMsg::Source(SourceMsg::ShowLoaded {
             request,
             result: Ok(files.into()),
         })),
@@ -220,7 +218,7 @@ pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> Model {
     );
     settle(apply(
         model,
-        Msg::Plugin(PluginsMsg::Legacy(LegacyMsg::DiffLoaded {
+        Msg::Plugin(PluginsMsg::Diff(DiffMsg::DiffLoaded {
             request,
             result: Ok(diffs.into()),
         })),
@@ -248,7 +246,7 @@ pub fn history_model(
     );
     settle(apply(
         model,
-        Msg::Plugin(PluginsMsg::Legacy(LegacyMsg::HistoryLoaded {
+        Msg::Plugin(PluginsMsg::Diff(DiffMsg::HistoryLoaded {
             request,
             result: Ok((steps.into(), diffs.into())),
         })),
@@ -256,17 +254,18 @@ pub fn history_model(
 }
 
 pub fn load_show(files: Vec<SourceOutline>, model: &Model) -> Model {
-    let request = match &model.plugins.legacy.loaded {
-        Loaded::Show(show) => ShowRequest {
-            revision: show.revision.clone(),
+    let request = if model.kernel.active_view == crate::plugin::SOURCE_VIEW {
+        ShowRequest {
+            revision: model.plugins.source.revision.clone(),
             mode: model.kernel.workspace.query.mode,
             selection: model.kernel.workspace.query.scope.selection.clone(),
-        },
-        Loaded::Diff(_) => show_request(),
+        }
+    } else {
+        show_request()
     };
     apply(
         model.clone(),
-        Msg::Plugin(PluginsMsg::Legacy(LegacyMsg::ShowLoaded {
+        Msg::Plugin(PluginsMsg::Source(SourceMsg::ShowLoaded {
             request,
             result: Ok(files.into()),
         })),
@@ -274,23 +273,24 @@ pub fn load_show(files: Vec<SourceOutline>, model: &Model) -> Model {
 }
 
 pub fn load_diff(diffs: Vec<FileDiff>, model: &Model) -> Model {
-    let request = match &model.plugins.legacy.loaded {
-        Loaded::Diff(diff) => DiffRequest {
-            base: diff.base.clone(),
-            target: diff.target.clone(),
+    let request = if model.kernel.active_view.owner == crate::plugin::DIFF {
+        DiffRequest {
+            base: model.plugins.diff.base.clone(),
+            target: model.plugins.diff.target.clone(),
             mode: model.kernel.workspace.query.mode,
             selection: model.kernel.workspace.query.scope.selection.clone(),
-            view: match diff.view {
+            view: match model.plugins.diff.view {
                 DiffViewState::Range(_) => DiffView::Range,
                 DiffViewState::Commits(_) => DiffView::Commits,
             },
-            merge_base: diff.merge_base,
-        },
-        Loaded::Show(_) => diff_request(),
+            merge_base: model.plugins.diff.merge_base,
+        }
+    } else {
+        diff_request()
     };
     apply(
         model.clone(),
-        Msg::Plugin(PluginsMsg::Legacy(LegacyMsg::DiffLoaded {
+        Msg::Plugin(PluginsMsg::Diff(DiffMsg::DiffLoaded {
             request,
             result: Ok(diffs.into()),
         })),

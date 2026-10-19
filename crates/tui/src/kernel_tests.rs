@@ -12,20 +12,35 @@ use std::sync::Arc;
 
 use base::{ProjectionMode, RepoPath, Selection};
 
-use crate::api::Cmd;
 use crate::kernel::app::{Diagnostic, Msg, settle};
 use crate::kernel::plugin::Request;
 use crate::kernel::runtime::{Driver, Session, run_with, translate, translate_mouse};
 use crate::plugins::PluginsMsg;
 use crate::test_support::{
-    App, Cmd as PluginsCmd, diff_app, file_diff, folder_app, render, show_app, show_ref,
-    show_request, two_files,
+    App, Cmd as PluginsCmd, commits_app, diff_app, file_diff, folder_app, render, show_app,
+    show_ref, show_request, two_files,
 };
 use crate::util::input::{Key, Mouse, MouseKind};
 
-fn legacy_cmd(cmd: PluginsCmd) -> Option<Cmd> {
+/// The view effects these kernel tests inspect, flattened so the assertions
+/// read the same whichever plugin produced them.
+#[derive(Debug, PartialEq)]
+enum Cmd {
+    Show(crate::route::ShowRequest),
+    Diff(crate::route::DiffRequest),
+}
+
+fn plugin_cmd(cmd: PluginsCmd) -> Option<Cmd> {
     match cmd {
-        crate::plugins::PluginsCmd::Legacy(cmd) => Some(cmd),
+        crate::plugins::PluginsCmd::Source(cmd) => match cmd {
+            crate::source::Cmd::Load(request) => Some(Cmd::Show(request)),
+        },
+        crate::plugins::PluginsCmd::Diff(cmd) => match cmd {
+            crate::diff::Cmd::Range(request) | crate::diff::Cmd::History(request) => {
+                Some(Cmd::Diff(request))
+            }
+            crate::diff::Cmd::Step { .. } => None,
+        },
         crate::plugins::PluginsCmd::Tree(never) => match never {},
         crate::plugins::PluginsCmd::WhichKey(never) => match never {},
         crate::plugins::PluginsCmd::Prompt(never) => match never {},
@@ -44,7 +59,7 @@ fn run(app: &mut App, request: Request) -> Vec<Cmd> {
     let specs = crate::kernel::app::collect_specs(app);
     let mut cmds = Vec::new();
     crate::kernel::dispatch::apply_request(app, request, &mut cmds, 0, &specs);
-    cmds.into_iter().filter_map(legacy_cmd).collect()
+    cmds.into_iter().filter_map(plugin_cmd).collect()
 }
 
 // -- request semantics ------------------------------------------------------
@@ -119,10 +134,8 @@ fn set_files_falls_back_to_the_nearest_visible() {
 #[test]
 fn set_files_does_not_reset_the_body_when_it_drops_a_missing_selection() {
     let mut app = folder_app();
-    if let crate::page::Loaded::Show(show) = &mut app.plugins.legacy.loaded {
-        show.body.scroll = 2;
-        show.body.hscroll = 1;
-    }
+    app.plugins.source.body.scroll = 2;
+    app.plugins.source.body.hscroll = 1;
 
     let set = crate::kernel::workspace::FileSet {
         paths: Arc::from(Vec::new()),
@@ -131,34 +144,27 @@ fn set_files_does_not_reset_the_body_when_it_drops_a_missing_selection() {
     run(&mut app, Request::SetFiles(set));
 
     assert!(app.kernel.workspace.selected.is_none());
-    if let crate::page::Loaded::Show(show) = &app.plugins.legacy.loaded {
-        assert_eq!(
-            show.body.scroll, 2,
-            "dropping a selection must not reset the body"
-        );
-        assert_eq!(show.body.hscroll, 1);
-    } else {
-        panic!("expected a show");
-    }
+    assert_eq!(
+        app.plugins.source.body.scroll, 2,
+        "dropping a selection must not reset the body"
+    );
+    assert_eq!(app.plugins.source.body.hscroll, 1);
 }
 
 #[test]
 fn select_always_notifies_even_for_the_same_path() {
     let mut app = folder_app();
     let path = app.kernel.workspace.selected.clone().expect("a selection");
-    if let crate::page::Loaded::Show(show) = &mut app.plugins.legacy.loaded {
-        show.body.scroll = 3;
-        show.body.hscroll = 2;
-    }
+    app.plugins.source.body.scroll = 3;
+    app.plugins.source.body.hscroll = 2;
 
     run(&mut app, Request::Select(Some(path)));
 
-    if let crate::page::Loaded::Show(show) = &app.plugins.legacy.loaded {
-        assert_eq!(show.body.scroll, 0, "re-selecting resets the body scroll");
-        assert_eq!(show.body.hscroll, 0);
-    } else {
-        panic!("expected a show");
-    }
+    assert_eq!(
+        app.plugins.source.body.scroll, 0,
+        "re-selecting resets the body scroll"
+    );
+    assert_eq!(app.plugins.source.body.hscroll, 0);
 }
 
 #[test]
@@ -670,6 +676,148 @@ fn a_failing_initial_projection_restores_the_terminal_and_errors() {
         log.borrow().teardown,
         vec!["mouse_off", "show_cursor", "leave_alternate", "disable_raw"]
     );
+}
+
+// -- registry validation ----------------------------------------------------
+
+use crate::kernel::command::{
+    Binding, CommandId, CommandSpec, Group, KeyScope, KeySeq, Owner, validate,
+};
+
+fn test_command(name: &'static str, bindings: Vec<Binding>) -> CommandSpec {
+    CommandSpec {
+        id: CommandId {
+            owner: Owner::Kernel,
+            name,
+        },
+        label: "",
+        hint: "",
+        bindings,
+        palette: false,
+        group: None,
+        rank: 0,
+    }
+}
+
+fn bound(seq: KeySeq, scope: KeyScope) -> Binding {
+    Binding { seq, scope }
+}
+
+#[test]
+fn validation_rejects_a_duplicate_key() {
+    let both_anywhere = vec![
+        test_command(
+            "a",
+            vec![bound(KeySeq::Key(Key::Char('x')), KeyScope::Anywhere)],
+        ),
+        test_command(
+            "b",
+            vec![bound(KeySeq::Key(Key::Char('x')), KeyScope::Anywhere)],
+        ),
+    ];
+    assert!(validate(&both_anywhere, None).is_err());
+
+    let boundary = vec![
+        test_command(
+            "a",
+            vec![bound(KeySeq::Key(Key::Char('x')), KeyScope::Anywhere)],
+        ),
+        test_command(
+            "b",
+            vec![bound(
+                KeySeq::Key(Key::Char('x')),
+                KeyScope::Focused(crate::plugin::TREE_FOCUS),
+            )],
+        ),
+    ];
+    assert!(validate(&boundary, Some(crate::plugin::TREE_FOCUS)).is_err());
+    assert!(validate(&boundary, Some(crate::plugin::SOURCE_FOCUS)).is_ok());
+    assert!(validate(&boundary, None).is_ok());
+}
+
+#[test]
+fn validation_rejects_a_key_that_is_also_a_prefix() {
+    let conflict = vec![
+        test_command(
+            "a",
+            vec![bound(KeySeq::Key(Key::Char('x')), KeyScope::Anywhere)],
+        ),
+        CommandSpec {
+            id: CommandId {
+                owner: Owner::Show,
+                name: "fold",
+            },
+            label: "",
+            hint: "",
+            bindings: vec![bound(
+                KeySeq::Prefixed('x', 'a'),
+                KeyScope::Focused(crate::plugin::SOURCE_FOCUS),
+            )],
+            palette: true,
+            group: Some(Group {
+                prefix: 'x',
+                name: "group",
+            }),
+            rank: 210,
+        },
+    ];
+    assert!(validate(&conflict, Some(crate::plugin::SOURCE_FOCUS)).is_err());
+    assert!(validate(&conflict, Some(crate::plugin::TREE_FOCUS)).is_ok());
+}
+
+#[test]
+fn validation_rejects_a_prefixed_binding_without_a_group() {
+    let missing = vec![CommandSpec {
+        id: CommandId {
+            owner: Owner::Show,
+            name: "fold",
+        },
+        label: "",
+        hint: "",
+        bindings: vec![bound(
+            KeySeq::Prefixed('z', 'a'),
+            KeyScope::Focused(crate::plugin::SOURCE_FOCUS),
+        )],
+        palette: true,
+        group: None,
+        rank: 210,
+    }];
+    assert!(validate(&missing, Some(crate::plugin::SOURCE_FOCUS)).is_err());
+}
+
+#[test]
+fn the_real_registry_validates_in_every_view_and_focus() {
+    let show = folder_app();
+    let range = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+    let commits = commits_app(3);
+
+    for app in [&show, &range, &commits] {
+        let specs = crate::kernel::app::collect_specs(app).commands;
+        for focus in [
+            Some(crate::plugin::TREE_FOCUS),
+            Some(crate::plugin::SOURCE_FOCUS),
+            Some(crate::plugin::DIFF_BODY_FOCUS),
+            Some(crate::plugin::DIFF_BAND_FOCUS),
+            None,
+        ] {
+            assert!(
+                validate(&specs, focus).is_ok(),
+                "focus {focus:?}: {:?}",
+                validate(&specs, focus)
+            );
+        }
+    }
+
+    let folds = |app: &App| -> usize {
+        crate::kernel::app::collect_specs(app)
+            .commands
+            .iter()
+            .filter(|spec| spec.id.owner == Owner::Show && spec.id.name.starts_with("fold."))
+            .count()
+    };
+    assert_eq!(folds(&show), 7);
+    assert_eq!(folds(&range), 0);
+    assert_eq!(folds(&commits), 0);
 }
 
 // -- boundary scan ----------------------------------------------------------

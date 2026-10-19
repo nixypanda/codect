@@ -8,7 +8,7 @@
 //! The identifier types live in [`crate::kernel::plugin`]; this module
 //! re-exports them and holds the built-in pane constants until Phase 5.
 
-pub(crate) use crate::kernel::plugin::{FocusKey, PaneId, PluginId};
+pub(crate) use crate::kernel::plugin::{FocusKey, PaneId, PluginId, ViewId};
 
 /// The tree plugin's id.
 pub(crate) const TREE: PluginId = PluginId("tree");
@@ -141,6 +141,24 @@ pub(crate) const DIFF_BODY_FOCUS: FocusKey = FocusKey {
 
 /// The commits band's focus key.
 pub(crate) const DIFF_BAND_FOCUS: FocusKey = FocusKey {
+    owner: DIFF,
+    slot: 1,
+};
+
+/// The source view's only view.
+pub(crate) const SOURCE_VIEW: ViewId = ViewId {
+    owner: SOURCE,
+    slot: 0,
+};
+
+/// The diff plugin's compare view.
+pub(crate) const COMPARE_VIEW: ViewId = ViewId {
+    owner: DIFF,
+    slot: 0,
+};
+
+/// The diff plugin's history view.
+pub(crate) const HISTORY_VIEW: ViewId = ViewId {
     owner: DIFF,
     slot: 1,
 };

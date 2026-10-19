@@ -22,20 +22,15 @@ pub use render::icons::IconStyle;
 use render::theme::Theme;
 pub use route::{DiffView, LoadRequest};
 
-mod action;
-mod api;
-mod command;
 mod component;
 #[cfg(test)]
 mod golden;
 mod help;
 mod kernel;
-mod page;
 mod plugin;
 mod plugins;
 mod prompt;
 mod render;
-mod request;
 mod route;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -44,11 +39,13 @@ mod util;
 mod which_key;
 mod workspace;
 
+mod diff;
 mod finder;
 mod mode_picker;
 mod palette;
 mod scope_chooser;
 mod search_input;
+mod source;
 
 #[cfg(test)]
 mod app_tests;

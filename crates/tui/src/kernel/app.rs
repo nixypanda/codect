@@ -11,7 +11,7 @@ use crate::kernel::dispatch;
 use crate::kernel::help::HelpEntry;
 use crate::kernel::keymap::Keymap;
 use crate::kernel::layout::PaneSpec;
-use crate::kernel::plugin::{FocusKey, PaneId, PluginSet, Size};
+use crate::kernel::plugin::{FocusKey, PaneId, PluginSet, Size, ViewId};
 use crate::kernel::workspace::Workspace;
 use crate::render::icons::Icons;
 use crate::render::theme::Theme;
@@ -29,6 +29,7 @@ pub struct Kernel {
     pub chrome: Chrome,
     pub workspace: Workspace,
     pub focus: Option<FocusKey>,
+    pub active_view: ViewId,
     pub overlay: Option<PaneId>,
     pub keymap: Keymap,
     pub diagnostic: Option<Diagnostic>,
@@ -126,6 +127,7 @@ impl Specs {
             &kernel.root,
             &kernel.workspace,
             kernel.focus,
+            kernel.active_view,
             overlay,
             kernel.keymap.pending,
             app.plugins.busy(),
@@ -137,7 +139,13 @@ impl Specs {
         );
         let panes = app.plugins.panes(&bootstrap);
         let commands = if commands {
-            app.plugins.commands(&bootstrap)
+            let mut specs = crate::kernel::command::kernel_commands();
+            specs.extend(app.plugins.commands(&bootstrap));
+            #[cfg(debug_assertions)]
+            if let Err(message) = crate::kernel::command::validate(&specs, kernel.focus) {
+                panic!("command registry validation failed: {message}");
+            }
+            specs
         } else {
             Vec::new()
         };
@@ -183,6 +191,7 @@ pub(crate) fn cx_for<'a>(
         &kernel.root,
         &kernel.workspace,
         kernel.focus,
+        kernel.active_view,
         overlay,
         kernel.keymap.pending,
         busy,

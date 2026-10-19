@@ -1,9 +1,8 @@
 //! The command vocabulary: identifiers, bindings, and the registry invariants.
 //!
-//! The registry data itself (`raw_commands` and its helpers) is built by the
-//! `Legacy` plugin in this phase; this module holds only the types and the
-//! section 4.8 validation. `Owner` is the temporary stand-in for `PluginId`
-//! that tasks 4.2+ replace per plugin.
+//! This module holds the types, the kernel-owned command table, and the section
+//! 4.8 validation. `Owner` is the temporary stand-in for `PluginId` until the
+//! crate split.
 
 use crate::kernel::plugin::FocusKey;
 use crate::util::input::Key;
@@ -79,6 +78,118 @@ pub fn scope_matches(scope: KeyScope, focus: Option<FocusKey>) -> bool {
         KeyScope::Anywhere => true,
         KeyScope::Focused(target) => focus == Some(target),
     }
+}
+
+/// The kernel-owned commands (section 4.8). The kernel contributes these to the
+/// command registry itself; no plugin declares them.
+pub(crate) fn kernel_commands() -> Vec<CommandSpec> {
+    fn anywhere(seq: KeySeq) -> Binding {
+        Binding {
+            seq,
+            scope: KeyScope::Anywhere,
+        }
+    }
+    fn spec(
+        name: &'static str,
+        label: &'static str,
+        hint: &'static str,
+        bindings: Vec<Binding>,
+        palette: bool,
+        rank: u16,
+    ) -> CommandSpec {
+        CommandSpec {
+            id: CommandId {
+                owner: Owner::Kernel,
+                name,
+            },
+            label,
+            hint,
+            bindings,
+            palette,
+            group: None,
+            rank,
+        }
+    }
+
+    vec![
+        spec("quit", "Quit", "q", Vec::new(), true, 390),
+        spec(
+            "pane.next",
+            "Switch pane",
+            "Tab",
+            vec![anywhere(KeySeq::Key(Key::Tab))],
+            true,
+            320,
+        ),
+        spec(
+            "pane.previous",
+            "",
+            "",
+            vec![anywhere(KeySeq::Key(Key::BackTab))],
+            false,
+            0,
+        ),
+        spec(
+            "nav.top",
+            "Jump to top",
+            "g",
+            vec![
+                anywhere(KeySeq::Key(Key::Char('g'))),
+                anywhere(KeySeq::Key(Key::Home)),
+            ],
+            true,
+            360,
+        ),
+        spec(
+            "nav.bottom",
+            "Jump to bottom",
+            "G",
+            vec![
+                anywhere(KeySeq::Key(Key::Char('G'))),
+                anywhere(KeySeq::Key(Key::End)),
+            ],
+            true,
+            370,
+        ),
+        spec(
+            "nav.page_up",
+            "",
+            "",
+            vec![
+                anywhere(KeySeq::Key(Key::PageUp)),
+                anywhere(KeySeq::Key(Key::CtrlU)),
+            ],
+            false,
+            0,
+        ),
+        spec(
+            "nav.page_down",
+            "",
+            "",
+            vec![
+                anywhere(KeySeq::Key(Key::PageDown)),
+                anywhere(KeySeq::Key(Key::CtrlD)),
+            ],
+            false,
+            0,
+        ),
+        spec(
+            "search.next",
+            "",
+            "",
+            vec![anywhere(KeySeq::Key(Key::Char('n')))],
+            false,
+            0,
+        ),
+        spec(
+            "search.previous",
+            "",
+            "",
+            vec![anywhere(KeySeq::Key(Key::Char('N')))],
+            false,
+            0,
+        ),
+    ]
 }
 
 /// The section 4.8 registry invariants, checked over the in-scope bindings.

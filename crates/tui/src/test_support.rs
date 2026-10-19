@@ -15,14 +15,13 @@ use crate::kernel::cx::Cx;
 use crate::kernel::dispatch::apply_request;
 use crate::kernel::plugin::{PluginSet, Request};
 use crate::kernel::view::view;
-use crate::page::{Diff, DiffViewState, Loaded, Show};
 use crate::plugin::{DIFF_BODY_FOCUS, SOURCE_FOCUS};
-use crate::plugins::legacy::Msg as LegacyMsg;
 use crate::plugins::{KernelOptions, Plugins, PluginsMsg, build};
 use crate::render::icons::{IconStyle, Icons};
 use crate::render::theme::Theme;
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::scope_chooser::Msg as ScopeMsg;
+use crate::source::Msg as SourceMsg;
 use crate::util::input::{Key, Mouse, MouseKind};
 
 pub(crate) type App = GenericApp<Plugins>;
@@ -276,8 +275,12 @@ pub(crate) fn panes(app: &App) -> Vec<crate::render::layout::PaneSpec> {
     crate::kernel::app::Specs::panes_only(app).panes
 }
 
-pub(crate) fn legacy_msg(msg: LegacyMsg) -> Msg {
-    Msg::Plugin(PluginsMsg::Legacy(msg))
+pub(crate) fn source_msg(msg: SourceMsg) -> Msg {
+    Msg::Plugin(PluginsMsg::Source(msg))
+}
+
+pub(crate) fn diff_msg(msg: crate::diff::Msg) -> Msg {
+    Msg::Plugin(PluginsMsg::Diff(msg))
 }
 
 pub(crate) fn scope_msg(msg: ScopeMsg) -> Msg {
@@ -317,7 +320,7 @@ pub(crate) fn show_app_mode(files: Vec<SourceOutline>, mode: ProjectionMode) -> 
         selection: Selection::all(),
     });
     let (next, _) = update(
-        legacy_msg(LegacyMsg::ShowLoaded {
+        source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
                 revision: "HEAD".to_owned(),
                 mode,
@@ -340,7 +343,7 @@ pub(crate) fn diff_app(diffs: Vec<FileDiff>) -> App {
         merge_base: false,
     });
     let (next, _) = update(
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(crate::diff::Msg::DiffLoaded {
             request: diff_request(),
             result: Ok(diffs.into()),
         }),
@@ -376,7 +379,7 @@ pub(crate) fn commits_app(count: usize) -> App {
         merge_base: false,
     });
     let (next, _) = update(
-        legacy_msg(LegacyMsg::HistoryLoaded {
+        diff_msg(crate::diff::Msg::HistoryLoaded {
             request: commits_request(),
             result: Ok((
                 commit_steps(count).into(),
@@ -403,7 +406,7 @@ pub(crate) fn snapshot_range_app() -> App {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(crate::diff::Msg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", None, Some("a\n"))].into()),
         }),
@@ -428,7 +431,7 @@ pub(crate) fn merge_base_range_app() -> App {
         merge_base: request.merge_base,
     });
     let (next, _) = update(
-        legacy_msg(LegacyMsg::DiffLoaded {
+        diff_msg(crate::diff::Msg::DiffLoaded {
             request,
             result: Ok(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into()),
         }),
@@ -452,27 +455,18 @@ pub(crate) fn tail_palette_entries() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-pub(crate) fn show_ref(app: &App) -> &Show {
-    match &app.plugins.legacy.loaded {
-        Loaded::Show(show) => show,
-        _ => panic!("expected a show"),
-    }
+pub(crate) fn show_ref(app: &App) -> &crate::source::SourceView {
+    &app.plugins.source
 }
 
-pub(crate) fn diff_ref(app: &App) -> &Diff {
-    match &app.plugins.legacy.loaded {
-        Loaded::Diff(diff) => diff,
-        _ => panic!("expected a diff"),
-    }
+pub(crate) fn diff_ref(app: &App) -> &crate::diff::DiffPlugin {
+    &app.plugins.diff
 }
 
-pub(crate) fn commits_ref(app: &App) -> &crate::component::commit_picker::CommitPicker {
-    match &app.plugins.legacy.loaded {
-        Loaded::Diff(diff) => match &diff.view {
-            DiffViewState::Commits(commits) => &commits.picker,
-            _ => panic!("expected commits"),
-        },
-        _ => panic!("expected a diff"),
+pub(crate) fn commits_ref(app: &App) -> &crate::diff::CommitPicker {
+    match &app.plugins.diff.view {
+        crate::diff::DiffViewState::Commits(commits) => &commits.picker,
+        _ => panic!("expected commits"),
     }
 }
 
@@ -519,10 +513,38 @@ pub(crate) fn diff_focus_of(app: &App) -> Option<crate::kernel::plugin::FocusKey
 }
 
 pub(crate) fn focus_content(app: &mut App) {
-    app.kernel.focus = Some(match &app.plugins.legacy.loaded {
-        Loaded::Show(_) => SOURCE_FOCUS,
-        Loaded::Diff(_) => DIFF_BODY_FOCUS,
+    app.kernel.focus = Some(if app.kernel.active_view == crate::plugin::SOURCE_VIEW {
+        SOURCE_FOCUS
+    } else {
+        DIFF_BODY_FOCUS
     });
+}
+
+/// Whether the registry offers a palette entry owned by `owner` with `name`.
+pub(crate) fn has_palette_entry(
+    app: &App,
+    owner: crate::kernel::command::Owner,
+    name: &'static str,
+) -> bool {
+    with_cx(app, |cx| {
+        cx.palette_commands()
+            .iter()
+            .any(|spec| spec.id == crate::kernel::command::CommandId { owner, name })
+    })
+}
+
+/// The collected spec for a command, if the current view declares it.
+pub(crate) fn command_spec(
+    app: &App,
+    owner: crate::kernel::command::Owner,
+    name: &'static str,
+) -> Option<crate::kernel::command::CommandSpec> {
+    with_cx(app, |cx| {
+        cx.commands()
+            .iter()
+            .find(|spec| spec.id == crate::kernel::command::CommandId { owner, name })
+            .cloned()
+    })
 }
 
 pub(crate) fn press(app: &App, keys: &[Key]) -> App {

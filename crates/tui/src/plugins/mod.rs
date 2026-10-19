@@ -1,28 +1,28 @@
 //! The built-in plugins and the registry.
 //!
-//! Tasks 4.9–4.10 extract the rest and add them to the registry in field order.
+//! Registration order is behaviour: events are broadcast in field order, and a
+//! command's registration order breaks rank ties. The order is fixed here and
+//! in section 4.5 of the plugin plan.
 
-pub mod legacy;
-
-use crate::api::Cmd;
+use crate::diff::{Cmd as DiffCmd, DiffPlugin};
 use crate::finder::Finder;
 use crate::help::Help;
 use crate::kernel::app::{App, Chrome, Kernel};
 use crate::kernel::keymap::Keymap;
+use crate::kernel::plugin::Size;
 use crate::kernel::workspace::{FileSet, NO_CHANGES, NO_FILES, Query, Scope, Workspace};
 use crate::mode_picker::ModePicker;
 use crate::palette::Palette;
-use crate::plugin::TREE_FOCUS;
+use crate::plugin::{COMPARE_VIEW, HISTORY_VIEW, SOURCE_VIEW, TREE_FOCUS};
 use crate::prompt::Prompt;
 use crate::render::icons::Icons;
 use crate::render::theme::Theme;
-use crate::route::{DiffRequest, LoadRequest, ShowRequest};
+use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::scope_chooser::ScopeChooser;
 use crate::search_input::SearchInput;
+use crate::source::{Cmd as SourceCmd, SourceView};
 use crate::tree::Tree;
 use crate::which_key::WhichKey;
-
-pub use legacy::Legacy;
 
 crate::plugin_set! {
     /// Every plugin `codect tui` ships, in registration order.
@@ -36,7 +36,8 @@ crate::plugin_set! {
         search: Search = crate::search_input::SearchInput,
         modes: Modes = crate::mode_picker::ModePicker,
         scope: Scope = crate::scope_chooser::ScopeChooser,
-        legacy: Legacy = crate::plugins::legacy::Legacy,
+        source: Source = crate::source::SourceView,
+        diff: Diff = crate::diff::DiffPlugin,
     }
 }
 
@@ -82,7 +83,54 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         },
     };
 
-    let legacy = Legacy::new(request.clone());
+    let (source, diff, active_view, startup) = match request {
+        LoadRequest::Show {
+            revision,
+            mode,
+            selection,
+        } => (
+            SourceView::new(revision.clone(), mode),
+            DiffPlugin::inactive(),
+            SOURCE_VIEW,
+            PluginsCmd::Source(SourceCmd::Load(ShowRequest {
+                revision,
+                mode,
+                selection,
+            })),
+        ),
+        LoadRequest::Diff {
+            base,
+            target,
+            mode,
+            selection,
+            view,
+            merge_base,
+        } => {
+            let request = DiffRequest {
+                base: base.clone(),
+                target: target.clone(),
+                mode,
+                selection,
+                view,
+                merge_base,
+            };
+            let cmd = match view {
+                DiffView::Range => DiffCmd::Range(request),
+                DiffView::Commits => DiffCmd::History(request),
+            };
+            let active_view = match view {
+                DiffView::Range => COMPARE_VIEW,
+                DiffView::Commits => HISTORY_VIEW,
+            };
+            (
+                SourceView::inactive(),
+                DiffPlugin::new(base, target, mode, view, merge_base),
+                active_view,
+                PluginsCmd::Diff(cmd),
+            )
+        }
+    };
+
     let tree = Tree::default();
     let which_key = WhichKey::default();
     let prompt = Prompt::default();
@@ -112,12 +160,13 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         search,
         modes,
         scope,
-        legacy,
+        source,
+        diff,
     };
     plugins.assert_unique_ids();
     let kernel = Kernel {
         root,
-        size: crate::kernel::plugin::Size { width, height },
+        size: Size { width, height },
         chrome: Chrome {
             tree_percent: 30,
             theme,
@@ -127,40 +176,10 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         },
         workspace,
         focus,
+        active_view,
         overlay: None,
         keymap: Keymap::default(),
         diagnostic: None,
     };
-    let startup = vec![PluginsCmd::Legacy(request_into_cmd(request))];
-    (App::new(kernel, plugins), startup)
-}
-
-/// The effect a session starts with.
-pub fn request_into_cmd(request: LoadRequest) -> Cmd {
-    match request {
-        LoadRequest::Show {
-            revision,
-            mode,
-            selection,
-        } => Cmd::Show(ShowRequest {
-            revision,
-            mode,
-            selection,
-        }),
-        LoadRequest::Diff {
-            base,
-            target,
-            mode,
-            selection,
-            view,
-            merge_base,
-        } => Cmd::Diff(DiffRequest {
-            base,
-            target,
-            mode,
-            selection,
-            view,
-            merge_base,
-        }),
-    }
+    (App::new(kernel, plugins), vec![startup])
 }

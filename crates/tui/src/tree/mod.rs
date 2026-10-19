@@ -317,8 +317,8 @@ impl Tree {
     }
 }
 
-/// The tree's command specs. The single source for the tree commands, shared by
-/// the plugin and the legacy palette bridge.
+/// The tree's command specs. The single source for the tree commands; the
+/// palette reads them back through the kernel registry.
 pub(crate) fn commands() -> Vec<CommandSpec> {
     vec![
         tree_spec("wider", "Widen file tree", "]", ']', 330),
