@@ -4593,3 +4593,63 @@ fn the_tree_runs_its_resize_commands_and_the_views_do_not() {
     );
     assert_eq!(app.chrome.tree_percent, TREE_DEFAULT_PERCENT + TREE_STEP);
 }
+
+#[test]
+fn dropping_the_selection_does_not_reset_the_body() {
+    let mut app = folder_app();
+    app.plugins.source.body.scroll = 2;
+    app.plugins.source.body.hscroll = 1;
+
+    let set = tui_core::workspace::FileSet {
+        paths: std::sync::Arc::from(Vec::new()),
+        ..Default::default()
+    };
+    let mut cmds = Vec::new();
+    apply_request(&mut app, Request::SetFiles(set), &mut cmds);
+
+    assert!(app.kernel.workspace.selected.is_none());
+    assert_eq!(
+        app.plugins.source.body.scroll, 2,
+        "dropping a selection must not reset the body"
+    );
+    assert_eq!(app.plugins.source.body.hscroll, 1);
+    assert!(cmds.is_empty());
+}
+
+/// The migrated kernel-level validation over the real registry: every view and
+/// every focus stop must produce a conflict-free command table.
+#[cfg(feature = "diff")]
+#[test]
+fn the_real_registry_validates_in_every_view_and_focus() {
+    let show = folder_app();
+    let range = diff_app(vec![file_diff("a.rs", Some("a\n"), Some("A\n"))]);
+    let commits = commits_app(3);
+
+    for app in [&show, &range, &commits] {
+        let specs = tui_core::app::collect_specs(app).commands;
+        for focus in [
+            Some(TREE_FOCUS),
+            Some(SOURCE_FOCUS),
+            Some(DIFF_BODY_FOCUS),
+            Some(DIFF_BAND_FOCUS),
+            None,
+        ] {
+            assert!(
+                tui_core::command::validate(&specs, focus).is_ok(),
+                "focus {focus:?}: {:?}",
+                tui_core::command::validate(&specs, focus)
+            );
+        }
+    }
+
+    let folds = |app: &App| -> usize {
+        tui_core::app::collect_specs(app)
+            .commands
+            .iter()
+            .filter(|spec| spec.id.owner == SOURCE && spec.id.name.starts_with("fold."))
+            .count()
+    };
+    assert_eq!(folds(&show), 7);
+    assert_eq!(folds(&range), 0);
+    assert_eq!(folds(&commits), 0);
+}
