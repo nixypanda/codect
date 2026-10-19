@@ -59,6 +59,15 @@ pub struct CommandSpec {
     pub rank: u16,
 }
 
+/// The which-key data for one pending prefix: the group and its bindings,
+/// ordered by `(rank, registration)`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrefixGroupView {
+    pub key: char,
+    pub name: &'static str,
+    pub bindings: Vec<(char, &'static str, CommandId)>,
+}
+
 /// Whether a binding scope is active given the optional focus.
 pub fn scope_matches(scope: KeyScope, focus: Option<FocusKey>) -> bool {
     match scope {

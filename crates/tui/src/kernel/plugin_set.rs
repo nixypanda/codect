@@ -121,14 +121,25 @@ macro_rules! plugin_set {
                 target: $crate::kernel::plugin::HintTarget,
                 cx: &$crate::kernel::cx::Cx,
             ) -> Option<&'static str> {
-                let mut found = None;
-                $(
-                    $(#[$field_meta])*
-                    if found.is_none() {
-                        found = $crate::kernel::plugin::Plugin::hints(&self.$field, target, cx);
+                match target {
+                    $crate::kernel::plugin::HintTarget::Overlay(pane) => {
+                        $(
+                            $(#[$field_meta])*
+                            if $crate::kernel::plugin::Plugin::owns_pane(&self.$field, pane) {
+                                return $crate::kernel::plugin::Plugin::hints(&self.$field, target, cx);
+                            }
+                        )*
                     }
-                )*
-                found
+                    $crate::kernel::plugin::HintTarget::Focus(focus) => {
+                        $(
+                            $(#[$field_meta])*
+                            if $crate::kernel::plugin::Plugin::owns_focus(&self.$field, focus) {
+                                return $crate::kernel::plugin::Plugin::hints(&self.$field, target, cx);
+                            }
+                        )*
+                    }
+                }
+                None
             }
 
             fn chips(&self, cx: &$crate::kernel::cx::Cx) -> Vec<$crate::kernel::chrome::Chip> {
@@ -149,22 +160,24 @@ macro_rules! plugin_set {
             ) -> $crate::kernel::plugin::OverlaySpec {
                 $(
                     $(#[$field_meta])*
-                    if pane.owner == <$ty as $crate::kernel::plugin::Plugin>::ID {
+                    if $crate::kernel::plugin::Plugin::owns_pane(&self.$field, pane) {
                         return $crate::kernel::plugin::Plugin::overlay_spec(&self.$field, pane);
                     }
                 )*
                 $crate::kernel::plugin::OverlaySpec::MODAL
             }
 
-            fn overlay_pane(&self) -> Option<$crate::kernel::plugin::PaneId> {
-                let mut found = None;
+            fn pane_owner(
+                &self,
+                pane: $crate::kernel::plugin::PaneId,
+            ) -> Option<$crate::kernel::plugin::PluginId> {
                 $(
                     $(#[$field_meta])*
-                    if found.is_none() {
-                        found = $crate::kernel::plugin::Plugin::overlay_pane(&self.$field);
+                    if $crate::kernel::plugin::Plugin::owns_pane(&self.$field, pane) {
+                        return Some(<$ty as $crate::kernel::plugin::Plugin>::ID);
                     }
                 )*
-                found
+                None
             }
 
             fn busy(&self) -> bool {
@@ -540,6 +553,7 @@ mod tests {
             },
             workspace: workspace(),
             focus: None,
+            overlay: None,
             keymap: Keymap::default(),
             diagnostic: None,
         }

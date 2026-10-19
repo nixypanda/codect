@@ -19,6 +19,30 @@ pub(crate) const SOURCE: PluginId = PluginId("source");
 /// The diff plugin's id.
 pub(crate) const DIFF: PluginId = PluginId("diff");
 
+/// The which-key band plugin's id.
+pub(crate) const WHICH_KEY: PluginId = PluginId("which-key");
+
+/// The command palette plugin's id.
+pub(crate) const PALETTE: PluginId = PluginId("palette");
+
+/// The help plugin's id.
+pub(crate) const HELP: PluginId = PluginId("help");
+
+/// The file finder plugin's id.
+pub(crate) const FINDER: PluginId = PluginId("finder");
+
+/// The mode picker plugin's id.
+pub(crate) const MODES: PluginId = PluginId("modes");
+
+/// The scope chooser plugin's id.
+pub(crate) const SCOPE: PluginId = PluginId("scope");
+
+/// The search input plugin's id.
+pub(crate) const SEARCH: PluginId = PluginId("search");
+
+/// The text prompt plugin's id.
+pub(crate) const PROMPT: PluginId = PluginId("prompt");
+
 /// The file tree: `Navigator`.
 pub(crate) const TREE_PANE: PaneId = PaneId {
     owner: TREE,
@@ -47,6 +71,54 @@ pub(crate) const NEW_PANE: PaneId = PaneId {
 pub(crate) const COMMITS_PANE: PaneId = PaneId {
     owner: DIFF,
     slot: 2,
+};
+
+/// The which-key band's overlay pane.
+pub(crate) const WHICH_KEY_PANE: PaneId = PaneId {
+    owner: WHICH_KEY,
+    slot: 0,
+};
+
+/// The command palette's overlay pane.
+pub(crate) const PALETTE_PANE: PaneId = PaneId {
+    owner: PALETTE,
+    slot: 0,
+};
+
+/// The help popup's overlay pane.
+pub(crate) const HELP_PANE: PaneId = PaneId {
+    owner: HELP,
+    slot: 0,
+};
+
+/// The file finder's overlay pane.
+pub(crate) const FINDER_PANE: PaneId = PaneId {
+    owner: FINDER,
+    slot: 0,
+};
+
+/// The mode picker's overlay pane.
+pub(crate) const MODES_PANE: PaneId = PaneId {
+    owner: MODES,
+    slot: 0,
+};
+
+/// The scope chooser's overlay pane.
+pub(crate) const SCOPE_PANE: PaneId = PaneId {
+    owner: SCOPE,
+    slot: 0,
+};
+
+/// The search input's overlay pane.
+pub(crate) const SEARCH_PANE: PaneId = PaneId {
+    owner: SEARCH,
+    slot: 0,
+};
+
+/// The revision prompt's overlay pane.
+pub(crate) const PROMPT_PANE: PaneId = PaneId {
+    owner: PROMPT,
+    slot: 0,
 };
 
 /// The file tree's focus key.

@@ -17,7 +17,7 @@
 
 use base::RepoPath;
 
-use crate::action::{Action, PrefixGroup};
+use crate::action::Action;
 use crate::api::Cmd;
 use crate::component::text_input::Edit;
 use crate::plugin::{
@@ -177,7 +177,8 @@ impl Loaded {
         crate::command::palette_entries(self)
     }
 
-    pub fn prefix_groups(&self) -> Vec<PrefixGroup> {
+    #[cfg(test)]
+    pub fn prefix_groups(&self) -> Vec<crate::action::PrefixGroup> {
         crate::command::prefix_groups(self)
     }
 

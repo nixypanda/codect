@@ -5,8 +5,9 @@ use crate::kernel::app::{Diagnostic, Msg, settle, update};
 use crate::page::show::{ShowHighlights, VisibleRow};
 use crate::page::{DiffSide, Loaded, focus_default, focus_ring};
 use crate::plugin::{
-    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, NEW_PANE, OLD_PANE, SOURCE_FOCUS, SOURCE_PANE,
-    TREE_FOCUS, TREE_PANE,
+    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FINDER_PANE, HELP_PANE, MODES_PANE, NEW_PANE,
+    OLD_PANE, PALETTE_PANE, PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE,
+    TREE_FOCUS, TREE_PANE, WHICH_KEY_PANE,
 };
 use crate::plugins::PluginsCmd;
 use crate::plugins::legacy::Msg as LegacyMsg;
@@ -60,7 +61,7 @@ fn apply_action(app: &mut App, action: Action, cmds: &mut Vec<PluginsCmd>, depth
     use crate::kernel::plugin::{Out, PluginId};
     let specs = crate::kernel::app::collect_specs(app);
     let outs = {
-        let overlay = app.plugins.overlay_pane();
+        let overlay = app.kernel.overlay;
         let busy = app.plugins.busy();
         let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
         app.plugins.legacy.apply_action(action, &cx)
@@ -91,7 +92,7 @@ fn command_for(key: Key, app: &App) -> Option<Action> {
 
 fn tree_viewport_height(app: &App) -> usize {
     let specs = crate::kernel::app::collect_specs(app);
-    let overlay = app.plugins.overlay_pane();
+    let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
     let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
     cx.layout_if_focused(TREE_FOCUS)
@@ -103,7 +104,7 @@ fn tree_viewport_height(app: &App) -> usize {
 
 fn body_is_visible(app: &App) -> bool {
     let specs = crate::kernel::app::collect_specs(app);
-    let overlay = app.plugins.overlay_pane();
+    let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
     let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
     cx.body_visible()
@@ -1015,6 +1016,7 @@ fn mode_picker_on_a_diff_keeps_the_diff_shape() {
 fn the_mode_picker_lists_the_modes() {
     let mut app = two_files();
     app.plugins.legacy.overlay = Some(Overlay::mode(ProjectionMode::Types));
+    app.kernel.overlay = Some(MODES_PANE);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("types"), "{text}");
     assert!(text.contains("signatures"), "{text}");
@@ -1100,6 +1102,7 @@ fn help_toggles_and_swallows_navigation() {
     let app = two_files();
     let (help, _) = update(Msg::Key(Key::Char('?')), &app);
     assert_eq!(help.plugins.legacy.overlay, Some(Overlay::Help));
+    assert_eq!(help.kernel.overlay, Some(HELP_PANE));
 
     let (still, _) = update(Msg::Key(Key::Char('j')), &help);
     assert_eq!(still.plugins.tree.cursor, help.plugins.tree.cursor);
@@ -1161,16 +1164,15 @@ fn a_cancelled_prompt_does_not_wedge_input() {
     let (opened, _) = update(Msg::Key(Key::Char('r')), &app);
     assert!(show_ref(&opened).prompt.is_some(), "r opens the prompt");
     assert_eq!(
-        opened.plugins.overlay_pane(),
-        Some(crate::plugins::legacy::LEGACY_OVERLAY),
+        opened.kernel.overlay,
+        Some(PROMPT_PANE),
         "the prompt occupies the overlay slot"
     );
 
     let (cancelled, _) = update(Msg::Key(Key::Esc), &opened);
     assert!(show_ref(&cancelled).prompt.is_none(), "Esc cancels it");
     assert_eq!(
-        cancelled.plugins.overlay_pane(),
-        None,
+        cancelled.kernel.overlay, None,
         "the overlay slot clears with the prompt"
     );
 
@@ -1196,8 +1198,7 @@ fn a_cancelled_prompt_does_not_wedge_input() {
     assert!(show_ref(&empty_cancelled).prompt.is_none());
     assert!(cmds.is_empty(), "an empty value emits no load");
     assert_eq!(
-        empty_cancelled.plugins.overlay_pane(),
-        None,
+        empty_cancelled.kernel.overlay, None,
         "the slot clears on an empty confirm too"
     );
     let (quit, _) = update(Msg::Key(Key::Char('q')), &empty_cancelled);
@@ -1211,8 +1212,7 @@ fn a_cancelled_prompt_does_not_wedge_input() {
         let (cancelled, _) = update(Msg::Key(Key::Esc), &opened);
         assert!(diff_ref(&cancelled).prompt.is_none());
         assert_eq!(
-            cancelled.plugins.overlay_pane(),
-            None,
+            cancelled.kernel.overlay, None,
             "the diff prompt clears on Esc"
         );
         let (quit, _) = update(Msg::Key(Key::Char('q')), &cancelled);
@@ -1241,6 +1241,7 @@ fn the_revision_prompt_renders_its_label_and_text() {
     if let Loaded::Show(show) = &mut app.plugins.legacy.loaded {
         show.prompt = Some(TextInput::new("HEAD~2"));
     }
+    app.kernel.overlay = Some(PROMPT_PANE);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("revision"), "{text}");
     assert!(text.contains("HEAD~2"), "{text}");
@@ -1254,6 +1255,7 @@ fn scope_key_opens_the_chooser_and_requests_areas() {
         opened.plugins.legacy.overlay,
         Some(Overlay::Scope(_))
     ));
+    assert_eq!(opened.kernel.overlay, Some(SCOPE_PANE));
     assert_eq!(cmds, vec![PluginsCmd::Legacy(Cmd::LoadAreas)]);
 }
 
@@ -1264,6 +1266,7 @@ fn choosing_all_from_the_chooser_loads_everything() {
     let (loaded, _) = update(legacy_msg(LegacyMsg::AreasLoaded(Ok(area_set()))), &opened);
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &loaded);
     assert_eq!(chosen.plugins.legacy.overlay, None);
+    assert_eq!(chosen.kernel.overlay, None);
     assert_eq!(
         cmds,
         vec![PluginsCmd::Legacy(Cmd::Show(ShowRequest {
@@ -1281,6 +1284,7 @@ fn selecting_an_area_loads_that_area() {
     let (down, _) = update(Msg::Key(Key::Down), &loaded);
     let (chosen, cmds) = update(Msg::Key(Key::Enter), &down);
     assert_eq!(chosen.plugins.legacy.overlay, None);
+    assert_eq!(chosen.kernel.overlay, None);
     let expected = Selection::new(vec![SelectionGroup::Area(
         Area::new("core", [RepoPath::new("src/core").unwrap()]).unwrap(),
     )]);
@@ -1414,10 +1418,9 @@ fn the_palette_and_finder_render_their_lists() {
     app.plugins.legacy.overlay = Some(Overlay::palette(&overlay::Ctx {
         visible: &app.workspace.files.paths,
         entries: &app.plugins.legacy.loaded.palette_entries(),
-        groups: &app.plugins.legacy.loaded.prefix_groups(),
         mode: app.workspace.query.mode,
-        pending_prefix: app.keymap.pending,
     }));
+    app.kernel.overlay = Some(PALETTE_PANE);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("commands"), "{text}");
     assert!(text.contains("Switch types"), "{text}");
@@ -1426,10 +1429,9 @@ fn the_palette_and_finder_render_their_lists() {
     app.plugins.legacy.overlay = Some(Overlay::finder(&overlay::Ctx {
         visible: &app.workspace.files.paths,
         entries: &app.plugins.legacy.loaded.palette_entries(),
-        groups: &app.plugins.legacy.loaded.prefix_groups(),
         mode: app.workspace.query.mode,
-        pending_prefix: app.keymap.pending,
     }));
+    app.kernel.overlay = Some(FINDER_PANE);
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("find file"), "{text}");
     assert!(text.contains("a.rs"), "{text}");
@@ -1751,6 +1753,7 @@ fn the_wheel_scrolls_a_diff_and_clicking_it_focuses() {
 fn mouse_is_ignored_while_an_overlay_is_open() {
     let mut app = two_files();
     app.plugins.legacy.overlay = Some(Overlay::Help);
+    app.kernel.overlay = Some(HELP_PANE);
     let (next, _) = update(Msg::Mouse(click(TREE_X, TREE_Y + 1)), &app);
     assert_eq!(next.plugins.tree.cursor, app.plugins.tree.cursor);
     assert_eq!(next.workspace.selected, app.workspace.selected);
@@ -2848,15 +2851,16 @@ fn the_which_key_band_cancels_on_an_unrelated_key_and_on_esc() {
 
     let band = press(&app, &[Key::Char('z')]);
     assert_eq!(
-        band.plugins.legacy.overlay,
-        Some(Overlay::which_key()),
+        band.kernel.overlay,
+        Some(WHICH_KEY_PANE),
         "pressing z opens the fold band"
     );
+    assert_eq!(band.plugins.which_key.cursor, 0);
     assert_eq!(band.keymap.pending, Some('z'), "the prefix is pending");
 
     let cancelled = press(&band, &[Key::Char('x')]);
     assert_eq!(
-        cancelled.plugins.legacy.overlay, None,
+        cancelled.kernel.overlay, None,
         "an unrelated key closes the band"
     );
     assert_eq!(cancelled.keymap.pending, None, "the prefix is cleared");
@@ -2867,7 +2871,7 @@ fn the_which_key_band_cancels_on_an_unrelated_key_and_on_esc() {
     );
 
     let escaped = press(&band, &[Key::Esc]);
-    assert_eq!(escaped.plugins.legacy.overlay, None, "Esc closes the band");
+    assert_eq!(escaped.kernel.overlay, None, "Esc closes the band");
     assert_eq!(escaped.keymap.pending, None, "Esc clears the prefix");
     assert_eq!(show_ref(&escaped).body.cursor_line, 1);
 
@@ -2880,16 +2884,10 @@ fn a_mouse_event_closes_the_which_key_band() {
     let mut app = folder_app();
     focus_content(&mut app);
     let armed = press(&app, &[Key::Char('z')]);
-    assert!(matches!(
-        armed.plugins.legacy.overlay,
-        Some(Overlay::WhichKey { .. })
-    ));
+    assert_eq!(armed.kernel.overlay, Some(WHICH_KEY_PANE));
 
     let (cleared, _) = update(Msg::Mouse(scroll(CONTENT_X, 5, false)), &armed);
-    assert!(
-        cleared.plugins.legacy.overlay.is_none(),
-        "the mouse drops the band"
-    );
+    assert!(cleared.kernel.overlay.is_none(), "the mouse drops the band");
 
     let moved = press(&cleared, &[Key::Char('j')]);
     assert_eq!(
@@ -2904,10 +2902,7 @@ fn a_reload_closes_the_which_key_band() {
     let mut app = folder_app();
     focus_content(&mut app);
     let armed = press(&app, &[Key::Char('z')]);
-    assert!(matches!(
-        armed.plugins.legacy.overlay,
-        Some(Overlay::WhichKey { .. })
-    ));
+    assert_eq!(armed.kernel.overlay, Some(WHICH_KEY_PANE));
 
     let (reloaded, _) = update(
         legacy_msg(LegacyMsg::ShowLoaded {
@@ -2920,7 +2915,7 @@ fn a_reload_closes_the_which_key_band() {
         &armed,
     );
     assert!(
-        reloaded.plugins.legacy.overlay.is_none(),
+        reloaded.kernel.overlay.is_none(),
         "a reload drops the pending band"
     );
 }
@@ -3077,34 +3072,28 @@ fn the_band_keys_select_and_run_a_binding() {
         show_ref(&via_keys).line_count()
     );
     assert!(
-        via_band.plugins.legacy.overlay.is_none(),
+        via_band.kernel.overlay.is_none(),
         "running a binding closes the band"
     );
 
     // Ctrl-J and Ctrl-K move the highlight without dispatching a binding.
     let opened = press(&app, &[Key::Char('z')]);
-    assert_eq!(opened.plugins.legacy.overlay, Some(Overlay::which_key()));
+    assert_eq!(opened.kernel.overlay, Some(WHICH_KEY_PANE));
+    assert_eq!(opened.plugins.which_key.cursor, 0);
     assert_eq!(opened.keymap.pending, Some('z'));
     let down = press(&opened, &[Key::CtrlJ]);
-    assert_eq!(
-        down.plugins.legacy.overlay,
-        Some(Overlay::WhichKey { cursor: 1 })
-    );
+    assert_eq!(down.plugins.which_key.cursor, 1);
     let up = press(&down, &[Key::CtrlK]);
-    assert_eq!(up.plugins.legacy.overlay, Some(Overlay::which_key()));
+    assert_eq!(up.plugins.which_key.cursor, 0);
     let clamped = press(&up, &[Key::CtrlK]);
     assert_eq!(
-        clamped.plugins.legacy.overlay,
-        Some(Overlay::which_key()),
+        clamped.plugins.which_key.cursor, 0,
         "the highlight clamps at the first binding"
     );
 
     // The arrow keys move the same highlight.
     let arrows = press(&app, &[Key::Char('z'), Key::Down, Key::Down, Key::Up]);
-    assert_eq!(
-        arrows.plugins.legacy.overlay,
-        Some(Overlay::WhichKey { cursor: 1 })
-    );
+    assert_eq!(arrows.plugins.which_key.cursor, 1);
 }
 
 #[test]
@@ -3147,14 +3136,12 @@ fn q_under_a_pending_prefix_closes_the_band_without_quitting() {
     let mut app = folder_app();
     focus_content(&mut app);
     let band = press(&app, &[Key::Char('z')]);
-    assert_eq!(
-        band.plugins.legacy.overlay,
-        Some(Overlay::WhichKey { cursor: 0 })
-    );
+    assert_eq!(band.kernel.overlay, Some(WHICH_KEY_PANE));
+    assert_eq!(band.plugins.which_key.cursor, 0);
     assert_eq!(band.keymap.pending, Some('z'));
 
     let closed = press(&band, &[Key::Char('q')]);
-    assert_eq!(closed.plugins.legacy.overlay, None, "q closes the band");
+    assert_eq!(closed.kernel.overlay, None, "q closes the band");
     assert!(
         !closed.chrome.quit,
         "q does not quit under a pending prefix"
@@ -3189,10 +3176,11 @@ fn an_unhandled_key_falls_through_a_non_modal_overlay() {
     let mut app = two_files();
     // Force the band open with no pending prefix. It is non-modal, so a key it
     // does not handle falls through to the keymap.
-    app.plugins.legacy.overlay = Some(Overlay::WhichKey { cursor: 0 });
+    app.kernel.overlay = Some(WHICH_KEY_PANE);
     assert_eq!(app.keymap.pending, None);
 
     let (next, _) = update(Msg::Key(Key::Char('?')), &app);
+    assert_eq!(next.kernel.overlay, Some(HELP_PANE));
     assert_eq!(next.plugins.legacy.overlay, Some(Overlay::Help));
 }
 
@@ -3204,6 +3192,7 @@ fn ctrl_c_quits_with_a_capturing_overlay_open() {
         opened.plugins.legacy.overlay,
         Some(Overlay::Search(_))
     ));
+    assert_eq!(opened.kernel.overlay, Some(SEARCH_PANE));
 
     let (quit, _) = update(Msg::Key(Key::CtrlC), &opened);
     assert!(quit.chrome.quit, "Ctrl-C quits even from a search input");
@@ -3265,10 +3254,8 @@ fn the_band_reads_its_prefix_from_the_keymap() {
     focus_content(&mut app);
     let band = press(&app, &[Key::Char('z')]);
     assert_eq!(band.keymap.pending, Some('z'));
-    assert_eq!(
-        band.plugins.legacy.overlay,
-        Some(Overlay::WhichKey { cursor: 0 })
-    );
+    assert_eq!(band.kernel.overlay, Some(WHICH_KEY_PANE));
+    assert_eq!(band.plugins.which_key.cursor, 0);
 
     let text = buffer_text(&render(&band, 100, 20));
     assert!(
@@ -3814,7 +3801,7 @@ fn the_tree_plugin_owns_its_pane_and_the_legacy_plugin_does_not() {
         assert_eq!(tree, 1, "the union owns TREE_PANE exactly once");
 
         let specs = crate::kernel::app::Specs::panes_only(&app);
-        let overlay = app.plugins.overlay_pane();
+        let overlay = app.kernel.overlay;
         let busy = app.plugins.busy();
         let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
         let legacy = app.plugins.legacy.panes(&cx);
@@ -3963,6 +3950,7 @@ fn a_long_diff_line_is_wrapped_inside_its_pane() {
 fn the_help_overlay_lists_the_keys() {
     let mut app = two_files();
     app.plugins.legacy.overlay = Some(Overlay::Help);
+    app.kernel.overlay = Some(HELP_PANE);
     let text = buffer_text(&render(&app, 100, 32));
     assert!(text.contains("help"), "{text}");
     assert!(text.contains("quit"), "{text}");
@@ -4017,7 +4005,8 @@ fn the_canvas_is_opaque_in_every_flavor() {
         for overlay in [None, Some(Overlay::Help)] {
             let mut app = two_files();
             app.chrome.theme = Theme::new(flavor, Capability::TrueColor);
-            app.plugins.legacy.overlay = overlay;
+            app.plugins.legacy.overlay = overlay.clone();
+            app.kernel.overlay = overlay.map(|_| HELP_PANE);
             let buffer = render(&app, 100, 20);
             for y in 0..buffer.area.height {
                 for x in 0..buffer.area.width {
@@ -4579,7 +4568,7 @@ fn a_band_click_outside_the_inner_rect_only_moves_focus() {
 fn the_tree_input_is_pane_scoped() {
     let mut app = two_files();
     let specs = crate::kernel::app::Specs::panes_only(&app);
-    let overlay = app.plugins.overlay_pane();
+    let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
     let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
 
@@ -4630,7 +4619,7 @@ fn files_changed_selects_the_nearest_visible_file() {
     };
 
     let specs = crate::kernel::app::Specs::panes_only(&app);
-    let overlay = app.plugins.overlay_pane();
+    let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
     let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
     let outs = app.plugins.tree.on_event(&Event::FilesChanged, &cx);
@@ -4654,7 +4643,7 @@ fn a_selection_change_reveals_the_file_in_the_tree() {
     app.workspace.selected = Some(RepoPath::new("f39.rs").unwrap());
 
     let specs = crate::kernel::app::Specs::panes_only(&app);
-    let overlay = app.plugins.overlay_pane();
+    let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
     let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
     app.plugins.tree.on_event(&Event::SelectionChanged, &cx);
@@ -4666,7 +4655,7 @@ fn a_selection_change_reveals_the_file_in_the_tree() {
 fn the_tree_runs_its_resize_commands_and_legacy_does_not() {
     let mut app = two_files();
     let specs = crate::kernel::app::Specs::panes_only(&app);
-    let overlay = app.plugins.overlay_pane();
+    let overlay = app.kernel.overlay;
     let busy = app.plugins.busy();
     let cx = crate::kernel::app::cx_for(&app.kernel, overlay, busy, &specs);
 

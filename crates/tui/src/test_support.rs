@@ -493,7 +493,7 @@ pub(crate) fn after_batch_effects(app: &mut App, pending: &[Cmd]) -> Vec<Cmd> {
     let specs = crate::kernel::app::collect_specs(app);
     let outs = {
         let kernel = &app.kernel;
-        let overlay = app.plugins.overlay_pane();
+        let overlay = app.kernel.overlay;
         let busy = app.plugins.busy();
         let cx = crate::kernel::app::cx_for(kernel, overlay, busy, &specs);
         app.plugins.after_batch(pending, &cx)

@@ -136,7 +136,7 @@ pub(crate) fn run_with<S: PluginSet, D: Driver<S>>(
         let specs = collect_specs(&next);
         let outs = {
             let App { kernel, plugins } = &mut next;
-            let overlay = plugins.overlay_pane();
+            let overlay = kernel.overlay;
             let busy = plugins.busy();
             let cx = cx_for(kernel, overlay, busy, &specs);
             plugins.after_batch(&cmds, &cx)

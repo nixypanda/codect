@@ -18,7 +18,7 @@ pub(crate) fn view<S: PluginSet>(app: &App<S>, frame: &mut Frame) {
     // The body layout needs only the panes. The command registry and help are
     // built only when an overlay may read them, so an idle warm frame does not
     // reallocate the whole registry.
-    let overlay = app.plugins.overlay_pane();
+    let overlay = app.kernel.overlay;
     let specs = if overlay.is_some() {
         Specs::full(app)
     } else {

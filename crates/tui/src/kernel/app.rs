@@ -29,6 +29,7 @@ pub struct Kernel {
     pub chrome: Chrome,
     pub workspace: Workspace,
     pub focus: Option<FocusKey>,
+    pub overlay: Option<PaneId>,
     pub keymap: Keymap,
     pub diagnostic: Option<Diagnostic>,
 }
@@ -117,7 +118,7 @@ impl Specs {
     /// command on every call.
     fn collect<S: PluginSet>(app: &App<S>, commands: bool, help: bool) -> Self {
         let kernel = &app.kernel;
-        let overlay = app.plugins.overlay_pane();
+        let overlay = app.kernel.overlay;
         let bootstrap = Cx::new(
             kernel.size,
             &kernel.chrome.theme,
@@ -230,7 +231,7 @@ pub fn update<S: PluginSet>(msg: Msg<S::Msg>, app: &App<S>) -> (App<S>, Vec<S::C
             let specs = Specs::full(&next);
             let outs = {
                 let kernel = &next.kernel;
-                let overlay = next.plugins.overlay_pane();
+                let overlay = next.kernel.overlay;
                 let busy = next.plugins.busy();
                 let cx = cx_for(kernel, overlay, busy, &specs);
                 next.plugins.update(msg, &cx)
@@ -260,7 +261,7 @@ pub fn settle<S: PluginSet>(mut app: App<S>) -> App<S> {
     let specs = Specs::panes_only(&app);
     {
         let kernel = &app.kernel;
-        let overlay = app.plugins.overlay_pane();
+        let overlay = app.kernel.overlay;
         let busy = app.plugins.busy();
         let cx = cx_for(kernel, overlay, busy, &specs);
         app.plugins.settle(&cx);
@@ -281,7 +282,7 @@ fn sync_search<S: PluginSet>(app: &mut App<S>, specs: &Specs) {
     };
     let matches = {
         let kernel = &app.kernel;
-        let overlay = app.plugins.overlay_pane();
+        let overlay = app.kernel.overlay;
         let busy = app.plugins.busy();
         let cx = cx_for(kernel, overlay, busy, specs);
         app.plugins.search(&needle, &cx)

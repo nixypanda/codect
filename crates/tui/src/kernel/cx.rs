@@ -6,9 +6,10 @@
 //! request cascade never re-collects them.
 
 #![allow(dead_code)]
-use crate::kernel::command::CommandSpec;
+use crate::kernel::command::{CommandSpec, PrefixGroupView};
 use crate::kernel::focus::focus_default;
 use crate::kernel::help::HelpEntry;
+use crate::kernel::keymap;
 use crate::kernel::layout::{
     BodyLayout, MIN_HEIGHT, PaneGeometry, PaneSpec, Placement, SIDE_BY_SIDE_MIN_WIDTH,
     SINGLE_PANE_MIN_WIDTH, body_layout, frame_areas,
@@ -93,6 +94,20 @@ impl<'a> Cx<'a> {
             self.commands.iter().filter(|spec| spec.palette).collect();
         specs.sort_by_key(|spec| spec.rank);
         specs
+    }
+
+    /// The which-key band's data: the in-scope commands whose binding is
+    /// `Prefixed(prefix, _)`, in `(rank, registration)` order.
+    pub fn prefix_group(&self, prefix: char) -> Option<PrefixGroupView> {
+        let (group, bindings) = keymap::prefix_group(self.commands, prefix, self.focus)?;
+        Some(PrefixGroupView {
+            key: group.prefix,
+            name: group.name,
+            bindings: bindings
+                .into_iter()
+                .map(|binding| (binding.key, binding.label, binding.id))
+                .collect(),
+        })
     }
 
     /// The body layout with the current focus.

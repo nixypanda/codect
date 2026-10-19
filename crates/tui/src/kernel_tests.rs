@@ -27,6 +27,7 @@ fn legacy_cmd(cmd: PluginsCmd) -> Cmd {
     match cmd {
         crate::plugins::PluginsCmd::Legacy(cmd) => cmd,
         crate::plugins::PluginsCmd::Tree(never) => match never {},
+        crate::plugins::PluginsCmd::WhichKey(never) => match never {},
     }
 }
 
@@ -155,16 +156,13 @@ fn select_always_notifies_even_for_the_same_path() {
 fn select_clears_a_pending_prefix() {
     let mut app = folder_app();
     app.kernel.keymap.pending = Some('z');
-    app.plugins.legacy.overlay = Some(crate::component::overlay::Overlay::which_key());
+    app.kernel.overlay = Some(crate::plugin::WHICH_KEY_PANE);
     let path = app.kernel.workspace.selected.clone().expect("a selection");
 
     run(&mut app, Request::Select(Some(path)));
 
     assert!(app.kernel.keymap.pending.is_none());
-    assert!(
-        app.plugins.legacy.overlay.is_none(),
-        "the which-key band closes"
-    );
+    assert!(app.kernel.overlay.is_none(), "the which-key band closes");
 }
 
 #[test]
@@ -308,10 +306,53 @@ fn cancel_prefix_clears_the_band() {
     );
 
     app.kernel.keymap.pending = Some('z');
-    app.plugins.legacy.overlay = Some(crate::component::overlay::Overlay::which_key());
+    app.kernel.overlay = Some(crate::plugin::WHICH_KEY_PANE);
     run(&mut app, Request::CancelPrefix);
     assert!(app.kernel.keymap.pending.is_none());
-    assert!(app.plugins.legacy.overlay.is_none());
+    assert!(app.kernel.overlay.is_none());
+}
+
+#[test]
+fn open_overlay_replaces_and_close_is_targeted() {
+    let mut app = folder_app();
+    run(&mut app, Request::OpenOverlay(crate::plugin::SCOPE_PANE));
+    assert_eq!(app.kernel.overlay, Some(crate::plugin::SCOPE_PANE));
+
+    run(&mut app, Request::OpenOverlay(crate::plugin::HELP_PANE));
+    assert_eq!(app.kernel.overlay, Some(crate::plugin::HELP_PANE));
+
+    run(&mut app, Request::CloseOverlay(crate::plugin::SCOPE_PANE));
+    assert_eq!(
+        app.kernel.overlay,
+        Some(crate::plugin::HELP_PANE),
+        "closing another pane leaves the open overlay alone"
+    );
+    run(&mut app, Request::CloseOverlay(crate::plugin::HELP_PANE));
+    assert_eq!(app.kernel.overlay, None);
+}
+
+#[test]
+fn replacing_an_overlay_notifies_its_owner() {
+    let mut app = folder_app();
+    run(
+        &mut app,
+        Request::RunCommand(crate::kernel::command::CommandId {
+            owner: crate::kernel::command::Owner::Overlay,
+            name: "scope.open",
+        }),
+    );
+    assert_eq!(app.kernel.overlay, Some(crate::plugin::SCOPE_PANE));
+    assert!(matches!(
+        app.plugins.legacy.overlay,
+        Some(crate::component::overlay::Overlay::Scope(_))
+    ));
+
+    run(&mut app, Request::OpenOverlay(crate::plugin::HELP_PANE));
+    assert_eq!(app.kernel.overlay, Some(crate::plugin::HELP_PANE));
+    assert!(
+        app.plugins.legacy.overlay.is_none(),
+        "the replaced owner receives OverlayClosed"
+    );
 }
 
 #[test]

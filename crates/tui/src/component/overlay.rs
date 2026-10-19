@@ -1,10 +1,10 @@
 //! The modal overlays that are valid whatever kind of projection is loaded:
 //! help, the scope chooser, the mode picker, the command palette, the fuzzy
-//! file finder, search, and the which-key band.
+//! file finder, and search.
 //!
 //! The revision editors are *not* here: a base-revision prompt only exists on a
 //! diff and a show-revision prompt only on a show, so each lives in its content
-//! variant.
+//! variant. The which-key band is not here either; it is its own plugin.
 
 use base::{AreaSet, ProjectionMode, RepoPath, Selection, SelectionGroup};
 use engine::EngineError;
@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::action::{Action, PrefixGroup};
+use crate::action::Action;
 use crate::page::{available_modes, mode_label};
 use crate::render::block::{popup_block, scrim};
 use crate::render::layout::{centered, window_offset};
@@ -91,15 +91,12 @@ pub enum Overlay {
     Palette(PaletteState),
     Finder(FinderState),
     Search(SearchState),
-    WhichKey { cursor: usize },
 }
 
 pub struct Ctx<'a> {
     pub visible: &'a [RepoPath],
     pub entries: &'a [(Action, &'static str, &'static str)],
-    pub groups: &'a [PrefixGroup],
     pub mode: ProjectionMode,
-    pub pending_prefix: Option<char>,
 }
 
 #[derive(Debug)]
@@ -159,33 +156,12 @@ impl Overlay {
         })
     }
 
-    pub fn which_key() -> Self {
-        Self::WhichKey { cursor: 0 }
-    }
-
     /// Whether the overlay consumes keys, so `q` acts on it instead of quitting.
     pub fn captures_text(&self) -> bool {
         matches!(
             self,
-            Self::Scope(_)
-                | Self::Palette(_)
-                | Self::Finder(_)
-                | Self::Search(_)
-                | Self::WhichKey { .. }
+            Self::Scope(_) | Self::Palette(_) | Self::Finder(_) | Self::Search(_)
         )
-    }
-
-    /// Whether keys the overlay does not handle are swallowed instead of
-    /// falling through to the kernel keymap. Every overlay is modal except the
-    /// which-key band, which lets an unrelated key resolve the pending prefix.
-    pub fn modal(&self) -> bool {
-        !matches!(self, Self::WhichKey { .. })
-    }
-
-    /// Whether Ctrl-J and Ctrl-K reach the overlay as themselves instead of the
-    /// `j` / `k` alias. Only the which-key band navigates with them.
-    pub fn keeps_ctrl_jk(&self) -> bool {
-        matches!(self, Self::WhichKey { .. })
     }
 
     pub fn update(&mut self, msg: Msg) -> Vec<OutMsg> {
@@ -220,7 +196,6 @@ impl Overlay {
             Self::Palette(state) => Some(palette_key(state, key, ctx.entries)),
             Self::Finder(state) => Some(finder_key(state, key, ctx.visible)),
             Self::Search(state) => Some(search_key(state, key)),
-            Self::WhichKey { cursor } => which_key_key(ctx.pending_prefix, cursor, key, ctx.groups),
         }
     }
 }
@@ -411,32 +386,6 @@ fn search_key(state: &mut SearchState, key: Key) -> Vec<OutMsg> {
     }
 }
 
-fn which_key_key(
-    pending: Option<char>,
-    cursor: &mut usize,
-    key: Key,
-    groups: &[PrefixGroup],
-) -> Option<Vec<OutMsg>> {
-    let prefix = pending?;
-    let group = groups.iter().find(|group| group.key == prefix)?;
-    let last = group.bindings.len().saturating_sub(1);
-    match key {
-        Key::Up | Key::CtrlK => {
-            *cursor = cursor.saturating_sub(1);
-            Some(Vec::new())
-        }
-        Key::Down | Key::CtrlJ => {
-            *cursor = (*cursor + 1).min(last);
-            Some(Vec::new())
-        }
-        Key::Enter => Some(match group.bindings.get(*cursor) {
-            Some(binding) => vec![OutMsg::Close, OutMsg::Action(binding.action)],
-            None => vec![OutMsg::Close],
-        }),
-        _ => None,
-    }
-}
-
 fn text_edit(key: Key) -> Option<Edit> {
     match key {
         Key::Char(character) => Some(Edit::Insert(character)),
@@ -496,10 +445,8 @@ pub(crate) struct RenderCtx<'a> {
     pub theme: &'a Theme,
     pub mode: ProjectionMode,
     pub entries: &'a [(Action, &'static str, &'static str)],
-    pub groups: &'a [PrefixGroup],
     pub visible: &'a [RepoPath],
     pub matches: usize,
-    pub pending_prefix: Option<char>,
 }
 
 pub(crate) fn render(state: &Overlay, ctx: &RenderCtx, frame: &mut Frame, area: Rect) {
@@ -511,7 +458,6 @@ pub(crate) fn render(state: &Overlay, ctx: &RenderCtx, frame: &mut Frame, area: 
         Overlay::Palette(state) => render_palette(frame, area, state, ctx, theme),
         Overlay::Finder(state) => render_finder(frame, area, state, ctx, theme),
         Overlay::Search(state) => render_search(frame, area, state, ctx, theme),
-        Overlay::WhichKey { cursor } => render_which_key(frame, area, *cursor, ctx, theme),
     }
 }
 
@@ -800,70 +746,6 @@ fn render_search(
         Paragraph::new(Line::from(spans)).style(theme.bg(theme.palette.surface)),
         popup,
     );
-}
-
-fn render_which_key(frame: &mut Frame, area: Rect, cursor: usize, ctx: &RenderCtx, theme: &Theme) {
-    let Some(prefix) = ctx.pending_prefix else {
-        return;
-    };
-    let Some(group) = ctx.groups.iter().find(|group| group.key == prefix) else {
-        return;
-    };
-    // Keep the top header row and the bottom status row; the band sits between.
-    let available = area.height.saturating_sub(2) as usize;
-    if group.bindings.is_empty() || area.width < 4 || available < 3 {
-        return;
-    }
-
-    let entry_width = group
-        .bindings
-        .iter()
-        .map(|binding| 2 + UnicodeWidthStr::width(binding.label))
-        .max()
-        .unwrap_or(0);
-    let column = entry_width + 3;
-    let columns = ((area.width as usize - 2) / column).max(1);
-    let rows = group.bindings.len().div_ceil(columns);
-    let height = (rows + 2).min(available) as u16;
-    let visible_rows = height as usize - 2;
-
-    let band = Rect {
-        x: area.x,
-        y: area.y + area.height - 1 - height,
-        width: area.width,
-        height,
-    };
-    frame.render_widget(Clear, band);
-    let block = popup_block(&format!("{} ({})", group.name, prefix), theme);
-    let inner = block.inner(band);
-    frame.render_widget(block, band);
-
-    let cursor_row = cursor / columns;
-    let offset = window_offset(cursor_row, rows, visible_rows);
-    let mut lines = Vec::with_capacity(visible_rows);
-    for row in offset..(offset + visible_rows).min(rows) {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        for slot in 0..columns {
-            let index = row * columns + slot;
-            let Some(binding) = group.bindings.get(index) else {
-                break;
-            };
-            let selected = index == cursor;
-            let text = format!("{} {}", binding.key, binding.label);
-            let width = UnicodeWidthStr::width(text.as_str());
-            let style = if selected {
-                theme.fg_bg(theme.palette.selection_fg, theme.palette.selection_bg)
-            } else {
-                theme.fg(theme.palette.text)
-            };
-            spans.push(Span::styled(text, style));
-            if slot + 1 < columns {
-                spans.push(Span::raw(" ".repeat(column.saturating_sub(width))));
-            }
-        }
-        lines.push(Line::from(spans));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn ranked_line(

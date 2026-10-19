@@ -1,7 +1,6 @@
 //! The built-in plugins and the registry.
 //!
-//! In this phase there is one plugin, `Legacy`; tasks 4.2–4.9 extract the rest
-//! and add them to the registry in field order.
+//! Tasks 4.3–4.9 extract the rest and add them to the registry in field order.
 
 pub mod legacy;
 
@@ -14,6 +13,7 @@ use crate::render::icons::Icons;
 use crate::render::theme::Theme;
 use crate::route::{DiffRequest, LoadRequest, ShowRequest};
 use crate::tree::Tree;
+use crate::which_key::WhichKey;
 
 pub use legacy::Legacy;
 
@@ -21,6 +21,7 @@ crate::plugin_set! {
     /// Every plugin `codect tui` ships, in registration order.
     pub struct Plugins: PluginsMsg, PluginsCmd {
         tree: Tree = crate::tree::Tree,
+        which_key: WhichKey = crate::which_key::WhichKey,
         legacy: Legacy = crate::plugins::legacy::Legacy,
     }
 }
@@ -69,6 +70,7 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
 
     let legacy = Legacy::new(request.clone());
     let tree = Tree::default();
+    let which_key = WhichKey::default();
     let focus = Some(TREE_FOCUS);
     let workspace = Workspace {
         query,
@@ -79,7 +81,11 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         selected: None,
         search: None,
     };
-    let plugins = Plugins { tree, legacy };
+    let plugins = Plugins {
+        tree,
+        which_key,
+        legacy,
+    };
     plugins.assert_unique_ids();
     let kernel = Kernel {
         root,
@@ -93,6 +99,7 @@ pub fn build(options: KernelOptions) -> (App<Plugins>, Vec<PluginsCmd>) {
         },
         workspace,
         focus,
+        overlay: None,
         keymap: Keymap::default(),
         diagnostic: None,
     };

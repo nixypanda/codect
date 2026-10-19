@@ -57,7 +57,7 @@ fn deliver<S: PluginSet>(
     specs: &Specs,
 ) -> Vec<(PluginId, Out<S::Cmd>)> {
     let App { kernel, plugins } = app;
-    let overlay = plugins.overlay_pane();
+    let overlay = kernel.overlay;
     let busy = plugins.busy();
     let cx = cx_for(kernel, overlay, busy, specs);
     plugins.on_event(target, event, &cx)
@@ -75,6 +75,19 @@ pub(crate) fn broadcast<S: PluginSet>(
     process_wrapped(app, outs, cmds, depth + 1, specs);
 }
 
+/// Deliver `event` to one plugin's owner and process its outs.
+fn send_to<S: PluginSet>(
+    app: &mut App<S>,
+    owner: PluginId,
+    event: Event,
+    cmds: &mut Vec<S::Cmd>,
+    depth: u8,
+    specs: &Specs,
+) {
+    let outs = deliver(app, EventTarget::One(owner), &event, specs);
+    process_wrapped(app, outs, cmds, depth + 1, specs);
+}
+
 fn plugin_input<S: PluginSet>(
     app: &mut App<S>,
     pane: PaneId,
@@ -82,7 +95,7 @@ fn plugin_input<S: PluginSet>(
     specs: &Specs,
 ) -> Reply<S::Cmd> {
     let App { kernel, plugins } = app;
-    let overlay = plugins.overlay_pane();
+    let overlay = kernel.overlay;
     let busy = plugins.busy();
     let cx = cx_for(kernel, overlay, busy, specs);
     plugins.input(pane, input, &cx)
@@ -177,8 +190,28 @@ fn apply_one<S: PluginSet>(
                 crate::kernel::plugin::NavigatorResize::Reset => 30,
             };
         }
-        Request::OpenOverlay(_pane) => {}
-        Request::CloseOverlay(_pane) => {}
+        Request::OpenOverlay(pane) => {
+            let previous = app.kernel.overlay;
+            app.kernel.overlay = Some(pane);
+            if let Some(previous) = previous
+                && previous != pane
+            {
+                let owner = app.plugins.pane_owner(previous).unwrap_or(previous.owner);
+                send_to(
+                    app,
+                    owner,
+                    Event::OverlayClosed(previous),
+                    cmds,
+                    depth,
+                    specs,
+                );
+            }
+        }
+        Request::CloseOverlay(pane) => {
+            if app.kernel.overlay == Some(pane) {
+                app.kernel.overlay = None;
+            }
+        }
         Request::CancelPrefix => {
             if app.kernel.keymap.pending.take().is_some() {
                 broadcast(app, Event::PrefixCleared, cmds, depth, specs);
@@ -194,7 +227,7 @@ fn search_needle<S: PluginSet>(
     specs: &Specs,
 ) -> Vec<crate::kernel::search::SearchMatch> {
     let App { kernel, plugins } = app;
-    let overlay = plugins.overlay_pane();
+    let overlay = kernel.overlay;
     let busy = plugins.busy();
     let cx = cx_for(kernel, overlay, busy, specs);
     plugins.search(needle, &cx)
@@ -231,7 +264,7 @@ fn run_command<S: PluginSet>(
     }
     let outs = {
         let App { kernel, plugins } = app;
-        let overlay = plugins.overlay_pane();
+        let overlay = kernel.overlay;
         let busy = plugins.busy();
         let cx = cx_for(kernel, overlay, busy, specs);
         plugins.run(id, &cx)
@@ -317,8 +350,8 @@ pub(crate) fn dispatch_key<S: PluginSet>(
     }
     // 2. Ctrl-K/Ctrl-J alias, except inside a keeps-ctrl-jk overlay.
     let keeps = app
-        .plugins
-        .overlay_pane()
+        .kernel
+        .overlay
         .is_some_and(|pane| app.plugins.overlay_spec(pane).keeps_ctrl_jk);
     let key = if keeps {
         key
@@ -330,7 +363,7 @@ pub(crate) fn dispatch_key<S: PluginSet>(
         }
     };
     // 3. An open overlay owns the key.
-    if let Some(pane) = app.plugins.overlay_pane() {
+    if let Some(pane) = app.kernel.overlay {
         let spec = app.plugins.overlay_spec(pane);
         if key == Key::Char('q') && !spec.captures_text {
             apply_request(app, Request::Quit, cmds, 0, specs);
@@ -400,7 +433,7 @@ pub(crate) fn dispatch_mouse<S: PluginSet>(
     // 1. Cancel a pending prefix (which also closes the band).
     apply_request(app, Request::CancelPrefix, cmds, 0, specs);
     // 2. Ignore the mouse while an overlay is open or the terminal is small.
-    if app.plugins.overlay_pane().is_some()
+    if app.kernel.overlay.is_some()
         || app.kernel.size.width < SINGLE_PANE_MIN_WIDTH
         || app.kernel.size.height < MIN_HEIGHT
     {

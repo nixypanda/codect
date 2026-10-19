@@ -25,15 +25,18 @@ use crate::kernel::help::HelpEntry;
 use crate::kernel::layout::PaneGeometry;
 use crate::kernel::nav::Nav;
 use crate::kernel::plugin::{
-    Event, HintTarget, Input, MouseInput, Out, OverlaySpec, PaneId, Plugin, PluginId, Reply,
-    Request,
+    Event, FocusKey, HintTarget, Input, MouseInput, Out, OverlaySpec, PaneId, Plugin, PluginId,
+    Reply, Request,
 };
 use crate::page::diff::Side;
 use crate::page::{
     Commits, Ctx as PageCtx, Diff, DiffSide, DiffViewState, Loaded, OutMsg, Paging, Range, Show,
     ShowBody, ViewCtx, diff as diff_page, show as show_page,
 };
-use crate::plugin::{COMMITS_PANE, DIFF_BAND_FOCUS, NEW_PANE, OLD_PANE, SOURCE_PANE, TREE_FOCUS};
+use crate::plugin::{
+    COMMITS_PANE, DIFF_BAND_FOCUS, DIFF_BODY_FOCUS, FINDER_PANE, HELP_PANE, MODES_PANE, NEW_PANE,
+    OLD_PANE, PALETTE_PANE, PROMPT_PANE, SCOPE_PANE, SEARCH_PANE, SOURCE_FOCUS, SOURCE_PANE,
+};
 use crate::render::layout::{VisualRow, commit_offset};
 use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
 use crate::util::input::{Key, MouseKind};
@@ -42,13 +45,18 @@ use crate::workspace::SearchMatch;
 /// The plugin's id.
 pub const LEGACY: PluginId = PluginId("legacy");
 
-/// The one overlay slot's pane.
-pub const LEGACY_OVERLAY: PaneId = PaneId {
-    owner: LEGACY,
-    slot: 0,
-};
-
 const MOUSE_SCROLL_STEP: i32 = 3;
+
+fn overlay_pane(overlay: &Overlay) -> PaneId {
+    match overlay {
+        Overlay::Help => HELP_PANE,
+        Overlay::Scope(_) => SCOPE_PANE,
+        Overlay::Mode { .. } => MODES_PANE,
+        Overlay::Palette(_) => PALETTE_PANE,
+        Overlay::Finder(_) => FINDER_PANE,
+        Overlay::Search(_) => SEARCH_PANE,
+    }
+}
 
 /// The five effect results the runtime folds back.
 #[allow(clippy::enum_variant_names)]
@@ -147,20 +155,24 @@ impl Legacy {
 
     fn route_show(&mut self, msg: show_page::Msg, cx: &Cx) -> Vec<Out<Cmd>> {
         let ctx = self.page_ctx(cx);
-        if let Loaded::Show(show) = &mut self.loaded {
-            convert(show_page::update(msg, show, cx.workspace, &ctx))
-        } else {
-            Vec::new()
-        }
+        let Loaded::Show(show) = &mut self.loaded else {
+            return Vec::new();
+        };
+        let had_prompt = show.prompt.is_some();
+        let mut outs = convert(show_page::update(msg, show, cx.workspace, &ctx));
+        push_prompt_transition(&mut outs, had_prompt, show.prompt.is_some());
+        outs
     }
 
     fn route_diff(&mut self, msg: diff_page::Msg, cx: &Cx) -> Vec<Out<Cmd>> {
         let ctx = self.page_ctx(cx);
-        if let Loaded::Diff(diff) = &mut self.loaded {
-            convert(diff_page::update(msg, diff, cx.workspace, &ctx))
-        } else {
-            Vec::new()
-        }
+        let Loaded::Diff(diff) = &mut self.loaded else {
+            return Vec::new();
+        };
+        let had_prompt = diff.prompt.is_some();
+        let mut outs = convert(diff_page::update(msg, diff, cx.workspace, &ctx));
+        push_prompt_transition(&mut outs, had_prompt, diff.prompt.is_some());
+        outs
     }
 
     fn route_page_action(&mut self, action: GlobalAction, cx: &Cx) -> Vec<Out<Cmd>> {
@@ -191,34 +203,59 @@ impl Legacy {
         }
     }
 
-    /// Open `overlay`. The kernel derives the open slot from the plugin.
+    /// The pane of the open overlay: the prompt's while a revision prompt is
+    /// active, else the open overlay variant's.
+    pub(crate) fn overlay_pane(&self) -> Option<PaneId> {
+        if self.loaded.prompt_active() {
+            return Some(PROMPT_PANE);
+        }
+        self.overlay.as_ref().map(overlay_pane)
+    }
+
+    /// Whether `pane` is the overlay this plugin has open, if any.
+    fn is_open_overlay(&self, pane: PaneId) -> bool {
+        self.overlay_pane() == Some(pane)
+    }
+
+    /// The focus hint for the view panes this plugin draws for.
+    fn focus_hints(&self, focus: FocusKey) -> Option<&'static str> {
+        match self.loaded {
+            Loaded::Show(_) if focus == SOURCE_FOCUS => {
+                Some("wheel / j k scroll   / search   Ctrl-P commands   Tab tree   ? help ")
+            }
+            Loaded::Diff(_) if focus == DIFF_BAND_FOCUS => {
+                Some("j/k choose commit   Tab files   Ctrl-P commands   ? help ")
+            }
+            Loaded::Diff(_) if focus == DIFF_BODY_FOCUS => {
+                Some("wheel / j k scroll   / search   n/N match   Ctrl-P commands   ? help ")
+            }
+            _ => None,
+        }
+    }
+
+    /// Open `overlay` and ask the kernel to place it in the overlay slot.
     fn open_overlay(&mut self, overlay: Overlay) -> Vec<Out<Cmd>> {
+        let pane = overlay_pane(&overlay);
         self.overlay = Some(overlay);
-        Vec::new()
+        vec![Out::Kernel(Request::OpenOverlay(pane))]
     }
 
     fn open_palette(&mut self, cx: &Cx) -> Vec<Out<Cmd>> {
         let entries = self.loaded.palette_entries();
-        let groups = self.loaded.prefix_groups();
         let palette = Overlay::palette(&overlay::Ctx {
             visible: &cx.workspace.files.paths,
             entries: &entries,
-            groups: &groups,
             mode: cx.workspace.query.mode,
-            pending_prefix: cx.pending_prefix,
         });
         self.open_overlay(palette)
     }
 
     fn open_finder(&mut self, cx: &Cx) -> Vec<Out<Cmd>> {
         let entries = self.loaded.palette_entries();
-        let groups = self.loaded.prefix_groups();
         let finder = Overlay::finder(&overlay::Ctx {
             visible: &cx.workspace.files.paths,
             entries: &entries,
-            groups: &groups,
             mode: cx.workspace.query.mode,
-            pending_prefix: cx.pending_prefix,
         });
         self.open_overlay(finder)
     }
@@ -272,7 +309,9 @@ impl Legacy {
         for out in outs {
             match out {
                 overlay::OutMsg::Close => {
-                    self.overlay = None;
+                    if let Some(open) = self.overlay.take() {
+                        result.push(Out::Kernel(Request::CloseOverlay(overlay_pane(&open))));
+                    }
                 }
                 overlay::OutMsg::Selection(selection) => {
                     result.push(Out::Kernel(Request::Requery(
@@ -301,13 +340,10 @@ impl Legacy {
 
     fn overlay_key(&mut self, key: Key, cx: &Cx) -> Reply<Cmd> {
         let entries = self.loaded.palette_entries();
-        let groups = self.loaded.prefix_groups();
         let octx = overlay::Ctx {
             visible: &cx.workspace.files.paths,
             entries: &entries,
-            groups: &groups,
             mode: cx.workspace.query.mode,
-            pending_prefix: cx.pending_prefix,
         };
         let Some(overlay) = &mut self.overlay else {
             return Reply::unhandled();
@@ -325,7 +361,7 @@ impl Legacy {
     }
 
     fn key_input(&mut self, pane: PaneId, key: Key, cx: &Cx) -> Reply<Cmd> {
-        if pane == LEGACY_OVERLAY {
+        if self.is_open_overlay(pane) {
             if self.loaded.prompt_active() {
                 let outs = self.route_prompt(key, cx);
                 return Reply {
@@ -546,39 +582,25 @@ impl Plugin for Legacy {
     }
 
     fn hints(&self, target: HintTarget, _cx: &Cx) -> Option<&'static str> {
+        let pane = match target {
+            HintTarget::Overlay(pane) => pane,
+            HintTarget::Focus(focus) => return self.focus_hints(focus),
+        };
+        if !self.is_open_overlay(pane) {
+            return None;
+        }
         if self.loaded.prompt_active() {
             return Some("Enter apply   Esc cancel ");
         }
-        match target {
-            HintTarget::Overlay(_) => match &self.overlay {
-                Some(Overlay::Scope(_)) => Some("↑↓ choose   Enter select   Esc close "),
-                Some(Overlay::Mode { .. }) => Some("↑↓ choose   Enter apply   Esc close "),
-                Some(Overlay::Palette(_)) | Some(Overlay::Finder(_)) => {
-                    Some("type to filter   ↑↓ choose   Enter open   Esc close ")
-                }
-                Some(Overlay::Search(_)) => Some("type to search   Enter next   Esc cancel "),
-                Some(Overlay::WhichKey { .. }) => {
-                    Some("↑↓ / Ctrl-K/J choose   Enter run   Esc close ")
-                }
-                Some(Overlay::Help) => Some("Esc close "),
-                None => Some("Esc close "),
-            },
-            HintTarget::Focus(focus) => {
-                if focus == DIFF_BAND_FOCUS {
-                    return Some("j/k choose commit   Tab files   Ctrl-P commands   ? help ");
-                }
-                if focus == TREE_FOCUS {
-                    return None;
-                }
-                Some(match self.loaded {
-                    Loaded::Show(_) => {
-                        "wheel / j k scroll   / search   Ctrl-P commands   Tab tree   ? help "
-                    }
-                    Loaded::Diff(_) => {
-                        "wheel / j k scroll   / search   n/N match   Ctrl-P commands   ? help "
-                    }
-                })
+        match &self.overlay {
+            Some(Overlay::Scope(_)) => Some("↑↓ choose   Enter select   Esc close "),
+            Some(Overlay::Mode { .. }) => Some("↑↓ choose   Enter apply   Esc close "),
+            Some(Overlay::Palette(_)) | Some(Overlay::Finder(_)) => {
+                Some("type to filter   ↑↓ choose   Enter open   Esc close ")
             }
+            Some(Overlay::Search(_)) => Some("type to search   Enter next   Esc cancel "),
+            Some(Overlay::Help) => Some("Esc close "),
+            None => None,
         }
     }
 
@@ -626,30 +648,44 @@ impl Plugin for Legacy {
         Vec::new()
     }
 
-    fn overlay_spec(&self, _pane: PaneId) -> OverlaySpec {
-        if self.loaded.prompt_active() {
+    fn overlay_spec(&self, pane: PaneId) -> OverlaySpec {
+        if pane == PROMPT_PANE && self.loaded.prompt_active() {
             return OverlaySpec {
                 captures_text: true,
                 modal: true,
                 keeps_ctrl_jk: false,
             };
         }
-        match &self.overlay {
-            Some(overlay) => OverlaySpec {
-                captures_text: overlay.captures_text(),
-                modal: overlay.modal(),
-                keeps_ctrl_jk: overlay.keeps_ctrl_jk(),
-            },
-            None => OverlaySpec::MODAL,
+        let captures_text = self
+            .overlay
+            .as_ref()
+            .filter(|_| self.is_open_overlay(pane))
+            .is_some_and(Overlay::captures_text);
+        OverlaySpec {
+            captures_text,
+            modal: true,
+            keeps_ctrl_jk: false,
         }
     }
 
-    fn overlay_pane(&self) -> Option<PaneId> {
-        if self.loaded.prompt_active() || self.overlay.is_some() {
-            Some(LEGACY_OVERLAY)
-        } else {
-            None
-        }
+    /// The unextracted overlay owners this plugin still answers for; each moves
+    /// to its own plugin in tasks 4.4–4.9.
+    fn owns_pane(&self, pane: PaneId) -> bool {
+        matches!(
+            pane,
+            HELP_PANE
+                | SCOPE_PANE
+                | MODES_PANE
+                | PALETTE_PANE
+                | FINDER_PANE
+                | SEARCH_PANE
+                | PROMPT_PANE
+        )
+    }
+
+    /// The view focus keys whose plugins are not extracted yet.
+    fn owns_focus(&self, focus: FocusKey) -> bool {
+        matches!(focus, SOURCE_FOCUS | DIFF_BODY_FOCUS | DIFF_BAND_FOCUS)
     }
 
     fn busy(&self) -> bool {
@@ -713,7 +749,10 @@ impl Plugin for Legacy {
         }
     }
 
-    fn render_overlay(&self, _pane: PaneId, area: Rect, cx: &Cx, frame: &mut Frame) {
+    fn render_overlay(&self, pane: PaneId, area: Rect, cx: &Cx, frame: &mut Frame) {
+        if !self.is_open_overlay(pane) {
+            return;
+        }
         if self.loaded.prompt_active() {
             match &self.loaded {
                 Loaded::Show(show) => show_page::prompt_view(show, cx.theme, frame, area),
@@ -725,19 +764,16 @@ impl Plugin for Legacy {
             return;
         };
         let entries = self.loaded.palette_entries();
-        let groups = self.loaded.prefix_groups();
         let rctx = overlay::RenderCtx {
             theme: cx.theme,
             mode: cx.workspace.query.mode,
             entries: &entries,
-            groups: &groups,
             visible: &cx.workspace.files.paths,
             matches: cx
                 .workspace
                 .search
                 .as_ref()
                 .map_or(0, |search| search.matches.len()),
-            pending_prefix: cx.pending_prefix,
         };
         overlay::render(state, &rctx, frame, area);
     }
@@ -830,21 +866,15 @@ impl Plugin for Legacy {
                 self.on_selection_changed(cx);
                 Vec::new()
             }
-            Event::QueryChanged | Event::SearchChanged => Vec::new(),
-            Event::PrefixPending(_) => self.open_overlay(Overlay::which_key()),
-            Event::PrefixCleared => {
-                if matches!(self.overlay, Some(Overlay::WhichKey { .. })) {
-                    self.overlay = None;
-                }
-                Vec::new()
-            }
+            Event::QueryChanged | Event::SearchChanged | Event::PrefixPending(_) => Vec::new(),
+            Event::PrefixCleared => Vec::new(),
             Event::Resized => {
                 self.loaded
                     .clamp_scroll(cx.size.height, cx.workspace.selected.as_ref());
                 Vec::new()
             }
             Event::OverlayClosed(pane) => {
-                if *pane == LEGACY_OVERLAY && !self.loaded.prompt_active() {
+                if self.is_open_overlay(*pane) && !self.loaded.prompt_active() {
                     self.overlay = None;
                 }
                 Vec::new()
@@ -943,6 +973,20 @@ fn convert(outs: Vec<OutMsg>) -> Vec<Out<Cmd>> {
             OutMsg::Request(request) => Out::Kernel(request),
         })
         .collect()
+}
+
+/// Keep the kernel overlay slot in step with the prompt: a page message that
+/// opens or closes the revision prompt asks for the prompt's pane accordingly.
+fn push_prompt_transition(outs: &mut Vec<Out<Cmd>>, had_prompt: bool, has_prompt: bool) {
+    if had_prompt == has_prompt {
+        return;
+    }
+    let request = if has_prompt {
+        Request::OpenOverlay(PROMPT_PANE)
+    } else {
+        Request::CloseOverlay(PROMPT_PANE)
+    };
+    outs.push(Out::Kernel(request));
 }
 
 fn command_id(name: &'static str) -> CommandId {

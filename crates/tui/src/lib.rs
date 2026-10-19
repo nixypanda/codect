@@ -39,6 +39,7 @@ mod route;
 pub(crate) mod test_support;
 mod tree;
 mod util;
+mod which_key;
 mod workspace;
 
 #[cfg(test)]

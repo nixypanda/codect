@@ -248,10 +248,17 @@ pub trait Plugin: Clone + 'static {
         let _ = pane;
         OverlaySpec::MODAL
     }
-    /// The overlay pane this plugin currently has open, if any. The kernel owns
-    /// no overlay slot of its own; it asks the plugins.
-    fn overlay_pane(&self) -> Option<PaneId> {
-        None
+    /// Whether this plugin owns `pane` for `overlay_spec` routing. The default
+    /// matches the pane's owner against this plugin's id; `Legacy` overrides it
+    /// to claim the overlay owners whose plugins are not extracted yet.
+    fn owns_pane(&self, pane: PaneId) -> bool {
+        pane.owner == Self::ID
+    }
+    /// Whether this plugin answers `hints` for `focus`. The default matches the
+    /// focus's owner; `Legacy` overrides it to claim the view focus keys whose
+    /// plugins are not extracted yet.
+    fn owns_focus(&self, focus: FocusKey) -> bool {
+        focus.owner == Self::ID
     }
     fn busy(&self) -> bool {
         false
@@ -326,8 +333,9 @@ pub trait PluginSet: Clone + 'static {
     fn chips(&self, cx: &Cx) -> Vec<Chip>;
     fn status(&self, cx: &Cx) -> Vec<Segment>;
     fn overlay_spec(&self, pane: PaneId) -> OverlaySpec;
-    /// The overlay pane the plugins currently have open, if any.
-    fn overlay_pane(&self) -> Option<PaneId>;
+    /// The plugin that answers for `pane`: the first whose `owns_pane` claims
+    /// it. `Legacy` claims the panes whose plugins are not extracted yet.
+    fn pane_owner(&self, pane: PaneId) -> Option<PluginId>;
     fn busy(&self) -> bool;
     fn render(
         &self,
