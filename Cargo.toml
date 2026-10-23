@@ -8,6 +8,8 @@ members = [
     "crates/lang-python",
     "crates/lang-rust",
     "crates/engine",
+    "crates/tui-core",
+    "crates/tui-diff",
     "crates/tui",
     "crates/cli",
 ]
@@ -28,6 +30,8 @@ lang-haskell = { path = "crates/lang-haskell" }
 lang-python = { path = "crates/lang-python" }
 lang-rust = { path = "crates/lang-rust" }
 engine = { path = "crates/engine" }
+tui-core = { path = "crates/tui-core" }
+tui-diff = { path = "crates/tui-diff" }
 tui = { path = "crates/tui" }
 
 # Runtime dependencies.
@@ -81,3 +85,12 @@ portable-pty = "0.9"
 # Benchmark-only dependency. Confined to `tui`'s `bench` feature via a
 # `required-features` bench target, so it never enters a normal build.
 criterion = { version = "0.8", features = ["html_reports"] }
+
+# The terminal frontend is split across `tui-core`, `tui`, and `tui-diff`.
+# Thin LTO recovers the cross-crate inlining the single-crate build had; without
+# it the frame/update benchmarks regress well past the plan's 10% budget.
+[profile.release]
+lto = "thin"
+
+[profile.bench]
+lto = "thin"

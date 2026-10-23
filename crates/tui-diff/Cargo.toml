@@ -1,0 +1,21 @@
+[package]
+name = "tui-diff"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Exposes the `#[doc(hidden)]` row-layout hook `bench` uses.
+bench = []
+
+[dependencies]
+base.workspace = true
+engine.workspace = true
+ratatui.workspace = true
+unicode-width.workspace = true
+tui-core.workspace = true
+
+[dev-dependencies]
+tui-core = { workspace = true, features = ["testing"] }

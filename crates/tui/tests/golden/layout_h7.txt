@@ -1,0 +1,16 @@
+# layout_h7 100x7
+terminal too small                                                                                  
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+## styles
+0: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
+1: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
+2: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
+3: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
+4: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
+5: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
+6: 0-99 fg=#737aa2 bg=#1a1b26 mod=-

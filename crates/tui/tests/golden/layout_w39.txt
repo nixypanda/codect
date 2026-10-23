@@ -1,0 +1,42 @@
+# layout_w39 39x20
+terminal too small                     
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+                                       
+## styles
+0: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+1: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+2: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+3: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+4: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+5: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+6: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+7: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+8: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+9: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+10: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+11: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+12: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+13: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+14: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+15: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+16: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+17: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+18: 0-38 fg=#737aa2 bg=#1a1b26 mod=-
+19: 0-38 fg=#737aa2 bg=#1a1b26 mod=-

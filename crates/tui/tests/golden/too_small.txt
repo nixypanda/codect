@@ -1,0 +1,14 @@
+# too_small 30x6
+terminal too small            
+                              
+                              
+                              
+                              
+                              
+## styles
+0: 0-29 fg=#737aa2 bg=#1a1b26 mod=-
+1: 0-29 fg=#737aa2 bg=#1a1b26 mod=-
+2: 0-29 fg=#737aa2 bg=#1a1b26 mod=-
+3: 0-29 fg=#737aa2 bg=#1a1b26 mod=-
+4: 0-29 fg=#737aa2 bg=#1a1b26 mod=-
+5: 0-29 fg=#737aa2 bg=#1a1b26 mod=-

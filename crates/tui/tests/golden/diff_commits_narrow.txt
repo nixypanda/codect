@@ -1,0 +1,50 @@
+# diff_commits_narrow 60x24
+ ◆ codect  /repo      types   0000000..0101010   scope: all 
+╭ BASE · 0000000 ──────────────────────────────────────────╮
+│  @@ -1,1 +1,1 @@                                         │
+│ -1 a                                                     │
+│                                                          │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+╭ TARGET · 0101010 ────────────────────────────────────────╮
+│  @@ -1,1 +1,1 @@                                         │
+│ +1 A                                                     │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+╭ Commits ─────────────────────────────────────────────────╮
+│ ▌ 0101010 Commit subject 0                           1/5 │
+│   0202020 Commit subject 1                           2/5 │
+│   0303030 Commit subject 2                           3/5 │
+│   0404040 Commit subject 3                           4/5 │
+│   0505050 Commit subject 4                           5/5 │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+ a.rs +1 −1                                          ? help 
+## styles
+0: 0-9 fg=#1a1b26 bg=#7dcfff mod=BOLD 10-16 fg=#a9b1d6 bg=#16161e mod=- 17-20 fg=reset bg=#16161e mod=- 21-27 fg=#1a1b26 bg=#7dcfff mod=- 28-28 fg=reset bg=#16161e mod=- 29-46 fg=#c0caf5 bg=#292e42 mod=- 47-47 fg=reset bg=#16161e mod=- 48-59 fg=#c0caf5 bg=#292e42 mod=-
+1: 0-59 fg=#545c7e bg=#1a1b26 mod=-
+2: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#7aa2f7 bg=#292e42 mod=BOLD 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+3: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-4 fg=#f7768e bg=#4a272f mod=- 5-5 fg=#c0caf5 bg=#914c54 mod=- 6-57 fg=reset bg=#4a272f mod=- 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+4: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+5: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+6: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+7: 0-59 fg=#545c7e bg=#1a1b26 mod=-
+8: 0-59 fg=#545c7e bg=#1a1b26 mod=-
+9: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#7aa2f7 bg=#292e42 mod=BOLD 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+10: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-4 fg=#9ece6a bg=#243e4a mod=- 5-5 fg=#c0caf5 bg=#449dab mod=- 6-57 fg=reset bg=#243e4a mod=- 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+11: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+12: 0-0 fg=#545c7e bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#545c7e bg=#1a1b26 mod=-
+13: 0-59 fg=#545c7e bg=#1a1b26 mod=-
+14: 0-59 fg=#7dcfff bg=#1a1b26 mod=-
+15: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#c0caf5 bg=#283457 mod=BOLD 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+16: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#c0caf5 bg=#1a1b26 mod=- 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+17: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#c0caf5 bg=#1a1b26 mod=- 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+18: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#c0caf5 bg=#1a1b26 mod=- 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+19: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-1 fg=reset bg=#1a1b26 mod=- 2-57 fg=#c0caf5 bg=#1a1b26 mod=- 58-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+20: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+21: 0-0 fg=#7dcfff bg=#1a1b26 mod=- 1-58 fg=reset bg=#1a1b26 mod=- 59-59 fg=#7dcfff bg=#1a1b26 mod=-
+22: 0-59 fg=#7dcfff bg=#1a1b26 mod=-
+23: 0-5 fg=#c0caf5 bg=#16161e mod=- 6-8 fg=#9ece6a bg=#16161e mod=- 9-11 fg=#f7768e bg=#16161e mod=- 12-52 fg=reset bg=#16161e mod=- 53-59 fg=#737aa2 bg=#16161e mod=-

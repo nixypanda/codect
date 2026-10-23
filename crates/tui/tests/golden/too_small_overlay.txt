@@ -1,0 +1,14 @@
+# too_small_overlay 30x6
+╭ help ──────────────────────╮
+│ Move                       │
+│   ↑ ↓ / k j   move the tree│
+│   ← → / h l   fold the tree│
+│   g / G       jump to the t│
+╰────────────────────────────╯
+## styles
+0: 0-0 fg=#7dcfff bg=#16161e mod=- 1-6 fg=#7dcfff bg=#16161e mod=BOLD 7-29 fg=#7dcfff bg=#16161e mod=-
+1: 0-0 fg=#7dcfff bg=#16161e mod=- 1-5 fg=#7dcfff bg=#16161e mod=BOLD 6-28 fg=reset bg=#16161e mod=- 29-29 fg=#7dcfff bg=#16161e mod=-
+2: 0-0 fg=#7dcfff bg=#16161e mod=- 1-15 fg=#c0caf5 bg=#16161e mod=- 16-28 fg=#a9b1d6 bg=#16161e mod=- 29-29 fg=#7dcfff bg=#16161e mod=-
+3: 0-0 fg=#7dcfff bg=#16161e mod=- 1-15 fg=#c0caf5 bg=#16161e mod=- 16-28 fg=#a9b1d6 bg=#16161e mod=- 29-29 fg=#7dcfff bg=#16161e mod=-
+4: 0-0 fg=#7dcfff bg=#16161e mod=- 1-15 fg=#c0caf5 bg=#16161e mod=- 16-28 fg=#a9b1d6 bg=#16161e mod=- 29-29 fg=#7dcfff bg=#16161e mod=-
+5: 0-29 fg=#7dcfff bg=#16161e mod=-

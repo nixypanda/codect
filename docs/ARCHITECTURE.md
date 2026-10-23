@@ -11,7 +11,9 @@ Codect is a Cargo workspace. This page is a map; the authoritative contract is
 | `git` | Read-only repository access through `gix`: discovery, revision resolution, tree traversal, stage-zero index reads, blob reads. `gix` types never leave this crate. |
 | `lang-elm`, `lang-haskell`, `lang-python`, `lang-rust` | One adapter per language: Tree-sitter parsing, extraction into the shared model, and canonical rendering. All grammar node names live here. |
 | `engine` | The shared Git-aware application layer. Composes `git` reads with `base` rendering and exposes `show` and `diff` over a selection. No CLI, terminal, or rendering. |
-| `tui` | The optional terminal frontend. Owns the TEA loop, terminal lifecycle, and all UI. |
+| `tui-core` | The terminal kernel: run loop, terminal lifecycle, frame, shared state (workspace, search, keymap, focus, overlay slot, layout), the plugin contract, and the design system. It names no plugin and links neither `tui` nor `tui-diff`. |
+| `tui` | The built-in plugins (tree, source, and the overlays), the registry, and the public `run`. Optional in `cli` behind the default-on `tui` feature. |
+| `tui-diff` | The optional compare (range) and history (commits) views, behind `tui`'s default-on `diff` feature. Among the TUI crates it depends on `tui-core` only. |
 | `cli` | Argument parsing, engine invocation, output rendering, diagnostics, exit codes, and JSON serialization. |
 
 ## Dependency direction
@@ -23,10 +25,14 @@ cli
   ├── engine
   └── tui (optional, default-on)
 
-tui              ──→ base, engine
-engine           ──→ base, git, lang-elm, lang-haskell, lang-python, lang-rust
-lang-*           ──→ base
-git              ──→ base
+tui       ──→ tui-core, base, engine, ratatui
+          └──→ tui-diff (optional, feature `diff`, default-on)
+tui-diff  ──→ tui-core, base, engine, ratatui
+tui-core  ──→ base, engine, ratatui, crossterm, terminal-colorsaurus,
+              unicode-width, syntect, two-face, thiserror
+engine    ──→ base, git, lang-elm, lang-haskell, lang-python, lang-rust
+lang-*    ──→ base
+git       ──→ base
 ```
 
 The boundaries are enforced by review and by the required checks:
@@ -34,12 +40,21 @@ The boundaries are enforced by review and by the required checks:
 - `base` must not depend on `gix`, Tree-sitter, a grammar, `clap`, or any file
   format. Language-specific node names never appear in `base`.
 - `engine` must not depend on `clap`, `miette`, `ratatui`, or `crossterm`.
-- `tui` must not depend on `clap` or `miette`, discover repositories, parse
-  arguments, or read `.codect.toml`.
+- `tui-core` depends on no plugin crate and names no plugin; no plugin type,
+  plugin id string, or plugin module appears in it. `just
+  check-tui-core-boundary` guards this.
+- `tui-diff` depends on `tui-core` only among the TUI crates; it never depends
+  on `tui`.
+- `tui` builds and passes its tests with `--no-default-features` (no diff);
+  `just check-tui-nodiff` guards this.
+- None of the three TUI crates depends on `clap` or `miette`, discovers a
+  repository, parses arguments, or reads `.codect.toml`.
 - Building `cli --no-default-features` links no terminal dependency.
 
-Inside `tui` the graph is one-way and bottom-up:
-`render`/`util` → `component` → `page` → `view`/`app` → `lib`.
+Inside the three crates the graph is one-way. `tui-core` owns the kernel and
+the design system; every UI surface is a plugin in `tui` or `tui-diff` written
+against `tui-core`'s contract. Plugins never import each other: they talk
+through kernel state (`Cx`), kernel requests, and kernel events.
 
 ## Pipeline
 

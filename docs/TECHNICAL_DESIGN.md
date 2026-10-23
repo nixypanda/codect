@@ -100,41 +100,81 @@ crates/
       engine.rs
       config.rs
       error.rs
-  tui/
+  tui-core/
     src/
       lib.rs
+      runtime.rs
       app.rs
-      route.rs
-      api.rs
-      action.rs
+      dispatch.rs
+      keymap.rs
+      command.rs
+      workspace.rs
+      search.rs
+      focus.rs
+      layout.rs
+      chrome.rs
+      view.rs
+      help.rs
+      nav.rs
+      plugin.rs
+      plugin_set.rs
+      cx.rs
       render/
         mod.rs
         theme.rs
         icons.rs
-        layout.rs
-        text.rs
         highlight.rs
         block.rs
         empty.rs
-        metrics.rs
-      component/
+        text.rs
+      widgets/
         mod.rs
-        overlay.rs
-        commit_picker.rs
-        tree.rs
         text_input.rs
-      page/
-        mod.rs
-        show.rs
-        diff.rs
-      view/
-        mod.rs
-        chrome.rs
+        ranked_list.rs
       util/
         mod.rs
         cache.rs
         fuzzy.rs
         input.rs
+      testing.rs
+  tui/
+    src/
+      lib.rs
+      plugins/
+        mod.rs       the registry
+      tree/
+        mod.rs
+        view.rs
+      source/
+        mod.rs
+        rows.rs
+        folds.rs
+        update.rs
+        view.rs
+      which_key.rs
+      palette.rs
+      help.rs
+      finder.rs
+      mode_picker.rs
+      scope_chooser.rs
+      search_input.rs
+      prompt.rs
+      route.rs
+      bench.rs
+      test_support.rs
+      golden.rs
+    tests/
+      golden/
+  tui-diff/
+    src/
+      lib.rs
+      plugin.rs
+      model.rs
+      pane.rs
+      layout.rs
+      emphasis.rs
+      commit_picker.rs
+      bench.rs
   cli/
     src/
       main.rs
@@ -160,8 +200,11 @@ cli
   ├── engine
   └── tui (optional, default-on)
 
-tui              ──→ base
-                 └──→ engine
+tui       ──→ tui-core, base, engine, ratatui
+          └──→ tui-diff (optional, feature `diff`, default-on)
+tui-diff  ──→ tui-core, base, engine, ratatui
+tui-core  ──→ base, engine, ratatui, crossterm, terminal-colorsaurus,
+              unicode-width, syntect, two-face, thiserror
 engine           ──→ base, git
                  └──→ lang-elm, lang-haskell,
                       lang-python, lang-rust
@@ -178,28 +221,30 @@ git              ──→ base
 must not depend on `clap`, `miette`, `ratatui`, or `crossterm`, and it never
 renders a document or reads command-line arguments.
 
-`tui` is the terminal frontend (section 21). It must not depend on `clap`
-or `miette`, discover repositories, parse arguments, or read `.codect.toml`; it
-receives an `Engine` and a fully-built `Selection` and talks to the terminal
-through `ratatui`/`crossterm` only.
+The terminal frontend is three crates (section 21). `tui-core` is the kernel:
+it owns the run loop, the terminal lifecycle, the frame, the shared state, the
+plugin contract, and the design system, and it names no plugin. `tui` owns the
+built-in plugins, the registry, and the public `run`. `tui-diff` owns the
+optional compare and history views behind `tui`'s default-on `diff` feature.
+`tui-core` is the only crate that touches the terminal; `tui` and `tui-diff`
+draw through `ratatui` on the kernel's frame. None of the three depends on
+`clap` or `miette`, discovers repositories, parses arguments, or reads
+`.codect.toml`; they receive an `Engine` and a fully-built `Selection` and talk
+to the terminal through `ratatui`/`crossterm` only.
 
-Inside `tui` the dependency direction is one-way, bottom-up:
+Inside the three crates the dependency direction is one-way:
 
 ```text
-render, util  (no UI deps)
+tui-core      kernel, plugin contract, and design system; names no plugin
   ↑
-component     (reusable panes and the overlay)
+tui-diff      the optional diff plugin (tui-core only among the TUI crates)
   ↑
-page          (show / diff: model, update, view)
-  ↑
-view, app     (frame composition; the shell that routes and owns shared state)
-  ↑
-lib           (the run loop, terminal lifecycle, and effect interpreter)
+tui           the built-in plugins, the registry, and `run`
 ```
 
-`render` never reaches up for `Focus` or the width constants, and `component`
-never depends on `page`, `view`, or `app`; a page owns its own model, messages,
-`update`, and `view` and talks to the shell only through `OutMsg` values.
+A plugin reads kernel state through `Cx` and talks to the kernel only through
+requests and events; plugins never import each other. The kernel draws only the
+frame and calls each pane's owning plugin to draw its own content.
 
 ## 4. Dependencies
 
@@ -247,11 +292,13 @@ two-face = { version = "0.5", default-features = false, features = ["syntect-fan
 they are not a serialization dependency of `gix`, whose `serde` feature stays
 disabled (section 4.1).
 
-The terminal dependencies are used only by `tui`, behind the default-on
-`tui` feature of `cli`. With `--no-default-features`, none of `ratatui`,
-`crossterm`, `terminal-colorsaurus`, `unicode-width`, `syntect`, or `two-face`
-may appear in `cli`'s dependency tree; this is enforced by
-`just check-workspace-nodefault` (section 18.1). `syntect` uses the
+The terminal dependencies are used only by the terminal-frontend crates, behind
+the default-on `tui` feature of `cli`: `tui-core` uses `crossterm`,
+`terminal-colorsaurus`, `unicode-width`, `syntect`, and `two-face`; `tui` and
+`tui-diff` use `ratatui` and `unicode-width` as well. With
+`--no-default-features`, none of `ratatui`, `crossterm`, `terminal-colorsaurus`,
+`unicode-width`, `syntect`, or `two-face` may appear in `cli`'s dependency
+tree; this is enforced by `just check-workspace-nodefault` (section 18.1). `syntect` uses the
 `fancy-regex` backend so the build needs no Oniguruma C toolchain.
 `terminal-colorsaurus` shares `libc` and `mio` with crossterm and adds only
 `terminal-trx` and `xterm-color`. The premium UI work adds no other dependency:
@@ -1382,6 +1429,19 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
 - The feature graph is checked by `just check-workspace-nodefault`: the
   no-default-features build must not link `ratatui`, `crossterm`,
   `terminal-colorsaurus`, `syntect`, or `two-face`.
+- The kernel is tested with fake plugins from `tui_core::testing`, so the
+  key-dispatch, request, focus, layout, and runtime suites never import `tui` or
+  `tui-diff`. Each plugin crate keeps its own unit tests beside its code.
+- `crates/tui/tests/golden/*.txt` are byte-stable frames written by the
+  `#[cfg(test)]` scenarios in `crates/tui/src/golden.rs` and compared with the
+  committed files on every run. `UPDATE_GOLDEN=1 cargo test -p tui golden`
+  rewrites them; a task may only commit rewritten files when it lists the
+  change. The committed frames are the refactor oracle: they must stay
+  byte-identical.
+- `just check-tui-nodiff` builds and tests `tui` with `--no-default-features`
+  and fails if `tui-diff` appears in its dependency tree; the diff tests are
+  `#[cfg(feature = "diff")]`. `just check-tui-core-boundary` fails if `tui-core`
+  depends on `tui` or `tui-diff`.
 - No test launches an editor, writes repository data, or depends on the
   developer's terminal configuration.
 
@@ -1577,9 +1637,12 @@ cargo test --workspace
 cargo build --workspace --release
 cargo tree -e features -p git
 cargo build -p cli --no-default-features
+cargo build -p tui --no-default-features
+cargo test -p tui --no-default-features
+cargo tree -p tui-core
 ```
 
-Review the `cargo tree` command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features. The final build must succeed and link none of `ratatui`, `crossterm`, `terminal-colorsaurus`, `syntect`, or `two-face`; `just check-workspace-nodefault` additionally asserts their absence with `cargo tree`.
+Review the `cargo tree` command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features. The final build must succeed and link none of `ratatui`, `crossterm`, `terminal-colorsaurus`, `syntect`, or `two-face`; `just check-workspace-nodefault` additionally asserts their absence with `cargo tree`. `just check-tui-nodiff` asserts that `tui-diff` is absent from the no-diff build and that its tests pass, and `just check-tui-core-boundary` asserts that `tui-core` links no plugin crate.
 
 ## 19. Implementation sequence
 
@@ -1920,6 +1983,40 @@ keeps no persistent cache.
 - Emitting a `Load` marks the model busy, and the runtime draws the busy frame
   before the blocking effect runs, so the spinner is visible during a
   projection.
+
+### 21.9 Writing a plugin
+
+A plugin is a `Clone + 'static` type implementing `tui_core::plugin::Plugin`.
+That trait is the only extension point; plugins are compile-time and in-tree.
+To add a shipped surface:
+
+1. Implement `Plugin`: `const ID`, `type Msg`, `type Cmd`, and `perform`. Every
+   declaration and reaction method has an empty default, so a plugin implements
+   only what it needs.
+2. Add a field to the `plugin_set!` registry in
+   `crates/tui/src/plugins/mod.rs`. Field order is registration order and is
+   behaviour: events are broadcast in field order, and registration order breaks
+   command rank ties.
+3. Build the plugin in `plugins::build` if it is always present.
+
+Contract rules:
+
+- `panes`, `commands`, `help`, `hints`, `chips`, `status`, `overlay_spec`,
+  `render`, `render_overlay`, and `busy` are pure and cheap. No I/O, no caching
+  through interior mutability.
+- `input`, `run`, `update`, `on_event`, `search`, `after_batch`, and `settle`
+  mutate only `self`. Engine work leaves as `Out::Effect`; everything else
+  leaves as `Out::Kernel(Request)`.
+- `perform` is the only method that touches the `Engine`, and only the runtime
+  calls it.
+- A plugin reads other plugins' state only through `Cx`.
+- Every `PaneId`, `FocusKey`, `ViewId`, and `CommandId` a plugin creates uses
+  `Self::ID` as its owner; the kernel `debug_assert!`s this.
+- An unhandled `Input::Key(Key::Esc)` returns `handled: false`, so the kernel
+  default (clear the diagnostic and the search) runs.
+- The plugin's `Cmd` is `Clone + Debug + PartialEq` and its `Msg` is `Debug`:
+  tests compare the returned effects with `==` and inspect the model
+  field-wise.
 
 ## 22. Upstream references
 

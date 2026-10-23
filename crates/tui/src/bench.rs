@@ -1,7 +1,7 @@
 //! Benchmark and docs-showcase façade for the terminal frontend.
 //!
 //! This module exists so `benches/frame.rs` (and `examples/frames.rs`, which
-//! renders the docs/showcase images) can reach the crate's internals (`App`,
+//! renders the docs/showcase images) can reach the crate's internals (`Model`,
 //! `view`, the syntax highlighter, and the diff-layout cache) without widening
 //! the frontend's real public API. It is compiled only with the `bench`
 //! feature, `#[doc(hidden)]`, and is not part of any supported surface.
@@ -22,30 +22,34 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
-use crate::app::{App, DiffRequest, DiffView, LoadRequest, ShowRequest};
-use crate::page::{DiffViewState, Loaded};
-use crate::render::highlight::StyledLine;
-use crate::render::icons::{IconStyle, Icons};
-use crate::render::layout::VisualRow;
-use crate::render::theme::{Capability, Flavor, Theme};
-use crate::view::view;
+use crate::plugins::{KernelOptions, Plugins, PluginsMsg, build};
+use crate::route::{DiffRequest, DiffView, LoadRequest, ShowRequest};
+use crate::source::Msg as SourceMsg;
+use tui_core::app::{
+    App, Msg as KernelMsg, collect_specs, cx_for, settle as kernel_settle, update as kernel_update,
+};
+use tui_core::plugin::PluginSet;
+use tui_core::render::highlight::StyledLine;
+use tui_core::render::icons::{IconStyle, Icons};
+use tui_core::render::theme::{Capability, Flavor, Theme};
+use tui_diff::{DiffViewState, Msg as DiffMsg, VisualRow};
 
-pub use crate::app::App as Model;
-pub use crate::app::Msg;
-pub use crate::app::update;
-pub use crate::util::input::Key;
+pub type Model = App<Plugins>;
+pub type Msg = KernelMsg<PluginsMsg>;
+
+pub use tui_core::util::input::Key;
 
 pub fn terminal(width: u16, height: u16) -> Terminal<TestBackend> {
     Terminal::new(TestBackend::new(width, height)).expect("test terminal")
 }
 
-pub fn draw(model: &App, terminal: &mut Terminal<TestBackend>) {
+pub fn draw(model: &Model, terminal: &mut Terminal<TestBackend>) {
     terminal
-        .draw(|frame| view(model, frame))
+        .draw(|frame| tui_core::view::view(model, frame))
         .expect("draw a frame");
 }
 
-pub fn render_to_buffer(model: &App, width: u16, height: u16) -> Buffer {
+pub fn render_to_buffer(model: &Model, width: u16, height: u16) -> Buffer {
     let mut terminal = terminal(width, height);
     draw(model, &mut terminal);
     terminal.backend().buffer().clone()
@@ -56,21 +60,30 @@ pub fn buffer_diff(previous: &Buffer, current: &Buffer) -> usize {
 }
 
 pub fn highlight(text: &str, language: Language) -> Vec<StyledLine> {
-    crate::render::highlight::highlight(text, language, &truecolor_dark())
+    tui_core::render::highlight::highlight(text, language, &truecolor_dark())
 }
 
-pub fn compute_diff_rows(model: &App) -> Vec<VisualRow> {
-    model.compute_diff_rows()
+pub fn compute_diff_rows(model: &Model) -> Vec<VisualRow> {
+    let specs = collect_specs(model);
+    let overlay = model.kernel.overlay;
+    let busy = model.plugins.busy();
+    let cx = cx_for(&model.kernel, overlay, busy, &specs);
+    tui_diff::bench::compute_rows(&model.plugins.diff, &cx)
 }
 
-pub fn settle(model: App) -> App {
-    crate::app::settle(model)
+pub fn update(msg: Msg, model: &Model) -> (Model, Vec<crate::plugins::PluginsCmd>) {
+    kernel_update(msg, model)
 }
 
-pub fn set_body_scroll(model: &mut App, scroll: u16) {
-    match &mut model.loaded {
-        Loaded::Show(show) => show.body.scroll = scroll,
-        Loaded::Diff(diff) => diff.set_body_scroll(scroll),
+pub fn settle(model: Model) -> Model {
+    kernel_settle(model)
+}
+
+pub fn set_body_scroll(model: &mut Model, scroll: u16) {
+    if model.kernel.active_view == crate::plugin::SOURCE_VIEW {
+        model.plugins.source.body.scroll = scroll;
+    } else {
+        model.plugins.diff.set_body_scroll(scroll);
     }
 }
 
@@ -147,19 +160,25 @@ pub fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> FileDiff {
     }
 }
 
-fn base(request: LoadRequest, width: u16, height: u16) -> App {
-    App::new(
-        "/repo".to_owned(),
+fn base(request: LoadRequest, width: u16, height: u16) -> Model {
+    build(KernelOptions {
+        root: "/repo".to_owned(),
         request,
-        "all".to_owned(),
+        scope_label: "all".to_owned(),
         width,
         height,
-        truecolor_dark(),
-        Icons::new(IconStyle::None),
-    )
+        theme: truecolor_dark(),
+        icons: Icons::new(IconStyle::None),
+    })
+    .0
 }
 
-pub fn show_model(mode: ProjectionMode, files: Vec<SourceOutline>, width: u16, height: u16) -> App {
+pub fn show_model(
+    mode: ProjectionMode,
+    files: Vec<SourceOutline>,
+    width: u16,
+    height: u16,
+) -> Model {
     let request = ShowRequest {
         revision: "HEAD".to_owned(),
         mode,
@@ -176,14 +195,14 @@ pub fn show_model(mode: ProjectionMode, files: Vec<SourceOutline>, width: u16, h
     );
     settle(apply(
         model,
-        Msg::ShowLoaded {
+        Msg::Plugin(PluginsMsg::Source(SourceMsg::ShowLoaded {
             request,
             result: Ok(files.into()),
-        },
+        })),
     ))
 }
 
-pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> App {
+pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> Model {
     let request = diff_request();
     let model = base(
         LoadRequest::Diff {
@@ -199,14 +218,19 @@ pub fn diff_model(diffs: Vec<FileDiff>, width: u16, height: u16) -> App {
     );
     settle(apply(
         model,
-        Msg::DiffLoaded {
+        Msg::Plugin(PluginsMsg::Diff(DiffMsg::DiffLoaded {
             request,
             result: Ok(diffs.into()),
-        },
+        })),
     ))
 }
 
-pub fn history_model(steps: Vec<CommitStep>, diffs: Vec<FileDiff>, width: u16, height: u16) -> App {
+pub fn history_model(
+    steps: Vec<CommitStep>,
+    diffs: Vec<FileDiff>,
+    width: u16,
+    height: u16,
+) -> Model {
     let request = commits_request();
     let model = base(
         LoadRequest::Diff {
@@ -222,57 +246,59 @@ pub fn history_model(steps: Vec<CommitStep>, diffs: Vec<FileDiff>, width: u16, h
     );
     settle(apply(
         model,
-        Msg::HistoryLoaded {
+        Msg::Plugin(PluginsMsg::Diff(DiffMsg::HistoryLoaded {
             request,
             result: Ok((steps.into(), diffs.into())),
-        },
+        })),
     ))
 }
 
-pub fn load_show(files: Vec<SourceOutline>, model: &App) -> App {
-    let request = match &model.loaded {
-        Loaded::Show(show) => ShowRequest {
-            revision: show.revision.clone(),
-            mode: show.mode,
-            selection: show.scope.selection.clone(),
-        },
-        Loaded::Diff(_) => show_request(),
+pub fn load_show(files: Vec<SourceOutline>, model: &Model) -> Model {
+    let request = if model.kernel.active_view == crate::plugin::SOURCE_VIEW {
+        ShowRequest {
+            revision: model.plugins.source.revision.clone(),
+            mode: model.kernel.workspace.query.mode,
+            selection: model.kernel.workspace.query.scope.selection.clone(),
+        }
+    } else {
+        show_request()
     };
     apply(
         model.clone(),
-        Msg::ShowLoaded {
+        Msg::Plugin(PluginsMsg::Source(SourceMsg::ShowLoaded {
             request,
             result: Ok(files.into()),
-        },
+        })),
     )
 }
 
-pub fn load_diff(diffs: Vec<FileDiff>, model: &App) -> App {
-    let request = match &model.loaded {
-        Loaded::Diff(diff) => DiffRequest {
-            base: diff.base.clone(),
-            target: diff.target.clone(),
-            mode: diff.mode,
-            selection: diff.scope.selection.clone(),
-            view: match diff.view {
+pub fn load_diff(diffs: Vec<FileDiff>, model: &Model) -> Model {
+    let request = if model.kernel.active_view.owner == crate::plugin::DIFF {
+        DiffRequest {
+            base: model.plugins.diff.base.clone(),
+            target: model.plugins.diff.target.clone(),
+            mode: model.kernel.workspace.query.mode,
+            selection: model.kernel.workspace.query.scope.selection.clone(),
+            view: match model.plugins.diff.view {
                 DiffViewState::Range(_) => DiffView::Range,
                 DiffViewState::Commits(_) => DiffView::Commits,
             },
-            merge_base: diff.merge_base,
-        },
-        Loaded::Show(_) => diff_request(),
+            merge_base: model.plugins.diff.merge_base,
+        }
+    } else {
+        diff_request()
     };
     apply(
         model.clone(),
-        Msg::DiffLoaded {
+        Msg::Plugin(PluginsMsg::Diff(DiffMsg::DiffLoaded {
             request,
             result: Ok(diffs.into()),
-        },
+        })),
     )
 }
 
-fn apply(model: App, msg: Msg) -> App {
-    crate::app::update(msg, &model).0
+fn apply(model: Model, msg: Msg) -> Model {
+    kernel_update(msg, &model).0
 }
 
 fn show_request() -> ShowRequest {

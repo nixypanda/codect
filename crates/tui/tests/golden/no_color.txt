@@ -1,0 +1,62 @@
+# no_color 100x30
+ ◆ codect  /repo                                                          types   HEAD   scope: all 
+╭ Files ─────────────────────┬ Source ─────────────────────────────────────────────────────────────╮
+│ ▌a.rs                      │ − 1 a                                                               │
+│  b.rs                      │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+╰────────────────────────────┴─────────────────────────────────────────────────────────────────────╯
+ a.rs 1 of 1 lines                click open   Ctrl-P commands   Ctrl-F find   Tab content   ? help 
+## styles
+0: 0-9 fg=reset bg=reset mod=BOLD 10-99 fg=reset bg=reset mod=-
+1: 0-99 fg=reset bg=reset mod=-
+2: 0-99 fg=reset bg=reset mod=-
+3: 0-99 fg=reset bg=reset mod=-
+4: 0-99 fg=reset bg=reset mod=-
+5: 0-99 fg=reset bg=reset mod=-
+6: 0-99 fg=reset bg=reset mod=-
+7: 0-99 fg=reset bg=reset mod=-
+8: 0-99 fg=reset bg=reset mod=-
+9: 0-99 fg=reset bg=reset mod=-
+10: 0-99 fg=reset bg=reset mod=-
+11: 0-99 fg=reset bg=reset mod=-
+12: 0-99 fg=reset bg=reset mod=-
+13: 0-99 fg=reset bg=reset mod=-
+14: 0-99 fg=reset bg=reset mod=-
+15: 0-99 fg=reset bg=reset mod=-
+16: 0-99 fg=reset bg=reset mod=-
+17: 0-99 fg=reset bg=reset mod=-
+18: 0-99 fg=reset bg=reset mod=-
+19: 0-99 fg=reset bg=reset mod=-
+20: 0-99 fg=reset bg=reset mod=-
+21: 0-99 fg=reset bg=reset mod=-
+22: 0-99 fg=reset bg=reset mod=-
+23: 0-99 fg=reset bg=reset mod=-
+24: 0-99 fg=reset bg=reset mod=-
+25: 0-99 fg=reset bg=reset mod=-
+26: 0-99 fg=reset bg=reset mod=-
+27: 0-99 fg=reset bg=reset mod=-
+28: 0-99 fg=reset bg=reset mod=-
+29: 0-99 fg=reset bg=reset mod=-

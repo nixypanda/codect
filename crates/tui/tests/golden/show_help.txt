@@ -1,0 +1,82 @@
+# show_help 100x40
+ ◆ codect  /repo                                                          types   HEAD   scope: all 
+╭ Files ─────────────────────┬ Source ─────────────────────────────────────────────────────────────╮
+│ ▌a.rs                      │ − 1 a                                                               │
+│  b.rs                      │                                                                     │
+│                     ╭ help ────────────────────────────────────────────────╮                     │
+│                     │ Move                                                 │                     │
+│                     │   ↑ ↓ / k j   move the tree or body cursor           │                     │
+│                     │   ← → / h l   fold the tree or pan sideways          │                     │
+│                     │   g / G       jump to the top or bottom              │                     │
+│                     │                                                      │                     │
+│                     │ Fold                                                 │                     │
+│                     │   Enter / za  toggle the fold at the cursor          │                     │
+│                     │   zo / zc     open or close the fold                 │                     │
+│                     │   zO / zC     open or close recursively              │                     │
+│                     │   zR / zM     unfold all / fold all                  │                     │
+│                     │                                                      │                     │
+│                     │ Find                                                 │                     │
+│                     │   Ctrl-P      open the command palette               │                     │
+│                     │   Ctrl-F      find a file by name                    │                     │
+│                     │   / then n / Nsearch the view and step matches       │                     │
+│                     │                                                      │                     │
+│                     │ View                                                 │                     │
+│                     │   Tab         switch tree and content                │                     │
+│                     │   m / s       switch mode or change scope            │                     │
+│                     │   r / b / t   edit the revision, base, or target     │                     │
+│                     │   [ / ] / \   resize or reset the tree               │                     │
+│                     │   ? / Esc     toggle help or dismiss                 │                     │
+│                     │   q / Ctrl-C  quit                                   │                     │
+│                     │                                                      │                     │
+│                     │ Mouse                                                │                     │
+│                     │   click       select a file or fold a directory      │                     │
+│                     │   gutter + / -fold or unfold a declaration           │                     │
+│                     │   click line  move the source cursor                 │                     │
+│                     │   wheel       scroll the tree or the content         │                     │
+│                     ╰──────────────────────────────────────────────────────╯                     │
+│                            │                                                                     │
+│                            │                                                                     │
+│                            │                                                                     │
+╰────────────────────────────┴─────────────────────────────────────────────────────────────────────╯
+ a.rs 1 of 1 lines                                                                        Esc close 
+## styles
+0: 0-9 fg=#1a1b26 bg=#7dcfff mod=BOLD|DIM 10-16 fg=#a9b1d6 bg=#16161e mod=DIM 17-72 fg=reset bg=#16161e mod=DIM 73-79 fg=#1a1b26 bg=#7dcfff mod=DIM 80-80 fg=reset bg=#16161e mod=DIM 81-86 fg=#c0caf5 bg=#292e42 mod=DIM 87-87 fg=reset bg=#16161e mod=DIM 88-99 fg=#c0caf5 bg=#292e42 mod=DIM
+1: 0-28 fg=#7dcfff bg=#1a1b26 mod=DIM 29-29 fg=#3b4261 bg=#1a1b26 mod=DIM 30-99 fg=#545c7e bg=#1a1b26 mod=DIM
+2: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-1 fg=reset bg=#1a1b26 mod=DIM 2-2 fg=#7dcfff bg=#283457 mod=DIM 3-27 fg=#c0caf5 bg=#283457 mod=DIM 28-28 fg=reset bg=#1a1b26 mod=DIM 29-29 fg=#3b4261 bg=#1a1b26 mod=DIM 30-30 fg=reset bg=#1a1b26 mod=DIM 31-32 fg=#7dcfff bg=#1a1b26 mod=DIM 33-34 fg=#545c7e bg=#1a1b26 mod=DIM 35-35 fg=#c0caf5 bg=#1a1b26 mod=DIM 36-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+3: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-2 fg=reset bg=#1a1b26 mod=DIM 3-6 fg=#c0caf5 bg=#1a1b26 mod=DIM 7-28 fg=reset bg=#1a1b26 mod=DIM 29-29 fg=#3b4261 bg=#1a1b26 mod=DIM 30-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+4: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-28 fg=#7dcfff bg=#16161e mod=BOLD 29-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+5: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-27 fg=#7dcfff bg=#16161e mod=BOLD 28-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+6: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-65 fg=#a9b1d6 bg=#16161e mod=- 66-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+7: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-66 fg=#a9b1d6 bg=#16161e mod=- 67-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+8: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-62 fg=#a9b1d6 bg=#16161e mod=- 63-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+9: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+10: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-27 fg=#7dcfff bg=#16161e mod=BOLD 28-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+11: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-66 fg=#a9b1d6 bg=#16161e mod=- 67-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+12: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-59 fg=#a9b1d6 bg=#16161e mod=- 60-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+13: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-62 fg=#a9b1d6 bg=#16161e mod=- 63-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+14: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-58 fg=#a9b1d6 bg=#16161e mod=- 59-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+15: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+16: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-27 fg=#7dcfff bg=#16161e mod=BOLD 28-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+17: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-61 fg=#a9b1d6 bg=#16161e mod=- 62-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+18: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-56 fg=#a9b1d6 bg=#16161e mod=- 57-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+19: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-69 fg=#a9b1d6 bg=#16161e mod=- 70-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+20: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+21: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-27 fg=#7dcfff bg=#16161e mod=BOLD 28-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+22: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-60 fg=#a9b1d6 bg=#16161e mod=- 61-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+23: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-64 fg=#a9b1d6 bg=#16161e mod=- 65-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+24: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-71 fg=#a9b1d6 bg=#16161e mod=- 72-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+25: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-61 fg=#a9b1d6 bg=#16161e mod=- 62-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+26: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-59 fg=#a9b1d6 bg=#16161e mod=- 60-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+27: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-41 fg=#a9b1d6 bg=#16161e mod=- 42-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+28: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+29: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-28 fg=#7dcfff bg=#16161e mod=BOLD 29-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+30: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-70 fg=#a9b1d6 bg=#16161e mod=- 71-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+31: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-65 fg=#a9b1d6 bg=#16161e mod=- 66-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+32: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-59 fg=#a9b1d6 bg=#16161e mod=- 60-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+33: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-22 fg=#7dcfff bg=#16161e mod=- 23-37 fg=#c0caf5 bg=#16161e mod=- 38-67 fg=#a9b1d6 bg=#16161e mod=- 68-76 fg=reset bg=#16161e mod=- 77-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+34: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-21 fg=reset bg=#1a1b26 mod=DIM 22-77 fg=#7dcfff bg=#16161e mod=- 78-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+35: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-28 fg=reset bg=#1a1b26 mod=DIM 29-29 fg=#3b4261 bg=#1a1b26 mod=DIM 30-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+36: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-28 fg=reset bg=#1a1b26 mod=DIM 29-29 fg=#3b4261 bg=#1a1b26 mod=DIM 30-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+37: 0-0 fg=#7dcfff bg=#1a1b26 mod=DIM 1-28 fg=reset bg=#1a1b26 mod=DIM 29-29 fg=#3b4261 bg=#1a1b26 mod=DIM 30-98 fg=reset bg=#1a1b26 mod=DIM 99-99 fg=#545c7e bg=#1a1b26 mod=DIM
+38: 0-28 fg=#7dcfff bg=#1a1b26 mod=DIM 29-29 fg=#3b4261 bg=#1a1b26 mod=DIM 30-99 fg=#545c7e bg=#1a1b26 mod=DIM
+39: 0-5 fg=#c0caf5 bg=#16161e mod=DIM 6-18 fg=#737aa2 bg=#16161e mod=DIM 19-89 fg=reset bg=#16161e mod=DIM 90-99 fg=#737aa2 bg=#16161e mod=DIM
