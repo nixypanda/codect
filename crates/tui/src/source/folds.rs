@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use base::{FoldRegion, ProjectionMode, RepoPath};
+use base::{FoldRegion, RepoPath};
 
 use tui_core::cx::Cx;
 use tui_core::render::highlight::{self, StyledLine};
@@ -11,6 +11,7 @@ use tui_core::render::theme::Theme;
 use tui_core::util::cache::BoundedCache;
 
 use super::SourceView;
+use super::filters_dropped_declarations;
 use super::rows::VisibleRow;
 
 /// The highlighted lines of the source view's files.
@@ -38,6 +39,10 @@ impl ShowHighlights {
 }
 
 /// The fold regions of the source view's files.
+///
+/// The cache is keyed by path only. Correctness therefore relies on
+/// `update::loaded` clearing it whenever the loaded revision or mode changes;
+/// retention is baked into each `FoldRegion`.
 #[derive(Clone, Debug, Default)]
 pub struct ShowFolds {
     cache: BoundedCache<Arc<Vec<FoldRegion>>>,
@@ -159,6 +164,9 @@ impl SourceView {
         if regions.is_empty() {
             return;
         }
+        // Dropped regions intentionally receive overrides too. Overrides are
+        // sticky across mode reloads, and the filtered row builder hides their
+        // effects; do not filter this iteration by retention.
         match action {
             Fold::OpenAll => {
                 for region in &regions {
@@ -215,7 +223,7 @@ impl SourceView {
                 .filter(|(_, region)| {
                     region.start_line <= *line
                         && *line <= region.end_line
-                        && (self.loaded_mode != ProjectionMode::Tests || region.retained)
+                        && (!filters_dropped_declarations(self.loaded_mode) || region.retained)
                 })
                 .max_by_key(|(_, region)| region.level)
                 .map(|(index, _)| index),
@@ -238,7 +246,7 @@ impl SourceView {
                 .enumerate()
                 .filter(|(_, region)| {
                     region.start_line == *line
-                        && (self.loaded_mode != ProjectionMode::Tests || region.retained)
+                        && (!filters_dropped_declarations(self.loaded_mode) || region.retained)
                 })
                 .max_by_key(|(_, region)| region.end_line)
                 .map(|(index, _)| index),

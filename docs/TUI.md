@@ -27,7 +27,7 @@ codect tui diff commits --mode <types|signatures|tests> [--path <PATH> | --area 
 
 ![codect tui show — a file tree beside the mode-folded source](showcase/tui-show.png)
 
-*`codect tui show --mode types`: the file tree, the source folded to the mode, and the status bar.*
+*`codect tui show --mode types`: the file tree, the source filtered and folded to the mode, and the status bar.*
 
 The diff panes use Tokyo Night night/day syntax colors and added/deleted line
 backgrounds, brighter intra-line emphasis on the bytes that changed, and
@@ -87,16 +87,34 @@ selected file with mode-driven folds.
 
 - A retained container is open and a retained signature is folded, so the body
   shows the shape of the code without the implementations.
-- `tests` mode is a filter rather than a marker: a declaration the mode drops is
-  removed entirely — no row, its lines gone — and lines outside every retained
-  declaration or container are hidden too, so only the retained tests and the
-  containers that hold them remain. Exclusion is independent of folding, so
-  `za`/`zR` cannot reveal a dropped declaration, and a file with nothing
-  retained shows an empty state.
-- In `types` and `signatures` a declaration the requested mode drops is folded
-  whatever its kind, because the mode keeps nothing of it; its row is marked
-  `hidden in <mode>`. This is what makes `types` filter out a method-only
-  inherent `impl`, say, instead of leaving its body in the source.
+- `types` and `tests` are filters rather than markers: a declaration the mode
+  drops is removed entirely — no row, its lines gone — and lines outside every
+  retained declaration or container are hidden too. In `types` only the
+  retained type declarations and the containers that hold them remain; in
+  `tests` only the retained tests and their containers remain. Exclusion is
+  independent of folding, so `za`/`zR` cannot reveal a dropped declaration, and
+  a file with nothing retained shows an empty state.
+- Types re-enables a retained declaration's start, declaration, and end lines
+  when a dropped declaration covers the same physical line, because a terminal
+  row cannot hide only part of a line. Those shared lines are visible and
+  searchable, and the dropped text on that physical line is visible too. The
+  declaration line is the signature a collapsed row summarizes, so an annotated
+  declaration still resolves when its fold start is the doc-comment line.
+- Tests keeps its historical row construction: a dropped declaration on a shared
+  start line wins that line. A retained collapsed row at the same start is
+  therefore skipped, and later retained body lines can appear as source rows.
+  That row output is unchanged.
+- `signatures` keeps the marker-row code path: a declaration the loaded outline
+  marks dropped is folded whatever its kind and its row is marked
+  `hidden in signatures`. Real Signatures projections retain every outlined
+  declaration, so this path is normally exercised through the outline contract
+  rather than by a normal Signatures view.
+- Dropped lines inside a collapsed retained container have no visible row and
+  are not searchable; retained lines inside the same container still map to its
+  fold row. The emitted Fold row's own summary line is always visible and
+  searchable, even when a dropped region covers it. This
+  line-mapping/search/cursor fix applies to Types and Tests, but Tests row
+  construction itself is unchanged.
 - A collapsed row shows the declaration's own signature line — the line the
   declaration node starts on, excluding leading attributes, decorators, and doc
   comments — followed by the fold suffix. The leading annotations stay hidden
@@ -111,9 +129,10 @@ selected file with mode-driven folds.
   later `zc`/`zM` closes it again.
 - The modes are `types`, `signatures`, and `tests`.
 - Folding uses declaration spans, so a body that is part of the declaration's
-  span (Rust, Python, and Elm) hides fully. A Haskell top-level binding is
-  separate from its signature, so the binding is not inside the outlined
-  declaration and remains visible.
+  span (Rust, Python, and Elm) hides fully. In `signatures`, a Haskell top-level
+  binding is separate from its signature, so the binding is not inside the
+  outlined declaration and remains visible. In `types` and `tests` the binding
+  is filtered or absent.
 
 ## Mouse
 

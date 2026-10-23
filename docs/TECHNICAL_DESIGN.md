@@ -1805,17 +1805,29 @@ codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>
 
 `tui show` is a source explorer rather than a projection renderer: the body
 shows the real committed source of the selected file and folds it with the same
-outline and source spans the `codect.show.v1` document carries. In `types` and
-`signatures` a declaration the requested mode drops is still located and folded
-with a `hidden in <mode>` marker; in `tests` the mode is a filter, so a dropped
-declaration is removed entirely — no row, its lines hidden — and only the
-retained declarations and the containers that hold them are shown. Containers
-open and signature bodies fold, and the fold overrides are session-sticky. A
-collapsed row shows the declaration's own signature line — the line the
-declaration node starts on, excluding leading attributes, decorators, and doc
-comments — followed by the fold suffix; the leading annotations stay hidden
-while the fold is closed. The projection and diff models are untouched: the
-explorer only reads them, and the canonical projection and diff output stay
+outline and source spans the `codect.show.v1` document carries. `types` and
+`tests` are filters: a declaration the requested mode drops is removed entirely
+— no row, its lines hidden — and only the retained declarations and the
+containers that hold them are shown. Types also keeps a retained region's start,
+declaration, and end lines when a dropped declaration shares that physical line;
+those lines are visible and searchable, including the dropped text on that same
+line. The declaration line is the signature a collapsed row summarizes, so an
+annotated declaration still resolves when its fold start is the doc-comment
+line.
+Tests keeps its historical row construction, including drop-wins on a shared
+start line and the later retained-body lines that can follow when the collapsed
+row at that start is skipped. `signatures` keeps the marker-row code path, where
+a declaration the loaded outline marks dropped is still located, folded, and
+tagged `hidden in signatures`. Containers open and signature bodies fold, and
+the fold overrides are session-sticky. A collapsed row shows the declaration's
+own signature line — the line the declaration node starts on, excluding leading
+attributes, decorators, and doc comments — followed by the fold suffix; the
+leading annotations stay hidden while the fold is closed. Dropped lines inside a
+collapsed retained container have no visible row or search match, while retained
+lines still map to the fold row. The emitted Fold row's own summary line is
+always visible and searchable, even when a dropped region covers it. The
+projection and diff models are untouched:
+the explorer only reads them, and the canonical projection and diff output stay
 byte-for-byte unchanged.
 
 ### 21.2 The Elm Architecture

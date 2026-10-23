@@ -146,6 +146,12 @@ In `tests` mode most outlined declarations are not retained, so a consumer falls
 back to the outline signature for every non-test declaration in the file.
 `ProjectionMode::superset` is the single place that relation is stated.
 
+The outline is a consumer contract, not a display policy. The Neovim plugin
+renders a dropped declaration's outline signature with a `hidden in <mode>`
+marker. The TUI source explorer filters dropped declarations entirely in `types`
+and `tests` and keeps the marker-row code path for `signatures`. Neither choice
+changes the projection, the outline, or `retained_in_mode`.
+
 Which declarations a mode *keeps* is a separate question, answered by an
 exhaustive `match` where it is needed rather than by a predicate on the enum, so
 adding a mode is a compile error instead of a silently inherited default. See

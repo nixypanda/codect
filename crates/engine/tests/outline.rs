@@ -254,3 +254,82 @@ fn tests_mode_outline_is_the_signatures_superset_and_retains_only_tests() {
         "the fixture corpus must contain a declaration Tests mode drops"
     );
 }
+
+#[test]
+fn dropped_regions_never_swallow_a_retained_declaration() {
+    let mut files = Vec::new();
+    input_files(&fixture_root(), &mut files);
+    files.sort();
+    assert!(!files.is_empty(), "expected at least one fixture input");
+
+    let mut saw_dropped = false;
+    for path in files {
+        let display = path.to_string_lossy().into_owned();
+        let source = std::fs::read(&path).unwrap_or_else(|error| panic!("read {display}: {error}"));
+        let lines_text = std::str::from_utf8(&source)
+            .unwrap_or_else(|error| panic!("{display}: fixture source is not UTF-8: {error}"));
+        let lines: Vec<&str> = lines_text.lines().collect();
+        let repo_path = repo_path_of(&path);
+
+        for mode in [ProjectionMode::Types, ProjectionMode::Tests] {
+            let file = project_source(&repo_path, &source, mode)
+                .unwrap_or_else(|error| panic!("{mode:?} projection of {display}: {error}"));
+            let by_key: std::collections::BTreeMap<&str, &base::OutlineItem> = file
+                .outline
+                .iter()
+                .map(|item| (item.item.stable_key.as_str(), item))
+                .collect();
+
+            for item in &file.outline {
+                if !file.retained_in_mode(item) {
+                    continue;
+                }
+                let mut parent = item.item.parent_key.as_deref();
+                while let Some(key) = parent {
+                    let ancestor = by_key.get(key).unwrap_or_else(|| {
+                        panic!(
+                            "{display}: retained `{}` has missing ancestor `{key}`",
+                            item.item.stable_key
+                        )
+                    });
+                    assert!(
+                        file.retained_in_mode(ancestor),
+                        "{display} ({mode:?}): retained `{}` has dropped ancestor `{key}`",
+                        item.item.stable_key
+                    );
+                    parent = ancestor.item.parent_key.as_deref();
+                }
+            }
+
+            // The TUI line mask hides dropped lines and keeps retained
+            // coverage. A retained region wholly inside a dropped span would
+            // lose its body; Types only re-enables same-line retained starts,
+            // declaration lines, and ends, and Tests derives visibility from
+            // its historical rows.
+            let regions = base::fold_regions(&file, &lines);
+            for dropped in regions.iter().filter(|region| !region.retained) {
+                saw_dropped = true;
+                for retained in regions.iter().filter(|region| region.retained) {
+                    assert!(
+                        !(dropped.start_line < retained.start_line
+                            && retained.start_line < dropped.end_line),
+                        "{display} ({mode:?}): dropped region `{}` {}..{} strictly contains \
+                         retained start `{}` at line {}; the TUI line mask would hide that \
+                         retained region (only same-line start, declaration, and end lines are \
+                         re-enabled for Types)",
+                        dropped.stable_key,
+                        dropped.start_line,
+                        dropped.end_line,
+                        retained.stable_key,
+                        retained.start_line,
+                    );
+                }
+            }
+        }
+    }
+
+    assert!(
+        saw_dropped,
+        "the fixture corpus must contain declarations Types or Tests drop"
+    );
+}

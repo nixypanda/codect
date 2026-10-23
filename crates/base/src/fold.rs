@@ -30,9 +30,11 @@
 //!
 //! # Modes
 //!
-//! A declaration the requested mode drops is closed whatever its kind, so its
-//! body becomes a `hidden in <mode>` fold row; a retained container is open so
-//! its declarations stay reachable, and a retained signature is closed.
+//! A declaration the requested mode drops is closed whatever its kind. A
+//! consumer that renders every region (the Neovim plugin) shows its body as a
+//! `hidden in <mode>` fold row; a consumer that filters the mode (the TUI
+//! source explorer in `types` and `tests`) omits it. A retained container is
+//! open so its declarations stay reachable, and a retained signature is closed.
 //!
 //! Block annotation openers are tried closest-first (`{-#` before `{-`, `#![`
 //! before `#[`) because the shorter opener's closer also matches the longer

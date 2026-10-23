@@ -220,6 +220,95 @@ pub(crate) fn tests_filter_outline() -> SourceOutline {
     }
 }
 
+pub(crate) const TYPES_FILTER_SOURCE: &str = "\
+pub enum Dropped {\n    A,\n}\n\npub trait Store {\n    type Item;\n\n    // A comment that belongs to the retained container.\n\n    /// Get an item.\n    #[allow(dead_code)]\n    fn get(&self) -> Self::Item;\n}\n\n#[allow(dead_code)]\npub fn helper() {\n    let hidden = 42;\n}\n\npub struct Kept {\n    pub hidden: bool,\n}\n";
+
+pub(crate) fn types_filter_outline() -> SourceOutline {
+    let path = supported("a.rs");
+    let dropped = item_at("Dropped", None, ItemKind::Type, 0, 2);
+    let variant = item_at("Dropped::A", Some("Dropped"), ItemKind::Variant, 1, 1);
+    let store = item_at("Store", None, ItemKind::Trait, 4, 12);
+    let item = item_at("Store::Item", Some("Store"), ItemKind::AssociatedType, 5, 5);
+    let get = item_at("Store::get", Some("Store"), ItemKind::Method, 11, 11);
+    let helper = item_at("helper", None, ItemKind::Function, 15, 17);
+    let kept = item_at("Kept", None, ItemKind::Type, 19, 21);
+    let hidden = item_at("Kept::hidden", Some("Kept"), ItemKind::Field, 20, 20);
+    let projection = vec![
+        dropped.clone(),
+        variant.clone(),
+        store.clone(),
+        item.clone(),
+        kept.clone(),
+        hidden.clone(),
+    ];
+    let superset = vec![dropped, variant, store, item, get, helper, kept, hidden];
+    let outline = assemble_outline(&path, projection, superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TYPES_FILTER_SOURCE.to_owned(),
+    }
+}
+
+pub(crate) const TYPES_SHARED_LINES_SOURCE: &str = "trait T { fn f() {\n    body\n} }\n";
+
+pub(crate) fn types_shared_lines_outline() -> SourceOutline {
+    let path = supported("a.rs");
+    let container = item_at("T", None, ItemKind::Trait, 0, 2);
+    let method = item_at("T::f", Some("T"), ItemKind::Method, 0, 2);
+    let outline = assemble_outline(&path, vec![container.clone()], vec![container, method])
+        .expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TYPES_SHARED_LINES_SOURCE.to_owned(),
+    }
+}
+
+pub(crate) const TYPES_ANNOTATED_SHARED_SOURCE: &str =
+    "/// docs\ntrait T { fn f() {\n    body\n} }\n";
+
+pub(crate) fn types_annotated_shared_outline() -> SourceOutline {
+    let path = supported("a.rs");
+    let container = item_at("T", None, ItemKind::Trait, 1, 3);
+    let method = item_at("T::f", Some("T"), ItemKind::Method, 1, 3);
+    let outline = assemble_outline(&path, vec![container.clone()], vec![container, method])
+        .expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TYPES_ANNOTATED_SHARED_SOURCE.to_owned(),
+    }
+}
+
+pub(crate) const TESTS_FOLD_SUMMARY_SOURCE: &str =
+    "mod tests { fn a() {} fn b() {\n    let hidden = 1;\n} #[test] fn t() {} }\n";
+
+pub(crate) fn tests_fold_summary_outline() -> SourceOutline {
+    let path = supported("a.rs");
+    let module = item_at("mod tests", None, ItemKind::Module, 0, 2);
+    let dropped_a = item_at("mod tests::a", Some("mod tests"), ItemKind::Function, 0, 0);
+    let dropped_b = item_at("mod tests::b", Some("mod tests"), ItemKind::Function, 0, 2);
+    let test = item_at("mod tests::t", Some("mod tests"), ItemKind::Function, 2, 2);
+    let projection = vec![module.clone(), test.clone()];
+    let superset = vec![module, dropped_a, dropped_b, test];
+    let outline = assemble_outline(&path, projection, superset).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: TESTS_FOLD_SUMMARY_SOURCE.to_owned(),
+    }
+}
+
+pub(crate) const ONLY_FUNCTIONS_SOURCE: &str = "pub fn first() {}\n\npub fn second() {}\n";
+
+pub(crate) fn only_functions_outline() -> SourceOutline {
+    let path = supported("a.rs");
+    let first = item_at("fn::first", None, ItemKind::Function, 0, 0);
+    let second = item_at("fn::second", None, ItemKind::Function, 2, 2);
+    let outline = assemble_outline(&path, Vec::new(), vec![first, second]).expect("valid fixture");
+    SourceOutline {
+        outline,
+        source: ONLY_FUNCTIONS_SOURCE.to_owned(),
+    }
+}
+
 pub(crate) fn show_request() -> ShowRequest {
     ShowRequest {
         revision: "HEAD".to_owned(),
