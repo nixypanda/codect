@@ -19,7 +19,7 @@
       # Single source of truth for the package version. The release workflow
       # checks the pushed tag against this line, so keep it in sync with
       # `[workspace.package] version` in Cargo.toml.
-      version = "0.1.0";
+      version = "0.2.0";
 
       systems = [
         "x86_64-darwin"

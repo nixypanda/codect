@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "base"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bstr",
  "similar",
@@ -383,7 +383,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -786,7 +786,7 @@ dependencies = [
 
 [[package]]
 name = "engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "git",
@@ -955,7 +955,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "git"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "bstr",
@@ -2040,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "lang-elm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "thiserror 2.0.20",
@@ -2050,7 +2050,7 @@ dependencies = [
 
 [[package]]
 name = "lang-haskell"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "thiserror 2.0.20",
@@ -2060,7 +2060,7 @@ dependencies = [
 
 [[package]]
 name = "lang-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "thiserror 2.0.20",
@@ -2070,7 +2070,7 @@ dependencies = [
 
 [[package]]
 name = "lang-rust"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "thiserror 2.0.20",
@@ -3332,7 +3332,7 @@ dependencies = [
 
 [[package]]
 name = "tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "criterion",
@@ -3347,7 +3347,7 @@ dependencies = [
 
 [[package]]
 name = "tui-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "crossterm",
@@ -3363,7 +3363,7 @@ dependencies = [
 
 [[package]]
 name = "tui-diff"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base",
  "engine",
