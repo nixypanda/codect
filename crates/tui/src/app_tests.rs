@@ -17,10 +17,11 @@ use crate::test_support::{
     ATTRIBUTED_SOURCE, App, NESTED_SOURCE, area_set, assert_view_consistent,
     attributed_child_outline, base_app, buffer_row, buffer_text, cell_x_of, click, command_spec,
     declaration_less, dropped_container_outline, focus_content, folder_app, has_palette_entry,
-    item, multi_method_outline, nested_outline, palette_entries, press, render, row_with,
-    scope_msg, scroll, select_file, selected, show_app, show_app_mode, show_ref, show_request,
-    source_msg, source_outline, source_outline_with, test_function_outline, tests_filter_outline,
-    two_files, two_function_outline, with_cx,
+    item, multi_method_outline, nested_outline, only_functions_outline, palette_entries, press,
+    render, row_with, scope_msg, scroll, select_file, selected, show_app, show_app_mode, show_ref,
+    show_request, source_msg, source_outline, source_outline_with, test_function_outline,
+    tests_filter_outline, tests_fold_summary_outline, two_files, two_function_outline,
+    types_annotated_shared_outline, types_filter_outline, types_shared_lines_outline, with_cx,
 };
 #[cfg(feature = "diff")]
 use crate::test_support::{
@@ -402,12 +403,15 @@ fn empty_projections_are_still_explorable_in_the_tree() {
 }
 
 #[test]
-fn a_declaration_less_file_is_visible_and_renders_its_full_source() {
+fn a_declaration_less_file_renders_its_full_source_in_signatures_mode() {
     let source = "// only a comment\nuse std::fmt;\n";
-    let app = show_app(vec![
-        declaration_less("comments.rs", source),
-        source_outline("full.rs", "x\n"),
-    ]);
+    let app = show_app_mode(
+        vec![
+            declaration_less("comments.rs", source),
+            source_outline("full.rs", "x\n"),
+        ],
+        ProjectionMode::Signatures,
+    );
 
     assert!(
         app.workspace
@@ -2019,14 +2023,11 @@ fn the_fold_suffix_widens_the_horizontal_scroll_range() {
 }
 
 #[test]
-fn a_dropped_declaration_folds_and_marks_the_row_dropped() {
-    let app = show_app(vec![nested_outline(
-        "a.rs",
-        NESTED_SOURCE,
-        (0, 5),
-        (1, 4),
-        false,
-    )]);
+fn a_dropped_declaration_in_signatures_mode_folds_and_marks_the_row_dropped() {
+    let app = show_app_mode(
+        vec![nested_outline("a.rs", NESTED_SOURCE, (0, 5), (1, 4), false)],
+        ProjectionMode::Signatures,
+    );
     let show = show_ref(&app);
 
     let fold = show
@@ -2046,8 +2047,11 @@ fn a_dropped_declaration_folds_and_marks_the_row_dropped() {
 }
 
 #[test]
-fn a_dropped_container_folds_to_one_row_tagged_hidden_in_mode() {
-    let app = show_app(vec![dropped_container_outline("a.rs", NESTED_SOURCE)]);
+fn a_dropped_container_in_signatures_mode_folds_to_one_row_tagged_hidden_in_signatures() {
+    let app = show_app_mode(
+        vec![dropped_container_outline("a.rs", NESTED_SOURCE)],
+        ProjectionMode::Signatures,
+    );
     let show = show_ref(&app);
 
     assert_eq!(
@@ -2068,7 +2072,7 @@ fn a_dropped_container_folds_to_one_row_tagged_hidden_in_mode() {
 
     let text = buffer_text(&render(&app, 100, 20));
     assert!(
-        text.contains("hidden in types"),
+        text.contains("hidden in signatures"),
         "the dropped tag is missing: {text}"
     );
     assert!(
@@ -2292,18 +2296,15 @@ fn the_folded_body_renders_the_signature_and_hides_the_body() {
 }
 
 #[test]
-fn a_dropped_declaration_renders_the_hidden_in_mode_tag() {
-    let app = show_app(vec![nested_outline(
-        "a.rs",
-        NESTED_SOURCE,
-        (0, 5),
-        (1, 4),
-        false,
-    )]);
+fn a_dropped_declaration_in_signatures_mode_renders_the_hidden_in_mode_tag() {
+    let app = show_app_mode(
+        vec![nested_outline("a.rs", NESTED_SOURCE, (0, 5), (1, 4), false)],
+        ProjectionMode::Signatures,
+    );
     let text = buffer_text(&render(&app, 100, 20));
 
     assert!(
-        text.contains("hidden in types"),
+        text.contains("hidden in signatures"),
         "the dropped tag is missing: {text}"
     );
     assert!(
@@ -2490,32 +2491,690 @@ fn tests_mode_exclusion_survives_open_all() {
 }
 
 #[test]
-fn types_mode_keeps_marker_rows_for_dropped_declarations() {
-    let app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Types);
+fn types_mode_removes_dropped_declarations_entirely() {
+    let app = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
     let show = show_ref(&app);
 
-    let dropped: Vec<usize> = show
-        .visible_rows()
-        .iter()
-        .filter_map(|row| match row {
-            VisibleRow::Fold {
-                line,
-                dropped: true,
-                ..
-            } => Some(*line),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        dropped,
-        vec![1, 9],
-        "types mode still marks dropped declarations: {:?}",
+    for hidden in [4, 10, 11, 12, 14, 15, 16, 17, 18, 19] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "line {hidden} must have no visible row: {:?}",
+            show.visible_rows()
+        );
+    }
+    for visible in [1, 2, 3, 5, 6, 7, 8, 9, 13, 20, 21, 22] {
+        assert!(
+            show.visible_row_for_source_line(visible).is_some(),
+            "line {visible} must be visible: {:?}",
+            show.visible_rows()
+        );
+    }
+    assert!(
+        !show
+            .visible_rows()
+            .iter()
+            .any(|row| matches!(row, VisibleRow::Fold { dropped: true, .. })),
+        "types mode must not emit a `hidden in types` marker row: {:?}",
         show.visible_rows()
     );
 
     let text = buffer_text(&render(&app, 100, 20));
     assert!(text.contains("pub enum Dropped"), "{text}");
-    assert!(text.contains("hidden in types"), "{text}");
+    assert!(text.contains("pub trait Store"), "{text}");
+    assert!(text.contains("type Item;"), "{text}");
+    assert!(
+        text.contains("// A comment that belongs to the retained container."),
+        "the retained-container comment must be visible: {text}"
+    );
+    assert!(text.contains("pub struct Kept"), "{text}");
+    assert!(text.contains("pub hidden: bool,"), "{text}");
+    assert!(!text.contains("Get an item"), "{text}");
+    assert!(!text.contains("fn get"), "{text}");
+    assert!(!text.contains("fn helper"), "{text}");
+    assert!(!text.contains("let hidden"), "{text}");
+    assert!(!text.contains("hidden in types"), "{text}");
+    assert!(text.contains("12 of 22 lines"), "{text}");
+}
+
+#[test]
+fn types_mode_with_no_retained_declarations_renders_the_empty_state() {
+    let app = show_app_mode(vec![only_functions_outline()], ProjectionMode::Types);
+    assert_eq!(
+        show_ref(&app).line_count(),
+        0,
+        "a file with nothing retained has no rows"
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("No type declarations"), "{text}");
+    assert!(text.contains("Nothing retained in this mode."), "{text}");
+    assert!(!text.contains("pub fn first"), "{text}");
+}
+
+#[test]
+fn types_mode_declaration_less_file_has_no_visible_rows() {
+    let app = show_app_mode(
+        vec![declaration_less(
+            "comments.rs",
+            "// only a comment\nuse std::fmt;\n",
+        )],
+        ProjectionMode::Types,
+    );
+    assert_eq!(show_ref(&app).line_count(), 0);
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("No type declarations"), "{text}");
+    assert!(!text.contains("only a comment"), "{text}");
+}
+
+#[test]
+fn types_mode_empty_file_renders_no_type_declarations() {
+    let app = show_app_mode(
+        vec![declaration_less("empty.rs", "")],
+        ProjectionMode::Types,
+    );
+    assert_eq!(show_ref(&app).line_count(), 0);
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("No type declarations"), "{text}");
+    assert!(text.contains("Nothing retained in this mode."), "{text}");
+}
+
+#[test]
+fn types_mode_cursor_anchors_to_a_visible_row() {
+    let mut app = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
+    let selected = app.workspace.selected.clone();
+    app.plugins.source.body.cursor_line = 17;
+    app.plugins.source.ensure_visible_rows(selected.as_ref());
+
+    let show = show_ref(&app);
+    assert_eq!(
+        show.body.cursor_line, 20,
+        "the cursor moves to the next retained line"
+    );
+    assert!(show.cursor_row().is_some(), "the cursor is drawn");
+}
+
+#[test]
+fn types_mode_fold_marker_ignores_dropped_region_starts() {
+    let app = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
+    let show = show_ref(&app);
+    let selected = app.workspace.selected.as_ref();
+
+    assert_eq!(
+        show.fold_marker(selected, &VisibleRow::Source { line: 10 }),
+        None,
+        "the dropped method's fold start must not show a gutter marker"
+    );
+    assert_eq!(
+        show.fold_marker(selected, &VisibleRow::Source { line: 15 }),
+        None,
+        "the dropped helper's fold start must not show a gutter marker"
+    );
+    assert_eq!(
+        show.fold_marker(selected, &VisibleRow::Source { line: 5 }),
+        Some('−'),
+        "the retained trait keeps its gutter marker"
+    );
+}
+
+#[test]
+fn types_mode_keeps_shared_start_and_end_lines() {
+    let app = show_app_mode(vec![types_shared_lines_outline()], ProjectionMode::Types);
+    let show = show_ref(&app);
+
+    assert_eq!(
+        show.visible_rows(),
+        &[
+            VisibleRow::Source { line: 1 },
+            VisibleRow::Source { line: 3 },
+        ],
+        "the retained trait's shared start and end lines stay visible"
+    );
+
+    let text = buffer_text(&render(&app, 100, 20));
+    assert!(text.contains("trait T { fn f() {"), "{text}");
+    assert!(text.contains("} }"), "{text}");
+    assert!(
+        !text.contains("body"),
+        "the dropped method body stays hidden: {text}"
+    );
+}
+
+#[test]
+fn types_mode_keeps_annotated_shared_declaration_line() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app_mode(
+        vec![types_annotated_shared_outline()],
+        ProjectionMode::Types,
+    );
+    let selected = app.workspace.selected.clone();
+    {
+        let show = show_ref(&app);
+        assert_eq!(
+            show.visible_rows(),
+            &[
+                VisibleRow::Source { line: 1 },
+                VisibleRow::Source { line: 2 },
+                VisibleRow::Source { line: 4 },
+            ],
+            "the doc line, signature line, and closing braces are visible"
+        );
+        assert!(
+            show.visible_row_for_source_line(2).is_some(),
+            "the declaration line is visible"
+        );
+        let text = buffer_text(&render(&app, 100, 20));
+        assert!(text.contains("/// docs"), "{text}");
+        assert!(text.contains("trait T { fn f() {"), "{text}");
+        assert!(text.contains("} }"), "{text}");
+        assert!(!text.contains("body"), "{text}");
+
+        let show = &mut app.plugins.source;
+        show.ensure_visible_rows(selected.as_ref());
+        let regions = show
+            .folds
+            .regions(&path)
+            .expect("fold regions are cached")
+            .to_vec();
+        let container = regions
+            .iter()
+            .find(|region| region.stable_key == "T")
+            .expect("the retained trait region");
+        show.fold_state.set(&path, &container.stable_key, false);
+        show.body.cursor_line = 2;
+        show.ensure_visible_rows(selected.as_ref());
+    }
+
+    let show = show_ref(&app);
+    assert_eq!(
+        show.visible_rows(),
+        &[VisibleRow::Fold {
+            line: 1,
+            summary_line: 2,
+            region_index: 0,
+            hidden: 3,
+            dropped: false,
+        }],
+        "the annotated trait collapses to its signature summary"
+    );
+    assert_eq!(
+        show.visible_row_for_source_line(2),
+        Some(0),
+        "the fold summary line resolves back to its own row"
+    );
+    assert_eq!(
+        show.cursor_row(),
+        Some(0),
+        "the cursor can rest on the fold summary line"
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn types_mode_search_finds_annotated_shared_declaration_line() {
+    let mut app = show_app_mode(
+        vec![types_annotated_shared_outline()],
+        ProjectionMode::Types,
+    );
+    focus_content(&mut app);
+    let collapsed = press(&app, &[Key::Char('z'), Key::Char('M')]);
+
+    let mut searching = collapsed;
+    commit_search(&mut searching, "trait T");
+    let matches = &searching.workspace.search.as_ref().expect("search").matches;
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].line, 2, "the signature line is searchable");
+
+    let show = show_ref(&searching);
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(2)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Fold {
+                line: 1,
+                summary_line: 2,
+                ..
+            })
+        ),
+        "the matched declaration line maps to the collapsed summary row"
+    );
+
+    let stepped = press(&searching, &[Key::Char('n')]);
+    let show = show_ref(&stepped);
+    assert_eq!(show.body.cursor_line, 2);
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(2)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Source { line: 2 })
+        ),
+        "revealing the match opens the annotated trait"
+    );
+}
+
+#[test]
+fn reveal_visible_shared_start_line_opens_enclosing_regions() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app_mode(vec![types_shared_lines_outline()], ProjectionMode::Types);
+    let selected = app.workspace.selected.clone();
+    {
+        let show = &mut app.plugins.source;
+        show.ensure_visible_rows(selected.as_ref());
+        let regions = show
+            .folds
+            .regions(&path)
+            .expect("fold regions are cached")
+            .to_vec();
+        let container = regions
+            .iter()
+            .find(|region| region.stable_key == "T")
+            .expect("the retained trait region");
+        show.fold_state.set(&path, &container.stable_key, false);
+        show.ensure_visible_rows(selected.as_ref());
+
+        show.reveal_source_line(selected.as_ref(), 1);
+
+        let regions = show
+            .folds
+            .regions(&path)
+            .expect("fold regions are cached")
+            .to_vec();
+        let container = regions
+            .iter()
+            .find(|region| region.stable_key == "T")
+            .expect("the retained trait region");
+        let method = regions
+            .iter()
+            .find(|region| region.stable_key == "T::f")
+            .expect("the dropped method region");
+        assert!(
+            show.fold_state.is_open(&path, container),
+            "the retained enclosing region opens"
+        );
+        assert!(
+            show.fold_state.is_open(&path, method),
+            "the dropped enclosing region may receive a sticky override"
+        );
+    }
+
+    let show = show_ref(&app);
+    assert_eq!(
+        show.visible_rows(),
+        &[
+            VisibleRow::Source { line: 1 },
+            VisibleRow::Source { line: 3 },
+        ],
+        "the shared start/end lines remain visible after reveal"
+    );
+}
+
+#[test]
+fn types_mode_ignores_a_dropped_fold_override() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
+    let selected = app.workspace.selected.clone();
+    {
+        let show = &mut app.plugins.source;
+        show.ensure_visible_rows(selected.as_ref());
+        let regions = show
+            .folds
+            .regions(&path)
+            .expect("fold regions are cached")
+            .to_vec();
+        for region in regions.iter().filter(|region| !region.retained) {
+            show.fold_state.set(&path, &region.stable_key, true);
+        }
+        show.ensure_visible_rows(selected.as_ref());
+    }
+
+    let show = show_ref(&app);
+    for hidden in [10, 11, 12, 15, 16, 17, 18] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "line {hidden} must stay hidden despite the override"
+        );
+    }
+    assert!(
+        !show
+            .visible_rows()
+            .iter()
+            .any(|row| matches!(row, VisibleRow::Fold { dropped: true, .. }))
+    );
+}
+
+#[test]
+fn types_mode_exclusion_survives_open_all_and_close_all() {
+    let mut app = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
+    focus_content(&mut app);
+
+    let opened = press(&app, &[Key::Char('z'), Key::Char('R')]);
+    let show = show_ref(&opened);
+    for hidden in [10, 11, 12, 15, 16, 17, 18] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "line {hidden} must stay hidden after zR"
+        );
+    }
+
+    let closed = press(&opened, &[Key::Char('z'), Key::Char('M')]);
+    let show = show_ref(&closed);
+    for hidden in [10, 11, 12, 15, 16, 17, 18] {
+        assert!(
+            !matches!(
+                show.visible_row_for_source_line(hidden)
+                    .map(|row| &show.visible_rows()[row]),
+                Some(VisibleRow::Source { .. })
+            ),
+            "line {hidden} must not become a source row after zM"
+        );
+    }
+    let text = buffer_text(&render(&closed, 100, 20));
+    assert!(!text.contains("fn get"), "{text}");
+    assert!(!text.contains("fn helper"), "{text}");
+    assert!(!text.contains("let hidden"), "{text}");
+
+    let reopened = press(&closed, &[Key::Char('z'), Key::Char('R')]);
+    let show = show_ref(&reopened);
+    for hidden in [10, 11, 12, 15, 16, 17, 18] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "line {hidden} must stay hidden after reopening"
+        );
+    }
+}
+
+#[test]
+fn types_mode_visible_row_for_source_line_rejects_dropped_lines_inside_a_collapsed_container() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
+    let selected = app.workspace.selected.clone();
+    {
+        let show = &mut app.plugins.source;
+        show.ensure_visible_rows(selected.as_ref());
+        let regions = show
+            .folds
+            .regions(&path)
+            .expect("fold regions are cached")
+            .to_vec();
+        let store = regions
+            .iter()
+            .find(|region| region.stable_key == "Store")
+            .expect("the retained trait region");
+        show.fold_state.set(&path, &store.stable_key, false);
+        show.ensure_visible_rows(selected.as_ref());
+    }
+
+    let show = show_ref(&app);
+    for hidden in [10, 11, 12] {
+        assert_eq!(
+            show.visible_row_for_source_line(hidden),
+            None,
+            "a dropped line inside the collapsed trait must have no row"
+        );
+    }
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(6)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Fold { line: 5, .. })
+        ),
+        "a retained line inside the collapsed trait maps to its fold row"
+    );
+}
+
+#[test]
+fn reveal_hidden_dropped_line_does_not_open_regions() {
+    let path = RepoPath::new("a.rs").expect("valid path");
+    let mut app = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
+    let selected = app.workspace.selected.clone();
+    {
+        let show = &mut app.plugins.source;
+        show.ensure_visible_rows(selected.as_ref());
+        let regions = show
+            .folds
+            .regions(&path)
+            .expect("fold regions are cached")
+            .to_vec();
+        let store = regions
+            .iter()
+            .find(|region| region.stable_key == "Store")
+            .expect("the retained trait region");
+        show.fold_state.set(&path, &store.stable_key, false);
+        show.ensure_visible_rows(selected.as_ref());
+
+        show.reveal_source_line(selected.as_ref(), 12);
+
+        let regions = show
+            .folds
+            .regions(&path)
+            .expect("fold regions are cached")
+            .to_vec();
+        let store = regions
+            .iter()
+            .find(|region| region.stable_key == "Store")
+            .expect("the retained trait region");
+        let get = regions
+            .iter()
+            .find(|region| region.stable_key == "Store::get")
+            .expect("the dropped method region");
+        assert!(
+            !show.fold_state.is_open(&path, store),
+            "the retained container must stay closed"
+        );
+        assert!(
+            !show.fold_state.is_open(&path, get),
+            "the hidden dropped line must not receive an override"
+        );
+    }
+
+    assert!(
+        matches!(
+            show_ref(&app)
+                .visible_row_for_source_line(5)
+                .map(|row| &show_ref(&app).visible_rows()[row]),
+            Some(VisibleRow::Fold { line: 5, .. })
+        ),
+        "the retained container is still rendered as its fold row"
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn types_mode_search_ignores_dropped_matches_inside_a_collapsed_container() {
+    let mut app = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
+    focus_content(&mut app);
+    let collapsed = press(&app, &[Key::Char('z'), Key::Char('M')]);
+
+    let mut searching = collapsed;
+    commit_search(&mut searching, "hidden");
+    let matches = &searching.workspace.search.as_ref().expect("search").matches;
+    assert_eq!(
+        matches.len(),
+        1,
+        "only the retained field line matches: {matches:?}"
+    );
+    assert_eq!(matches[0].line, 21);
+
+    let stepped = press(&searching, &[Key::Char('n')]);
+    let show = show_ref(&stepped);
+    assert_eq!(show.body.cursor_line, 21, "the cursor reaches the match");
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(21)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Source { line: 21 })
+        ),
+        "stepping reveals the retained field"
+    );
+
+    let mut dropped = show_app_mode(vec![types_filter_outline()], ProjectionMode::Types);
+    focus_content(&mut dropped);
+    let dropped = press(&dropped, &[Key::Char('z'), Key::Char('M')]);
+    for needle in ["helper", "Get an item"] {
+        let mut searching = dropped.clone();
+        commit_search(&mut searching, needle);
+        assert!(
+            searching
+                .workspace
+                .search
+                .as_ref()
+                .expect("search")
+                .matches
+                .is_empty(),
+            "`{needle}` is only in dropped declarations and must not match"
+        );
+    }
+
+    let mut comment = dropped;
+    commit_search(&mut comment, "A comment");
+    let matches = &comment.workspace.search.as_ref().expect("search").matches;
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].line, 8);
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn tests_mode_search_ignores_dropped_matches_inside_a_collapsed_container() {
+    let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    focus_content(&mut app);
+    let collapsed = press(&app, &[Key::Char('z'), Key::Char('M')]);
+
+    let mut dropped = collapsed.clone();
+    commit_search(&mut dropped, "helper");
+    assert!(
+        dropped
+            .workspace
+            .search
+            .as_ref()
+            .expect("search")
+            .matches
+            .is_empty(),
+        "a dropped helper inside the collapsed module must not match"
+    );
+
+    let mut retained = collapsed;
+    commit_search(&mut retained, "hidden");
+    let matches = &retained.workspace.search.as_ref().expect("search").matches;
+    assert_eq!(matches.len(), 1, "the retained test body still matches");
+    assert_eq!(matches[0].line, 13);
+    let show = show_ref(&retained);
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(13)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Fold { line: 5, .. })
+        ),
+        "the retained line maps to the collapsed module's fold row"
+    );
+
+    let stepped = press(&retained, &[Key::Char('n')]);
+    let show = show_ref(&stepped);
+    assert_eq!(show.body.cursor_line, 13);
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(13)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Source { line: 13 })
+        ),
+        "stepping opens the retained test and shows the match"
+    );
+}
+
+#[test]
+fn tests_mode_dropped_line_inside_a_collapsed_container_has_no_visible_row() {
+    let mut app = show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests);
+    focus_content(&mut app);
+    let collapsed = press(&app, &[Key::Char('z'), Key::Char('M')]);
+    let show = show_ref(&collapsed);
+
+    assert_eq!(
+        show.visible_row_for_source_line(9),
+        None,
+        "the dropped helper has no row inside the collapsed module"
+    );
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(13)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Fold { line: 5, .. })
+        ),
+        "the retained test body still maps to the module fold row"
+    );
+}
+
+#[test]
+fn tests_mode_keeps_an_emitted_fold_summary_visible() {
+    let mut app = show_app_mode(vec![tests_fold_summary_outline()], ProjectionMode::Tests);
+    let selected = app.workspace.selected.clone();
+    let show = show_ref(&app);
+    assert_eq!(
+        show.visible_rows(),
+        &[
+            VisibleRow::Source { line: 2 },
+            VisibleRow::Fold {
+                line: 3,
+                summary_line: 3,
+                region_index: 3,
+                hidden: 0,
+                dropped: false,
+            },
+        ],
+        "the old Tests builder emits the retained test as a Fold summary"
+    );
+    assert_eq!(
+        show.visible_row_for_source_line(3),
+        Some(1),
+        "the emitted Fold row's summary line resolves to its own row"
+    );
+
+    app.plugins.source.body.cursor_line = 3;
+    app.plugins.source.ensure_visible_rows(selected.as_ref());
+    assert_eq!(
+        app.plugins.source.cursor_row(),
+        Some(1),
+        "the cursor can rest on the Fold summary line"
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn tests_mode_search_finds_an_emitted_fold_summary() {
+    let mut app = show_app_mode(vec![tests_fold_summary_outline()], ProjectionMode::Tests);
+    focus_content(&mut app);
+    commit_search(&mut app, "fn t");
+    let matches = &app.workspace.search.as_ref().expect("search").matches;
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].line, 3);
+    let show = show_ref(&app);
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(3)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Fold {
+                line: 3,
+                summary_line: 3,
+                ..
+            })
+        ),
+        "the Fold summary line is searchable"
+    );
+
+    let stepped = press(&app, &[Key::Char('n')]);
+    let show = show_ref(&stepped);
+    assert_eq!(show.body.cursor_line, 3);
+    assert!(
+        matches!(
+            show.visible_row_for_source_line(3)
+                .map(|row| &show.visible_rows()[row]),
+            Some(VisibleRow::Source { line: 3 })
+        ),
+        "revealing the match opens the retained test"
+    );
 }
 
 #[cfg(feature = "diff")]

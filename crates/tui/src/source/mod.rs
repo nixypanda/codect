@@ -6,14 +6,19 @@
 //! [`tui_core::workspace::Workspace`], and the view reads them through
 //! [`tui_core::cx::Cx`].
 //!
-//! The body cursor always names a visible row's source line, so the `tests`-mode
-//! filter (which can hide the cursor's line) anchors it to the nearest visible
-//! row; both body offsets are clamped to the projection before the cursor is
-//! revealed.
+//! The body cursor always names a visible row's source line, so a filtering
+//! mode (`types` or `tests`) that can hide the cursor's line anchors it to the
+//! nearest visible row; both body offsets are clamped to the projection before
+//! the cursor is revealed.
 //!
-//! In `tests` mode a dropped region's whole subtree is skipped. That is safe
-//! because a container that holds a test is itself retained, so a dropped
-//! container can have no retained descendant.
+//! In a filtering mode a dropped region's lines are hidden. Tests keeps its
+//! historical row construction, including drop-wins on a shared start line;
+//! Types uses a line mask that also keeps retained region start, declaration,
+//! and end lines shared with dropped declarations. Both rely on the outline
+//! invariant that a container holding a retained declaration is itself retained,
+//! so a dropped container has no retained descendant. `signatures` keeps the
+//! marker-row code path: it renders a dropped region as a `hidden in signatures`
+//! fold row instead of filtering it out.
 
 mod folds;
 mod rows;
@@ -50,6 +55,19 @@ pub struct ShowRequest {
     pub revision: String,
     pub mode: ProjectionMode,
     pub selection: base::Selection,
+}
+
+/// Whether the source explorer hides declarations the loaded mode dropped
+/// instead of rendering them as `hidden in <mode>` marker rows.
+///
+/// This is a presentation policy, not a projection rule: Types and Tests both
+/// hide dropped declarations, while Signatures keeps the marker-row code path.
+/// The match is exhaustive so a new mode must choose explicitly.
+pub(crate) fn filters_dropped_declarations(mode: ProjectionMode) -> bool {
+    match mode {
+        ProjectionMode::Types | ProjectionMode::Tests => true,
+        ProjectionMode::Signatures => false,
+    }
 }
 
 const MOUSE_SCROLL_STEP: i32 = 3;
@@ -443,5 +461,17 @@ impl Plugin for SourceView {
             } => Err(error),
             other => Ok(other),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_types_and_tests_filter_dropped_declarations() {
+        assert!(filters_dropped_declarations(ProjectionMode::Types));
+        assert!(filters_dropped_declarations(ProjectionMode::Tests));
+        assert!(!filters_dropped_declarations(ProjectionMode::Signatures));
     }
 }

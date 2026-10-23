@@ -45,10 +45,10 @@ pub(crate) fn render(
     }
 
     if view.line_count() == 0 {
-        let (title, detail) = if view.loaded_mode == ProjectionMode::Tests {
-            ("No test declarations", "Nothing retained in this mode.")
-        } else {
-            ("Empty file", "This file has no source lines.")
+        let (title, detail) = match view.loaded_mode {
+            ProjectionMode::Types => ("No type declarations", "Nothing retained in this mode."),
+            ProjectionMode::Signatures => ("Empty file", "This file has no source lines."),
+            ProjectionMode::Tests => ("No test declarations", "Nothing retained in this mode."),
         };
         render_empty(frame, inner, title, detail, theme);
         return;

@@ -65,7 +65,11 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let files = engine.show_source_outlines("HEAD", ProjectionMode::Types, &selection)?;
     let mut show = show_model(ProjectionMode::Types, files, width, height);
     show.root = root.clone();
-    set_body_scroll(&mut show, SHOW_FOLD_SCROLL);
+    // Types mode filters declarations, so the showcase file can have fewer
+    // rows than the fixed scroll target. Clamp it to keep the body populated.
+    let viewport = height.saturating_sub(4) as usize;
+    let max_scroll = show.plugins.source.line_count().saturating_sub(viewport) as u16;
+    set_body_scroll(&mut show, SHOW_FOLD_SCROLL.min(max_scroll));
     render("tui-show", &show, &args.out, width, height)?;
 
     let (palette, _) = update(Msg::Key(Key::CtrlP), &show);

@@ -29,6 +29,7 @@ use crate::test_support::{
     ATTRIBUTED_SOURCE, App, NESTED_SOURCE, area_set, attributed_child_outline, base_app_with,
     dropped_container_outline, golden_document, nested_outline, press, render, scope_msg, show_app,
     show_app_mode, show_request, source_msg, source_outline, step, tests_filter_outline, two_files,
+    types_filter_outline,
 };
 #[cfg(feature = "diff")]
 use crate::test_support::{
@@ -111,6 +112,7 @@ fn scenarios() -> Vec<Scenario> {
         scenario("show_folds", 100, 30, build_show_folds),
         scenario("show_dropped", 100, 30, build_show_dropped),
         scenario("show_tests_mode", 100, 30, build_show_tests_mode),
+        scenario("show_types_mode", 100, 30, build_show_types_mode),
         scenario("show_narrow_tree", 60, 20, build_show_narrow_tree),
         scenario("show_narrow_body", 60, 20, build_show_narrow_body),
         scenario("show_palette", 100, 30, build_show_palette),
@@ -254,6 +256,10 @@ fn build_show_dropped() -> App {
 
 fn build_show_tests_mode() -> App {
     show_app_mode(vec![tests_filter_outline()], ProjectionMode::Tests)
+}
+
+fn build_show_types_mode() -> App {
+    show_app_mode(vec![types_filter_outline()], ProjectionMode::Types)
 }
 
 fn build_show_narrow_tree() -> App {
