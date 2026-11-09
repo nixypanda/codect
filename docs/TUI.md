@@ -33,6 +33,26 @@ The diff panes use Tokyo Night night/day syntax colors and added/deleted line
 backgrounds, brighter intra-line emphasis on the bytes that changed, and
 full-width `@@` hunk bands. `NO_COLOR` disables all styling.
 
+## File moves
+
+A detected file move is one row under its target path, with a move badge. Its
+label shows the source and target names:
+
+- A same-directory move shows `old_name → new_name`.
+- A cross-directory move shows the old full path before the target name, because
+  the row already sits under the target directory.
+
+Selection and search use the target-path key. The row remains under the target
+even when that target is outside the requested scope, and the scope label keeps
+showing the scope the user requested.
+
+The two panes compare the move's old and new projections and name the old and
+new paths in their titles. A pure move has no hunk rows; both panes show a
+`Moved` empty state with the detail `Moved from … to …`, instead of
+`No text changes`. An edited move renders ordinary focused hunks. Search covers
+both projections and the move counts as one file event; a pure move has no hunk
+rows to highlight.
+
 ![codect tui diff range — side-by-side projection diff](showcase/tui-diff-range.png)
 
 *`codect tui diff range`: a side-by-side projection diff with hunk bands.*
@@ -58,7 +78,7 @@ full-width `@@` hunk bands. `NO_COLOR` disables all styling.
 | `zR` / `zM` | Unfold every region / fold every region |
 | `Ctrl-P` | Open the command palette |
 | `Ctrl-F` | Find a file by name |
-| `/`, then `n`/`N` | Search the current view and step through matches |
+| `/`, then `n`/`N` | Search the current view, including both projections of a move, and step through matches |
 | `m` | Choose types, signatures, or tests |
 | `s` | Choose a scope: everything, a named area, or a literal path |
 | `r` | Edit the show revision |

@@ -24,14 +24,27 @@ is consequently not self-contained — it shows signatures whose referenced type
 never declares.
 
 Function and value **bodies are never projected**. Implementation-only changes
-are intentionally invisible in all modes and in both diff directions.
+do not alter a projection in any mode. In a diff they are invisible for an
+unmoved file; inside a detected move they produce no hunks while the move
+itself remains visible.
+
+Move detection is a file-level diff operation, not a projection rule. A moved
+file's two projections are computed independently in the requested mode and
+compared normally, but a move is still emitted when the two projections are
+equal; only a move with two empty requested-mode projections is omitted. A
+body-only edit inside a move therefore changes no projected line and produces no
+hunks, while the move itself remains visible. Moves do not pair different
+languages, symlinks, submodules, or unsupported files; `.py` and `.pyi` are the
+same Python language for this purpose.
 
 ## What every projection guarantees
 
 - Emission is deterministic and independent of the current directory, locale,
   terminal width, wall clock, environment variables, or installed compilers.
-- Original whitespace and comments do not affect output. Canonical rendering is
-  what makes formatting-only edits disappear from a focused diff.
+- Original whitespace and comments do not affect projection output, so a
+  formatting-only edit leaves an unmoved file's projection and content hunks
+  unchanged. A detected move remains visible: move pairing reads raw source
+  bytes, where whitespace and comments can affect the fuzzy score.
 - Declaration order, semantic token order, member order, visibility, generic
   parameters, constraints, and selected modifiers are preserved.
 - Line breaks are fixed by declaration shape and a single 80-column budget
@@ -151,6 +164,11 @@ renders a dropped declaration's outline signature with a `hidden in <mode>`
 marker. The TUI source explorer filters dropped declarations entirely in `types`
 and `tests` and keeps the marker-row code path for `signatures`. Neither choice
 changes the projection, the outline, or `retained_in_mode`.
+
+For diff consumers, `codect.diff.v2` pairs a moved file's source and target
+outlines with its `old_path` and target `path`. Declaration matching across a
+move is a consumer concern; path-prefixed stable keys may need rebasing before
+comparing outlines.
 
 Which declarations a mode *keeps* is a separate question, answered by an
 exhaustive `match` where it is needed rather than by a predicate on the enum, so

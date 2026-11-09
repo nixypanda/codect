@@ -35,7 +35,9 @@ codect show --mode tests --path tests                # Rust and Python only
   an editor, and never executes repository code.
 - JSON is versioned. Tolerate unknown fields; treat any other `schema` value as
   a fatal version mismatch.
-- A body-only change produces an empty focused diff. That is intentional.
+- A body-only change produces an empty focused diff unless it is inside a
+  detected file move; a move remains visible even when its projections are
+  equal. A move with two empty requested-mode projections is omitted.
 - `types`/`signatures`/`tests` never include function bodies; never fall back to
   raw source.
 - `tests` is a filter over `signatures`, not a level of detail: it declares no
@@ -46,18 +48,18 @@ codect show --mode tests --path tests                # Rust and Python only
 
 | Document | Contents |
 | --- | --- |
-| [CLI and JSON contract](docs/agents/CONTRACT.md) | Exact flags, exit codes, `codect.show.v1`, `codect.diff.v1`, snapshots |
+| [CLI and JSON contract](docs/agents/CONTRACT.md) | Exact flags, exit codes, `codect.show.v1`, `codect.diff.v2`, snapshots |
 | [Projection model](docs/agents/PROJECTION.md) | Modes, per-language rules, stable keys, outline/superset rule |
 | [Invariants](docs/agents/INVARIANTS.md) | Determinism, invariance, schema stability, boundaries |
 | [Product](docs/PRODUCT.md) | Authoritative behavior and scope |
 | [Technical design](docs/TECHNICAL_DESIGN.md) | Full implementation contract |
-| [Schemas](docs/schema/) | `codect.show.v1.json`, `codect.diff.v1.json` |
+| [Schemas](docs/schema/) | `codect.show.v1.json`, `codect.diff.v2.json` (`codect.diff.v1.json` is archived) |
 | [Editor plugins](docs/editors/) | Per-host integration findings and wiring lessons |
 | [Plans](docs/plans/) | Self-contained work items / task packets |
 
 ## Changing the code
 
 Run `just check` before claiming a change is done. It runs formatting, clippy,
-the workspace tests, a release build, the `gix` feature audit, and the
-`--no-default-features` build. See
+the workspace tests, a release build, the `gix` feature audit, the
+`--no-default-features` build, and the DSH Node suite. See
 [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full list and the test layout.

@@ -4,10 +4,11 @@
 
 Codect provides selectable views of a codebase at different levels of detail. Its focused views remove implementation bodies so that a person or tool can study the shape of the code without reading how it works.
 
-Each focused view also has a corresponding diff view. A focused diff compares
-the selected projections of two Git snapshots rather than their complete
-source text. Snapshots may be commits, the index, the worktree, or an
-empty tree.
+Each focused view also has a corresponding diff view. A focused diff renders a
+comparison of the selected projections of two Git snapshots; it never renders
+complete source text or a function body. File-move detection may read source
+bytes solely to pair old and new paths. Snapshots may be commits, the index, the
+worktree, or an empty tree.
 
 ## Product modes
 
@@ -26,9 +27,10 @@ consumer that does not recognize it fails loudly rather than reading a filtered
 projection as the full superset.
 
 The CLI and terminal frontend implement **Types**, **Signatures**, and **Tests**.
-The Neovim plugin implements **Types** and **Signatures**; it also has a local
-`full` fold state that opens the source buffer, which is not the planned Full
-projection mode.
+The Neovim Diffview adapter also implements **Types**, **Signatures**, and
+**Tests**; its editor projection surface remains Types and Signatures, and it
+has a local `full` fold state that opens the source buffer, which is not the
+planned Full projection mode. The DSH plugin requests Types and Signatures.
 
 ![The same change shown as a Types diff and a Signatures diff](showcase/types-vs-signatures.png)
 
@@ -172,7 +174,10 @@ changes, and not type changes to the code under test.
 Not recognized as tests:
 
 - Cases generated inside a macro body, such as `proptest!` or rstest's generated
-  functions. Codect never expands macros or reads a body.
+  functions. Codect never expands macros. The parser still parses the whole
+  source AST, but test detection does not inspect function body contents for
+  markers. Move detection may read source bytes for pairing; they are never
+  rendered.
 - `#[bench]` functions and any other benchmark.
 - A `#[test]` method inside a `#[cfg(test)] impl` block, since Tests mode does
   not descend into implementation blocks.
@@ -188,8 +193,8 @@ Haskell and Python do not use the Elm placeholder. They render declarations exac
 
 ### Focused diffs
 
-Both focused modes compare two selected Git snapshots. Both text and JSON
-diffs compare commits and also accept `:index`, `:worktree`, `:empty`, and the
+Focused diffs compare two selected Git snapshots. Both text and JSON diffs
+compare commits and also accept `:index`, `:worktree`, `:empty`, and the
 canonical Git empty-tree object ID.
 
 - A Types diff shows only additions, removals, and changes to type declarations.
@@ -206,18 +211,52 @@ feature branch is compared from where it started. Both sides must be commits;
 the snapshots have no merge base. The JSON document marks the base snapshot
 with `merge_base: true` and reports the resolved merge base as its id.
 
-Implementation-only changes are intentionally invisible in both focused diff
-modes. If a function body changes while its explicit signature remains
-unchanged, the focused diff contains no change for that function. The JSON
-document `codect.diff.v1` contains only files with changed canonical
-projections and carries each side's projection and declaration outline.
+Implementation-only changes are intentionally invisible for unmoved files in
+focused diffs. If a function body changes while its explicit signature remains
+unchanged, the focused diff contains no change for that function. Inside a
+detected move, a body-only edit produces no hunks but the move remains visible.
+The JSON document `codect.diff.v2` normally contains only files with changed
+canonical projections and carries each side's projection and declaration
+outline.
 `:index` reads stage-zero blobs; `:worktree` reads tracked regular files on
 disk plus untracked, non-ignored files, never unsaved editor buffers. Mutable
 snapshot names must be refreshed after staging or file writes.
 
+Codect also detects **file moves**, not declaration moves or copies. A move pairs
+a removed path with an added path when they are supported regular files of the
+same language. Exact source content is paired first; remaining candidates may be
+paired by source-content similarity at a fixed 50% threshold. Detection runs
+over the complete supported snapshots before path or area filtering, so a narrow
+scope cannot change the pairing. Existing same-path pairs take precedence, each
+path participates in at most one move, and source content, not projection text,
+decides eligibility.
+
+Fuzzy pairing is a content heuristic, not a reconstruction of history: unrelated
+files that share enough boilerplate can pair above the threshold. Exact source
+content is matched first, and the deterministic source score plus raw-path
+ordering decides every remaining choice. Detection reads raw source bytes; it
+does not apply Git filters, end-of-line conversion, or checkout normalization, so
+an LF versus CRLF difference can prevent a pair.
+
+A detected move is one event. Text mode renders a pure move with `rename from`
+and `rename to` headers and no content hunks; an edited move adds the two path
+headers and focused hunks. The JSON event carries the target `path`, source
+`old_path`, both projections, and `equal` indicating whether the two canonical
+projection texts match. A move with at least one nonempty projection remains
+visible when its projections are equal, including a body-only edit inside the
+move. A move whose two requested-mode projections are both empty is omitted, so
+a non-test-only file does not appear
+in a Tests diff; gaining or losing the last test leaves one nonempty side and a
+focused hunk.
+
+A move matches a scope when either its old or new path matches. Selecting either
+end returns the whole event, and the TUI keys the single row under the target
+path. Files that did not move continue to obey the equal-projection omission
+rule.
+
 ### Path scoping
 
-Both focused modes accept a repeatable path selection that narrows a view or diff to part of the repository.
+Focused views accept a repeatable path selection that narrows a view or diff to part of the repository.
 
 - A selected path names either a file or a directory; a directory includes every file beneath it.
 - Paths are relative to the current directory. Absolute paths are accepted only inside the repository, and in a bare repository relative paths resolve against the repository root.
@@ -225,11 +264,16 @@ Both focused modes accept a repeatable path selection that narrows a view or dif
 - Resolution is lexical: `.`, repeated slashes, and trailing slashes are normalized, and `..` may climb but may not leave the repository.
 - Matching is byte-exact and respects path boundaries, so `src` does not match `src2/lib.rs`.
 
-A path that names nothing in the projected revision is an error. A path that exists but contains no supported files is valid and produces empty output. Scoping changes which files are considered, never how they are projected: implementation bodies stay hidden exactly as they are without a path selection.
+A path that names nothing in the projected revision is an error; in a diff, a
+path named by either side of the comparison is valid. A path that exists but
+contains no supported files is valid and produces empty output. Scoping changes
+which files are considered, never how they are projected: rendered projections
+never include implementation bodies. In a diff, a move is in scope when either
+its old or new path matches; selecting either end returns the whole move event.
 
 ### Named areas
 
-A repository may define named path groups in a configuration file, so a project can share a recurring selection such as a package or subsystem instead of repeating paths. Both focused modes accept a repeatable `--area`/`-a` selection that narrows a view or diff to one or more named areas.
+A repository may define named path groups in a configuration file, so a project can share a recurring selection such as a package or subsystem instead of repeating paths. Focused views accept a repeatable `--area`/`-a` selection that narrows a view or diff to one or more named areas.
 
 - Areas are defined in `.codect.toml` at the repository root, under an `[areas]` table that maps each name to a list of paths:
 
@@ -241,10 +285,10 @@ A repository may define named path groups in a configuration file, so a project 
 
 - Area paths are relative to the repository root, not the current directory.
 - An area holds literal paths, and repeating `--area` selects the union of the named areas.
-- An area names paths only; it carries no projection mode, so areas combine freely with Types and Signatures.
+- An area names paths only; it carries no projection mode, so areas combine freely with Types, Signatures, and Tests.
 - `--area` and `--path` cannot be combined in one command.
 
-An area is valid when at least one of its paths names something in the projected revision; in a diff, either side may satisfy it. A missing or malformed configuration file, or an area name the configuration does not define, is an error.
+An area is valid when at least one of its paths names something in the projected revision; in a diff, either side may satisfy it. A move is selected by an area when either its old or new path is in the area. A missing or malformed configuration file, or an area name the configuration does not define, is an error.
 
 Area configuration is declarative data. It defines names and paths only and is never executed. Areas hold literal repository paths: they do not use glob patterns and do not expand environment variables or other substitutions.
 
@@ -267,7 +311,11 @@ focused views.
   source, so projection and diff semantics are unchanged.
 - `codect tui diff range` presents a changed-file tree beside a side-by-side
   comparison of two snapshots — commits, the index, the worktree, or the empty
-  tree — with `@@` hunk headers.
+  tree — with `@@` hunk headers. A moved file is one row under its target path
+  with a move badge and an `old → new` label. Same-directory moves show
+  `old_name → new_name`; cross-directory moves show the old full path before the
+  target name. A pure move has no hunk rows; both panes show a `Moved` empty
+  state with the detail `Moved from … to …` instead of `No text changes`.
 - `codect tui diff commits` adds a scrollable commit list below the file tree
   and diff, pinned as a full-width band at the bottom of the body.
   It follows the target's first-parent chain after the base, newest first, so it
@@ -281,7 +329,9 @@ focused views.
   without leaving the frontend.
 - A command palette and a fuzzy file finder make every action reachable without
   memorizing keys, and the current view can be searched with match
-  highlighting.
+  highlighting. A moved file is searched through both of its projections and
+  counted as one event; a pure move has no hunk rows to highlight even though
+  both projections are searched.
 - The interface uses a themed design system with light and dark palettes,
   detects the terminal's background at startup so it matches a white or black
   terminal, and degrades to 256- or 16-color terminals; `NO_COLOR` disables
@@ -305,6 +355,16 @@ Neovim plugin that consumes it to build semantic folds.
 - `codect show --format json` emits the versioned `codect.show.v1` document. Its
   schema is committed at `docs/schema/codect.show.v1.json`, and golden documents
   live under `fixtures/schema/`.
+- `codect diff --format json` emits `codect.diff.v2`, which carries moved events
+  and remains the document Diffview and DSH consume. `codect.diff.v1` is
+  archived and is not emitted by the current binary.
+- `codect.diff.v2` `path`/`old_path` always use Codect's display encoding then
+  normal JSON string escaping; they are not raw path bytes. `codect.show.v1`
+  `path` uses that encoding only when the new producer's optional
+  `path_encoding: "codect.path.v1"` marker is present. Absence means legacy show
+  display semantics and must not be decoded with the new decoder; unknown marker
+  values are unsupported for path decoding. The show schema remains
+  `codect.show.v1`; required fields are unchanged and the marker is additive.
 - The document pairs the requested mode's canonical projection with a
   **mode-independent outline**: every declaration in the file, including ones
   the requested mode drops. Each outline entry carries the declaration's stable
@@ -350,7 +410,7 @@ The current implementation does not include:
 - Implementation-change indicators.
 - Dependency or behavioral-impact analysis.
 - Documentation or comment views.
-- Rename or move detection beyond what is visible in the projected text.
+- Declaration-level move detection or copy detection (file moves are detected).
 - Semantic-versioning recommendations.
 - Languages other than Elm, Haskell, Python, and Rust.
 - Agent-specific experiences.
@@ -418,8 +478,8 @@ Language support may differ in whether inferred types, public visibility, or imp
 
 ### Interactive navigation
 
-The terminal frontend already switches between Types and Signatures and changes
-the projection scope. Later experiences may add:
+The terminal frontend already switches between Types, Signatures, and Tests and
+changes the projection scope. Later experiences may add:
 
 - Switch between Public and Full views as those modes are implemented.
 - Reveal the implementation of a selected declaration on demand.
@@ -432,7 +492,8 @@ the projection scope. Later experiences may add:
 
 The Neovim plugin implements source-buffer semantic folds, mode switching,
 declaration picking, automatic folding, and focused Diffview history and local
-diffs when a compatible Diffview revision is installed. The Diffview adapter
+diffs in Types, Signatures, and Tests when a compatible Diffview revision is
+installed. The Diffview adapter
 uses read-only projected scratch buffers and is pinned to a specific upstream
 revision. Source navigation beyond the existing declaration picker and
 on-demand implementation reveal remain possible future work.
