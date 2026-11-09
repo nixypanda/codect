@@ -12,6 +12,8 @@
  * `ok === false`, otherwise return `value`.
  */
 
+import type { NavigationPathEncoding } from "./move";
+
 /* eslint-disable @typescript-eslint/no-unused-vars */
 declare function require(id: string): any;
 
@@ -22,7 +24,8 @@ const { DiffView } = require("./diff-view");
 const { CodectTitle } = require("./title");
 const { codeLabels } = require("./labels");
 const { ensureStyles } = require("./styles");
-const { fileAddressFor } = require("./address");
+const { repoFileAddress } = require("./address");
+const { navigationPath } = require("./move");
 const { TYPERT_REMOTE } = require("../api-codect/typert.remote-client");
 
 const NS = "codect";
@@ -36,11 +39,12 @@ const LOCALE_EN: Record<string, string> = {
   "codect.guide.diff.description": "Compare declarations between two revisions",
   "codect.label.revision": "Revision",
   "codect.label.mode": "Projection mode",
-  "codect.label.pathFilter": "Filter by path",
+  "codect.label.pathFilter": "Filter by raw repo-relative path (not display-escaped)",
   "codect.label.base": "Base revision",
   "codect.label.target": "Target revision",
   "codect.label.files": "files changed",
   "codect.label.declarations": "declarations",
+  "codect.label.moved": "moved",
   "codect.label.outline": "Outline",
   "codect.label.toggleTree": "Toggle file tree",
   "codect.label.diff": "Diff",
@@ -56,7 +60,7 @@ const LOCALE_EN: Record<string, string> = {
   "codect.placeholder.revision": "Revision (HEAD)",
   "codect.placeholder.base": "Base (HEAD~1)",
   "codect.placeholder.target": "Target (HEAD)",
-  "codect.placeholder.path": "Filter by path",
+  "codect.placeholder.path": "Filter by raw repo-relative path",
   "codect.loading.show": "Loading projection…",
   "codect.loading.diff": "Loading focused diff…",
   "codect.empty.show": "No projected file content in this scope.",
@@ -215,13 +219,21 @@ function apply(ctx: any) {
 
     function navigateFrom(
       props: any,
-      tabActions: any,
-      root: string
-    ): (path: string, line: number) => void {
-      return (path: string, line: number) => {
+      tabActions: any
+    ): (
+      path: string,
+      line: number,
+      encoding: NavigationPathEncoding
+    ) => void {
+      return (path: string, line: number, encoding: NavigationPathEncoding) => {
         const sessionId = props?.sessionId;
         if (sessionId === undefined || sessionId === null) return;
-        const address = fileAddressFor(String(sessionId), root, path);
+        const decodedPath = navigationPath(path, encoding);
+        // Unsupported/ambiguous encodings and paths with raw non-UTF-8 bytes
+        // have no safe JavaScript path form. Do not open the display text as a
+        // substituted filename; navigation stays disabled for that file.
+        if (decodedPath === null) return;
+        const address = repoFileAddress(String(sessionId), decodedPath);
         if (tabActions && typeof tabActions.openResource === "function") {
           tabActions.openResource(address, { params: { line } });
           return;
@@ -242,7 +254,7 @@ function apply(ctx: any) {
           t("codect.empty.noWorkspace")
         );
       }
-      const onNavigate = navigateFrom(props, tabInfo?.tab?.actions, root);
+      const onNavigate = navigateFrom(props, tabInfo?.tab?.actions);
       return React.createElement(ShowView, { root, codect, labels, t, onNavigate });
     }
 
@@ -256,7 +268,7 @@ function apply(ctx: any) {
           t("codect.empty.noWorkspace")
         );
       }
-      const onNavigate = navigateFrom(props, tabInfo?.tab?.actions, root);
+      const onNavigate = navigateFrom(props, tabInfo?.tab?.actions);
       return React.createElement(DiffView, {
         root,
         codect,

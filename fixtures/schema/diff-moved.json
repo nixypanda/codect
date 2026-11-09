@@ -1,0 +1,151 @@
+{
+  "schema": "codect.diff.v2",
+  "mode": "types",
+  "base": {
+    "kind": "commit",
+    "revision": "BASE",
+    "id": "BASE_ID"
+  },
+  "target": {
+    "kind": "commit",
+    "revision": "TARGET",
+    "id": "TARGET_ID"
+  },
+  "files": [
+    {
+      "path": "moved.rs",
+      "old_path": "lib.rs",
+      "language": "rust",
+      "status": "moved",
+      "base": {
+        "snapshot_id": "BASE_ID",
+        "projection": {
+          "text": "pub struct Moved {\n    pub value: u32,\n}\n",
+          "items": [
+            {
+              "stable_key": "lib.rs::type::Moved",
+              "parent_key": null,
+              "kind": "type",
+              "name": "Moved",
+              "span": {
+                "start_line": 1,
+                "end_line": 3,
+                "start_byte": 0,
+                "end_byte": 40
+              },
+              "canonical_text": "pub struct Moved {\n    pub value: u32,\n}"
+            },
+            {
+              "stable_key": "lib.rs::type::Moved::field::value",
+              "parent_key": "lib.rs::type::Moved",
+              "kind": "field",
+              "name": "value",
+              "span": {
+                "start_line": 2,
+                "end_line": 2,
+                "start_byte": 23,
+                "end_byte": 37
+              },
+              "canonical_text": "    pub value: u32,"
+            }
+          ]
+        },
+        "outline": [
+          {
+            "stable_key": "lib.rs::type::Moved",
+            "parent_key": null,
+            "kind": "type",
+            "name": "Moved",
+            "span": {
+              "start_line": 1,
+              "end_line": 3,
+              "start_byte": 0,
+              "end_byte": 40
+            },
+            "signature": "pub struct Moved {\n    pub value: u32,\n}",
+            "retained_in_mode": true
+          },
+          {
+            "stable_key": "lib.rs::type::Moved::field::value",
+            "parent_key": "lib.rs::type::Moved",
+            "kind": "field",
+            "name": "value",
+            "span": {
+              "start_line": 2,
+              "end_line": 2,
+              "start_byte": 23,
+              "end_byte": 37
+            },
+            "signature": "    pub value: u32,",
+            "retained_in_mode": true
+          }
+        ]
+      },
+      "target": {
+        "snapshot_id": "TARGET_ID",
+        "projection": {
+          "text": "pub struct Moved {\n    pub value: u32,\n}\n",
+          "items": [
+            {
+              "stable_key": "moved.rs::type::Moved",
+              "parent_key": null,
+              "kind": "type",
+              "name": "Moved",
+              "span": {
+                "start_line": 1,
+                "end_line": 3,
+                "start_byte": 0,
+                "end_byte": 40
+              },
+              "canonical_text": "pub struct Moved {\n    pub value: u32,\n}"
+            },
+            {
+              "stable_key": "moved.rs::type::Moved::field::value",
+              "parent_key": "moved.rs::type::Moved",
+              "kind": "field",
+              "name": "value",
+              "span": {
+                "start_line": 2,
+                "end_line": 2,
+                "start_byte": 23,
+                "end_byte": 37
+              },
+              "canonical_text": "    pub value: u32,"
+            }
+          ]
+        },
+        "outline": [
+          {
+            "stable_key": "moved.rs::type::Moved",
+            "parent_key": null,
+            "kind": "type",
+            "name": "Moved",
+            "span": {
+              "start_line": 1,
+              "end_line": 3,
+              "start_byte": 0,
+              "end_byte": 40
+            },
+            "signature": "pub struct Moved {\n    pub value: u32,\n}",
+            "retained_in_mode": true
+          },
+          {
+            "stable_key": "moved.rs::type::Moved::field::value",
+            "parent_key": "moved.rs::type::Moved",
+            "kind": "field",
+            "name": "value",
+            "span": {
+              "start_line": 2,
+              "end_line": 2,
+              "start_byte": 23,
+              "end_byte": 37
+            },
+            "signature": "    pub value: u32,",
+            "retained_in_mode": true
+          }
+        ]
+      },
+      "equal": true
+    }
+  ]
+}

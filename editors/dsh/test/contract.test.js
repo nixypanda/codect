@@ -1,10 +1,10 @@
 /**
  * Contract tests: `codect show/diff --format json` matches the shapes the DSH
- * plugin consumes (docs/schema/codect.{show,diff}.v1.json).
+ * plugin consumes (docs/schema/codect.{show,diff}.v1/v2.json).
  *
- * The diff tests build a throwaway repository so added/deleted/modified files
- * are always present — a HEAD~1..HEAD diff of this repo can legitimately be
- * empty, which previously let a wrong schema pass unnoticed.
+ * The diff tests build a throwaway repository so added/deleted/modified/moved
+ * files are always present — a HEAD~1..HEAD diff of this repo can legitimately
+ * be empty, which previously let a wrong schema pass unnoticed.
  */
 
 import { test, after } from "node:test";
@@ -46,14 +46,20 @@ function makeFixtureRepo() {
   git("config", "user.name", "test");
   mkdirSync(join(dir, "src"));
 
-  writeFileSync(join(dir, "src/a.rs"), "pub struct A { pub x: i32 }\n");
-  writeFileSync(join(dir, "src/b.rs"), "pub struct B { pub y: i32 }\n");
+  writeFileSync(join(dir, "src/a.rs"), "pub struct Alpha { pub x: i32 }\n");
+  writeFileSync(join(dir, "src/b.rs"), "pub struct Obsolete { pub old: bool }\n");
+  writeFileSync(join(dir, "src/old_exact.rs"), "pub struct Renamed { pub kept: u8 }\n");
+  writeFileSync(join(dir, "src/old_edited.rs"), "pub struct Edited { pub value: i32 }\n");
   git("add", "-A");
   git("commit", "-qm", "one");
 
-  writeFileSync(join(dir, "src/a.rs"), "pub struct A { pub x: i64 }\n");
-  writeFileSync(join(dir, "src/c.rs"), "pub struct C { pub z: i32 }\n");
+  writeFileSync(join(dir, "src/a.rs"), "pub struct Alpha { pub x: i64 }\n");
+  writeFileSync(join(dir, "src/c.rs"), "pub enum NewThing { One, Two }\n");
   rmSync(join(dir, "src/b.rs"));
+  rmSync(join(dir, "src/old_exact.rs"));
+  writeFileSync(join(dir, "src/new_exact.rs"), "pub struct Renamed { pub kept: u8 }\n");
+  rmSync(join(dir, "src/old_edited.rs"));
+  writeFileSync(join(dir, "src/new_edited.rs"), "pub struct Edited { pub value: i64 }\n");
   git("add", "-A");
   git("commit", "-qm", "two");
 
@@ -135,10 +141,10 @@ test("codect show --mode signatures includes signatures", () => {
   assert.equal(doc.mode, "signatures");
 });
 
-test("codect diff returns the side-based codect.diff.v1 document", () => {
+test("codect diff returns the side-based codect.diff.v2 document", () => {
   const doc = runCodect(["diff", "--format", "json", "--mode", "types", "HEAD~1", "HEAD"], fixture);
 
-  assert.equal(doc.schema, "codect.diff.v1");
+  assert.equal(doc.schema, "codect.diff.v2");
   assert.ok(["types", "signatures"].includes(doc.mode));
   assert.ok(typeof doc.base.revision === "string");
   assert.ok(typeof doc.target.revision === "string");
@@ -148,8 +154,9 @@ test("codect diff returns the side-based codect.diff.v1 document", () => {
   for (const file of doc.files) {
     assert.ok(typeof file.path === "string");
     assert.ok(typeof file.language === "string");
-    assert.ok(["added", "deleted", "modified"].includes(file.status));
-    assert.equal(file.equal, false);
+    assert.ok(
+      ["added", "deleted", "modified", "moved"].includes(file.status)
+    );
     statuses.add(file.status);
     for (const side of [file.base, file.target]) {
       if (side === null) continue;
@@ -158,9 +165,51 @@ test("codect diff returns the side-based codect.diff.v1 document", () => {
       assert.ok(Array.isArray(side.projection.items));
       assert.ok(Array.isArray(side.outline));
     }
+    if (file.status === "moved") {
+      assert.ok(typeof file.old_path === "string");
+      assert.notEqual(file.old_path, file.path);
+      assert.notEqual(file.base, null);
+      assert.notEqual(file.target, null);
+      assert.equal(typeof file.equal, "boolean");
+      assert.equal(
+        file.equal,
+        file.base.projection.text === file.target.projection.text
+      );
+    } else {
+      assert.equal("old_path" in file, false);
+      assert.equal(file.equal, false);
+      if (file.status === "added") {
+        assert.equal(file.base, null);
+        assert.notEqual(file.target, null);
+      } else if (file.status === "deleted") {
+        assert.notEqual(file.base, null);
+        assert.equal(file.target, null);
+      } else {
+        assert.notEqual(file.base, null);
+        assert.notEqual(file.target, null);
+      }
+    }
     assert.ok(!("items" in file), "diff files do not carry a top-level items array");
   }
-  assert.deepEqual([...statuses].sort(), ["added", "deleted", "modified"]);
+  assert.deepEqual(
+    [...statuses].sort(),
+    ["added", "deleted", "modified", "moved"]
+  );
+
+  const byPath = new Map(doc.files.map((file) => [file.path, file]));
+  const exact = byPath.get("src/new_exact.rs");
+  assert.equal(exact?.status, "moved");
+  assert.equal(exact?.old_path, "src/old_exact.rs");
+  assert.equal(exact?.equal, true);
+
+  const edited = byPath.get("src/new_edited.rs");
+  assert.equal(edited?.status, "moved");
+  assert.equal(edited?.old_path, "src/old_edited.rs");
+  assert.equal(edited?.equal, false);
+  assert.notEqual(
+    edited?.base.projection.text,
+    edited?.target.projection.text
+  );
 });
 
 test("client outline comparison yields added/deleted/changed declarations", () => {
@@ -179,6 +228,10 @@ test("client outline comparison yields added/deleted/changed declarations", () =
   const added = diffChanges(byPath.get("src/c.rs"));
   assert.ok(added.length >= 1);
   assert.ok(added.every((c) => c.status === "added"));
+
+  const exactMove = byPath.get("src/new_exact.rs");
+  assert.ok(exactMove !== undefined);
+  assert.deepEqual(diffChanges(exactMove), []);
 });
 
 test("codect diff with --path filter", () => {
@@ -186,9 +239,27 @@ test("codect diff with --path filter", () => {
     ["diff", "--format", "json", "--mode", "signatures", "--path", "src/c.rs", "HEAD~1", "HEAD"],
     fixture
   );
-  assert.equal(doc.schema, "codect.diff.v1");
+  assert.equal(doc.schema, "codect.diff.v2");
   assert.equal(doc.files.length, 1);
   assert.equal(doc.files[0].path, "src/c.rs");
+});
+
+test("a scope selecting either path returns the whole move event", () => {
+  for (const selected of ["src/old_exact.rs", "src/new_exact.rs"]) {
+    const doc = runCodect(
+      ["diff", "--format", "json", "--mode", "types", "--path", selected, "HEAD~1", "HEAD"],
+      fixture
+    );
+    assert.equal(doc.schema, "codect.diff.v2");
+    assert.equal(doc.files.length, 1);
+    const [move] = doc.files;
+    assert.equal(move.status, "moved");
+    assert.equal(move.path, "src/new_exact.rs");
+    assert.equal(move.old_path, "src/old_exact.rs");
+    assert.notEqual(move.base, null);
+    assert.notEqual(move.target, null);
+    assert.equal(move.equal, true);
+  }
 });
 
 test("codect show :worktree reads from worktree", () => {
@@ -214,7 +285,7 @@ test(
       snapshotFixture
     );
 
-    assert.equal(doc.schema, "codect.diff.v1");
+    assert.equal(doc.schema, "codect.diff.v2");
     assert.equal(doc.base.kind, "commit");
     assert.equal(doc.target.kind, "worktree");
     assert.equal(doc.target.revision, ":worktree");

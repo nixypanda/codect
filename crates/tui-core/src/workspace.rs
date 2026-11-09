@@ -58,6 +58,11 @@ pub struct FileSet {
     pub paths: Arc<[RepoPath]>,
     /// The change badge each path shows in the tree.
     pub badges: Arc<BTreeMap<RepoPath, BadgeTone>>,
+    /// The source path of a moved file, keyed by its target path.
+    ///
+    /// Paths stay the identity; the map only feeds the tree's move label. It is
+    /// empty for `show` and for diffs with no moves.
+    pub moves: Arc<BTreeMap<RepoPath, RepoPath>>,
     /// The tree's empty state when there are no files.
     pub empty: EmptyText,
 }
@@ -75,6 +80,7 @@ pub enum BadgeTone {
     Added,
     Modified,
     Deleted,
+    Moved,
 }
 
 /// The tree's empty text for a `show` session.

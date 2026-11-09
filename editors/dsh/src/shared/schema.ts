@@ -1,15 +1,17 @@
 /**
  * Shared JSON schema types for the codect DSH plugin.
  *
- * These mirror the codect.show.v1 and codect.diff.v1 contracts that the
+ * These mirror the codect.show.v1 and codect.diff.v2 contracts that the
  * `codect` CLI emits with `--format json`. The backend runner parses these
- * directly; the frontend renders them.
+ * directly; the frontend renders them. Show stays on v1; only diff moved to
+ * v2 for file-move events.
  *
  * See docs/agents/CONTRACT.md in the codect repository for the canonical
  * projection model.
  */
 
 export type CodectShowSchema = "codect.show.v1";
+export type CodectPathEncoding = "codect.path.v1";
 export type CodectInput = "revision" | "stdin" | "worktree";
 export type CodectMode = "types" | "signatures";
 export type CodectRevision = string | null;
@@ -55,10 +57,15 @@ export interface ShowDocument {
   input: CodectInput;
   revision: CodectRevision;
   mode: CodectMode;
+  /**
+   * Additive marker for the injective path display encoding. Absent is the
+   * legacy show encoding: do not interpret backslash escapes in `path`.
+   */
+  path_encoding?: CodectPathEncoding;
   files: ShowFile[];
 }
 
-export type CodectDiffSchema = "codect.diff.v1";
+export type CodectDiffSchema = "codect.diff.v2";
 
 export interface DiffRevision {
   kind: "commit" | "worktree" | "index" | "empty";
@@ -75,16 +82,60 @@ export interface DiffFileSide {
   outline: OutlineItem[];
 }
 
-export type DiffFileStatus = "added" | "deleted" | "modified";
+export type DiffFileStatus = "added" | "deleted" | "modified" | "moved";
 
-export interface DiffFile {
+interface DiffFileBase {
+  /** Target-side display/selection key; for a deletion, the removed path. */
   path: string;
   language: string;
-  status: DiffFileStatus;
   base: DiffFileSide | null;
   target: DiffFileSide | null;
+  equal: boolean;
+}
+
+export interface AddedDiffFile extends DiffFileBase {
+  status: "added";
+  old_path?: never;
+  base: null;
+  target: DiffFileSide;
   equal: false;
 }
+
+export interface DeletedDiffFile extends DiffFileBase {
+  status: "deleted";
+  old_path?: never;
+  base: DiffFileSide;
+  target: null;
+  equal: false;
+}
+
+export interface ModifiedDiffFile extends DiffFileBase {
+  status: "modified";
+  old_path?: never;
+  base: DiffFileSide;
+  target: DiffFileSide;
+  equal: false;
+}
+
+/**
+ * A move has both projections. `path` is the target path and `old_path` the
+ * source path; they are always distinct. `equal` says whether the two canonical
+ * projection texts match, so an exact or body-only move is `true` and a move
+ * with a projected change is `false`.
+ */
+export interface MovedDiffFile extends DiffFileBase {
+  status: "moved";
+  old_path: string;
+  base: DiffFileSide;
+  target: DiffFileSide;
+  equal: boolean;
+}
+
+export type DiffFile =
+  | AddedDiffFile
+  | DeletedDiffFile
+  | ModifiedDiffFile
+  | MovedDiffFile;
 
 export interface DiffDocument {
   schema: CodectDiffSchema;

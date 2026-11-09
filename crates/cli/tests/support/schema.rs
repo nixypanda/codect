@@ -5,9 +5,10 @@
 // validator so the test suite adds no dependency to the build graph. The
 // supported keywords are exactly the ones the schema uses: `$ref` into
 // `$defs`, `type` (including a union of types), `required`, `properties`,
-// `additionalProperties` (boolean), `items`, `enum`, `const`, and `minimum`.
-// An unsupported keyword in the schema is ignored, so the schema is kept
-// within this subset deliberately.
+// `additionalProperties` (boolean), `items`, `enum`, `const`, `minimum`,
+// `allOf`, `if`/`then`/`else`, and `not`, plus the boolean schemas `true` and
+// `false`. An unsupported keyword in the schema is ignored, so the schema is
+// kept within this subset deliberately.
 
 use serde_json::Value;
 
@@ -16,10 +17,40 @@ pub fn validate(schema: &Value, instance: &Value) -> Result<(), String> {
 }
 
 fn check(root: &Value, schema: &Value, instance: &Value, path: &str) -> Result<(), String> {
+    match schema {
+        Value::Bool(true) => return Ok(()),
+        Value::Bool(false) => return Err(format!("{path}: rejected by a false schema")),
+        _ => {}
+    }
+
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
         let target = resolve(root, reference)
             .ok_or_else(|| format!("{path}: unresolved $ref `{reference}`"))?;
         return check(root, target, instance, path);
+    }
+
+    if let Some(alternatives) = schema.get("allOf").and_then(Value::as_array) {
+        for (index, candidate) in alternatives.iter().enumerate() {
+            check(root, candidate, instance, &format!("{path}.allOf[{index}]"))?;
+        }
+    }
+
+    if let Some(candidate) = schema.get("if") {
+        let condition = check(root, candidate, instance, &format!("{path}.if")).is_ok();
+        let branch = if condition {
+            schema.get("then")
+        } else {
+            schema.get("else")
+        };
+        if let Some(branch) = branch {
+            check(root, branch, instance, &format!("{path}.if"))?;
+        }
+    }
+
+    if let Some(candidate) = schema.get("not")
+        && check(root, candidate, instance, &format!("{path}.not")).is_ok()
+    {
+        return Err(format!("{path}: matched a `not` schema"));
     }
 
     if let Some(alternatives) = schema.get("oneOf").and_then(Value::as_array) {

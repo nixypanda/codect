@@ -54,17 +54,50 @@ impl SourceOutline {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FileOutlineDiff {
-    Added { new: FileOutline },
-    Deleted { old: FileOutline },
-    Modified { old: FileOutline, new: FileOutline },
+    Added {
+        new: FileOutline,
+    },
+    Deleted {
+        old: FileOutline,
+    },
+    Modified {
+        old: FileOutline,
+        new: FileOutline,
+    },
+    /// A source file whose path changed. Both sides are present and their
+    /// paths differ; their requested-mode projections may be equal.
+    Moved {
+        old: FileOutline,
+        new: FileOutline,
+    },
 }
 
 impl FileOutlineDiff {
+    /// The target-side path. For a deletion this is the sole present path.
     pub fn path(&self) -> &RepoPath {
         match self {
             Self::Added { new } => new.path(),
             Self::Deleted { old } => old.path(),
-            Self::Modified { old, .. } => old.path(),
+            Self::Modified { new, .. } => new.path(),
+            Self::Moved { new, .. } => new.path(),
+        }
+    }
+
+    /// The source-side path, absent only for an addition.
+    pub fn old_path(&self) -> Option<&RepoPath> {
+        match self {
+            Self::Added { .. } => None,
+            Self::Deleted { old } => Some(old.path()),
+            Self::Modified { old, .. } | Self::Moved { old, .. } => Some(old.path()),
+        }
+    }
+
+    /// The target-side path, absent only for a deletion.
+    pub fn new_path(&self) -> Option<&RepoPath> {
+        match self {
+            Self::Added { new } => Some(new.path()),
+            Self::Deleted { .. } => None,
+            Self::Modified { new, .. } | Self::Moved { new, .. } => Some(new.path()),
         }
     }
 }
@@ -135,6 +168,38 @@ mod tests {
         assert_eq!(file.outline[1].item.canonical_text, "    fn id(&self);");
         assert_eq!(file.path(), file.projection.path());
         assert_eq!(file.language(), file.projection.language());
+    }
+
+    #[test]
+    fn moved_outline_diff_uses_the_target_path_and_exposes_both_sides() {
+        let old = assemble_outline(&supported("src/old.rs"), Vec::new(), Vec::new())
+            .expect("valid outline fixture");
+        let new = assemble_outline(&supported("src/new.rs"), Vec::new(), Vec::new())
+            .expect("valid outline fixture");
+        let diff = FileOutlineDiff::Moved {
+            old: old.clone(),
+            new: new.clone(),
+        };
+
+        assert_eq!(diff.path(), new.path());
+        assert_eq!(diff.old_path(), Some(old.path()));
+        assert_eq!(diff.new_path(), Some(new.path()));
+    }
+
+    #[test]
+    fn modified_outline_diff_uses_the_target_path() {
+        let old = assemble_outline(&supported("src/old.rs"), Vec::new(), Vec::new())
+            .expect("valid outline fixture");
+        let new = assemble_outline(&supported("src/new.rs"), Vec::new(), Vec::new())
+            .expect("valid outline fixture");
+        let diff = FileOutlineDiff::Modified {
+            old: old.clone(),
+            new: new.clone(),
+        };
+
+        assert_eq!(diff.path(), new.path());
+        assert_eq!(diff.old_path(), Some(old.path()));
+        assert_eq!(diff.new_path(), Some(new.path()));
     }
 
     #[test]

@@ -199,6 +199,7 @@ pub(crate) fn loaded(
                     paths,
                     badges: Arc::new(BTreeMap::new()),
                     empty: NO_FILES,
+                    ..FileSet::default()
                 })),
                 Out::Kernel(Request::ClearDiagnostic),
                 Out::Kernel(Request::CancelPrefix),

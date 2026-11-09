@@ -266,7 +266,9 @@ fn scoped_diff_marks_added_and_deleted_files_with_dev_null() {
     repo.write("src/alpha/gone.rs", RUST_BASE);
     repo.commit("base");
     repo.remove("src/alpha/gone.rs");
-    repo.write("src/alpha/new.rs", RUST_BASE);
+    // Cross-language on purpose: an identical Rust source would be detected
+    // as a move, while this test exercises added/deleted framing.
+    repo.write("src/alpha/new.py", "class Fresh:\n    value: int\n");
     repo.commit("target");
 
     let output = run(
@@ -286,7 +288,7 @@ fn scoped_diff_marks_added_and_deleted_files_with_dev_null() {
     let document = stdout(&output);
     assert!(
         document.contains(
-            "diff --codect a/src/alpha/new.rs b/src/alpha/new.rs\n--- /dev/null\n+++ b/src/alpha/new.rs\n"
+            "diff --codect a/src/alpha/new.py b/src/alpha/new.py\n--- /dev/null\n+++ b/src/alpha/new.py\n"
         ),
         "added file block missing: {document:?}"
     );

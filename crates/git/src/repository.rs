@@ -174,6 +174,60 @@ impl GitRepository {
         Ok(entries)
     }
 
+    /// Return the uncompressed byte size of a blob without reading its
+    /// contents. Used to apply the move-detection size cap before any fuzzy
+    /// read.
+    pub fn blob_size(&self, id: &ObjectId) -> Result<u64, GitError> {
+        let repository = self.location();
+        let blob_id = id.to_gix(&repository)?;
+        let header = self
+            .repo
+            .find_header(blob_id)
+            .map_err(|source| GitError::ObjectRead {
+                repository: repository.clone(),
+                object_id: id.clone(),
+                source: Box::new(source),
+            })?;
+        if header.kind() != gix::objs::Kind::Blob {
+            return Err(GitError::ObjectRead {
+                repository,
+                object_id: id.clone(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "object is not a blob",
+                )),
+            });
+        }
+        Ok(header.size())
+    }
+
+    /// Hash exactly `size` bytes from `reader` as a Git blob, producing the
+    /// object id that the same content would have in the object database. The
+    /// caller supplies the length so a large worktree file can be streamed
+    /// instead of retained in memory.
+    pub fn hash_blob_stream(
+        &self,
+        reader: &mut dyn std::io::Read,
+        size: u64,
+    ) -> Result<ObjectId, GitError> {
+        let repository = self.location();
+        let mut progress = gix::progress::Discard;
+        let interrupt = std::sync::atomic::AtomicBool::new(false);
+        let id = gix::objs::compute_stream_hash(
+            self.repo.object_hash(),
+            gix::objs::Kind::Blob,
+            reader,
+            size,
+            &mut progress,
+            &interrupt,
+        )
+        .map_err(|source| GitError::SourceHash {
+            repository: repository.clone(),
+            source: Box::new(source),
+        })?;
+        ObjectId::from_gix(&id, &repository)
+    }
+
     pub(crate) fn gix(&self) -> &gix::Repository {
         &self.repo
     }

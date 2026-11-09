@@ -8,8 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use base::{
-    LanguageProjector, ProjectedFile, ProjectionInput, ProjectionMode, RepoPath, SupportedPath,
-    diff_document, show_document,
+    FileDiff, LanguageProjector, ProjectedFile, ProjectionInput, ProjectionMode, RepoPath,
+    SupportedPath, diff_document, show_document,
 };
 use lang_elm::ElmProjector;
 use lang_haskell::HaskellProjector;
@@ -80,18 +80,26 @@ fn mixed_diff_document_covers_added_deleted_modified_and_unchanged_files() {
         let elm = ElmProjector;
         let rust = RustProjector;
 
-        let old = vec![
-            project(&elm, "src/Main.elm", &elm_old, mode),
-            project(&rust, "src/lib.rs", &rust_unchanged, mode),
-            project(&rust, "src/Old.rs", &rust_deleted, mode),
-        ];
-        let new = vec![
-            project(&elm, "src/App.elm", &elm_added, mode),
-            project(&elm, "src/Main.elm", &elm_modified, mode),
-            project(&rust, "src/lib.rs", &rust_unchanged, mode),
+        let diffs = vec![
+            FileDiff::Deleted {
+                old: project(&rust, "src/Old.rs", &rust_deleted, mode),
+            },
+            FileDiff::Added {
+                new: project(&elm, "src/App.elm", &elm_added, mode),
+            },
+            FileDiff::Modified {
+                old: project(&elm, "src/Main.elm", &elm_old, mode),
+                new: project(&elm, "src/Main.elm", &elm_modified, mode),
+            },
+            // An equal projection is filtered by the renderer even if a caller
+            // hands it an event for an unchanged path.
+            FileDiff::Modified {
+                old: project(&rust, "src/lib.rs", &rust_unchanged, mode),
+                new: project(&rust, "src/lib.rs", &rust_unchanged, mode),
+            },
         ];
 
-        let document = diff_document(&old, &new);
+        let document = diff_document(&diffs);
         assert!(
             !document.contains('\u{1b}'),
             "core rendering must be plain text"
@@ -133,7 +141,7 @@ fn mixed_diff_document_covers_added_deleted_modified_and_unchanged_files() {
 #[test]
 fn show_document_and_diff_document_are_empty_without_files() {
     assert_eq!(show_document(&[]), "");
-    assert_eq!(diff_document(&[], &[]), "");
+    assert_eq!(diff_document(&[]), "");
 }
 
 #[test]
@@ -173,16 +181,18 @@ fn diff_document_reports_haskell_and_python_changes() {
     let python_new = fixture("python/decorators/input.py");
 
     for mode in MODES {
-        let old = vec![
-            project(&HaskellProjector, "src/Model.hs", &haskell_old, mode),
-            project(&PythonProjector, "src/model.py", &python_old, mode),
-        ];
-        let new = vec![
-            project(&HaskellProjector, "src/Model.hs", &haskell_new, mode),
-            project(&PythonProjector, "src/model.py", &python_new, mode),
+        let diffs = vec![
+            FileDiff::Modified {
+                old: project(&HaskellProjector, "src/Model.hs", &haskell_old, mode),
+                new: project(&HaskellProjector, "src/Model.hs", &haskell_new, mode),
+            },
+            FileDiff::Modified {
+                old: project(&PythonProjector, "src/model.py", &python_old, mode),
+                new: project(&PythonProjector, "src/model.py", &python_new, mode),
+            },
         ];
 
-        let document = diff_document(&old, &new);
+        let document = diff_document(&diffs);
         assert!(!document.contains('\u{1b}'));
         assert!(
             document.contains("diff --codect a/src/Model.hs b/src/Model.hs\n"),

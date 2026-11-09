@@ -171,6 +171,14 @@ const CSS = `
   width: 16px;
 }
 .codect-row-label { overflow: hidden; text-overflow: ellipsis; }
+.codect-row-move {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-tertiary, inherit);
+  text-decoration: line-through;
+}
 .codect-row-dir { color: var(--dsw-alias-label-primary, inherit); }
 .codect-badge {
   margin-left: auto;
@@ -182,6 +190,7 @@ const CSS = `
 .codect-badge-added { color: var(--dsw-alias-code-diff-added, #3fb950); }
 .codect-badge-deleted { color: var(--dsw-alias-state-error-primary, #f85149); }
 .codect-badge-modified { color: var(--dsw-alias-state-warn-primary, #d29922); }
+.codect-badge-moved { color: var(--dsw-alias-state-info-primary, #58a6ff); }
 .codect-file-header {
   display: flex;
   align-items: baseline;
@@ -190,6 +199,11 @@ const CSS = `
   color: var(--dsw-alias-label-secondary, inherit);
   overflow: hidden;
 }
+.codect-move-header .codect-file-path {
+  flex: 0 1 auto;
+  max-width: 42%;
+}
+.codect-file-arrow { flex: none; color: var(--dsw-alias-label-tertiary, inherit); }
 .codect-file-path {
   font-family: var(--dsw-font-markdown-code-block, monospace);
   overflow: hidden;
@@ -257,6 +271,10 @@ const CSS = `
   overflow: hidden;
 }
 .codect-outline-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.1)); }
+.codect-decl-static { cursor: default; }
+.codect-decl-static:hover { background: transparent; }
+.codect-outline-row-static { cursor: default; }
+.codect-outline-row-static:hover { background: transparent; }
 .codect-outline-kind {
   flex: none;
   font-size: 10px;

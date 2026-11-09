@@ -16,8 +16,9 @@
 
 #![allow(dead_code)]
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use tempfile::TempDir;
 
@@ -78,6 +79,22 @@ impl TestRepo {
 
     pub fn git_ok(&self, args: &[&str]) -> String {
         git_ok(self.path(), args)
+    }
+
+    pub fn git_stdin(&self, args: &[&str], input: &[u8]) -> Output {
+        git_stdin(self.path(), args, input)
+    }
+
+    pub fn git_ok_stdin(&self, args: &[&str], input: &[u8]) -> String {
+        let output = self.git_stdin(args, input);
+        assert!(
+            output.status.success(),
+            "`git {}` failed in {}: {}",
+            args.join(" "),
+            self.path().display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("git stdout is UTF-8 in tests")
     }
 
     pub fn commit(&self, message: &str) -> String {
@@ -148,6 +165,28 @@ pub fn doc(relative: &str) -> String {
 pub mod schema;
 
 fn git(dir: &Path, args: &[&str]) -> Output {
+    git_command(dir, args)
+        .output()
+        .expect("the `git` executable must be available for test setup")
+}
+
+fn git_stdin(dir: &Path, args: &[&str], input: &[u8]) -> Output {
+    let mut child = git_command(dir, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the `git` executable must be available for test setup");
+    child
+        .stdin
+        .take()
+        .expect("piped git stdin")
+        .write_all(input)
+        .expect("write git stdin");
+    child.wait_with_output().expect("wait for git")
+}
+
+fn git_command(dir: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
     for prefix in [
         "user.name=Codect Test",
@@ -175,9 +214,8 @@ fn git(dir: &Path, args: &[&str]) -> Output {
         .env("GIT_COMMITTER_DATE", FIXED_DATE)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .expect("the `git` executable must be available for test setup")
+        .env_remove("GIT_INDEX_FILE");
+    command
 }
 
 fn git_ok(dir: &Path, args: &[&str]) -> String {

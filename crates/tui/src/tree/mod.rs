@@ -10,7 +10,7 @@
 
 mod view;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use base::RepoPath;
@@ -27,7 +27,10 @@ use tui_core::plugin::{
     Event, FocusKey, HintTarget, Input, MouseInput, NavigatorResize, Never, Out, PaneId, Plugin,
     PluginId, Reply, Request,
 };
+use tui_core::render::text::middle_ellipsis;
 use tui_core::util::input::{Key, MouseKind};
+use tui_core::workspace::FileSet;
+use unicode_width::UnicodeWidthStr;
 
 const MOUSE_SCROLL_STEP: i32 = 3;
 
@@ -82,8 +85,8 @@ enum OutMsg {
 }
 
 impl Tree {
-    fn sync(&mut self, visible: &[RepoPath]) {
-        self.rows = Arc::from(build_rows(visible, &self.collapsed));
+    fn sync(&mut self, files: &FileSet) {
+        self.rows = Arc::from(build_rows(&files.paths, &self.collapsed, &files.moves));
         self.collapsed
             .retain(|path| self.rows.iter().any(|row| row.kind.path() == path));
         if !self.rows.is_empty() {
@@ -124,17 +127,17 @@ impl Tree {
         self.rows.get(self.cursor)
     }
 
-    fn update(&mut self, msg: Msg, visible: &[RepoPath], height: usize) -> Option<OutMsg> {
+    fn update(&mut self, msg: Msg, files: &FileSet, height: usize) -> Option<OutMsg> {
         let scrolled = matches!(&msg, Msg::Scroll(_));
         let out = match msg {
             Msg::Move(delta) => self.move_cursor(delta),
             Msg::Page(delta) => self.move_cursor(delta),
             Msg::ToTop => self.move_cursor_to(0),
             Msg::ToBottom => self.move_cursor_to(self.rows.len().saturating_sub(1)),
-            Msg::Open => self.open(visible),
-            Msg::Close => self.close(visible),
-            Msg::Toggle => self.toggle(visible),
-            Msg::Click(index) => self.click(index, visible),
+            Msg::Open => self.open(files),
+            Msg::Close => self.close(files),
+            Msg::Toggle => self.toggle(files),
+            Msg::Click(index) => self.click(index, files),
             Msg::Scroll(delta) => {
                 self.scroll_viewport(delta, height);
                 None
@@ -174,24 +177,24 @@ impl Tree {
         }
     }
 
-    fn open(&mut self, visible: &[RepoPath]) -> Option<OutMsg> {
+    fn open(&mut self, files: &FileSet) -> Option<OutMsg> {
         let (path, expanded) = self.directory_at_cursor()?;
         if expanded {
             self.move_cursor(1)
         } else {
-            self.set_collapsed(path, false, visible);
+            self.set_collapsed(path, false, files);
             None
         }
     }
 
-    fn close(&mut self, visible: &[RepoPath]) -> Option<OutMsg> {
+    fn close(&mut self, files: &FileSet) -> Option<OutMsg> {
         let row = self.current_row()?;
         let (path, expanded, is_dir) = match &row.kind {
             RowKind::Directory { path, expanded } => (path.clone(), *expanded, true),
             RowKind::File { path } => (path.clone(), false, false),
         };
         if is_dir && expanded {
-            self.set_collapsed(path, true, visible);
+            self.set_collapsed(path, true, files);
             None
         } else {
             self.move_to_parent(&path);
@@ -199,23 +202,23 @@ impl Tree {
         }
     }
 
-    fn toggle(&mut self, visible: &[RepoPath]) -> Option<OutMsg> {
+    fn toggle(&mut self, files: &FileSet) -> Option<OutMsg> {
         let row = self.current_row()?;
         match row.kind.clone() {
             RowKind::Directory { path, expanded } => {
-                self.set_collapsed(path, expanded, visible);
+                self.set_collapsed(path, expanded, files);
                 None
             }
             RowKind::File { path } => Some(OutMsg::Selected(path)),
         }
     }
 
-    fn click(&mut self, index: usize, visible: &[RepoPath]) -> Option<OutMsg> {
+    fn click(&mut self, index: usize, files: &FileSet) -> Option<OutMsg> {
         let kind = self.rows.get(index).map(|row| row.kind.clone())?;
         self.cursor = index;
         match kind {
             RowKind::Directory { path, expanded } => {
-                self.set_collapsed(path, expanded, visible);
+                self.set_collapsed(path, expanded, files);
                 None
             }
             RowKind::File { path } => Some(OutMsg::Selected(path)),
@@ -229,13 +232,13 @@ impl Tree {
         }
     }
 
-    fn set_collapsed(&mut self, path: RepoPath, collapsed: bool, visible: &[RepoPath]) {
+    fn set_collapsed(&mut self, path: RepoPath, collapsed: bool, files: &FileSet) {
         if collapsed {
             self.collapsed.insert(path.clone());
         } else {
             self.collapsed.remove(&path);
         }
-        self.rows = Arc::from(build_rows(visible, &self.collapsed));
+        self.rows = Arc::from(build_rows(&files.paths, &self.collapsed, &files.moves));
         self.cursor = self.row_of_directory(&path).unwrap_or(0);
     }
 
@@ -288,8 +291,7 @@ impl Tree {
     /// selection into a kernel request.
     fn apply(&mut self, msg: Msg, cx: &Cx) -> Vec<Out<Never>> {
         let height = viewport_height(cx);
-        let visible = &cx.workspace.files.paths;
-        match self.update(msg, visible, height) {
+        match self.update(msg, &cx.workspace.files, height) {
             Some(OutMsg::Selected(path)) => vec![Out::Kernel(Request::Select(Some(path)))],
             None => Vec::new(),
         }
@@ -297,7 +299,7 @@ impl Tree {
 
     fn on_files_changed(&mut self, cx: &Cx) -> Vec<Out<Never>> {
         let hint = self.cursor;
-        self.sync(&cx.workspace.files.paths);
+        self.sync(&cx.workspace.files);
         match cx.workspace.selected.clone() {
             Some(path) => {
                 let height = viewport_height(cx);
@@ -526,7 +528,11 @@ impl Plugin for Tree {
     }
 }
 
-pub(crate) fn build_rows(visible: &[RepoPath], collapsed: &BTreeSet<RepoPath>) -> Vec<TreeRow> {
+pub(crate) fn build_rows(
+    visible: &[RepoPath],
+    collapsed: &BTreeSet<RepoPath>,
+    moves: &BTreeMap<RepoPath, RepoPath>,
+) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     let mut stack: Vec<Vec<u8>> = Vec::new();
     let mut index = 0;
@@ -581,13 +587,80 @@ pub(crate) fn build_rows(visible: &[RepoPath], collapsed: &BTreeSet<RepoPath>) -
 
         rows.push(TreeRow {
             depth: directories.len(),
-            label: component_label(components[components.len() - 1]),
+            label: moves.get(path).map_or_else(
+                || component_label(components[components.len() - 1]),
+                |old| move_label(old, path),
+            ),
             kind: RowKind::File { path: path.clone() },
         });
         index += 1;
     }
 
     rows
+}
+
+/// The tree label for a moved file.
+///
+/// The target directory is already visible in the tree, so a move inside one
+/// directory reads `old_name → new_name`; when the directories differ the old
+/// full path disambiguates the source without repeating the target directory.
+fn move_label(old: &RepoPath, new: &RepoPath) -> String {
+    let (old_name, new_name, old_directory, new_directory) = path_names(old, new);
+    if old_directory == new_directory {
+        format!("{old_name} → {new_name}")
+    } else {
+        format!("{old} → {new_name}")
+    }
+}
+
+/// A move label fitted to `width` with the target basename as the priority.
+///
+/// The full path is used while it fits, then the source directory is dropped,
+/// then the source basename is middle-elided. Only when the target itself no
+/// longer fits does the target name elide.
+pub(crate) fn move_label_for_width(old: &RepoPath, new: &RepoPath, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let full = move_label(old, new);
+    if UnicodeWidthStr::width(full.as_str()) <= width {
+        return full;
+    }
+    let (old_name, new_name, _, _) = path_names(old, new);
+    let names = format!("{old_name} → {new_name}");
+    if UnicodeWidthStr::width(names.as_str()) <= width {
+        return names;
+    }
+    let target_width = UnicodeWidthStr::width(new_name.as_str());
+    let old_width = width.saturating_sub(target_width + 3);
+    if old_width > 0 {
+        return format!("{} → {new_name}", middle_ellipsis(&old_name, old_width));
+    }
+    if width >= target_width + 2 {
+        return format!("→ {new_name}");
+    }
+    if width >= 6 {
+        return format!("→ {}", middle_ellipsis(&new_name, width - 2));
+    }
+    middle_ellipsis(&new_name, width)
+}
+
+fn path_names<'a>(
+    old: &'a RepoPath,
+    new: &'a RepoPath,
+) -> (String, String, Option<&'a [u8]>, Option<&'a [u8]>) {
+    let mut old_parts = old.as_bytes().rsplitn(2, |&byte| byte == b'/');
+    let mut new_parts = new.as_bytes().rsplitn(2, |&byte| byte == b'/');
+    let old_name = old_parts.next().unwrap_or_default();
+    let new_name = new_parts.next().unwrap_or_default();
+    let old_directory = old_parts.next();
+    let new_directory = new_parts.next();
+    (
+        component_label(old_name),
+        component_label(new_name),
+        old_directory,
+        new_directory,
+    )
 }
 
 fn join_components(components: &[&[u8]]) -> Vec<u8> {
@@ -620,10 +693,17 @@ mod tests {
         RepoPath::new(value).unwrap()
     }
 
+    fn files(paths: Vec<RepoPath>) -> FileSet {
+        FileSet {
+            paths: Arc::from(paths),
+            ..FileSet::default()
+        }
+    }
+
     #[test]
     fn build_rows_nests_directories_in_raw_path_order() {
         let visible = [path("a.rs"), path("src/lib.rs"), path("src/main.rs")];
-        let rows = build_rows(&visible, &BTreeSet::new());
+        let rows = build_rows(&visible, &BTreeSet::new(), &Default::default());
         let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, vec!["a.rs", "src", "lib.rs", "main.rs"]);
         assert_eq!(rows[0].depth, 0);
@@ -633,15 +713,15 @@ mod tests {
 
     #[test]
     fn update_moves_the_cursor_and_reports_files() {
-        let visible = [path("a.rs"), path("b.rs")];
+        let files = files(vec![path("a.rs"), path("b.rs")]);
         let mut tree = Tree::default();
-        tree.sync(&visible);
+        tree.sync(&files);
         assert!(matches!(
-            tree.update(Msg::Move(1), &visible, 10),
+            tree.update(Msg::Move(1), &files, 10),
             Some(OutMsg::Selected(_))
         ));
         assert_eq!(tree.cursor, 1);
-        assert!(tree.update(Msg::Scroll(3), &visible, 1).is_none());
+        assert!(tree.update(Msg::Scroll(3), &files, 1).is_none());
     }
 
     #[test]
@@ -649,7 +729,7 @@ mod tests {
         let visible = [path("a.rs"), path("src/lib.rs"), path("src/main.rs")];
         let mut collapsed = BTreeSet::new();
         collapsed.insert(path("src"));
-        let rows = build_rows(&visible, &collapsed);
+        let rows = build_rows(&visible, &collapsed, &Default::default());
         let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, vec!["a.rs", "src"]);
         assert!(matches!(
@@ -659,5 +739,60 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_move_label_names_both_paths_without_repeating_the_target_directory() {
+        let old = path("src/old.rs");
+        let new = path("src/new.rs");
+        assert_eq!(move_label(&old, &new), "old.rs → new.rs");
+
+        let old = path("src/old.rs");
+        let new = path("lib/new.rs");
+        assert_eq!(move_label(&old, &new), "src/old.rs → new.rs");
+
+        let old = path("old.rs");
+        let new = path("lib/new.rs");
+        assert_eq!(move_label(&old, &new), "old.rs → new.rs");
+
+        let old = RepoPath::new(b"src/\xFF/old.rs".as_slice()).unwrap();
+        let new = path("lib/new.rs");
+        assert_eq!(
+            move_label(&old, &new),
+            "src/\\xFF/old.rs → new.rs",
+            "non-UTF-8 source paths use the existing escaped display form"
+        );
+    }
+
+    #[test]
+    fn a_narrow_move_label_keeps_the_target_basename() {
+        let old = path("src/very/deep/directories/old.rs");
+        let new = path("dst/new.rs");
+        assert_eq!(move_label_for_width(&old, &new, 14), "ol…rs → new.rs");
+        assert_eq!(move_label_for_width(&old, &new, 8), "→ new.rs");
+        assert_eq!(move_label_for_width(&old, &new, 5), "ne…rs");
+        assert_eq!(
+            move_label_for_width(&old, &new, 50),
+            "src/very/deep/directories/old.rs → new.rs"
+        );
+    }
+
+    #[test]
+    fn build_rows_places_a_moved_file_once_under_its_target_path() {
+        let target = path("dst/new.rs");
+        let mut moves = BTreeMap::new();
+        moves.insert(target.clone(), path("src/old.rs"));
+        let files = FileSet {
+            paths: Arc::from(vec![target.clone()]),
+            moves: Arc::new(moves),
+            ..FileSet::default()
+        };
+        let mut tree = Tree::default();
+        tree.sync(&files);
+
+        let labels: Vec<&str> = tree.rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, vec!["dst", "src/old.rs → new.rs"]);
+        assert_eq!(tree.row_of_file(&target), Some(1));
+        assert_eq!(tree.row_of_file(&path("src/old.rs")), None);
     }
 }

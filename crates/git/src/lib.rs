@@ -67,6 +67,13 @@ pub enum GitError {
         source: Box<dyn Error + Send + Sync + 'static>,
     },
 
+    #[error("source content in repository `{repository}` could not be hashed")]
+    SourceHash {
+        repository: PathBuf,
+        #[source]
+        source: Box<dyn Error + Send + Sync + 'static>,
+    },
+
     #[error("a commit tree in repository `{repository}` could not be traversed")]
     TreeTraversal {
         repository: PathBuf,

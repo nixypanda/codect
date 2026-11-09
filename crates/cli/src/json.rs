@@ -1,14 +1,21 @@
-// The `codect.show.v1` JSON document.
+// The `codect.show.v1` and `codect.diff.v2` JSON documents.
 //
 // The JSON types live in the CLI so `base` stays free of serialization
-// and `engine` stays free of file formats. The document is produced for
+// and `engine` stays free of file formats. The documents are produced for
 // both committed revisions and editor-supplied bytes (stdin or worktree), and
-// is validated against `docs/schema/codect.show.v1.json` by the test suite.
+// are validated against the schemas in `docs/schema/` by the test suite.
 //
 // # Contract highlights
 //
-// - `schema` is the literal `codect.show.v1`; a consumer treats any other value
-//   as a fatal, explicit version mismatch.
+// - `schema` is the literal `codect.show.v1` or `codect.diff.v2`; a consumer
+//   treats any other value as a fatal, explicit version mismatch. Show stays on
+//   v1; diff moved to v2 when file moves added `status: "moved"` and
+//   `old_path`.
+// - New show documents carry the additive `path_encoding: "codect.path.v1"`
+//   marker: path fields then use Codect's injective display form. Legacy show
+//   v1 documents omit it and their paths must be decoded with the old rules or
+//   rejected when that cannot be done safely. Diff v2 always uses the injective
+//   form and needs no marker.
 // - Line numbers are **one-based** for editor friendliness. Byte offsets are
 //   zero-based into the decoded UTF-8 source. The plugin converts as needed.
 // - `projection` is the requested mode; `outline` is mode-independent and
@@ -37,7 +44,20 @@ use engine::SnapshotDiff;
 use serde::Serialize;
 
 pub const SCHEMA: &str = "codect.show.v1";
-pub const DIFF_SCHEMA: &str = "codect.diff.v1";
+pub const PATH_ENCODING: &str = "codect.path.v1";
+pub const DIFF_SCHEMA: &str = "codect.diff.v2";
+
+/// A diff document cannot be serialized without violating its contract.
+///
+/// This is an internal producer failure rather than user input: core owns the
+/// rule that a move has two distinct raw paths, and the RepoPath display form
+/// is injective. The CLI still returns an error instead of panicking or
+/// emitting a malformed document if either invariant regresses.
+#[derive(Debug, thiserror::Error)]
+pub enum DiffDocumentError {
+    #[error("a moved file has indistinguishable raw or escaped old and new paths")]
+    IndistinguishableMovePaths,
+}
 
 pub fn diff_document(
     base: &str,
@@ -45,7 +65,12 @@ pub fn diff_document(
     mode: ProjectionMode,
     diff: &SnapshotDiff,
     merge_base: bool,
-) -> String {
+) -> Result<String, DiffDocumentError> {
+    let files = diff
+        .files
+        .iter()
+        .map(|file| diff_file_document(file, diff))
+        .collect::<Result<Vec<_>, _>>()?;
     let document = DiffDocument {
         schema: DIFF_SCHEMA,
         mode: mode_name(mode),
@@ -61,16 +86,12 @@ pub fn diff_document(
             id: diff.target_id.clone(),
             merge_base: None,
         },
-        files: diff
-            .files
-            .iter()
-            .map(|file| diff_file_document(file, diff))
-            .collect(),
+        files,
     };
     let mut text =
         serde_json::to_string_pretty(&document).expect("serializing the diff document cannot fail");
     text.push('\n');
-    text
+    Ok(text)
 }
 
 #[derive(Serialize)]
@@ -94,6 +115,8 @@ struct SnapshotDocument<'a> {
 #[derive(Serialize)]
 struct DiffFileDocument {
     path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    old_path: Option<String>,
     language: &'static str,
     status: &'static str,
     base: Option<DiffSideDocument>,
@@ -108,34 +131,59 @@ struct DiffSideDocument {
     outline: Vec<OutlineDocument>,
 }
 
-fn diff_file_document(file: &FileOutlineDiff, diff: &SnapshotDiff) -> DiffFileDocument {
-    let (exemplar, status, base, target) = match file {
-        FileOutlineDiff::Added { new } => (
-            new,
-            "added",
-            None,
-            Some(diff_side_document(new, diff.target_id.clone())),
-        ),
-        FileOutlineDiff::Deleted { old } => (
-            old,
-            "deleted",
-            Some(diff_side_document(old, diff.base_id.clone())),
-            None,
-        ),
-        FileOutlineDiff::Modified { old, new } => (
-            old,
-            "modified",
-            Some(diff_side_document(old, diff.base_id.clone())),
-            Some(diff_side_document(new, diff.target_id.clone())),
-        ),
-    };
-    DiffFileDocument {
-        path: file.path().to_string(),
-        language: language_name(exemplar.language()),
-        status,
-        base,
-        target,
-        equal: false,
+fn diff_file_document(
+    file: &FileOutlineDiff,
+    diff: &SnapshotDiff,
+) -> Result<DiffFileDocument, DiffDocumentError> {
+    match file {
+        FileOutlineDiff::Added { new } => Ok(DiffFileDocument {
+            path: new.path().to_string(),
+            old_path: None,
+            language: language_name(new.language()),
+            status: "added",
+            base: None,
+            target: Some(diff_side_document(new, diff.target_id.clone())),
+            equal: false,
+        }),
+        FileOutlineDiff::Deleted { old } => Ok(DiffFileDocument {
+            path: old.path().to_string(),
+            old_path: None,
+            language: language_name(old.language()),
+            status: "deleted",
+            base: Some(diff_side_document(old, diff.base_id.clone())),
+            target: None,
+            equal: false,
+        }),
+        FileOutlineDiff::Modified { old, new } => Ok(DiffFileDocument {
+            path: new.path().to_string(),
+            old_path: None,
+            language: language_name(new.language()),
+            status: "modified",
+            base: Some(diff_side_document(old, diff.base_id.clone())),
+            target: Some(diff_side_document(new, diff.target_id.clone())),
+            equal: false,
+        }),
+        FileOutlineDiff::Moved { old, new } => {
+            // JSON Schema cannot compare `old_path` with `path`. Compare both
+            // the raw paths and their serialized display forms so a regression
+            // in either core invariant becomes a normal fatal diagnostic rather
+            // than a schema-invalid document.
+            let old_path = old.path().to_string();
+            let new_path = new.path().to_string();
+            if old.path() == new.path() || old_path == new_path {
+                return Err(DiffDocumentError::IndistinguishableMovePaths);
+            }
+            let equal = old.projection.canonical_text() == new.projection.canonical_text();
+            Ok(DiffFileDocument {
+                path: new_path,
+                old_path: Some(old_path),
+                language: language_name(new.language()),
+                status: "moved",
+                base: Some(diff_side_document(old, diff.base_id.clone())),
+                target: Some(diff_side_document(new, diff.target_id.clone())),
+                equal,
+            })
+        }
     }
 }
 
@@ -176,6 +224,7 @@ pub fn document(
 ) -> String {
     let document = Document {
         schema: SCHEMA,
+        path_encoding: PATH_ENCODING,
         input: input.name(),
         revision: revision.map(str::to_owned),
         mode: mode_name(mode),
@@ -190,6 +239,7 @@ pub fn document(
 #[derive(Serialize)]
 struct Document {
     schema: &'static str,
+    path_encoding: &'static str,
     input: &'static str,
     revision: Option<String>,
     mode: &'static str,
@@ -329,5 +379,42 @@ fn kind_name(kind: ItemKind) -> &'static str {
         ItemKind::Port => "port",
         ItemKind::Operator => "operator",
         ItemKind::ForeignBlock => "foreign_block",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    fn empty_outline(path: &str) -> FileOutline {
+        let path = base::SupportedPath::new(base::RepoPath::new(path).expect("valid test path"))
+            .expect("supported test path");
+        FileOutline {
+            projection: ProjectedFile::try_new(path, Vec::new()).expect("valid fixture"),
+            retained: BTreeSet::new(),
+            outline: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn moved_json_producer_reports_indistinguishable_old_and_new_paths() {
+        let diff = SnapshotDiff {
+            base_kind: "commit",
+            target_kind: "commit",
+            base_id: "BASE".to_owned(),
+            target_id: "TARGET".to_owned(),
+            files: vec![FileOutlineDiff::Moved {
+                old: empty_outline("src/same.rs"),
+                new: empty_outline("src/same.rs"),
+            }],
+        };
+        let error = diff_document("base", "target", ProjectionMode::Types, &diff, false)
+            .expect_err("identical raw move paths must not serialize");
+        assert!(matches!(
+            error,
+            DiffDocumentError::IndistinguishableMovePaths
+        ));
     }
 }

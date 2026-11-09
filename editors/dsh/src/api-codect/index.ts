@@ -153,7 +153,7 @@ class CodectService extends TypertRemoteService {
     assertRevision("base", params.base);
     assertRevision("target", params.target);
     args.push("--", params.base, params.target);
-    return (await execCodect(binary, args, params.root, this.config.timeoutMs, "codect.diff.v1")) as DiffDocument;
+    return (await execCodect(binary, args, params.root, this.config.timeoutMs, "codect.diff.v2")) as DiffDocument;
   }
 }
 

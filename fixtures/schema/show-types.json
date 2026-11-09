@@ -1,5 +1,6 @@
 {
   "schema": "codect.show.v1",
+  "path_encoding": "codect.path.v1",
   "input": "stdin",
   "revision": null,
   "mode": "types",

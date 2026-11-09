@@ -33,7 +33,7 @@ use crate::test_support::{
 };
 #[cfg(feature = "diff")]
 use crate::test_support::{
-    after_batch_effects, commits_app, diff_app, diff_msg, diff_request, file_diff,
+    after_batch_effects, commits_app, diff_app, diff_msg, diff_request, file_diff, moved_file,
 };
 use tui_core::app::Msg;
 #[cfg(feature = "diff")]
@@ -156,6 +156,12 @@ fn scenarios() -> Vec<Scenario> {
         scenario("show_fold_attributes", 100, 30, build_show_fold_attributes),
         #[cfg(feature = "diff")]
         scenario("diff_badges", 120, 30, build_diff_badges),
+        #[cfg(feature = "diff")]
+        scenario("diff_move", 120, 30, build_diff_move),
+        #[cfg(feature = "diff")]
+        scenario("diff_move_narrow", 80, 24, build_diff_move_narrow),
+        #[cfg(feature = "diff")]
+        scenario("diff_move_edited", 120, 30, build_diff_move_edited),
         scenario("show_which_key_run", 100, 30, build_show_which_key_run),
         scenario("show_search_wrap", 100, 30, build_show_search_wrap),
         scenario("layout_w39", 39, 20, build_layout_w39),
@@ -491,6 +497,48 @@ fn build_diff_badges() -> App {
         file_diff("c.rs", Some("c\n"), None),
     ];
     resize(&diff_app(diffs), 120, 30)
+}
+
+#[cfg(feature = "diff")]
+fn build_diff_move() -> App {
+    resize(
+        &diff_app(vec![moved_file(
+            "src/old.rs",
+            "src/new.rs",
+            "fn a() {}\n",
+            "fn a() {}\n",
+        )]),
+        120,
+        30,
+    )
+}
+
+#[cfg(feature = "diff")]
+fn build_diff_move_narrow() -> App {
+    resize(
+        &diff_app(vec![moved_file(
+            "src/very/deep/directories/old.rs",
+            "dst/new.rs",
+            "fn a() {}\n",
+            "fn a() {}\n",
+        )]),
+        80,
+        24,
+    )
+}
+
+#[cfg(feature = "diff")]
+fn build_diff_move_edited() -> App {
+    resize(
+        &diff_app(vec![moved_file(
+            "src/old.rs",
+            "lib/new.rs",
+            "fn a() {}\nfn b() {}\n",
+            "fn a() -> u8 {}\nfn b() {}\n",
+        )]),
+        120,
+        30,
+    )
 }
 
 fn build_show_which_key_run() -> App {

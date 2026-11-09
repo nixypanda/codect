@@ -1,8 +1,10 @@
 mod support;
 
 use std::collections::BTreeMap;
+use std::io::Cursor;
 
 use base::RepoPath;
+use git::GitError;
 use git::repository::{GitRepository, HashKind, SnapshotRepository, SourceEntry};
 use support::TestRepo;
 
@@ -15,6 +17,100 @@ fn blob_ids(entries: &[SourceEntry]) -> BTreeMap<String, String> {
 
 fn paths(entries: &[SourceEntry]) -> Vec<String> {
     entries.iter().map(|entry| entry.path.to_string()).collect()
+}
+
+fn content_cases() -> Vec<(&'static str, Vec<u8>)> {
+    let large: Vec<u8> = (0..300 * 1024).map(|index| (index % 251) as u8).collect();
+    vec![
+        ("empty.rs", Vec::new()),
+        ("nul.rs", b"pub struct Nul;\0\0\0\n".to_vec()),
+        ("crlf.rs", b"pub struct Crlf;\r\n\r\n// crlf\r\n".to_vec()),
+        ("raw.rs", vec![0xFF, 0xFE, 0x00, b'a', b'\n']),
+        ("large.rs", large),
+    ]
+}
+
+fn pack_all(repo: &TestRepo) {
+    repo.git_ok(&["repack", "-a", "-d"]);
+    // `repack` alone leaves loose copies behind; `prune-packed` removes them
+    // so every read below must come from the pack.
+    repo.git_ok(&["prune-packed"]);
+
+    let pack_dir = repo.path().join(".git/objects/pack");
+    let has_pack = std::fs::read_dir(&pack_dir)
+        .expect("pack directory")
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"));
+    assert!(has_pack, "repack should have produced a pack file");
+    assert_eq!(loose_object_count(repo), 0, "all objects should be packed");
+}
+
+fn loose_object_count(repo: &TestRepo) -> usize {
+    let objects_dir = repo.path().join(".git/objects");
+    std::fs::read_dir(&objects_dir)
+        .expect("objects directory")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.len() == 2 && name != "pack" && name != "info")
+        })
+        .flat_map(|entry| std::fs::read_dir(entry.path()).into_iter().flatten())
+        .filter_map(Result::ok)
+        .count()
+}
+
+fn assert_packed_content_cases(repo: &TestRepo, expected_kind: HashKind) {
+    let cases = content_cases();
+    for (path, bytes) in &cases {
+        repo.write_bytes(path, bytes);
+    }
+    repo.commit("content cases");
+    pack_all(repo);
+
+    let discovered = GitRepository::discover(repo.path()).expect("discover");
+    let revision = discovered.resolve_commit("HEAD").expect("HEAD");
+    assert_eq!(revision.object_id.kind, expected_kind);
+    let entries = discovered.source_entries(&revision).expect("enumerate");
+    let by_path: BTreeMap<String, &SourceEntry> = entries
+        .iter()
+        .map(|entry| (entry.path.to_string(), entry))
+        .collect();
+
+    for (path, expected) in &cases {
+        let entry = by_path
+            .get(*path)
+            .unwrap_or_else(|| panic!("missing entry for {path}"));
+        let bytes = discovered
+            .read_blob(&entry.blob_id)
+            .unwrap_or_else(|error| panic!("read packed {path}: {error}"));
+        assert_eq!(&bytes, expected, "packed bytes for {path}");
+
+        assert_eq!(
+            discovered
+                .blob_size(&entry.blob_id)
+                .unwrap_or_else(|error| panic!("packed blob size for {path}: {error}")),
+            expected.len() as u64,
+            "packed blob size for {path}"
+        );
+
+        let mut reader = Cursor::new(expected.as_slice());
+        let hashed = discovered
+            .hash_blob_stream(&mut reader, expected.len() as u64)
+            .unwrap_or_else(|error| panic!("stream hash for {path}: {error}"));
+        assert_eq!(
+            hashed, entry.blob_id,
+            "stream hash must match the packed object id for {path}"
+        );
+
+        assert_eq!(
+            repo.hash_object_no_filters(expected),
+            entry.blob_id.to_string(),
+            "git hash-object --no-filters must agree for {path}"
+        );
+    }
 }
 
 #[test]
@@ -117,6 +213,36 @@ fn records_executable_blobs() {
 }
 
 #[test]
+fn blob_size_and_stream_hash_match_the_object_database() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", "pub fn value() -> u8 {\n    1\n}\n");
+    repo.commit("base");
+
+    let discovered = GitRepository::discover(repo.path()).expect("discover");
+    let revision = discovered.resolve_commit("HEAD").expect("HEAD");
+    let entries = discovered.source_entries(&revision).expect("enumerate");
+    let entry = entries
+        .iter()
+        .find(|entry| entry.path.to_string() == "src/lib.rs")
+        .expect("lib entry");
+
+    let bytes = discovered.read_blob(&entry.blob_id).expect("read blob");
+    assert_eq!(
+        discovered.blob_size(&entry.blob_id).expect("blob size"),
+        bytes.len() as u64
+    );
+
+    let mut reader = std::io::Cursor::new(&bytes);
+    let hashed = discovered
+        .hash_blob_stream(&mut reader, bytes.len() as u64)
+        .expect("stream hash");
+    assert_eq!(
+        hashed, entry.blob_id,
+        "streaming a blob's bytes must produce its Git object id"
+    );
+}
+
+#[test]
 fn reads_packed_objects() {
     let repo = TestRepo::init();
     repo.write("src/a.rs", "pub fn a() {}\n");
@@ -125,33 +251,7 @@ fn reads_packed_objects() {
     repo.write("src/a.rs", "pub fn a_changed() {}\n");
     repo.commit("second");
 
-    repo.git_ok(&["repack", "-a", "-d"]);
-    // `repack` alone leaves loose copies behind; `prune-packed` removes them so
-    // the reads below must come from the pack.
-    repo.git_ok(&["prune-packed"]);
-
-    let pack_dir = repo.path().join(".git/objects/pack");
-    let has_pack = std::fs::read_dir(&pack_dir)
-        .expect("pack directory")
-        .filter_map(Result::ok)
-        .any(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"));
-    assert!(has_pack, "repack should have produced a pack file");
-
-    let objects_dir = repo.path().join(".git/objects");
-    let loose = std::fs::read_dir(&objects_dir)
-        .expect("objects directory")
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry.file_type().is_ok_and(|kind| kind.is_dir())
-                && entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| name.len() == 2 && name != "pack" && name != "info")
-        })
-        .flat_map(|entry| std::fs::read_dir(entry.path()).into_iter().flatten())
-        .filter_map(Result::ok)
-        .count();
-    assert_eq!(loose, 0, "all objects should have been packed and pruned");
+    pack_all(&repo);
 
     let discovered = GitRepository::discover(repo.path()).expect("discover");
     let revision = discovered.resolve_commit("HEAD").expect("HEAD");
@@ -164,6 +264,35 @@ fn reads_packed_objects() {
             .expect("read packed blob");
         assert!(!bytes.is_empty());
     }
+}
+
+#[test]
+fn packed_blob_size_and_stream_hash_cover_binary_and_large_blobs() {
+    let sha1 = TestRepo::init();
+    assert_packed_content_cases(&sha1, HashKind::Sha1);
+
+    let Some(sha256) = TestRepo::init_sha256() else {
+        eprintln!(
+            "skipping SHA-256 packed blob test: the Git executable cannot create SHA-256 repositories"
+        );
+        return;
+    };
+    assert_packed_content_cases(&sha256, HashKind::Sha256);
+}
+
+#[test]
+fn hash_blob_stream_reports_a_short_reader() {
+    let repo = TestRepo::init();
+    let discovered = GitRepository::discover(repo.path()).expect("discover");
+    let bytes = b"abcd";
+    let mut reader = Cursor::new(&bytes[..3]);
+    let error = discovered
+        .hash_blob_stream(&mut reader, bytes.len() as u64)
+        .expect_err("a reader shorter than the declared size must fail");
+    assert!(
+        matches!(error, GitError::SourceHash { .. }),
+        "got {error:?}"
+    );
 }
 
 #[test]

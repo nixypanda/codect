@@ -133,6 +133,52 @@ fn stdin_and_worktree_documents_match_modulo_input() {
 }
 
 #[test]
+fn path_encoding_marker_is_present_for_all_input_types_and_optional_for_legacy_documents() {
+    let repo = TestRepo::init();
+    repo.write("src/lib.rs", RUST);
+    repo.commit("base");
+
+    let revision = show_json_revision(&repo, "src/lib.rs", "types");
+    let stdin = show_json_stdin(&repo, "src/lib.rs", "types", RUST);
+    let worktree = show_json_worktree(&repo, "src/lib.rs", "types");
+    let schema = schema();
+
+    for (input, document) in [
+        ("revision", &revision),
+        ("stdin", &stdin),
+        ("worktree", &worktree),
+    ] {
+        assert_eq!(
+            document["path_encoding"], "codect.path.v1",
+            "{input} documents must carry the additive path marker"
+        );
+        support::schema::validate(&schema, document)
+            .unwrap_or_else(|error| panic!("{input} document is not schema-valid: {error}"));
+    }
+
+    // Old producers did not emit the optional marker. Their documents remain
+    // valid v1 documents even though new consumers may need to apply the
+    // legacy path decoding rules or reject an unsafe path.
+    let mut legacy = revision.clone();
+    legacy
+        .as_object_mut()
+        .expect("document object")
+        .remove("path_encoding");
+    assert!(legacy.get("path_encoding").is_none());
+    support::schema::validate(&schema, &legacy)
+        .expect("a legacy show v1 document without path_encoding stays schema-valid");
+
+    // A present marker is constrained: do not let a future encoding silently
+    // masquerade as codect.path.v1.
+    let mut wrong_marker = revision.clone();
+    wrong_marker["path_encoding"] = Value::from("codect.path.v2");
+    assert!(
+        support::schema::validate(&schema, &wrong_marker).is_err(),
+        "an unknown path_encoding value must be rejected"
+    );
+}
+
+#[test]
 fn stdin_and_revision_agree_on_projection_outline_and_stable_keys() {
     let repo = TestRepo::init();
     let source = fixture("rust/implementations/input.rs");

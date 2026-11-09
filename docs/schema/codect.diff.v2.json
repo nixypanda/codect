@@ -1,0 +1,422 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nixypanda/codect/docs/schema/codect.diff.v2.json",
+  "title": "Codect diff document v2",
+  "description": "Changed canonical projections between commit, index, worktree, and empty snapshots, including file moves. Consumers must reject an unknown schema version and may accept additive fields. Same-path files with equal projections are omitted. A move is emitted when at least one requested-mode projection is nonempty, with `equal` saying whether its two canonical projections match; a move with two empty requested-mode projections is omitted. Path strings use Codect's injective display form: a literal backslash is doubled, newline/CR/tab use `\\n`/`\\r`/`\\t`, other ASCII controls including DEL use uppercase `\\xNN`, invalid UTF-8 bytes use uppercase `\\xNN`, and ordinary Unicode is unchanged; JSON then applies its own string escaping. Path bytes, ordering, and identity remain the raw repository bytes. Lines are one-based and byte offsets zero-based. Mutable snapshot IDs name the input kind, not a durable content hash; consumers must refresh them after writes or staging.",
+  "type": "object",
+  "required": [
+    "schema",
+    "mode",
+    "base",
+    "target",
+    "files"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "codect.diff.v2"
+    },
+    "mode": {
+      "description": "The projection mode requested on the command line. `tests` is the Signatures projection restricted to test declarations, and is recognized for Rust and Python only; other languages retain nothing, so they project to an empty declaration list. Note that `tests` widens this enum's value set within `codect.diff.v2` rather than adding a field: a consumer that validates `mode` against the enum will reject `tests` as an unknown value, which is the intended loud failure.",
+      "enum": [
+        "types",
+        "signatures",
+        "tests"
+      ]
+    },
+    "base": {
+      "$ref": "#/$defs/snapshot"
+    },
+    "target": {
+      "$ref": "#/$defs/snapshot"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diff_file"
+      }
+    }
+  },
+  "$defs": {
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "kind",
+        "revision",
+        "id"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "enum": ["commit", "index", "worktree", "empty"]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "merge_base": {
+          "description": "Present and true only on the base snapshot of a `--merge-base` diff. It marks that `id` is the merge base of the requested `revision` and the target revision, not the tip of `revision`. Additive; omitted when the base is compared exactly as requested.",
+          "type": "boolean"
+        }
+      }
+    },
+    "diff_file": {
+      "type": "object",
+      "required": [
+        "path",
+        "language",
+        "status",
+        "base",
+        "target",
+        "equal"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "description": "The target-side display and selection key in Codect's injective escaped form: literal backslashes are doubled, ASCII controls use mnemonics or uppercase \\xNN, invalid UTF-8 bytes use uppercase \\xNN, and ordinary Unicode is unchanged; JSON applies its own string escaping on top. For a deletion, the removed path. For a move, the destination path; `old_path` carries the source path.",
+          "type": "string"
+        },
+        "old_path": {
+          "description": "The source path of a move, using the same injective escaped display form as `path`. Present only when `status` is `moved`; absent for every other status. JSON Schema cannot compare two property values, so producers and tests must additionally ensure `old_path` is distinct from `path` in both raw bytes and escaped form.",
+          "type": "string"
+        },
+        "language": {
+          "enum": [
+            "elm",
+            "haskell",
+            "python",
+            "rust"
+          ]
+        },
+        "status": {
+          "enum": [
+            "added",
+            "deleted",
+            "modified",
+            "moved"
+          ]
+        },
+        "base": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/side"
+            }
+          ]
+        },
+        "target": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/side"
+            }
+          ]
+        },
+        "equal": {
+          "description": "For a move, whether the two canonical projection texts are byte-for-byte equal. Always false for added, deleted, and modified files.",
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "moved"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "old_path",
+              "base",
+              "target"
+            ],
+            "properties": {
+              "old_path": {
+                "type": "string"
+              },
+              "base": {
+                "$ref": "#/$defs/side"
+              },
+              "target": {
+                "$ref": "#/$defs/side"
+              },
+              "equal": {
+                "type": "boolean"
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "old_path"
+              ]
+            },
+            "properties": {
+              "equal": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "added"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "base": {
+                "type": "null"
+              },
+              "target": {
+                "$ref": "#/$defs/side"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "deleted"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/side"
+              },
+              "target": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "modified"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/side"
+              },
+              "target": {
+                "$ref": "#/$defs/side"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "side": {
+      "type": "object",
+      "required": [
+        "snapshot_id",
+        "projection",
+        "outline"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "snapshot_id": {
+          "type": "string"
+        },
+        "projection": {
+          "$ref": "#/$defs/projection"
+        },
+        "outline": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/outline_item"
+          }
+        }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "required": [
+        "text",
+        "items"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "text": {
+          "description": "The exact canonical text this file emits in text mode for the requested mode.",
+          "type": "string"
+        },
+        "items": {
+          "description": "The requested-mode projected items, including index-only nested entries.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/item"
+          }
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": [
+        "stable_key",
+        "parent_key",
+        "kind",
+        "name",
+        "span",
+        "canonical_text"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "stable_key": {
+          "description": "The declaration's identity within its file. Unique within this file, but not necessarily across the repository (Rust impl keys are not path-namespaced), so consumers key global state by (path, stable_key).",
+          "type": "string"
+        },
+        "parent_key": {
+          "description": "The stable_key of the containing declaration, or null at top level.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        },
+        "canonical_text": {
+          "description": "The item's canonical fragment. A nested item's fragment carries its container indentation.",
+          "type": "string"
+        }
+      }
+    },
+    "outline_item": {
+      "type": "object",
+      "required": [
+        "stable_key",
+        "parent_key",
+        "kind",
+        "name",
+        "span",
+        "signature",
+        "retained_in_mode"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "stable_key": {
+          "description": "The declaration's identity within its file. Unique within this file, but not necessarily across the repository (Rust impl keys are not path-namespaced), so consumers key global state by (path, stable_key).",
+          "type": "string"
+        },
+        "parent_key": {
+          "description": "The stable_key of the containing declaration, or null at top level.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "span": {
+          "$ref": "#/$defs/span"
+        },
+        "signature": {
+          "description": "The declaration's canonical fragment from the Signatures superset projection. A nested declaration's fragment carries its container indentation. Single line where the canonical form is single line. This is the closed-fold text only when `retained_in_mode` is false; when it is true, the mode-correct closed-fold text is the matching `projection.items[].canonical_text`, which differs for container declarations (trait/impl/module) because the requested mode may omit members the superset shows.",
+          "type": "string"
+        },
+        "retained_in_mode": {
+          "description": "True when the requested mode's projection retains this stable_key.",
+          "type": "boolean"
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": [
+        "start_line",
+        "end_line",
+        "start_byte",
+        "end_byte"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "start_line": {
+          "description": "One-based first line of the declaration node. Preceding attributes, decorators, `{-# ... #-}` pragmas, and doc comments are excluded even though `signature` may include them; an editor should extend a fold start upward over those lines. A `decorator_start_line` field may be added additively within `codect.show.v1` later.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "description": "One-based last line of the declaration, including its body. For a brace language this is the closing brace; for Python it is the last line of the suite.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "start_byte": {
+          "description": "Zero-based first byte of the declaration in the decoded UTF-8 source.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_byte": {
+          "description": "Zero-based end byte (exclusive) of the declaration in the decoded UTF-8 source.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "kind": {
+      "description": "The exhaustive declaration kind. Every ItemKind in base maps to exactly one value.",
+      "enum": [
+        "module",
+        "type",
+        "type_alias",
+        "constructor",
+        "field",
+        "variant",
+        "trait",
+        "trait_implementation",
+        "associated_type",
+        "type_family",
+        "pattern_synonym",
+        "function",
+        "method",
+        "value",
+        "constant",
+        "static",
+        "port",
+        "operator",
+        "foreign_block"
+      ]
+    }
+  }
+}

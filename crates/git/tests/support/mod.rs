@@ -21,9 +21,10 @@
 #![allow(dead_code)]
 
 use std::ffi::OsStr;
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use tempfile::TempDir;
 
@@ -121,6 +122,37 @@ impl TestRepo {
     pub fn tag_annotated(&self, name: &str, message: &str) {
         self.git_ok(&["tag", "-a", name, "-m", message]);
     }
+
+    // A test-only oracle: hash raw bytes exactly as Git would store them,
+    // without any repository filter or working-tree conversion.
+    pub fn hash_object_no_filters(&self, bytes: &[u8]) -> String {
+        let mut command = git_command(self.path());
+        command
+            .args(["hash-object", "--no-filters", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .expect("the `git` executable must be available for test setup");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(bytes)
+            .expect("write oracle input");
+        let output = child.wait_with_output().expect("wait for git hash-object");
+        assert!(
+            output.status.success(),
+            "`git hash-object --no-filters --stdin` failed in {}: {}",
+            self.path().display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("git stdout is UTF-8 in tests")
+            .trim()
+            .to_owned()
+    }
 }
 
 pub fn git(dir: &Path, args: &[&str]) -> Output {
@@ -132,6 +164,14 @@ pub fn git(dir: &Path, args: &[&str]) -> Output {
 
 // Runs `git` in `dir`, isolated from host configuration and network access.
 pub fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
+    let mut command = git_command(dir);
+    command
+        .args(args.iter().map(|arg| OsStr::from_bytes(arg)))
+        .output()
+        .expect("the `git` executable must be available for test setup")
+}
+
+fn git_command(dir: &Path) -> Command {
     let mut command = Command::new("git");
     for prefix in [
         "user.name=Codect Test",
@@ -143,7 +183,6 @@ pub fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
     ] {
         command.arg("-c").arg(prefix);
     }
-    command.args(args.iter().map(|arg| OsStr::from_bytes(arg)));
     command
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -159,9 +198,8 @@ pub fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
         .env("GIT_COMMITTER_DATE", FIXED_DATE)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .expect("the `git` executable must be available for test setup")
+        .env_remove("GIT_INDEX_FILE");
+    command
 }
 
 pub fn git_ok(dir: &Path, args: &[&str]) -> String {

@@ -13,6 +13,7 @@ import React, { useMemo } from "react";
 import { DiffBlock } from "../primitives";
 import type { CodeLabels } from "../labels";
 import type { DiffFile } from "../../shared/schema";
+import { basePath, moveLabel, targetPath } from "../move";
 
 export type DiffLayout = "unified" | "split";
 
@@ -32,16 +33,19 @@ export function diffTexts(file: DiffFile): { before: string; after: string } {
 
 function fallbackDiff(file: DiffFile): string {
   const { before, after } = diffTexts(file);
+  const beforePath = basePath(file) ?? "/dev/null";
+  const afterPath = targetPath(file) ?? "/dev/null";
   return [
-    `--- ${file.path} (base)`,
+    `--- ${beforePath} (base)`,
     before,
-    `+++ ${file.path} (target)`,
+    `+++ ${afterPath} (target)`,
     after,
   ].join("\n");
 }
 
 export function DiffBody({ file, labels, layout = "unified", diffView }: DiffBodyProps) {
   const { before, after } = diffTexts(file);
+  const displayPath = moveLabel(file) ?? file.path;
 
   // Build the highlighted diff component once per file/layout. `dsh-diff-view`
   // computes its hunks eagerly here; a malformed service is treated as absent.
@@ -70,7 +74,7 @@ export function DiffBody({ file, labels, layout = "unified", diffView }: DiffBod
   if (typeof DiffBlock === "function") {
     const diffs = [
       {
-        path: file.path,
+        path: displayPath,
         oldText: before,
         newText: after,
       },

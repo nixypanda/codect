@@ -13,6 +13,14 @@ import type { CodectMode, DiffChange, DiffDocument, DiffFile } from "../shared/s
 import type { CodeLabels } from "./labels";
 import { buildTreeRows } from "./tree";
 import { diffChanges } from "./declaration-diff";
+import {
+  canNavigateChange,
+  canNavigatePath,
+  DIFF_PATH_ENCODING,
+  movedFrom,
+  pathForChange,
+  type NavigationPathEncoding,
+} from "./move";
 import { DiffBody, type DiffLayout } from "./components/diff-body";
 import { ModeToggle } from "./components/mode-toggle";
 import { TreeView, type FileStatus } from "./components/tree-view";
@@ -33,7 +41,11 @@ export interface DiffViewProps {
   };
   labels: CodeLabels;
   t: (key: string) => string;
-  onNavigate?: (path: string, line: number) => void;
+  onNavigate?: (
+    path: string,
+    line: number,
+    encoding: NavigationPathEncoding
+  ) => void;
   /**
    * Optional `dsh-diff-view` client service. When present, the diff body can
    * render side by side; when absent the layout control is hidden.
@@ -94,7 +106,11 @@ function Declarations({
   onNavigate,
 }: {
   file: DiffFile;
-  onNavigate?: (path: string, line: number) => void;
+  onNavigate?: (
+    path: string,
+    line: number,
+    encoding: NavigationPathEncoding
+  ) => void;
 }) {
   const changes = useMemo(() => diffChanges(file), [file]);
   if (changes.length === 0) {
@@ -102,19 +118,45 @@ function Declarations({
   }
   return (
     <div className="codect-outline">
-      {changes.map((change) => (
-        <div
-          key={`${change.status}:${change.item.stable_key}`}
-          className={`codect-outline-row codect-decl-${change.status}`}
-          title={change.target_text ?? change.base_text ?? change.item.name}
-          onClick={() => onNavigate?.(file.path, change.item.span.start_line)}
-        >
-          <span className="codect-decl-marker">{MARKER[change.status]}</span>
-          <span className="codect-outline-kind">{change.item.kind}</span>
-          <span className="codect-outline-name">{change.item.name}</span>
-          <span className="codect-outline-sig">{change.target_text ?? change.base_text ?? ""}</span>
-        </div>
-      ))}
+      {changes.map((change) => {
+        const changePath = pathForChange(file, change.status);
+        const navigable =
+          canNavigateChange(file, change.status) &&
+          canNavigatePath(changePath, DIFF_PATH_ENCODING);
+        const signature =
+          change.target_text ?? change.base_text ?? change.item.name;
+        const disabledReason =
+          file.status === "moved" && change.status === "deleted"
+            ? "deleted; source not available at target"
+            : "source path is not navigable";
+        return (
+          <div
+            key={`${change.status}:${change.item.stable_key}`}
+            className={`codect-outline-row codect-decl-${change.status}${
+              navigable ? "" : " codect-decl-static"
+            }`}
+            title={navigable ? signature : `${signature} (${disabledReason})`}
+            aria-disabled={navigable ? undefined : true}
+            onClick={
+              navigable
+                ? () =>
+                    onNavigate?.(
+                      changePath,
+                      change.item.span.start_line,
+                      DIFF_PATH_ENCODING
+                    )
+                : undefined
+            }
+          >
+            <span className="codect-decl-marker">{MARKER[change.status]}</span>
+            <span className="codect-outline-kind">{change.item.kind}</span>
+            <span className="codect-outline-name">{change.item.name}</span>
+            <span className="codect-outline-sig">
+              {change.target_text ?? change.base_text ?? ""}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -198,6 +240,18 @@ export function DiffView({ root, codect, labels, t, onNavigate, diffView }: Diff
   const statusOf = useCallback(
     (path: string): FileStatus | undefined => statusByPath.get(path),
     [statusByPath]
+  );
+  const oldPathByPath = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const file of files) {
+      const from = movedFrom(file);
+      if (from !== undefined) map.set(file.path, from);
+    }
+    return map;
+  }, [files]);
+  const oldPathOf = useCallback(
+    (path: string): string | undefined => oldPathByPath.get(path),
+    [oldPathByPath]
   );
   const selectedFile: DiffFile | undefined = files.find(
     (file) => file.path === selectedPath
@@ -327,12 +381,35 @@ export function DiffView({ root, codect, labels, t, onNavigate, diffView }: Diff
                     onSelect={setSelectedPath}
                     onToggleDir={toggleDir}
                     statusOf={statusOf}
+                    oldPathOf={oldPathOf}
                   />
                 )
               }
               content={
                 selectedFile !== undefined && (
                   <div className="codect-content">
+                    {selectedFile.status === "moved" && (
+                      <div className="codect-file-header codect-move-header">
+                        <span
+                          className="codect-file-path"
+                          title={selectedFile.old_path}
+                        >
+                          {selectedFile.old_path}
+                        </span>
+                        <span className="codect-file-arrow" aria-hidden="true">
+                          →
+                        </span>
+                        <span
+                          className="codect-file-path"
+                          title={selectedFile.path}
+                        >
+                          {selectedFile.path}
+                        </span>
+                        <span className="codect-file-meta">
+                          {t("codect.label.moved")}
+                        </span>
+                      </div>
+                    )}
                     <div className="codect-toolbar-row">
                       <SegmentedControl
                         className="codect-segmented"

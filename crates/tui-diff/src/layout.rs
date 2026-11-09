@@ -80,7 +80,9 @@ pub fn gutter_width(diff: &FileDiff) -> usize {
     let max_lines = match diff {
         FileDiff::Added { new } => lines(new),
         FileDiff::Deleted { old } => lines(old),
-        FileDiff::Modified { old, new } => lines(old).max(lines(new)),
+        FileDiff::Modified { old, new } | FileDiff::Moved { old, new } => {
+            lines(old).max(lines(new))
+        }
     };
     max_lines.max(1).to_string().len() + 2
 }
@@ -96,8 +98,17 @@ pub fn layout_diff(
     let (old_text, new_text) = match diff {
         FileDiff::Added { new } => ("", new.canonical_text()),
         FileDiff::Deleted { old } => (old.canonical_text(), ""),
-        FileDiff::Modified { old, new } => (old.canonical_text(), new.canonical_text()),
+        FileDiff::Modified { old, new } | FileDiff::Moved { old, new } => {
+            (old.canonical_text(), new.canonical_text())
+        }
     };
+    // A pure move is one event with no focused text change. Without this
+    // special case `context_windows` would return the whole all-equal row set
+    // and the panes would fabricate an unchanged hunk. The panes render a move
+    // empty state instead.
+    if matches!(diff, FileDiff::Moved { .. }) && old_text == new_text {
+        return Vec::new();
+    }
     let rows = base::aligned_rows(old_text, new_text);
 
     let mut visual = Vec::new();
@@ -431,6 +442,13 @@ mod tests {
         }
     }
 
+    fn moved_file(old_path: &str, new_path: &str, old_text: &str, new_text: &str) -> FileDiff {
+        FileDiff::Moved {
+            old: projected(old_path, old_text),
+            new: projected(new_path, new_text),
+        }
+    }
+
     fn runs_text(runs: &[Run]) -> String {
         runs.iter().map(|run| run.text.as_str()).collect()
     }
@@ -500,6 +518,54 @@ mod tests {
 
         assert_eq!(rows[0].kind, VisualRowKind::Hunk);
         assert_eq!(runs_text(&rows[0].old_runs), "@@ -1,2 +1,2 @@");
+    }
+
+    #[test]
+    fn layout_diff_renders_a_pure_move_as_no_rows() {
+        let diff = moved_file("src/old.rs", "src/new.rs", "fn a() {}\n", "fn a() {}\n");
+        let rows = layout_diff(&diff, 20, 20, &[], &[], &Theme::dark());
+
+        assert!(
+            rows.is_empty(),
+            "a pure move must not fabricate unchanged rows or a hunk header: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn layout_diff_renders_an_edited_move_as_ordinary_hunks() {
+        let diff = moved_file(
+            "src/old.rs",
+            "src/new.rs",
+            "fn a() {}\n",
+            "fn a() -> u8 {}\n",
+        );
+        let rows = layout_diff(&diff, 40, 40, &[], &[], &Theme::dark());
+
+        assert_eq!(rows[0].kind, VisualRowKind::Hunk);
+        assert!(
+            rows.iter()
+                .any(|row| row.kind == VisualRowKind::Diff(DiffRowKind::Change)),
+            "the edited move must show focused content rows: {rows:?}"
+        );
+        let same_text_modified = file_diff("a.rs", Some("fn a() {}\n"), Some("fn a() -> u8 {}\n"));
+        assert_eq!(
+            gutter_width(&diff),
+            gutter_width(&same_text_modified),
+            "the move gutter follows the wider side"
+        );
+    }
+
+    #[test]
+    fn layout_diff_keeps_a_move_visible_when_one_projection_side_is_empty() {
+        let diff = moved_file("src/old.rs", "src/new.rs", "fn test_a() {}\n", "");
+        let rows = layout_diff(&diff, 40, 40, &[], &[], &Theme::dark());
+
+        assert_eq!(rows[0].kind, VisualRowKind::Hunk);
+        assert!(
+            rows.iter()
+                .any(|row| row.old_number.is_some() && row.new_runs.is_empty()),
+            "losing the last projection line is still a visible change: {rows:?}"
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ editors/dsh/
 ├── scripts/build.mjs            # esbuild: lib/index.js (host), lib/client.js (client)
 ├── src/api-codect/              # host service (TypertRemoteService, @Remote show/diff)
 ├── src/client-codect/           # client (ModuleLoader entry, views, tree, styles)
-├── src/shared/schema.ts         # codect.show.v1 / codect.diff.v1 types
+├── src/shared/schema.ts         # codect.show.v1 / codect.diff.v2 types
 └── test/                        # CLI JSON contract + pure-helper unit tests
 ```
 
@@ -149,15 +149,38 @@ decision recorded here.
 - The client bundle is built by `scripts/build.mjs` as CJS and wrapped in
   `window.__ModuleLoader__.load({ id: "@nixypanda/dsh-codect", factory })`.
   React comes from the platform table; do not bundle `zod` into the client.
-- `codect.diff.v1` files carry `base`/`target` sides, not a per-file `items`
-  array.
+- `codect.diff.v2` files carry `base`/`target` sides, not a per-file `items`
+  array. The DSH plugin requests Types and Signatures; it does not request
+  Tests.
+- A moved file has `status: "moved"`, target `path`, source `old_path`, both
+  sides, and projection-derived `equal`. The tree keys the file by target path
+  and shows the old path as a move label. Declaration comparison rebases
+  path-prefixed stable keys from the old path to the new path so a pure move
+  does not appear as every declaration being deleted and re-added; path-independent
+  keys compare unchanged.
+- The host validates `codect.diff.v2` and the moved-file shape, including a
+  distinct `old_path` and `equal` matching the two canonical projections.
+- `codect.diff.v2` `path`/`old_path` are always Codect display-encoded and then
+  JSON-escaped. `codect.show.v1` `path` is display-encoded only when
+  `path_encoding: "codect.path.v1"` is present; absence means legacy semantics
+  and must not use the new decoder. Unknown marker values are unsupported for
+  path decoding. Decode the JSON and then the known display encoding before a
+  raw-path host API lookup; the display string is safe as a UI key but is not
+  raw path bytes.
+- The host must run `codect` with the session/root directory set to the
+  repository root. A root below it changes raw `--path` resolution and config
+  discovery; this is an existing DSH limitation.
+- The `--path` filter is raw CLI text, not a Codect display path. Pass a path
+  that is already appropriate for the CLI; do not pass a display-encoded host
+  path unless the client explicitly decodes it first.
 
 ## References
 
 - Plugin: [`editors/dsh/README.md`](../../editors/dsh/README.md).
 - Schemas: [`docs/schema/codect.show.v1.json`](../schema/codect.show.v1.json),
-  [`docs/schema/codect.diff.v1.json`](../schema/codect.diff.v1.json),
-  [`docs/agents/CONTRACT.md`](../agents/CONTRACT.md).
+  [`docs/schema/codect.diff.v2.json`](../schema/codect.diff.v2.json),
+  [`docs/agents/CONTRACT.md`](../agents/CONTRACT.md). The v1 diff schema is
+  archived and is not emitted by the current binary.
 - DSH packages (inside `app.asar/dsh/node_modules/@deepseek-ai/`):
   `dsh-client-ui-sidebar-right` (tab types, `openResource`),
   `dsh-client-resources` (resource protocols),

@@ -302,6 +302,9 @@ fn diff_reports_added_deleted_and_modified_files_and_skips_unchanged() {
     repo.write("README.md", "ignored\n");
     repo.commit("base");
 
+    // The added and deleted sources are same-language but deliberately
+    // dissimilar (focused source similarity 36, below the move threshold), so
+    // this test still exercises the added/deleted framing rather than a move.
     repo.write("src/new.rs", &fixture("rust/structs/input.rs"));
     repo.write("src/mod.elm", &fixture("elm/canonical-types/input.elm"));
     repo.remove("src/gone.rs");
@@ -818,6 +821,47 @@ fn color_never_and_redirected_output_contain_no_escape_bytes() {
     let show = run(&repo, &["--color=never", "show", "--mode", "types"]);
     assert!(show.status.success());
     assert!(!stdout(&show).contains('\u{1b}'));
+}
+
+#[test]
+fn color_always_keeps_a_modified_header_after_a_pure_move() {
+    let repo = TestRepo::init();
+    repo.write("src/a_old.rs", &fixture("rust/structs/input.rs"));
+    repo.write("src/b_mod.rs", &fixture("rust/unions-aliases/input.rs"));
+    repo.commit("base");
+    repo.git_ok(&["mv", "src/a_old.rs", "src/a_moved.rs"]);
+    repo.write("src/b_mod.rs", &fixture("rust/generics/input.rs"));
+    repo.commit("target");
+
+    let output = run(
+        &repo,
+        &[
+            "--color=always",
+            "diff",
+            "--mode",
+            "types",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let styled = stdout(&output);
+    assert!(
+        styled.contains("\u{1b}[1mrename to src/a_moved.rs\n\u{1b}[0m"),
+        "pure-move rename header must stay bold: {styled:?}"
+    );
+    assert!(
+        styled.contains("\u{1b}[1mdiff --codect a/src/b_mod.rs b/src/b_mod.rs\n\u{1b}[0m"),
+        "the next file header must start a fresh header block: {styled:?}"
+    );
+    assert!(
+        styled.contains("\u{1b}[1m--- a/src/b_mod.rs\n\u{1b}[0m")
+            && styled.contains("\u{1b}[1m+++ b/src/b_mod.rs\n\u{1b}[0m"),
+        "content headers after a move must be bold, not red/green: {styled:?}"
+    );
+    assert!(styled.contains("\u{1b}[36m@@"), "{styled:?}");
+    assert!(styled.contains("\u{1b}[31m-"), "{styled:?}");
+    assert!(styled.contains("\u{1b}[32m+"), "{styled:?}");
 }
 
 #[test]

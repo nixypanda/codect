@@ -30,6 +30,7 @@ const ShowResult = z.object({
   input: z.enum(["revision", "stdin", "worktree"]),
   revision: z.string().nullable(),
   mode: z.enum(["types", "signatures"]),
+  path_encoding: z.literal("codect.path.v1").optional(),
   files: z.array(z.object({
     path: z.string(),
     language: z.string(),
@@ -80,21 +81,81 @@ const DiffSide = z.object({
   outline: z.array(z.any()),
 });
 
+const DiffFileBase = {
+  path: z.string(),
+  language: z.string(),
+};
+
+interface MovedDiffFileShape {
+  path: string;
+  old_path: string;
+  equal: boolean;
+  base: { projection: { text: string } };
+  target: { projection: { text: string } };
+}
+
+const DiffFileMoved = z
+  .object({
+    ...DiffFileBase,
+    status: z.literal("moved"),
+    old_path: z.string(),
+    base: DiffSide,
+    target: DiffSide,
+    equal: z.boolean(),
+  })
+  .refine((file: MovedDiffFileShape) => file.old_path !== file.path, {
+    message: "a moved file's old_path must differ from path",
+    path: ["old_path"],
+  })
+  .refine(
+    (file: MovedDiffFileShape) =>
+      file.equal === (file.base.projection.text === file.target.projection.text),
+    {
+      message: "equal must match the two canonical projection texts",
+      path: ["equal"],
+    }
+  );
+
+const DiffFileAdded = z.object({
+  ...DiffFileBase,
+  status: z.literal("added"),
+  old_path: z.never().optional(),
+  base: z.null(),
+  target: DiffSide,
+  equal: z.literal(false),
+});
+
+const DiffFileDeleted = z.object({
+  ...DiffFileBase,
+  status: z.literal("deleted"),
+  old_path: z.never().optional(),
+  base: DiffSide,
+  target: z.null(),
+  equal: z.literal(false),
+});
+
+const DiffFileModified = z.object({
+  ...DiffFileBase,
+  status: z.literal("modified"),
+  old_path: z.never().optional(),
+  base: DiffSide,
+  target: DiffSide,
+  equal: z.literal(false),
+});
+
+const DiffFile = z.union([
+  DiffFileMoved,
+  DiffFileAdded,
+  DiffFileDeleted,
+  DiffFileModified,
+]);
+
 const DiffResult = z.object({
-  schema: z.literal("codect.diff.v1"),
+  schema: z.literal("codect.diff.v2"),
   mode: z.enum(["types", "signatures"]),
   base: DiffRevision,
   target: DiffRevision,
-  files: z.array(
-    z.object({
-      path: z.string(),
-      language: z.string(),
-      status: z.enum(["added", "deleted", "modified"]),
-      base: DiffSide.nullable(),
-      target: DiffSide.nullable(),
-      equal: z.literal(false),
-    })
-  ),
+  files: z.array(DiffFile),
 });
 
 export const TYPERT = {
@@ -204,6 +265,7 @@ export const TYPERT = {
               input: "revision" | "stdin" | "worktree";
               revision: string | null;
               mode: "types" | "signatures";
+              path_encoding?: "codect.path.v1"; // absent means the legacy show path encoding
               files: {
                 path: string;
                 language: string;
@@ -233,17 +295,18 @@ export const TYPERT = {
           {
             name: "DiffResult",
             declaration: `export interface DiffResult {
-              schema: "codect.diff.v1";
+              schema: "codect.diff.v2";
               mode: "types" | "signatures";
               base: DiffRevision;
               target: DiffRevision;
               files: {
                 path: string;
                 language: string;
-                status: "added" | "deleted" | "modified";
+                status: "added" | "deleted" | "modified" | "moved";
+                old_path?: string; // present only when status is "moved" and distinct from path
                 base: DiffSide | null;
                 target: DiffSide | null;
-                equal: false;
+                equal: boolean; // false for added/deleted/modified; projection equality for moved
               }[];
             }
             export interface DiffRevision {
