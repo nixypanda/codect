@@ -70,9 +70,10 @@ there is nothing for the plugin to open or close.
 
 The plugin's mode vocabulary is its own, independent of the binary's `--mode`. The
 binary also has a `tests` mode (Signatures restricted to test declarations,
-recognized for Rust and Python only) which this plugin does not expose: adding it
-means deciding where it sits in the `types -> signatures -> full` cycle and how a
-buffer folds when most declarations are not retained.
+recognized for Rust and Python only). The fold viewer does not expose it: adding
+it there means deciding where it sits in the `types -> signatures -> full` cycle
+and how a buffer folds when most declarations are not retained. The Diffview
+adapter does expose it as `:CodectDiffview tests`.
 
 ## Commands
 
@@ -167,9 +168,19 @@ or the index.
 When Diffview is installed, `:DiffviewFileHistory` and `:DiffviewOpen`
 views start in Codect's `default_mode`. Their file lists omit
 files whose canonical projections are equal, and their diff panes show only
-projected Types or Signatures. A body-only history commit stays in the commit
-list with Diffview's `No diff` row. The existing Diffview open, close, file
-history, and range commands need no replacement mappings.
+projected Types, Signatures, or Tests. A body-only history commit stays in the
+commit list with Diffview's `No diff` row. A matching file move remains visible
+even when both projections are equal; it is omitted only when both requested-mode
+projections are empty. The existing Diffview open, close, file history, and
+range commands need no replacement mappings.
+
+A detected file move is one row under its destination path, using Diffview's
+rename status and both projected sides. Codect reuses a matching Git rename
+entry. When Git reports a delete/add pair, or pairs paths differently from
+Codect, the adapter constructs one two-sided rename entry and disposes the
+surplus entries; a move therefore cannot appear twice or leave a null pane.
+This works in commit history and in both staged and working sections, including
+an unstaged rename whose destination is untracked.
 
 The ordinary `:DiffviewOpen` keeps Diffview's staged (HEAD versus index) and
 unstaged (index versus worktree) sections. Focused panes use separate read-only
@@ -179,10 +190,11 @@ Diffview file-list updates. Git's file list tracks changes on disk and in the
 index; unsaved changes that exist only in an editor buffer do not appear until
 written.
 
-Use `:CodectDiffview types`, `:CodectDiffview signatures`, or
-`:CodectDiffview source` in the current Diffview tab. History refreshes preserve
-the selected commit and file when they still exist. The focused panes are
-read-only scratch buffers; source mode restores Diffview's normal content.
+Use `:CodectDiffview types`, `:CodectDiffview signatures`,
+`:CodectDiffview tests`, or `:CodectDiffview source` in the current Diffview
+tab. History refreshes preserve the selected commit and file when they still
+exist. The focused panes are read-only scratch buffers; source mode restores
+Diffview's normal content.
 
 Diffview has no public provider for its file list and pane contents. This
 adapter is guarded by source hashes for Diffview commit
@@ -199,12 +211,22 @@ to activate the integration there; the five existing Diffview mappings and
 their `after = function() require("diffview").setup({}) end` callback need no
 changes. The dotfiles configuration does not currently install Codect itself.
 
-The `codect.diff.v1` CLI accepts commits, `:index`, `:worktree`, and Git's empty
-tree. Root commits therefore show focused added-file projections. Rename rows
-currently use Diffview's destination path; rename-aware matching and a separate
-old-path row are not provided. Unmerged index entries have no stage-zero
-snapshot mapping in this integration, so conflicting rows are omitted from
-focused file lists.
+The `codect.diff.v2` CLI accepts commits, `:index`, `:worktree`, and Git's empty
+tree. Root commits therefore show focused added-file projections. Moved files
+carry their destination as `path` and source as `old_path`; the adapter matches
+both. v2 paths use Codect's injective display escaping for literal backslashes,
+ASCII C0 control bytes plus DEL, and invalid UTF-8 bytes; valid Unicode,
+including C1, is unchanged. New show documents opt into the same encoding with a
+top-level `path_encoding: "codect.path.v1"` marker; unmarked show documents are
+passed through unchanged, matching legacy producers that left literal
+backslashes raw and escaped only invalid UTF-8 bytes. The adapter decodes marked
+show paths before comparing a buffer's raw repository path, always decodes v2
+paths, and preserves the encoded forms as labels. Focused file-panel leaves and directory labels use those
+display forms while tree keys and `entry.path` remain raw; source mode leaves
+Diffview's own path handling unchanged. An unknown show path encoding or a
+malformed escape is rejected explicitly. Unmerged index entries have no
+stage-zero snapshot mapping in this integration, so conflicting rows are
+omitted from focused file lists.
 
 ## Health
 
@@ -232,8 +254,27 @@ CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=range \
   CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
 CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=local \
   CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=move \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=move-split \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=move-paths \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=move-tree-labels \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=move-source-cycle \
+  CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
 CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim CODECT_TEST_DIFFVIEW_CASE=root \
   CODECT_BIN="$(pwd)/target/debug/codect" nvim --headless -u NONE -l editors/nvim/tests/test_diffview.lua
+```
+
+Run the independent move-acceptance suite separately; it needs the pinned
+Diffview checkout but has no case selector:
+
+```sh
+CODECT_DIFFVIEW_RTP=/path/to/diffview.nvim \
+  CODECT_BIN="$(pwd)/target/debug/codect" \
+  nvim --headless -u NONE -l editors/nvim/tests/test_move_acceptance.lua
 ```
 
 ## License

@@ -5,6 +5,38 @@ local WIDGET = P .. "type::Widget"
 local MAKE = P .. "fn::make"
 local NEW = "impl Widget::method::new"
 
+local function open_abs(path)
+  vim.cmd("silent! %bwipeout!")
+  local buf = vim.fn.bufadd(path)
+  vim.fn.bufload(buf)
+  vim.api.nvim_set_current_buf(buf)
+  return buf
+end
+
+local function stub_show(doc)
+  return "printf '%s' " .. vim.fn.shellescape(vim.json.encode(doc))
+end
+
+local function show_doc(marker, correct_path)
+  local function file(path)
+    return {
+      path = path,
+      language = "rust",
+      projection = { text = "", items = {} },
+      outline = {},
+    }
+  end
+  local doc = {
+    schema = "codect.show.v1",
+    input = "stdin",
+    revision = vim.NIL,
+    mode = "signatures",
+    files = { file("decoy.rs"), file(correct_path) },
+  }
+  if marker then doc.path_encoding = marker end
+  return doc
+end
+
 return function(H)
   H.test(":CodectShow types keeps types open and folds dropped signatures", function()
     H.open_fixture()
@@ -55,5 +87,70 @@ return function(H)
     H.truthy(types_make ~= signatures_make, "fold text differs between modes")
     H.contains(types_make, "hidden in types")
     H.contains(signatures_make, "pub fn make")
+  end)
+
+  H.test("show path selection follows the encoding marker and keeps encoded labels", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    root = vim.fn.resolve(root)
+    local init = vim.fn.system({ "git", "-C", root, "init", "-q" })
+    assert(vim.v.shell_error == 0, init)
+
+    local raw_path = "lit\\name.rs"
+    local display_path = "lit\\\\name.rs"
+    local absolute = root .. "/" .. raw_path
+    local file = assert(io.open(absolute, "wb"))
+    file:write("fn main() {}\n")
+    file:close()
+
+    local function run_with(doc)
+      open_abs(absolute)
+      require("codect.state").clear_overrides(raw_path)
+      local restore = H.with_stub_binary(stub_show(doc))
+      local messages = H.capture_notify(function()
+        vim.cmd("CodectShow signatures")
+      end)
+      restore()
+      return messages
+    end
+
+    local messages = run_with(show_doc("codect.path.v1", display_path))
+    H.eq(#messages, 0, table.concat(messages, "\n"))
+    local st = H.state()
+    H.truthy(st, ":CodectShow did not install state for the marked path")
+    H.eq(st.path, raw_path, "state path is not the raw byte path")
+    H.eq(st.file_entry.path, display_path, "the encoded label was not preserved")
+
+    messages = run_with(show_doc(nil, raw_path))
+    H.eq(#messages, 0, table.concat(messages, "\n"))
+    st = H.state()
+    H.truthy(st, ":CodectShow did not select an unmarked legacy path")
+    H.eq(st.path, raw_path, "legacy raw path was decoded")
+    H.eq(st.file_entry.path, raw_path, "legacy path label changed")
+
+    messages = run_with(show_doc("codect.path.v9", display_path))
+    H.truthy(#messages > 0, "unknown path encoding did not fail")
+    H.contains(messages[1], "unsupported Codect path encoding")
+
+    messages = run_with(show_doc("codect.path.v1", "bad\\q.rs"))
+    H.truthy(#messages > 0, "malformed marked path did not fail")
+    H.contains(messages[1], "invalid Codect path encoding")
+
+    local sole = show_doc("codect.path.v1", "decoy.rs")
+    sole.files = { sole.files[1] }
+    messages = run_with(sole)
+    H.truthy(#messages > 0, "marked documents still used the single-file fallback")
+    H.contains(messages[1], "no projection")
+
+    sole = show_doc(nil, "decoy.rs")
+    sole.files = { sole.files[1] }
+    messages = run_with(sole)
+    H.eq(#messages, 0, "legacy single-file fallback stopped working")
+    st = H.state()
+    H.truthy(st, "legacy single-file fallback did not install state")
+    H.eq(st.file_entry.path, "decoy.rs", "legacy fallback selected the wrong file")
+
+    vim.cmd("silent! %bwipeout!")
+    vim.fn.delete(root, "rf")
   end)
 end
