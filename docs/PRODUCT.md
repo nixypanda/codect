@@ -44,10 +44,17 @@ in both; Signatures adds every named signature.*
 - Codect supports Elm, Haskell, Python, and Rust.
 - A project may contain unsupported files, but they are not included in focused views.
 
+### Filesystem projection
+
+A `show` with no revision projects supported files on disk, inside or outside
+Git. It uses recursive deterministic traversal of supported files, does not
+follow symlinks or escape the root, and honors ignore rules. Inside Git it
+requires a worktree, so an omitted revision in a bare repository is fatal;
+tracked files are retained even when ignored, matching the `:worktree`
+snapshot semantics.
 ### Types mode
 
 Types mode shows:
-
 - Module names and paths, so declarations retain their file and module context.
 - Every type declaration and the information that defines its shape.
 - Generic parameters, constraints, and relationships between types.
@@ -259,9 +266,9 @@ rule.
 Focused views accept a repeatable path selection that narrows a view or diff to part of the repository.
 
 - A selected path names either a file or a directory; a directory includes every file beneath it.
-- Paths are relative to the current directory. Absolute paths are accepted only inside the repository, and in a bare repository relative paths resolve against the repository root.
+- Paths are relative to the current directory. Absolute paths are accepted only inside the root (the repository worktree when inside Git, otherwise the current directory), and in a bare repository relative paths resolve against the repository root.
 - Repeating the option selects the union of the named paths.
-- Resolution is lexical: `.`, repeated slashes, and trailing slashes are normalized, and `..` may climb but may not leave the repository.
+- Resolution is lexical: `.`, repeated slashes, and trailing slashes are normalized, and `..` may climb but may not leave the root.
 - Matching is byte-exact and respects path boundaries, so `src` does not match `src2/lib.rs`.
 
 A path that names nothing in the projected revision is an error; in a diff, a
@@ -390,10 +397,10 @@ working-tree buffer cannot be folded from a committed revision because its spans
 would drift as the user types, so `--stdin` reads the buffer's bytes from
 standard input and `--worktree` reads the file at `--path` from disk. Both
 require exactly one `--path`, which supplies the language and the
-repository-relative path used to build stable keys, and both resolve inside the
-repository. A `--path` that names a directory is a usage error, and `--worktree`
-refuses a symlinked target so a read can never escape the repository.
-
+repository-relative path used to build stable keys, and both operate inside or
+outside Git (rooted at the repository worktree when inside Git, otherwise the
+current directory). A `--path` that names a directory is a usage error, and
+`--worktree` refuses a symlinked target so a read can never escape the root.
 Codect now **reads** the worktree for this path. It remains strictly read-only:
 it never writes the repository, worktree, or index, and the stdin and worktree
 inputs are incapable of writing.

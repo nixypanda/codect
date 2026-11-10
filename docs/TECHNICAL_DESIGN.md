@@ -14,11 +14,11 @@ The current implementation supports:
 - Types, Signatures, and Tests projection modes. Tests mode recognizes tests in
   Rust and Python only; Elm and Haskell retain nothing, including their module
   headers, so they project to an empty declaration list.
-- Showing a projection for a Git commit.
+- Showing a projection for a Git commit, or for supported files on disk when no
+  revision is given (inside or outside Git).
 - Diffing projections from two Git commits in text or JSON; JSON also compares
   the index, tracked worktree, and empty tree.
 - Narrowing a projection to selected repository paths on both commands.
-
 Codect does not perform type inference, expand macros, inspect function bodies,
 or implement Public and Full projection modes. The editor projection surface
 (section 14.2) may read the worktree or standard input. JSON snapshot diffs
@@ -571,14 +571,15 @@ how they build the initial selection and present the result.
 ### 7.1 Show
 
 ```text
-repository path + revision + path selection
-  → discover repository
-  → resolve revision to one commit
-  → traverse commit tree
-  → select .elm, .hs, .py, .pyi, and .rs blobs
-  → reject selected paths absent from the revision (before any blob read)
+root (repository worktree when inside Git, otherwise cwd) + optional revision + path selection
+  → discover Git repository opportunistically (optional for disk projection,
+    root, and tracked-file membership; required for a revision or diff; an
+    in-Git disk projection requires a worktree, so bare repositories fail)  → when a revision is given, resolve it to one commit and traverse its tree
+  → when no revision is given, recursively traverse supported files on disk
+  → select .elm, .hs, .py, .pyi, and .rs files
+  → reject selected paths absent from the revision (before any blob read), when given
   → keep only paths matching the path scope
-  → read each remaining blob
+  → read each remaining file
   → project with its language adapter
   → sort files by raw repository path
   → render file sections
@@ -688,9 +689,10 @@ The concrete implementation wraps `gix::Repository`, but callers must not see th
 - Support normal repositories, bare repositories, and linked worktrees when `gix` can discover them.
 - Open the repository read-only.
 - Respect `gix` repository trust handling; do not override trust to force-load unsafe configuration.
-- Return a clear diagnostic when no repository is found.
-
-### 8.2 Revision resolution
+- Return a clear diagnostic when no repository is found and one is required (an
+  explicit revision or a diff), or when an in-Git disk projection has no
+  worktree. A show with no revision operates on the current directory outside
+  Git.### 8.2 Revision resolution
 
 Use `gix` revision parsing and require the result to identify one object. Peel annotated tags and other commit-ish objects to a commit.
 
@@ -1173,7 +1175,8 @@ codect diff --format <text|json> --mode <types|signatures|tests> [--merge-base] 
 
 Rules:
 
-- `show` defaults `REVISION` to `HEAD`.
+- `show` with an omitted `REVISION` projects supported files on disk
+  (Git-independent); an explicit `REVISION` requires Git.
 - `show` accepts `--format <text|json>` (default `text`) and the
   `--stdin`/`--worktree` input forms; section 14.2 defines the JSON document.
 - `--mode` is required; do not introduce a default before product validation.
@@ -1191,7 +1194,7 @@ Rules:
   stays the requested base and `id` is the resolved merge base.
 - `--path`/`-p` and `--area`/`-a` are mutually exclusive; passing both is a usage error that exits `2` through `clap`. Each is individually repeatable, and a repeated option forms a union of its selections.
 - `--path`/`-p` narrows the projection to the named files or directories; a directory includes every file beneath it. Matching is byte-exact and boundary-aware.
-- Paths resolve relative to the current directory. An absolute path must be inside the repository, `..` may climb but may not leave it, and in a bare repository relative paths resolve against the repository root. Resolution is lexical and never consults the filesystem.
+- Paths resolve relative to the current directory. An absolute path must be inside the root (the repository worktree when inside Git, otherwise the current directory), `..` may climb but may not leave it, and in a bare repository relative paths resolve against the repository root. Resolution is lexical and never consults the filesystem.
 - `--area`/`-a` selects named areas defined at the repository root (section 14.1). Area paths are repository-root-relative, so `--area` ignores the current directory.
 - A selected path that names nothing in the projected revision exits `1` with empty stdout; for `diff`, a path named by either the base or the target is valid.
 - A selected path that exists but contains no supported files exits `0` with empty output.
@@ -1265,10 +1268,11 @@ codect show --format json --mode <types|signatures|tests> --worktree --path <PAT
   single file.
 - The path is resolved with the same lexical containment rules as `--path`
   scoping (section 14). `--worktree` additionally refuses a symlinked target and
-  checks the fully-resolved path stays inside the repository, so a read can
-  never leave it even through a symlinked ancestor directory. An unsupported
-  extension, a non-UTF-8 source, a path outside the repository, a symlinked
-  worktree file, or a resolved path that escapes exits `1` with empty stdout.
+  checks the fully-resolved path stays inside the root, so a read can never leave
+  it even through a symlinked ancestor directory. `--stdin` and `--worktree`
+  operate inside or outside Git. An unsupported extension, a non-UTF-8 source, a
+  path outside the root, a symlinked worktree file, or a resolved path that
+  escapes exits `1` with empty stdout.
 - These inputs are read-only. They never write the repository, worktree, or
   index.
 - JSON is written uncolored; `--color` never introduces ANSI into it. JSON
@@ -1437,9 +1441,7 @@ Diagnostics must include, when applicable:
 
 Fatal cases include:
 
-- Command-level failures: no repository, an unresolvable or ambiguous revision,
-  a range or non-commit revision, a failed tree/index/snapshot enumeration, or
-  an invalid `.codect.toml` selected by `--area`.
+- Command-level failures: no repository or worktree when one is required (explicit revision, diff, or in-Git disk show), an unresolvable or ambiguous revision, a range or non-commit revision, a failed tree/index/snapshot enumeration, or an invalid `.codect.toml` selected by `--area`.
 - A selected path that names nothing in the projected revision, or in either side of a diff.
 - An empty area (no paths) or an area path that is absolute or contains `..`.
 - Git object missing or corrupt when needed for the operation.
@@ -2051,9 +2053,8 @@ codect tui diff range --mode <types|signatures|tests> [--merge-base] [--path <PA
 codect tui diff commits --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
-- `show` defaults `REVISION` to `HEAD`; both diff sides are required.
-  Bare `tui diff` is invalid. Range compares the endpoints directly; either
-  side may be a commit, `:index`, `:worktree`, or `:empty`, exactly like
+- `show` with an omitted `REVISION` projects supported files on disk (Git-independent); an explicit `REVISION` requires Git. Both diff sides are required.
+  Bare `tui diff` is invalid. Range compares the endpoints directly; either  side may be a commit, `:index`, `:worktree`, or `:empty`, exactly like
   `codect diff`. Commits requires the base on the target's first-parent chain
   and lists the steps after the base, newest first, so it needs commit sides; a
   snapshot side is a usage error. Each selected step compares its first parent

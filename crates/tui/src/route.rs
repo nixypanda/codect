@@ -15,7 +15,7 @@ pub use tui_diff::{DiffRequest, DiffView};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LoadRequest {
     Show {
-        revision: String,
+        revision: Option<String>,
         mode: ProjectionMode,
         selection: Selection,
     },

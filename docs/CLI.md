@@ -14,7 +14,7 @@ codect show --format json --mode <types|signatures|tests> --worktree --path <FIL
 codect diff --format <text|json> --mode <types|signatures|tests> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
-- `show` defaults `REVISION` to `HEAD`.
+- `show` with an omitted `REVISION` projects supported files on disk (Git-independent); an explicit `REVISION` requires Git.
 - `--mode` is required. `types` shows type declarations; `signatures` adds every
   named function, method, and value signature; `tests` is the Signatures
   projection restricted to tests in Rust and Python. Function bodies are never
@@ -55,11 +55,11 @@ directory includes everything beneath it). A path that names nothing in the
 projected revision — or in either side of a diff — is an error. A path that
 exists but contains no supported files is valid and produces empty output.
 
-Paths are relative to the current directory and must stay inside the repository.
+Paths are relative to the current directory and must stay inside the root (the
+repository worktree when inside Git, otherwise the current directory).
 Resolution is lexical: `.`, repeated slashes, and trailing slashes are
-normalized, and `..` may climb but may not leave the repository. Matching is
+normalized, and `..` may climb but may not leave the root. Matching is
 byte-exact and respects path boundaries, so `src` does not match `src2/lib.rs`.
-
 ## Named areas
 
 `--area`/`-a` is repeatable and selects named path groups defined in
@@ -163,7 +163,8 @@ marker; pass `--width=<n>` above the content width to avoid it.
   Show remains at v1; the new producer adds optional
   `path_encoding: "codect.path.v1"`. Without that marker, `path` uses legacy
   display semantics and must not be decoded with the new path encoding. Unknown
-  marker values are unsupported for path decoding.
+  marker values are unsupported for path decoding. A filesystem projection from
+  an omitted revision uses `input: "worktree"` and `revision: null`.
 - `codect diff --format json` emits `codect.diff.v2` for commits and the
   snapshots `:index`, `:worktree`, and `:empty`, plus the canonical Git
   empty-tree object ID as an alias for the empty side. The text format accepts
@@ -184,7 +185,7 @@ the current binary. For the exact contract, see
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including a diff with focused changes and a selection with no supported files (empty output). |
-| `1` | Fatal: no repository; bad revision; tree/index/snapshot enumeration; Git object read required for the operation; absent path; config/area failure; or a source selected for projection that is non-UTF-8 or fails to parse. Move-detection discovery reads remain per-file best effort. Empty stdout, one diagnostic on stderr. |
+| `1` | Fatal: no repository or worktree when one is required (explicit revision, diff, or in-Git disk show); bad revision; tree/index/snapshot enumeration; Git object read required for the operation; absent path; config/area failure; or a source selected for projection that is non-UTF-8 or fails to parse. Move-detection discovery reads remain per-file best effort. Empty stdout, one diagnostic on stderr. |
 | `2` | Usage error. |
 
 ## Next

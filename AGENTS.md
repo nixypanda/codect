@@ -20,7 +20,7 @@ codect diff --format json --mode signatures HEAD :worktree
 codect show --mode tests --path tests                # Rust and Python only
 ```
 
-- `show` defaults `REVISION` to `HEAD`. `--mode` is required.
+- `show` with an omitted `REVISION` projects supported files on disk (Git-independent); an explicit `REVISION` requires Git. `--mode` is required.
 - Text output is the canonical projection, byte-for-byte stable.
 - The snapshots `:index`, `:worktree`, `:empty`, and the empty-tree object ID
   are valid `diff` sides in both `text` and `json`. `:worktree` includes

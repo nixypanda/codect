@@ -148,12 +148,14 @@ pub(crate) fn on_event(view: &mut SourceView, event: &Event, cx: &Cx) -> Vec<Out
             };
             vec![Out::Effect(Cmd::Load(request))]
         }
-        Event::PromptSubmitted { tag, value }
-            if *tag == REVISION_PROMPT_TAG && !value.is_empty() =>
-        {
+        Event::PromptSubmitted { tag, value } if *tag == REVISION_PROMPT_TAG => {
             view.loading = true;
             let mut request = view.request(cx.workspace.query.scope.selection.clone());
-            request.revision = value.clone();
+            request.revision = if value.is_empty() {
+                None
+            } else {
+                Some(value.clone())
+            };
             vec![Out::Effect(Cmd::Load(request))]
         }
         _ => Vec::new(),

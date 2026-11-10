@@ -754,7 +754,7 @@ fn an_empty_diff_session_renders_the_no_changes_empty_text() {
 #[test]
 fn a_busy_empty_show_renders_the_loading_state() {
     let app = base_app(LoadRequest::Show {
-        revision: "HEAD".to_owned(),
+        revision: Some("HEAD".to_owned()),
         mode: ProjectionMode::Types,
         selection: Selection::all(),
     });
@@ -1539,7 +1539,7 @@ fn confirming_a_revision_emits_a_load_with_that_revision() {
     assert_eq!(
         cmds,
         vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
-            revision: "HEAD~2".to_owned(),
+            revision: Some("HEAD~2".to_owned()),
             ..show_request()
         }))]
     );
@@ -5361,14 +5361,14 @@ fn a_scope_requery_keeps_the_loaded_mode() {
 fn a_mode_requery_keeps_the_scope() {
     let selection = Selection::new(vec![SelectionGroup::Path(RepoPath::new("b.rs").unwrap())]);
     let app = base_app(LoadRequest::Show {
-        revision: "HEAD".to_owned(),
+        revision: Some("HEAD".to_owned()),
         mode: ProjectionMode::Types,
         selection: selection.clone(),
     });
     let (mut loaded, _) = update(
         source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
-                revision: "HEAD".to_owned(),
+                revision: Some("HEAD".to_owned()),
                 mode: ProjectionMode::Types,
                 selection: selection.clone(),
             },
@@ -5385,7 +5385,7 @@ fn a_mode_requery_keeps_the_scope() {
     assert_eq!(
         cmds,
         vec![PluginsCmd::Source(crate::source::Cmd::Load(ShowRequest {
-            revision: "HEAD".to_owned(),
+            revision: Some("HEAD".to_owned()),
             mode: ProjectionMode::Tests,
             selection,
         }))],

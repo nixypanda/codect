@@ -690,6 +690,38 @@ fn show_and_diff_work_in_a_bare_repository() {
         .stdout(predicates::str::contains("diff --codect a/src/User.elm"));
 }
 
+#[test]
+fn omitted_show_in_a_bare_repository_fails_with_a_no_worktree_diagnostic() {
+    let normal = TestRepo::init();
+    normal.write("src/User.elm", &fixture("elm/type-aliases/input.elm"));
+    normal.commit("base");
+
+    let bare = normal.clone_bare();
+
+    for args in [
+        vec!["show", "--mode", "types"],
+        vec!["show", "--format", "json", "--mode", "types"],
+    ] {
+        let output = codect_in(&bare, &args).output().expect("run codect");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            output.stdout.is_empty(),
+            "stdout must be empty: {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("has no worktree"),
+            "stderr must name the missing worktree: {stderr}"
+        );
+    }
+
+    codect_in(&bare, &["show", "--mode", "types", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("== src/User.elm =="));
+}
+
 // ---------------------------------------------------------------------------
 // failures and exit codes
 // ---------------------------------------------------------------------------

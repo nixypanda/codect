@@ -311,7 +311,7 @@ pub(crate) fn only_functions_outline() -> SourceOutline {
 
 pub(crate) fn show_request() -> ShowRequest {
     ShowRequest {
-        revision: "HEAD".to_owned(),
+        revision: Some("HEAD".to_owned()),
         mode: ProjectionMode::Types,
         selection: Selection::all(),
     }
@@ -430,14 +430,14 @@ pub(crate) fn show_app(files: Vec<SourceOutline>) -> App {
 
 pub(crate) fn show_app_mode(files: Vec<SourceOutline>, mode: ProjectionMode) -> App {
     let app = base_app(LoadRequest::Show {
-        revision: "HEAD".to_owned(),
+        revision: Some("HEAD".to_owned()),
         mode,
         selection: Selection::all(),
     });
     let (next, _) = update(
         source_msg(SourceMsg::ShowLoaded {
             request: ShowRequest {
-                revision: "HEAD".to_owned(),
+                revision: Some("HEAD".to_owned()),
                 mode,
                 selection: Selection::all(),
             },

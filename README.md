@@ -8,7 +8,7 @@ types, and signatures — without reading how it works. It supports Elm, Haskell
 Python, and Rust.
 
 ```sh
-codect show --mode signatures --path src/     # outline a revision
+codect show --mode signatures --path src/     # outline files on disk
 codect diff --mode types HEAD~1 HEAD          # focused diff
 codect tui show --mode types                  # interactive terminal browser
 ```
