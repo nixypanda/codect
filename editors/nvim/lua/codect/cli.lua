@@ -6,6 +6,8 @@
 
 local M = {}
 
+local path = require("codect.path")
+
 M.SCHEMA = "codect.show.v1"
 
 function M.resolve_binary()
@@ -96,6 +98,11 @@ function M.show(opts)
   local schema_err = M.check_schema(doc)
   if schema_err then
     return nil, schema_err
+  end
+
+  local encoding_err = path.check_show(doc)
+  if encoding_err then
+    return nil, encoding_err
   end
 
   return doc

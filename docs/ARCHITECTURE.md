@@ -7,10 +7,10 @@ Codect is a Cargo workspace. This page is a map; the authoritative contract is
 
 | Crate | Role |
 | --- | --- |
-| `base` | The grammar-agnostic core: projection model, repository paths, stable keys, canonical layout document, diff model, outline model. No Git, no parsers, no CLI. |
+| `base` | The grammar-agnostic core: projection model, repository paths, stable keys, canonical layout document, diff model (including move events), outline model, and the pure source-similarity score. No Git, no parsers, no CLI. |
 | `git` | Read-only repository access through `gix`: discovery, revision resolution, tree traversal, stage-zero index reads, blob reads. `gix` types never leave this crate. |
 | `lang-elm`, `lang-haskell`, `lang-python`, `lang-rust` | One adapter per language: Tree-sitter parsing, extraction into the shared model, and canonical rendering. All grammar node names live here. |
-| `engine` | The shared Git-aware application layer. Composes `git` reads with `base` rendering and exposes `show` and `diff` over a selection. No CLI, terminal, or rendering. |
+| `engine` | The shared Git-aware application layer. Composes `git` reads with `base` rendering and exposes `show` and `diff` over a selection. It owns the scope-independent comparison plan and bounded file-move detection, including worktree identity and per-comparison source caches. No CLI, terminal, or rendering. |
 | `tui-core` | The terminal kernel: run loop, terminal lifecycle, frame, shared state (workspace, search, keymap, focus, overlay slot, layout), the plugin contract, and the design system. It names no plugin and links neither `tui` nor `tui-diff`. |
 | `tui` | The built-in plugins (tree, source, and the overlays), the registry, and the public `run`. Optional in `cli` behind the default-on `tui` feature. |
 | `tui-diff` | The optional compare (range) and history (commits) views, behind `tui`'s default-on `diff` feature. Among the TUI crates it depends on `tui-core` only. |
@@ -76,15 +76,24 @@ repository path + revision + selection
 base + target + selection
   → resolve both → traverse both → union supported paths
   → reject selected paths absent from both
-  → for each path in byte order:
-      outside scope or unchanged blob → skip
-      one side only                   → compare with empty
-      both sides                      → project both; compare canonical text
-  → emit only files whose projections differ
+  → build a comparison plan over the complete supported snapshots:
+      both sides, same path        → unchanged blob fast path, or project both
+      old-only + new-only          → exact source identity, then bounded
+                                     source-similarity file-move pairing
+  → apply path/area scope: a move matches when either path matches
+  → project the selected pairs in the requested mode
+      unmoved equal projections    → omit
+      move with equal projections  → keep the move, no hunks
+      move with both empty         → omit
+  → sort events by target path and emit
 ```
 
-A source change that produces the same projection produces no output. That is
-the defining invariant of focused diffing.
+A source change that produces the same projection produces no output, except
+that a detected file move with at least one nonempty requested-mode projection
+remains visible with no content hunks. That move exception is part of the
+defining focused-diff invariant, not a fallback to raw source. A move whose two
+projections are both empty is omitted. Detection runs before scope so a narrow
+selection cannot change which paths pair.
 
 ## Core ideas
 
@@ -92,8 +101,10 @@ the defining invariant of focused diffing.
   keys and spans, plus canonical text derived from them. It is not a universal
   AST.
 - **Canonical text.** Rendering is deterministic and independent of original
-  formatting and comments, so formatting-only edits disappear from focused
-  diffs. Line breaks are fixed by declaration shape and an 80-column budget.
+  formatting and comments, so formatting-only edits leave unmoved projections
+  and content hunks unchanged. A detected move remains visible because move
+  pairing reads raw source bytes, where whitespace and comments can affect the
+  fuzzy score. Line breaks are fixed by declaration shape and an 80-column budget.
 - **Language adapters.** Core selects an adapter by path, invokes it, renders
   file framing, and compares canonical text. Adapters own all language meaning.
 - **Read-only.** Every path reads committed blobs, the tracked worktree, the

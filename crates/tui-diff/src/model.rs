@@ -177,7 +177,7 @@ impl super::DiffPlugin {
                 SearchPane::Old,
                 &mut matches,
             ),
-            FileDiff::Modified { old, new } => {
+            FileDiff::Modified { old, new } | FileDiff::Moved { old, new } => {
                 collect_matches(
                     old.canonical_text(),
                     &needle_lower,
@@ -208,9 +208,8 @@ impl super::DiffPlugin {
             return;
         };
         let language = match &diff {
-            FileDiff::Added { new } => new.language(),
-            FileDiff::Deleted { old } => old.language(),
-            FileDiff::Modified { old, .. } => old.language(),
+            FileDiff::Added { new } | FileDiff::Moved { new, .. } => new.language(),
+            FileDiff::Deleted { old } | FileDiff::Modified { old, .. } => old.language(),
         };
         let highlight_side =
             |file: &ProjectedFile| highlight::highlight(file.canonical_text(), language, theme);
@@ -304,7 +303,7 @@ fn diff_highlight(
             old: highlight_side(old),
             new: Vec::new(),
         },
-        FileDiff::Modified { old, new } => DiffHighlight {
+        FileDiff::Modified { old, new } | FileDiff::Moved { old, new } => DiffHighlight {
             old: highlight_side(old),
             new: highlight_side(new),
         },

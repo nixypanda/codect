@@ -63,7 +63,7 @@ editors/dsh/
 │   └── stubs/              # Local stub declarations for the host-side tsc build
 ├── src/
 │   ├── shared/
-│   │   └── schema.ts       # codect.show.v1 / codect.diff.v1 JSON types
+│   │   └── schema.ts       # codect.show.v1 / codect.diff.v2 JSON types
 │   ├── api-codect/         # Host-side (Electron main process)
 │   │   ├── index.ts        # cordis Service + @Remote methods
 │   │   ├── typert.host.ts  # Typert host protocol (generated/hand-written)
@@ -75,6 +75,7 @@ editors/dsh/
 │       ├── diff-view.tsx   # Focused diff viewer (tree + DiffBlock)
 │       ├── title.tsx       # Tab title chip
 │       ├── tree.ts         # Pure file-tree model (dirs-first, natural order)
+│       ├── move.ts         # Pure move path, label, and navigation helpers
 │       ├── outline.ts      # Pure declaration-outline nesting
 │       ├── address.ts      # Pure `dsh-resource://file/...` address builder
 │       ├── labels.ts       # Localized label bundles for the output cards
@@ -179,11 +180,30 @@ codect diff --format json --mode <types|signatures|tests> [--path P]... BASE TAR
 The plugin requests `types` and `signatures`; it does not request `tests`.
 
 - Text output is the canonical projection, byte-for-byte stable.
-- JSON is versioned: `codect.show.v1`, `codect.diff.v1`.
+- JSON is versioned: `codect.show.v1`, `codect.diff.v2`. Show stays on v1;
+  diff v2 adds `status: "moved"` events with `path` as the target path,
+  `old_path` as the source path, both sides, and projection-derived `equal`.
+- diff v2 `path`/`old_path` always use Codect's injective display encoding.
+  Show v1 `path` uses it only when the top-level `path_encoding` is
+  `codect.path.v1`; without that marker the path is legacy and backslash escapes
+  are not decoded. In a legacy path an escaped byte `\x80`-`\xFF` is ambiguous
+  with a literal filename, so that file is non-navigable rather than replaced.
+- The encoding writes a literal backslash as `\\`, ASCII C0 controls and DEL
+  with `\n`, `\r`, `\t`, or `\xNN`, and invalid UTF-8 bytes with `\xNN`; other
+  Unicode, including C1, is unchanged. Navigation decodes exactly once before
+  building a host file address; invalid UTF-8 paths remain non-navigable.
+- Commands run with the session cwd, which must be the Git repository root.
+  Sessions rooted in a subdirectory are unsupported; this plugin performs no
+  repository-root discovery.
+- Path filters are passed verbatim to the CLI and must be raw repo-relative
+  paths, not the display-escaped labels shown in the tree.
 - Each `diff` side is a commit, `:index`, `:worktree`, `:empty`, or the
   canonical empty-tree object id. `:index` reads stage-zero blobs; `:worktree`
   reads tracked files plus untracked, non-ignored files on disk (never unsaved
   editor buffers). `show` projects a committed revision, `--stdin`, or
   `--worktree`; this plugin exposes only the committed-revision input.
 - Exit 0 = success, 1 = fatal (empty stdout, stderr diagnostic), 2 = usage.
-- Body-only changes produce an empty focused diff (intentional).
+- Body-only changes produce an empty focused diff (intentional), except inside
+  a detected move. A detected move is emitted iff at least one requested-mode
+  projection is nonempty; an equal nonempty move remains visible without hunks,
+  and a move with both projections empty is omitted.

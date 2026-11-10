@@ -65,7 +65,7 @@ vim.api.nvim_create_user_command("CodectDiffview", function(args)
   require("codect.diffview").set_mode(args.fargs[1])
 end, {
   nargs = 1,
-  complete = mode_complete({ "types", "signatures", "source" }),
+  complete = mode_complete({ "types", "signatures", "tests", "source" }),
   desc = "Codect: switch the current Diffview tab between focused and source diffs",
 })
 

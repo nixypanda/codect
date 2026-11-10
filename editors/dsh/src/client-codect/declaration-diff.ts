@@ -12,6 +12,10 @@
  * is surfaced. A container that changed with no reported descendant is still
  * reported. Declarations the active mode drops (`retained_in_mode: false`) are
  * ignored on both sides.
+ *
+ * A moved file's stable keys are path-prefixed on both sides. Rebase the base
+ * keys onto the target path before matching so an exact move reports no
+ * declaration changes rather than deleting and re-adding every declaration.
  */
 
 import type { DiffChange, DiffFile, OutlineItem } from "../shared/schema";
@@ -20,19 +24,45 @@ function retained(item: OutlineItem): boolean {
   return item.retained_in_mode !== false;
 }
 
+function rebaseKey(file: DiffFile, key: string | null): string | null {
+  if (key === null || file.status !== "moved") return key;
+  const prefix = `${file.old_path}::`;
+  return key.startsWith(prefix)
+    ? `${file.path}${key.slice(file.old_path.length)}`
+    : key;
+}
+
+function rebaseItem(file: DiffFile, item: OutlineItem): OutlineItem {
+  if (file.status !== "moved") return item;
+  const stableKey = rebaseKey(file, item.stable_key);
+  const parentKey = rebaseKey(file, item.parent_key);
+  if (stableKey === item.stable_key && parentKey === item.parent_key) return item;
+  return {
+    ...item,
+    stable_key: stableKey ?? item.stable_key,
+    parent_key: parentKey,
+  };
+}
+
 export function diffChanges(file: DiffFile): DiffChange[] {
+  const baseOutline = (file.base?.outline ?? []).map((item) =>
+    rebaseItem(file, item)
+  );
+  const targetOutline = (file.target?.outline ?? []).map((item) =>
+    rebaseItem(file, item)
+  );
   const baseItems = new Map<string, OutlineItem>(
-    (file.base?.outline ?? []).map((item) => [item.stable_key, item])
+    baseOutline.map((item) => [item.stable_key, item])
   );
   const targetItems = new Map<string, OutlineItem>(
-    (file.target?.outline ?? []).map((item) => [item.stable_key, item])
+    targetOutline.map((item) => [item.stable_key, item])
   );
 
   const parentOf = new Map<string, string | null>();
-  for (const item of file.base?.outline ?? []) {
+  for (const item of baseOutline) {
     parentOf.set(item.stable_key, item.parent_key);
   }
-  for (const item of file.target?.outline ?? []) {
+  for (const item of targetOutline) {
     parentOf.set(item.stable_key, item.parent_key);
   }
 

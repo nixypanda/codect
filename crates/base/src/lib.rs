@@ -14,6 +14,7 @@ pub mod outline;
 pub mod path;
 pub mod render;
 pub mod selection;
+pub mod similarity;
 
 pub use diagnostic::{
     Diagnostic, DiagnosticContext, Location, ProjectionError, RepoPathError, decode_source,
@@ -33,3 +34,7 @@ pub use render::{
     LINE_WIDTH, diff_document, project_all, select_projector, show_document, sort_files,
 };
 pub use selection::{Selection, SelectionError, SelectionGroup};
+pub use similarity::{
+    PreparedSource, ProfileBudget, SCALAR_UNIT_MAX_BYTES, SimilarityInterner, SimilarityOutcome,
+    UnitMode, source_similarity, source_similarity_at_least, source_similarity_at_least_prepared,
+};

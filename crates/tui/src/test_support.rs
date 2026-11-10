@@ -354,6 +354,19 @@ pub(crate) fn file_diff(path: &str, old: Option<&str>, new: Option<&str>) -> Fil
     }
 }
 
+#[cfg(feature = "diff")]
+pub(crate) fn moved_file(
+    old_path: &str,
+    new_path: &str,
+    old_text: &str,
+    new_text: &str,
+) -> FileDiff {
+    FileDiff::Moved {
+        old: projected_file(old_path, old_text),
+        new: projected_file(new_path, new_text),
+    }
+}
+
 pub(crate) fn base_app(request: LoadRequest) -> App {
     base_app_with(request, Theme::dark(), Icons::new(IconStyle::None))
 }
@@ -475,6 +488,11 @@ pub(crate) fn commit_steps(count: usize) -> Vec<CommitStep> {
 
 #[cfg(feature = "diff")]
 pub(crate) fn commits_app(count: usize) -> App {
+    commits_app_with(count, vec![file_diff("a.rs", Some("a\n"), Some("A\n"))])
+}
+
+#[cfg(feature = "diff")]
+pub(crate) fn commits_app_with(count: usize, diffs: Vec<FileDiff>) -> App {
     let app = base_app(LoadRequest::Diff {
         base: "HEAD~1".to_owned(),
         target: "HEAD".to_owned(),
@@ -486,10 +504,7 @@ pub(crate) fn commits_app(count: usize) -> App {
     let (next, _) = update(
         diff_msg(tui_diff::Msg::HistoryLoaded {
             request: commits_request(),
-            result: Ok((
-                commit_steps(count).into(),
-                vec![file_diff("a.rs", Some("a\n"), Some("A\n"))].into(),
-            )),
+            result: Ok((commit_steps(count).into(), diffs.into())),
         }),
         &app,
     );

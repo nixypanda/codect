@@ -337,7 +337,7 @@ Keep `default-features = false`. Enable only:
 Do not enable these feature groups:
 
 - `basic` or any default bundle.
-- `blob-diff`; Codect diffs projections, not Git blobs.
+- `blob-diff`; Codect renders projections and implements its own bounded source similarity for file-move detection rather than using Git's blob-diff/rename machinery.
 - `status`, `worktree-stream`, `worktree-archive`, or `worktree-mutation`.
 - `merge`, `blame`, `mailmap`, or `notes`.
 - `credentials` or any network client or transport.
@@ -374,11 +374,11 @@ schema mismatch instead of a silent re-reading of a filtered projection as the
 full superset.
 
 This widens the `mode` enum's value set within `codect.show.v1` and
-`codect.diff.v1` rather than adding a field. Fields may be added additively
+`codect.diff.v2` rather than adding a field. Fields may be added additively
 within a version; widening an enum is a compatibility change, and a consumer
 validating `mode` against the enum rejects `tests` as an unknown value. That is
 the intended failure here, and both schemas and `docs/agents/INVARIANTS.md` say
-so, but review it as a compatibility change.
+so, but review it as a compatibility change. `codect.diff.v1` is archived.
 
 `ProjectionMode::superset` is the only mode question answered by a method: the
 other two are a yes or no, decided by an exhaustive `match` where needed.
@@ -476,10 +476,21 @@ Requirements:
 - Contain paths with a byte-exact, boundary-aware `RepoPath::is_within` check, so a directory contains itself and its descendants but not a sibling whose name merely shares its prefix (`src` does not contain `src2/x.rs`).
 - Sort by raw path bytes for deterministic output.
 - Detect `.elm`, `.hs`, `.py`/`.pyi`, and `.rs` using ASCII extension bytes.
-- Escape invalid UTF-8 when displaying a path.
+- Display a path with an injective encoding: ordinary valid Unicode is
+  unchanged; a literal backslash is doubled; LF, CR, and TAB use `\n`, `\r`, and
+  `\t`; every other C0 byte and DEL uses `\xNN`; and every invalid UTF-8 byte
+  uses `\xNN`, with two uppercase hex digits. Those escaped bytes cannot inject
+  a header line or terminal control sequence. Other valid Unicode, including C1
+  control characters, remains unchanged; this is not a general Unicode
+  terminal-control sanitizer.
+- Display encoding is output only. Processing, pairing, and sorting use raw
+  repository-path bytes.
 - Do not convert a repository path to `PathBuf` merely to inspect a committed tree.
 
-All supported source contents must be valid UTF-8. A supported source blob containing invalid UTF-8 is a fatal projection diagnostic.
+All supported source contents must be valid UTF-8 when projected. A supported
+source blob selected for projection that contains invalid UTF-8 is a fatal
+projection diagnostic. Move detection may read raw source bytes best-effort for
+pairing; an off-scope invalid source is not itself fatal.
 
 ### 5.2 Stable keys
 
@@ -578,28 +589,49 @@ repository path + revision + path selection
 
 ```text
 base revision + target revision + path selection
-  → resolve both to commits
-  → traverse both trees
-  → union supported paths
-  → reject selected paths absent from both revisions (before any blob read)
-  → for each path in byte order:
-      path outside the scope    → skip
-      unchanged blob ID         → skip
-      old blob only             → project old; compare with empty
-      new blob only             → compare empty with projected new
-      both blobs                → project both; compare projections
-  → emit only projected files with differences
+  → resolve both sides (commit, :index, :worktree, or :empty)
+  → traverse both supported source sets
+  → reject selected paths absent from both revisions (before projection reads)
+  → build one comparison plan over the complete supported snapshots:
+      both sides, same path        → unchanged blob fast path, or project both
+      old-only and new-only paths  → exact source identity first, then bounded
+                                     source-similarity file-move pairing
+  → apply the path/area scope to the plan (a move matches either path)
+  → project each selected plan pair in the requested mode:
+      unmoved equal projections    → omit
+      move with equal projections  → emit the move with no content hunks
+      move with both empty         → omit
+  → sort events by target path (sole path for additions/deletions)
+  → emit
 ```
 
-A source blob change that produces the same projection produces no output. This is the defining invariant of focused diffing.
+A source blob change that produces the same projection produces no output for an
+unmoved file. This is the defining invariant of focused diffing. A detected file
+move with at least one nonempty projection is the deliberate exception: it
+remains visible even when its projections are equal, so a body-only edit inside
+a move produces no hunks but keeps the move event. A move whose two
+requested-mode projections are both empty is omitted.
 
 For `diff`, the engine resolves each side as a commit, `:index`, `:worktree`,
 or `:empty`, in both `text` and `json`. The canonical Git empty-tree object ID
-is an alias for the empty side. It projects supported paths in raw path-byte
-order and omits equal canonical projections. Index entries come from stage-zero
-blobs; worktree entries are tracked regular files on disk unioned with
-untracked, non-ignored files, without following symlinks. Mutable snapshot
-names are labels rather than content hashes.
+is an alias for the empty side. It projects selected pairs in target-path order
+and omits equal canonical projections except for a move with at least one
+nonempty requested-mode projection; a move with two empty projections is
+omitted. Index entries come from stage-zero blobs; worktree entries are tracked
+regular files on disk unioned with untracked, non-ignored files, without
+following symlinks. Mutable snapshot names are labels rather than content
+hashes.
+
+Move detection runs before path or area filtering over the complete supported
+snapshot, so a narrow scope cannot change the pairing. Same-path pairs take
+precedence and never become moves. Detection may read off-scope supported
+sources, best-effort. A fuzzy candidate with unknown size, more than 256 KiB,
+invalid UTF-8, or a read failure is fuzzy-ineligible rather than fatal. Exact
+matching still considers every candidate and all sizes: blob IDs need no read,
+and a worktree identity is computed from raw bytes even above the fuzzy cap or
+with non-UTF-8 content. An unreadable worktree candidate cannot match exactly.
+A source selected for projection still uses the normal fatal read/parse path.
+Unchanged same-path entries with identical blob IDs still avoid reading blobs.
 
 ## 8. Git layer using `gix`
 
@@ -642,6 +674,12 @@ pub trait SnapshotRepository {
 
 `path_exists` reports whether a path names a tree or blob in a revision. A selected path is valid for a diff when either the base or the target names it, so a file deleted by the target stays in scope.
 
+The concrete `GitRepository` additionally exposes Codect-owned move-detection
+helpers: a blob-size lookup using the object header rather than decoding the
+blob, and a streaming Git-blob hash over worktree bytes. The latter lets exact
+move matching avoid loading a large worktree file into memory. `gix` types stay
+inside `git`; a hash failure is a typed `GitError`.
+
 The concrete implementation wraps `gix::Repository`, but callers must not see that type.
 
 ### 8.1 Repository discovery
@@ -675,7 +713,9 @@ Reject ranges such as `A..B` and `A...B` when passed as one argument. The `diff`
   Python, and Rust paths (including Python `.pyi` stubs).
 - Ignore directories after descending into them.
 - Ignore symlinks, Git links/submodules, and unsupported file types.
-- Do not perform rename detection.
+- The Git layer does not perform rename detection. The engine pairs sources
+  after both snapshots are enumerated, using Codect-owned source identities and
+  paths.
 - Committed trees are authoritative and tree traversal does not read
   `.gitignore`. Untracked worktree enumeration is the one exception (section
   8.5).
@@ -722,7 +762,10 @@ Centralize node-kind string constants in each crate's `syntax.rs`. Grammar upgra
 
 ## 10. Canonical rendering
 
-Canonical rendering prevents formatting-only source edits from appearing in focused diffs. Source slices alone are not acceptable output.
+Canonical rendering leaves an unmoved file's projection and content hunks
+unchanged for formatting-only source edits. A detected move remains visible:
+fuzzy pairing reads raw source bytes, where whitespace and comments can affect
+the score. Source slices alone are not acceptable output.
 
 Rendering must be independent of original whitespace and comments. It must preserve semantic token order, declaration order, member order, visibility, generic parameters, constraints, and modifiers selected by the product rules.
 
@@ -777,14 +820,31 @@ diff --codect a/src/User.elm b/src/User.elm
 +++ b/src/User.elm
 ```
 
-Use `/dev/null` for the absent side of an added or deleted file. Diff headers use escaped display paths when raw paths are not UTF-8.
+Use `/dev/null` for the absent side of an added or deleted file. Every diff
+header uses the path display encoding from section 5.1, including literal
+backslashes, control bytes, DEL, and invalid UTF-8. Unsafe path bytes are never
+written unescaped.
+
+A pure move uses the two diff paths plus Git-style rename headers and no content
+headers or hunks:
+
+```text
+diff --codect a/src/old.rs b/src/new.rs
+rename from src/old.rs
+rename to src/new.rs
+```
+
+An edited move follows the rename lines with `--- a/<old>`, `+++ b/<new>`, and
+ordinary focused hunks. Both move sides always use path labels, not `/dev/null`,
+because both source files exist.
 
 Multi-file document policy (pinned so it cannot drift):
 
 - `show` sections are separated by exactly one blank line.
-- `diff` blocks are concatenated with no blank line between them, and only files whose projections differ are emitted.
+- `diff` blocks are concatenated with no blank line between them, and only files whose projections differ are emitted, except that a detected move with at least one nonempty projection is emitted even when its projections are equal. A move with two empty requested-mode projections is omitted.
 - A non-empty document ends with exactly one trailing newline; a document with no emitted files is empty.
 - The `diff --codect` line keeps `a/` and `b/` labels even for an added or deleted file, while the absent `---`/`+++` side uses `/dev/null`.
+- The CLI colorizer must parse variable-length file headers (`diff`, `rename`, `---`, `+++`) rather than assuming exactly two lines after `diff`.
 
 ## 11. Elm projection
 
@@ -972,20 +1032,124 @@ Not detected: macro-generated cases, since macros are never expanded;
 
 ## 13. Diff engine
 
-Use `similar` over canonical projected text. Configure its patience algorithm and line-based comparison. Use three context lines initially.
+Use `similar` over canonical projected text. Configure its patience algorithm and line-based comparison for display. Use three context lines initially.
 
 Requirements:
 
-- Diff each repository path independently.
-- Emit files in raw path byte order.
-- Emit no header for a file whose projections are equal.
+- Diff each comparison event independently.
+- Sort events by target path, using the sole present path for additions and
+  deletions. Emit no header for an unmoved file whose projections are equal.
 - Treat an absent projection as empty content.
 - Preserve the standard `+`, `-`, and space prefixes.
 - Produce plain, deterministic output in core; apply ANSI styling only in the CLI output layer.
-- Color deletion red, insertion green, hunk headers cyan, and file headers bold when color is active.
+- Color deletion red, insertion green, hunk headers cyan, and all file/rename headers bold when color is active.
 - `--color=auto` uses terminal detection; redirected output contains no ANSI sequences.
 
-Do not implement declaration rename or move detection. Do not compare syntax trees directly. Canonical projection is the semantic step; the diff remains textual.
+Do not implement declaration move detection or copy detection. File moves are a
+separate engine-level pairing step over source bytes. Do not compare syntax trees
+directly. Canonical projection is the semantic step; the displayed diff remains
+textual.
+
+### File-move pairing
+
+The comparison plan has same-path, moved, added, and deleted pairs and is shared
+by every diff entry point. Same-path pairs take precedence; only old-only and
+new-only supported regular files of the same language are move candidates.
+`.py` and `.pyi` share the Python language; symlinks, submodules, unsupported
+paths, and different languages never pair.
+
+1. **Exact pass.** Pair equal source identities first. Commit and index sources
+   use blob IDs. A worktree side uses its exact Git blob identity computed from
+   the file bytes; a large file is streamed, so exact matching is not limited by
+   the fuzzy read cap and does not require the whole file in memory. Size
+   metadata may avoid hashing a worktree candidate when no same-language,
+   same-size counterpart exists; it never suppresses a possible exact pair.
+   Ambiguous equal sources pair by old raw path bytes, then new raw path bytes.
+2. **Fuzzy eligibility.** Remaining candidates must be in the same language and
+   have known sizes with a byte-size ratio of at least 1:2. Fuzzy matching runs
+   only when at most 256 old and 256 new paths remain after exact pairing, and
+   at most 4,096 candidate pairs remain after language, 256 KiB per-file, and
+   size-ratio filtering. Otherwise the unmatched paths stay additions and
+   deletions. These caps are deterministic fallbacks, not user configuration.
+3. **Score.** Read at most 256 KiB per fuzzy candidate and decode it as UTF-8.
+   The score is
+   `floor(100 * common / max(old_bytes, new_bytes))`, where `common` is the UTF-8
+   byte length of equal units in a deterministic Myers diff. Use Unicode scalar
+   units only when **both** sources are at most 4 KiB; otherwise use complete
+   lines including their line endings. Whitespace and line endings are source
+   content. A score of at least 50 is a candidate.
+4. **Selection.** Sort candidates by score descending, then old raw path bytes,
+   then new raw path bytes. Greedily accept a pair whose endpoints are unused.
+   Each path participates in at most one move; copies are not detected.
+
+Fuzzy pairing is a heuristic over raw repository source bytes, not a historical
+identity query. Shared boilerplate can push unrelated files over the threshold;
+exact content matching runs first, and the deterministic score and raw-path
+ordering decide the remaining pairs. No Git filter, end-of-line conversion,
+checkout transform, or rename metadata is applied, so an LF versus CRLF checkout
+difference can prevent a pair.
+
+Detection source access is best effort. A fuzzy candidate with unknown size,
+more than 256 KiB, invalid UTF-8, or a read failure is fuzzy-ineligible rather
+than fatal, including when it is off-scope. Exact matching still considers every
+candidate and all sizes: blob IDs need no read, and a worktree identity hashes
+raw bytes above the fuzzy cap or with non-UTF-8 content; an unreadable worktree
+candidate cannot match exactly. If a candidate is ultimately selected for
+projection, the normal fatal read/parse behavior still applies. Exact worktree
+identity may stream a source larger than the fuzzy cap and must not require the
+whole file in memory. Unchanged same-path entries with equal blob IDs retain the
+no-blob-read fast path. Detection may inspect off-scope candidates so scope
+cannot change the pairing.
+
+Fuzzy-eligible source bytes are frozen once before pair scoring; pair scoring
+performs no IO. The frozen raw-source snapshot is separate from the 32 MiB
+exact-worktree byte cache and is bounded at `512 * 256 KiB = 128 MiB`. This is a
+captured raw-source bound, not a total process-memory bound: prepared unit
+profiles, interner tables, LCS/Myers working memory, projections, and other
+process memory are additional. Selected worktree projections reuse captured
+fuzzy bytes when present.
+
+Pair scores are cached only within the comparison, keyed by the ordered
+`(old source identity, new source identity, UnitMode)`. Blob candidates use
+their blob ID; a worktree identity for this key is a hash of the captured raw
+bytes, not stale metadata. The score depends only on the source bytes. A
+candidate whose pre-read size differs from the captured byte length is
+fuzzy-ineligible, and the captured bytes remain available to a selected
+projection, so a stale size cannot select the wrong 4 KiB scalar/line mode.
+
+Prepared profiles are interned per comparison under a logical `ProfileBudget`:
+8,000,000 unit IDs, 5,000,000 light IDs, 2,000,000 heavy `(id, count)` entries,
+and 8 MiB charged interner keys (`unit_bytes + 32`). These are accounting
+limits, not physical allocation or RSS bounds; vector/map capacity and other
+overhead are additional. If preparation exhausts the budget, the engine uses the
+unchanged byte-slice scorer over the frozen bytes for that pair; the candidate
+and pair remain eligible.
+
+Every opened worktree read or exact hash is fingerprint-guarded before and after
+by length, mtime, and on Unix device, inode, ctime, and mtime nanoseconds. If an
+exact worktree identity was recorded and a selected source must be read again,
+its bytes are rehashed against that expected blob identity; a same-size rewrite
+fails as a normal `WorktreeRead`. This is per-file consistency, not an atomic
+worktree snapshot across files, and is not a claim of race-freedom against
+concurrent or malicious mutation.
+
+Safe prunes remain optional and skip only pairs provably below 50%. A
+byte-weighted heavy/light bound uses units heavy on both sides (minimum
+frequency multiplied by UTF-8 bytes) plus a light-only LCS-derived maximum byte
+total; a light match set above 100,000 match pairs skips that bound. The
+bit-parallel LCS scratch estimate is checked with saturating arithmetic before
+allocation and capped at 32 MiB including masks and four working vectors; over
+budget skips only that bound. Hunt-Szymanski is also selected only for sparse
+match sets at or below 100,000 match pairs. These are algorithm-selection
+limits, not semantic candidate/file caps, and no pair becomes ineligible. Every
+surviving pair uses the final deterministic Myers score. The 32 MiB LCS scratch
+limit is not a global process-memory bound, and no semantic cap, dependency, or
+thread is introduced.
+
+A matched move with at least one nonempty projection is emitted even when the
+two projections are equal; a pure move has no content headers or hunks. A move
+whose two requested-mode projections are both empty is omitted. For JSON, `equal` reports canonical projection equality;
+`path` is the target key and `old_path` the source.
 
 Alongside `unified_hunks`, core exposes a structured side-by-side alignment:
 `aligned_rows(old, new)` returns ordered rows carrying optional old and new line
@@ -993,7 +1157,8 @@ numbers, old and new text, and an `Equal`/`Add`/`Delete`/`Change`
 classification. It shares `unified_hunks`'s patience configuration and line
 tokenization, so the two always identify the same changed lines. The terminal
 frontend renders side by side from `aligned_rows` and must never derive a
-side-by-side view by parsing unified-diff text.
+side-by-side view by parsing unified-diff text. A pure move bypasses row layout
+and shows the move empty state instead.
 
 ## 14. CLI contract
 
@@ -1033,10 +1198,12 @@ Rules:
 - An area is satisfied when any one of its paths names something in the projected revision, or in either side of a diff; otherwise it exits `1` with empty stdout and a diagnostic naming the area.
 - A missing, unreadable, oversized, or malformed config, or an `--area` name the config does not define, exits `1` with empty stdout. Config errors never affect `--path` or unscoped runs.
 - Support `--color <auto|always|never>` with `auto` as the default.
-- `--help` must describe that implementation-only changes are invisible.
+- `--help` must describe that implementation-only changes are invisible, except that a detected file move with at least one nonempty projection remains visible.
 - Successful commands exit `0`, including a diff with projected changes.
 - Usage errors exit `2` through `clap`.
-- Repository, revision, object, UTF-8, or parse failures exit `1`.
+- Repository, revision, tree/index/snapshot, or Git object failures exit `1`.
+  A source selected for projection that is non-UTF-8 or fails to parse also
+  exits `1`; move-detection discovery reads are best-effort per candidate.
 - Write projections and diffs to stdout.
 - Write diagnostics to stderr.
 - Do not add progress output in the MVP.
@@ -1083,9 +1250,9 @@ committed at `docs/schema/codect.show.v1.json`; golden documents live under
 Input forms:
 
 ```text
-codect show --format json --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-codect show --format json --mode <types|signatures> --stdin --path <PATH>
-codect show --format json --mode <types|signatures> --worktree --path <PATH>
+codect show --format json --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... [REVISION]
+codect show --format json --mode <types|signatures|tests> --stdin --path <PATH>
+codect show --format json --mode <types|signatures|tests> --worktree --path <PATH>
 ```
 
 - `--stdin` reads source bytes from standard input; `--worktree` reads the file
@@ -1104,16 +1271,18 @@ codect show --format json --mode <types|signatures> --worktree --path <PATH>
   worktree file, or a resolved path that escapes exits `1` with empty stdout.
 - These inputs are read-only. They never write the repository, worktree, or
   index.
-- JSON is written raw; `--color` never introduces ANSI into it.
+- JSON is written uncolored; `--color` never introduces ANSI into it. JSON
+  string escaping is separate from and additional to the path display encoding.
 
 Document shape:
 
 ```jsonc
 {
   "schema": "codect.show.v1",   // a consumer treats any other value as fatal
+  "path_encoding": "codect.path.v1", // optional; absent = legacy path display
   "input": "revision",          // "revision" | "stdin" | "worktree"
   "revision": "HEAD",           // string, or null for stdin/worktree
-  "mode": "types",              // "types" | "signatures"
+  "mode": "types",              // "types" | "signatures" | "tests"
   "files": [                    // raw path byte order for revisions
     {
       "path": "src/auth.rs",
@@ -1160,6 +1329,14 @@ Contract rules:
   form is single line.
 - `projection.text` is exactly the canonical text text mode emits for that file,
   so the document and the text view cannot drift.
+- The new producer emits optional top-level
+  `path_encoding: "codect.path.v1"` and then writes `path` with the section 5.1
+  display encoding; JSON string escaping is an additional layer. Absence means
+  legacy show display semantics: do not apply the new decoder. An unknown
+  `path_encoding` value is unsupported for path decoding and should be rejected
+  gracefully. The schema remains `codect.show.v1`; required fields are unchanged
+  and the property is additive. A consumer decodes JSON first and then decodes
+  the display encoding only under the known marker.
 - Line numbers are one-based on the wire (the JSON layer adds one to the
   zero-based adapter span), for editor friendliness; byte offsets are zero-based
   into the decoded UTF-8 source. A consumer converts byte offsets if needed and
@@ -1192,29 +1369,58 @@ Crate placement:
   and golden fixtures are referenced by the CLI test suite, never by
   `base`.
 
-### 14.3 Focused snapshot diff document (`codect.diff.v1`)
+### 14.3 Focused snapshot diff document (`codect.diff.v2`)
 
 `codect diff --format json` emits the schema in
-[`docs/schema/codect.diff.v1.json`](./schema/codect.diff.v1.json). The root
-contains `schema`, `mode`, `base`, `target`, and `files`. Each snapshot has
-a `kind` (`commit`, `index`, `worktree`, or `empty`), the requested
-`revision`, and an `id`. A commit ID is resolved; `:index` and
-`:worktree` IDs are mutable labels, so callers must refresh after staging or
-disk writes.
+[`docs/schema/codect.diff.v2.json`](./schema/codect.diff.v2.json).
+`codect.diff.v2` always uses the fixed new path display encoding and needs no
+`path_encoding` marker. `codect.show.v1` remains v1 with optional additive
+`path_encoding`; `codect.diff.v1` is archived and is not emitted by the current
+binary.
 
-Each changed file has an escaped repository `path`, `language`, `status`
-(`added`, `deleted`, or `modified`), `base` and `target` sides, and
-`equal: false`. An absent side is `null`; a present side contains its
-`snapshot_id`, canonical `projection`, and declaration `outline`. Files
-whose projected text is equal are omitted. The stage-zero index supplies
-`:index`; `:worktree` reads tracked regular files from disk plus untracked,
-non-ignored files, and never includes unsaved editor buffers. Text and JSON
-accept the same snapshot sides, so a `:worktree` side includes untracked files
-in both.
+The root contains `schema`, `mode`, `base`, `target`, and `files`. Each snapshot
+has a `kind` (`commit`, `index`, `worktree`, or `empty`), the requested
+`revision`, and an `id`. A commit ID is resolved; `:index` and `:worktree` IDs
+are mutable labels, so callers must refresh after staging or disk writes.
+
+Each changed file has a display-encoded repository `path` (section 5.1; JSON
+string escaping is additional), `language`, `status`
+(`added`, `deleted`, `modified`, or `moved`), `base` and `target` sides, and
+`equal`. An absent side is `null`; a present side contains its `snapshot_id`,
+canonical `projection`, and declaration `outline`.
+
+- `added` has a null base and a target side; `deleted` has a base side and a
+  null target; `modified` has both sides. These statuses always carry
+  `equal: false` and omit `old_path`.
+- For `moved`, `path` is the target path, `old_path` is the source path, both
+  sides are present, and `equal` is `true` exactly when the canonical projection
+  texts match. The two paths are distinct; JSON Schema cannot compare property
+  values, so the producer and tests enforce this invariant.
+- A move whose two requested-mode projections are both empty is omitted.
+- Conditional schema constraints require both sides and `old_path` for a move,
+  prohibit `old_path` for every other status, and keep `equal: false` for those
+  statuses.
+
+Files whose projected text is equal are omitted except for a detected move with
+at least one nonempty requested-mode projection; a move with two empty
+projections is omitted, as described in section 13. The stage-zero index
+supplies `:index`; `:worktree`
+reads tracked regular files from disk plus untracked, non-ignored files, and
+never includes unsaved editor buffers. Text and JSON accept the same snapshot
+sides, so a `:worktree` side includes untracked files in both.
 
 The in-repository Neovim plugin uses this document for Diffview. Its adapter
-is guarded by hashes of a specific Diffview revision because it touches
-private Diffview internals. See
+requires `codect.diff.v2`, reconciles move entries by both target and old path
+without duplicating or nulling a pane, and supports Types, Signatures, and Tests
+modes. It is guarded by hashes of a specific Diffview revision because it
+touches private Diffview internals.
+
+Immutable commit-comparison documents use a bounded LRU cache of 32 entries and
+16 MiB; a document larger than the byte budget is not cached. Comparisons with a
+mutable `:index` or `:worktree` side are never cached. In focused mode, file-tree
+leaf and directory labels use Codect display-escaped path text when it differs
+from the raw path, while tree keys and `entry.path` remain raw; source mode
+keeps Diffview's native path UI. See
 [`editors/nvim/README.md`](../editors/nvim/README.md) for the pin and
 supported workflows.
 
@@ -1231,18 +1437,28 @@ Diagnostics must include, when applicable:
 
 Fatal cases include:
 
-- No repository found.
-- Revision not found, ambiguous, a range, or not peelable to a commit.
+- Command-level failures: no repository, an unresolvable or ambiguous revision,
+  a range or non-commit revision, a failed tree/index/snapshot enumeration, or
+  an invalid `.codect.toml` selected by `--area`.
 - A selected path that names nothing in the projected revision, or in either side of a diff.
-- `--area` selection with a missing, unreadable, oversized, or malformed `.codect.toml`.
-- `--area` naming an area the config does not define; the diagnostic lists the known names.
 - An empty area (no paths) or an area path that is absolute or contains `..`.
-- Git object missing or corrupt.
-- Supported source blob is not UTF-8.
-- Tree-sitter cannot parse a supported source file without error nodes.
-- Adapter finds an AST shape that violates its invariants.
+- Git object missing or corrupt when needed for the operation.
+- A source selected for projection that is not valid UTF-8.
+- Tree-sitter cannot parse a source selected for projection without error nodes.
+- Adapter finds an AST shape that violates its invariants in a projected source.
+
+Source-level failures apply only to sources selected for projection. Move
+detection's per-candidate discovery reads are best-effort and do not make an
+unreadable or invalid off-scope candidate fatal.
 
 Unsupported extensions, symlinks, submodules, and macro-generated declarations are exclusions, not fatal errors. A selected path that exists but contains no supported files is likewise an exclusion: it is valid and yields empty output rather than a diagnostic.
+
+Move detection source access is not itself a fatal operation. An unreadable,
+invalid, or oversized candidate is ineligible for fuzzy pairing, including when
+it is outside the requested scope. If that candidate is ultimately selected for
+projection, the existing fatal read, UTF-8, or parse failure applies. The
+deterministic fuzzy caps silently retain the unmatched paths as additions and
+deletions; they do not emit a diagnostic.
 
 Never silently fall back to raw source. Never emit a partial diff after a fatal projection error.
 
@@ -1385,6 +1601,19 @@ Create real temporary repositories and commits. Test:
 - Bare repository operation.
 - Invalid and ambiguous revisions.
 
+Move detection adds Git-layer coverage for:
+
+- Blob size lookup for loose and packed objects under SHA-1 and SHA-256,
+  agreeing with the decoded length and the `git hash-object --no-filters`
+  oracle. The packed case runs `repack -a -d` plus `prune-packed` and asserts no
+  loose objects remain.
+- Streaming blob identity over empty, NUL-containing, CRLF, invalid-raw-byte,
+  and 300 KiB inputs, including the no-filters oracle for both hash kinds.
+- A short reader reporting `GitError::SourceHash`.
+
+Engine tests cover worktree exact identity and move pairing on added, deleted,
+modified, and unchanged paths, including an untracked destination.
+
 Create the temporary repositories with the `git` executable. This is the only
 place the test suite may invoke Git: test setup may create commits, tags,
 branches, worktrees, and bare clones, while library and CLI code must never
@@ -1401,6 +1630,13 @@ Assert stdout, stderr, and exit status for every command form. Snapshot plain ou
 
 Path scoping has its own end-to-end coverage over temporary repositories: scoping to a directory, to a single file, and to a union of paths; `.` inside a subdirectory; an absolute path inside the repository; rejection of a path that would leave the repository; added and deleted files in a scoped diff; and a runtime capability check that skips the non-UTF-8 committed-path case when the environment cannot create one.
 
+File-move coverage includes exact and edited moves, body-only edits inside a move, ambiguous identical sources resolving by raw path bytes, a same-projection but unrelated pair below the threshold not pairing, copies remaining additions, `.py` to `.pyi`, different languages and unsupported files never pairing, a scope selecting either endpoint returning the whole event, merge-base and index/worktree/untracked moves, reversals, non-UTF-8 paths, LF/CRLF source differences, the deterministic fuzzy caps, off-scope oversized/unreadable candidates remaining non-fatal, and a selected source retaining the existing fatal projection behavior.
+
+Path-display coverage distinguishes a literal backslash from an invalid-byte
+`\xNN` escape, and covers LF/CR/TAB, other C0 bytes and DEL with uppercase
+`\xNN`, ordinary Unicode unchanged, JSON escaping as an additional layer,
+raw-byte ordering independent of display text, and both show and diff renderers.
+
 Named areas have end-to-end coverage over temporary repositories: selecting an area and matching the scoped output, resolving an area from a subdirectory to prove paths are repository-root-relative, repeating `--area` for a union, an unknown area exiting `1` with the known names, a missing and a malformed config exiting `1` only when areas are selected, the `--area` + `--path` usage error exiting `2`, and area-level existence where any one existing path satisfies the group.
 
 `config.rs` unit tests cover the schema: a valid file, a missing file, malformed TOML, an unknown top-level key, a duplicate area key, an empty area name, an empty path list, an absolute path, a `..` path, lenient `.`/trailing-slash normalization, a file with no `[areas]` table, an oversized file, and a symlinked file.
@@ -1412,7 +1648,10 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
   `update` as a `Cmd` rather than being performed inline.
 - `ratatui::TestBackend` covers the file tree, empty states, help, diagnostics,
   responsive layouts, the modal overlays, syntax coloring, themed diff
-  backgrounds, intra-line emphasis, hunk bands, and side-by-side wrapping. A
+  backgrounds, intra-line emphasis, hunk bands, and side-by-side wrapping. Move
+  coverage asserts one target-keyed row, the move badge and label, pane titles,
+  both projections in search, the pure-move empty state with no hunk rows, and
+  identical behavior in range and history. A
   coverage test renders both flavors and asserts no cell keeps the terminal's
   default background, so the palette is proven to own the whole canvas.
 - Palette, finder, and search are covered by pure `update` tests (filtering,
@@ -1447,13 +1686,22 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
 
 ### 16.7 JSON and Neovim integration tests
 
-The CLI tests compare `codect.show.v1` and `codect.diff.v1` documents against
+The CLI tests compare `codect.show.v1` and `codect.diff.v2` documents against
 golden fixtures and their committed JSON schemas. Snapshot diff tests cover
 commit, index, worktree, and empty inputs, including staged and unstaged
-changes. `just test-nvim` runs the plugin's headless Lua suite against the
-built binary. `nix flake check` includes the same plugin suite in a temporary
-Git repository. Diffview integration tests additionally require the pinned
-Diffview checkout described in the plugin README and are run separately.
+changes, and validate moved events, conditional side shapes, `old_path`
+presence/absence, and `equal`. The in-crate JSON Schema checker supports the
+conditional keywords the v2 schema uses; an unsupported keyword would otherwise
+make those tests pass vacuously.
+
+`just test-nvim` runs the plugin's headless Lua suite against the built binary.
+`nix flake check` includes the same plugin suite in a temporary Git repository.
+Diffview integration tests additionally require the pinned Diffview checkout
+described in the plugin README and are run separately. The separate pinned
+Diffview move suites cover exact and edited moves in history, range, and local
+staged/working views, the Tests mode, one-to-one entry reconciliation, and the
+absence of duplicate or null-pane rows; record them as passing only after that
+pinned run has completed.
 
 ## 17. Performance constraints
 
@@ -1462,15 +1710,23 @@ Correctness and stable output take priority over concurrency in the MVP.
 Initial performance rules:
 
 - Read `.codect.toml` at most once per command and only when `--area` is present, so unscoped and `--path` runs never touch it.
-- Filter entries by path scope before reading blobs, so scoping bounds the number of blobs read and projected.
-- Skip files with identical blob IDs before reading them during diff.
-- Read each needed blob at most once per command.
-- Project each `(blob ID, language, mode)` at most once per command.
+- Filter entries by path scope before projection and blob reads. Move detection is the deliberate exception: it runs over the complete supported snapshots so scope cannot change pairing, and it may inspect off-scope candidate sources best-effort.
+- Skip unchanged same-path entries with identical blob IDs before reading them during diff.
+- Read each needed source at most once per comparison where the operation permits it, and keep caches per-operation. Do not add a persistent cache.
+- Read at most 256 KiB per fuzzy move candidate. Exact worktree identity may stream a larger source and is not subject to the fuzzy cap.
+- Project each `(blob ID, path, mode)` at most once per command.
 - Use the bounded `gix` object cache.
 - Do not build compiler projects or invoke external processes.
 - Do not enable parallel projection until deterministic tests and profiling exist.
 
-Add benchmarks for large synthetic trees and representative real repositories before adding threads, persistent caches, or broader `gix` features.
+Move matching runs one fuzzy pass with deterministic caps. Safe frequency and
+LCS-length-derived byte upper bounds skip only pairs provably below the 50%
+threshold; they never replace the final deterministic Myers score for a
+survivor and introduce no semantic cap. Benchmark exact, scalar/line fuzzy,
+cap-fallback, the line-overlap scenario (roughly 55% shared source, near the
+threshold), and mixed-alphabet unique permutations with no duplicate file
+contents on large synthetic trees and representative repositories before adding
+threads, persistent caches, or broader `gix` features.
 
 The terminal frontend follows the same rules. It holds large, rarely-changed
 collections (projection payloads, tree rows, visible paths) behind `Arc`, so
@@ -1483,6 +1739,14 @@ persistent cache, and engine caches stay per-operation.
 Frontend responsiveness work is deferred until it is measured. If input-to-redraw
 latency exceeds roughly 100 ms median or 200 ms p95 on the reference host, add a
 cancellable worker and a loading state before considering persistent caches.
+
+The move-feature completion gate uses
+`python3 scripts/bench_move_detection.py`, which builds throwaway repositories
+and times `codect diff` through the public CLI. Its scenarios cover the bounded
+cap fallback, fuzzy scalar and line Myers work the frequency bound cannot prune,
+and exact streaming identity above the fuzzy byte cap. Use it to record
+before/after wall-clock evidence; the safe upper-bound prune above is an
+implementation optimization, not a new product cap.
 
 ### Performance baseline
 
@@ -1640,9 +1904,12 @@ cargo build -p cli --no-default-features
 cargo build -p tui --no-default-features
 cargo test -p tui --no-default-features
 cargo tree -p tui-core
+just test-dsh
 ```
 
-Review the `cargo tree` command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features. The final build must succeed and link none of `ratatui`, `crossterm`, `terminal-colorsaurus`, `syntect`, or `two-face`; `just check-workspace-nodefault` additionally asserts their absence with `cargo tree`. `just check-tui-nodiff` asserts that `tui-diff` is absent from the no-diff build and that its tests pass, and `just check-tui-core-boundary` asserts that `tui-core` links no plugin crate.
+The Neovim headless suite (`just test-nvim`) and the pinned Diffview move
+suites are separate editor checks; run them as part of the move-feature
+completion gate. Review the `cargo tree` command whenever dependencies change. It must show no unintended `gix` feature beyond the approved list and unavoidable transitive implications of those features. The final build must succeed and link none of `ratatui`, `crossterm`, `terminal-colorsaurus`, `syntect`, or `two-face`; `just check-workspace-nodefault` additionally asserts their absence with `cargo tree`. `just check-tui-nodiff` asserts that `tui-diff` is absent from the no-diff build and that its tests pass, and `just check-tui-core-boundary` asserts that `tui-core` links no plugin crate.
 
 ## 19. Implementation sequence
 
@@ -1779,9 +2046,9 @@ projections. `tui` is the only crate that touches the terminal.
 ### 21.1 Command surface
 
 ```text
-codect tui show --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-codect tui diff range --mode <types|signatures> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
-codect tui diff commits --mode <types|signatures> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui show --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... [REVISION]
+codect tui diff range --mode <types|signatures|tests> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect tui diff commits --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 - `show` defaults `REVISION` to `HEAD`; both diff sides are required.
@@ -1910,7 +2177,8 @@ keeps no persistent cache.
 - Search matches are highlighted in both the projection pane and the diff
   panes; `n`/`N` step through them.
 - The file-tree width is adjustable and clamped.
-- `RepoPath` remains the identity; labels are escaped for display only.
+- `RepoPath` remains the identity; labels use the section 5.1 display encoding
+  for output only and never affect raw-path order or pairing.
 - Mouse capture is enabled. A left click selects a file or folds a directory;
   a click in the commit picker selects a commit; a click in the show body moves
   the source cursor, and a click on the fold `+`/`-` gutter toggles that
@@ -1946,6 +2214,10 @@ keeps no persistent cache.
   full-width hunk bands, and `⋯ n unchanged lines` indicators for collapsed gaps.
 - Hunk headers and the collapsing of long unchanged runs are computed in the
   frontend from `aligned_rows`; core's diff model is untouched.
+- A detected move is one target-keyed row with a move badge and an `old → new`
+  label. A pure move has no hunk rows; both panes show a `Moved` empty state
+  with the detail `Moved from … to …`. Search covers both projections, and the
+  move counts once.
 - `NO_COLOR` disables all styling; structure such as line numbers, continuation
   markers, and hunk headers survives.
 - Highlighting is presentation only: canonical projection text and CLI output

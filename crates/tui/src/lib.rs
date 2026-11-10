@@ -33,6 +33,8 @@ mod finder;
 mod golden;
 mod help;
 mod mode_picker;
+#[cfg(test)]
+mod move_acceptance_tests;
 mod palette;
 mod plugin;
 mod plugins;

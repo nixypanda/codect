@@ -9,7 +9,10 @@
 // is independent of the terminal.
 //
 // In the diff styler the `---`/`+++` file headers collide with the deletion and
-// insertion prefixes, so they are recognized by position, not by prefix.
+// insertion prefixes, so a file header is recognized by position, not by
+// prefix. A header block is variable-length: a same-path change has two
+// `---`/`+++` lines, while a move has `rename from`/`rename to` and may or may
+// not be followed by the two content headers.
 
 use std::fmt::Write as _;
 use std::io::{self, Write as _};
@@ -98,30 +101,100 @@ fn style_diff(document: &str) -> String {
     let hunk = AnsiColor::Cyan.on_default();
 
     let mut styled = String::with_capacity(document.len());
-    let mut header_lines_remaining = 0u8;
+    let mut in_file_header = false;
 
     for line in document.split_inclusive('\n') {
         if line.starts_with("diff --codect") {
             push_styled(&mut styled, bold, line);
-            header_lines_remaining = 2;
-        } else if header_lines_remaining > 0 {
+            in_file_header = true;
+        } else if in_file_header && is_file_header_line(line) {
             push_styled(&mut styled, bold, line);
-            header_lines_remaining -= 1;
-        } else if line.starts_with("@@") {
-            push_styled(&mut styled, hunk, line);
-        } else if line.starts_with('+') {
-            push_styled(&mut styled, insertion, line);
-        } else if line.starts_with('-') {
-            push_styled(&mut styled, deletion, line);
+            // `+++` ends the header block; a pure move simply ends it at its
+            // last `rename to` line or at the next `diff` line.
+            if line.starts_with("+++ ") {
+                in_file_header = false;
+            }
         } else {
-            styled.push_str(line);
+            in_file_header = false;
+            if line.starts_with("@@") {
+                push_styled(&mut styled, hunk, line);
+            } else if line.starts_with('+') {
+                push_styled(&mut styled, insertion, line);
+            } else if line.starts_with('-') {
+                push_styled(&mut styled, deletion, line);
+            } else {
+                styled.push_str(line);
+            }
         }
     }
     styled
+}
+
+fn is_file_header_line(line: &str) -> bool {
+    line.starts_with("--- ")
+        || line.starts_with("+++ ")
+        || line.starts_with("rename from ")
+        || line.starts_with("rename to ")
 }
 
 fn push_styled(out: &mut String, style: Style, text: &str) {
     // Writing to a `String` cannot fail, so the result is intentionally ignored
     // rather than unwrapped.
     let _ = write!(out, "{}{}{}", style.render(), text, style.render_reset());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn styled(style: Style, line: &str) -> String {
+        format!("{}{}{}", style.render(), line, style.render_reset())
+    }
+
+    #[test]
+    fn style_diff_styles_every_pure_move_header_line() {
+        let bold = Style::new().bold();
+        let document = concat!(
+            "diff --codect a/src/old.rs b/src/new.rs\n",
+            "rename from src/old.rs\n",
+            "rename to src/new.rs\n",
+        );
+        let expected = format!(
+            "{}{}{}",
+            styled(bold, "diff --codect a/src/old.rs b/src/new.rs\n"),
+            styled(bold, "rename from src/old.rs\n"),
+            styled(bold, "rename to src/new.rs\n"),
+        );
+        assert_eq!(style_diff(document), expected);
+    }
+
+    #[test]
+    fn style_diff_ends_the_header_block_at_the_first_hunk_or_content_line() {
+        let bold = Style::new().bold();
+        let hunk = AnsiColor::Cyan.on_default();
+        let deletion = AnsiColor::Red.on_default();
+        let insertion = AnsiColor::Green.on_default();
+        let document = concat!(
+            "diff --codect a/src/old.rs b/src/new.rs\n",
+            "rename from src/old.rs\n",
+            "rename to src/new.rs\n",
+            "--- a/src/old.rs\n",
+            "+++ b/src/new.rs\n",
+            "@@ -1 +1 @@\n",
+            "-pub fn old() -> u32;\n",
+            "+pub fn new() -> u64;\n",
+        );
+        let expected = format!(
+            "{}{}{}{}{}{}{}{}",
+            styled(bold, "diff --codect a/src/old.rs b/src/new.rs\n"),
+            styled(bold, "rename from src/old.rs\n"),
+            styled(bold, "rename to src/new.rs\n"),
+            styled(bold, "--- a/src/old.rs\n"),
+            styled(bold, "+++ b/src/new.rs\n"),
+            styled(hunk, "@@ -1 +1 @@\n"),
+            styled(deletion, "-pub fn old() -> u32;\n"),
+            styled(insertion, "+pub fn new() -> u64;\n"),
+        );
+        assert_eq!(style_diff(document), expected);
+    }
 }

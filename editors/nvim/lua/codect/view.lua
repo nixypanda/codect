@@ -7,6 +7,7 @@
 
 local cli = require("codect.cli")
 local folds = require("codect.folds")
+local pathformat = require("codect.path")
 local state = require("codect.state")
 
 local M = {}
@@ -92,13 +93,15 @@ function M.buffer_source(buf)
 end
 
 local function find_file(doc, path)
+  local marked = doc.path_encoding == pathformat.SHOW_ENCODING
   for _, file in ipairs(doc.files or {}) do
-    if file.path == path then
+    if type(file) == "table" and type(file.path) == "string"
+        and pathformat.decode_show(doc, file.path) == path then
       return file
     end
   end
   local files = doc.files or {}
-  if #files == 1 then
+  if not marked and #files == 1 then
     return files[1]
   end
   return nil
@@ -197,6 +200,7 @@ local AUTO_FATAL_ERRORS = {
   "failed to run",
   "invalid json",
   "schema",
+  "path encoding",
 }
 
 local function is_fatal_auto_error(err)

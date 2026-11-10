@@ -23,14 +23,40 @@ pub enum FileDiff {
         old: ProjectedFile,
         new: ProjectedFile,
     },
+    /// A source file whose path changed. Both sides are present and their
+    /// paths differ; their canonical projections may be equal.
+    Moved {
+        old: ProjectedFile,
+        new: ProjectedFile,
+    },
 }
 
 impl FileDiff {
+    /// The target-side path. For a deletion this is the sole present path.
     pub fn path(&self) -> &RepoPath {
         match self {
             Self::Added { new } => new.path(),
             Self::Deleted { old } => old.path(),
-            Self::Modified { old, .. } => old.path(),
+            Self::Modified { new, .. } => new.path(),
+            Self::Moved { new, .. } => new.path(),
+        }
+    }
+
+    /// The source-side path, absent only for an addition.
+    pub fn old_path(&self) -> Option<&RepoPath> {
+        match self {
+            Self::Added { .. } => None,
+            Self::Deleted { old } => Some(old.path()),
+            Self::Modified { old, .. } | Self::Moved { old, .. } => Some(old.path()),
+        }
+    }
+
+    /// The target-side path, absent only for a deletion.
+    pub fn new_path(&self) -> Option<&RepoPath> {
+        match self {
+            Self::Added { new } => Some(new.path()),
+            Self::Deleted { .. } => None,
+            Self::Modified { new, .. } | Self::Moved { new, .. } => Some(new.path()),
         }
     }
 }
@@ -195,15 +221,41 @@ mod tests {
         let cases = [
             FileDiff::Added { new: new.clone() },
             FileDiff::Deleted { old: old.clone() },
-            FileDiff::Modified { old, new },
+            FileDiff::Modified {
+                old: old.clone(),
+                new: projected("src/renamed.rs", "fn a() -> u8 {}\n"),
+            },
+            FileDiff::Moved {
+                old: projected("src/old.rs", "fn a() {}\n"),
+                new: projected("src/new.rs", "fn a() {}\n"),
+            },
         ];
         for diff in &cases {
             match diff {
-                FileDiff::Added { new } => assert_eq!(diff.path(), new.path()),
-                FileDiff::Deleted { old } => assert_eq!(diff.path(), old.path()),
-                FileDiff::Modified { old, new } => {
+                FileDiff::Added { new } => {
+                    assert_eq!(diff.path(), new.path());
+                    assert_eq!(diff.old_path(), None);
+                    assert_eq!(diff.new_path(), Some(new.path()));
+                }
+                FileDiff::Deleted { old } => {
                     assert_eq!(diff.path(), old.path());
-                    assert_eq!(old.path(), new.path());
+                    assert_eq!(diff.old_path(), Some(old.path()));
+                    assert_eq!(diff.new_path(), None);
+                }
+                FileDiff::Modified { old, new } => {
+                    assert_eq!(
+                        diff.path(),
+                        new.path(),
+                        "a modified event is keyed by its target path"
+                    );
+                    assert_eq!(diff.old_path(), Some(old.path()));
+                    assert_eq!(diff.new_path(), Some(new.path()));
+                }
+                FileDiff::Moved { old, new } => {
+                    assert_eq!(diff.path(), new.path());
+                    assert_eq!(diff.old_path(), Some(old.path()));
+                    assert_eq!(diff.new_path(), Some(new.path()));
+                    assert_ne!(old.path(), new.path());
                 }
             }
         }

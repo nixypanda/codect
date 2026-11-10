@@ -78,9 +78,31 @@ impl TestRepo {
         );
         String::from_utf8(output.stdout).expect("git stdout is UTF-8 in tests")
     }
+
+    #[cfg(unix)]
+    pub fn git_bytes_ok(&self, args: &[&[u8]]) -> String {
+        let output = git_bytes(self.path(), args);
+        assert!(
+            output.status.success(),
+            "`git` with raw path bytes failed in {}: {}",
+            self.path().display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("git stdout is UTF-8 in tests")
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) -> Output {
+    git_command(dir, args.iter().map(std::ffi::OsStr::new))
+}
+
+#[cfg(unix)]
+fn git_bytes(dir: &Path, args: &[&[u8]]) -> Output {
+    use std::os::unix::ffi::OsStrExt;
+    git_command(dir, args.iter().map(|arg| std::ffi::OsStr::from_bytes(arg)))
+}
+
+fn git_command<'a>(dir: &Path, args: impl Iterator<Item = &'a std::ffi::OsStr>) -> Output {
     let mut command = Command::new("git");
     for prefix in [
         "user.name=Codect Test",

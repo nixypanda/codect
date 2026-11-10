@@ -36,7 +36,7 @@ impl ProjectionMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Language {
     Elm,
     Haskell,
@@ -328,9 +328,27 @@ impl RepoPath {
 }
 
 impl fmt::Display for RepoPath {
+    /// Render a path without ambiguity.
+    ///
+    /// A literal backslash is doubled, ASCII controls use `\n`, `\r`, `\t`,
+    /// or `\xNN`, and each invalid UTF-8 byte uses `\xNN`. Because the escape
+    /// introducer itself is escaped, a raw path containing the text `\xFF`
+    /// displays as `\\xFF`, distinct from an invalid byte `0xFF` displaying as
+    /// `\xFF`. Ordinary Unicode characters are emitted unchanged.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for chunk in ByteSlice::utf8_chunks(self.0.as_slice()) {
-            f.write_str(chunk.valid())?;
+            for character in chunk.valid().chars() {
+                match character {
+                    '\\' => f.write_str("\\\\")?,
+                    '\n' => f.write_str("\\n")?,
+                    '\r' => f.write_str("\\r")?,
+                    '\t' => f.write_str("\\t")?,
+                    control if control.is_ascii_control() => {
+                        write!(f, "\\x{:02X}", control as u32)?;
+                    }
+                    other => write!(f, "{other}")?,
+                }
+            }
             for &byte in chunk.invalid() {
                 write!(f, "\\x{byte:02X}")?;
             }
@@ -501,6 +519,59 @@ mod tests {
         assert_eq!(path.to_string(), "src/hello world.rs");
         let unicode = RepoPath::new("src/☃.rs").unwrap();
         assert_eq!(unicode.to_string(), "src/☃.rs");
+    }
+
+    #[test]
+    fn repository_path_display_is_injective_for_literal_escape_text() {
+        let literal_backslash = RepoPath::new(b"src/\\path.rs").unwrap();
+        assert_eq!(literal_backslash.to_string(), r"src/\\path.rs");
+
+        let literal_ff = RepoPath::new(b"src/\\xFF.rs").unwrap();
+        let invalid_ff = RepoPath::new(b"src/\xFF.rs").unwrap();
+        assert_eq!(literal_ff.to_string(), r"src/\\xFF.rs");
+        assert_eq!(invalid_ff.to_string(), r"src/\xFF.rs");
+        assert_ne!(literal_ff.to_string(), invalid_ff.to_string());
+
+        let literal_n = RepoPath::new(b"src/\\n.rs").unwrap();
+        let newline = RepoPath::new(b"src/\n.rs").unwrap();
+        assert_eq!(literal_n.to_string(), r"src/\\n.rs");
+        assert_eq!(newline.to_string(), r"src/\n.rs");
+        assert_ne!(literal_n.to_string(), newline.to_string());
+
+        let literal_t = RepoPath::new(b"src/\\t.rs").unwrap();
+        let tab = RepoPath::new(b"src/\t.rs").unwrap();
+        assert_eq!(literal_t.to_string(), r"src/\\t.rs");
+        assert_eq!(tab.to_string(), r"src/\t.rs");
+        assert_ne!(literal_t.to_string(), tab.to_string());
+    }
+
+    #[test]
+    fn repository_path_display_escapes_ascii_controls() {
+        let cases: &[(&[u8], &str)] = &[
+            (b"src/a\nb.rs", r"src/a\nb.rs"),
+            (b"src/a\rb.rs", r"src/a\rb.rs"),
+            (b"src/a\tb.rs", r"src/a\tb.rs"),
+            (b"src/a\x1Bb.rs", r"src/a\x1Bb.rs"),
+            (b"src/a\x7Fb.rs", r"src/a\x7Fb.rs"),
+            (b"src/a\x01b.rs", r"src/a\x01b.rs"),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(RepoPath::new(raw).unwrap().to_string(), *expected);
+        }
+    }
+
+    #[test]
+    fn repository_path_display_escaping_does_not_change_raw_ordering() {
+        let literal_ff = RepoPath::new(b"src/\\xFF.rs").unwrap();
+        let invalid_ff = RepoPath::new(b"src/\xFF.rs").unwrap();
+        let mut paths = [invalid_ff.clone(), literal_ff.clone()];
+        paths.sort();
+
+        assert_eq!(
+            paths,
+            [literal_ff, invalid_ff],
+            "raw bytes, not display text, define order"
+        );
     }
 
     #[test]

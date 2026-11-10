@@ -14,6 +14,11 @@ import type { CodectMode, ShowDocument, ShowFile } from "../shared/schema";
 import type { CodeLabels } from "./labels";
 import { buildTreeRows } from "./tree";
 import { outlineRows } from "./outline";
+import {
+  canNavigatePath,
+  showNavigationEncoding,
+  type NavigationPathEncoding,
+} from "./move";
 import { CodePane } from "./components/code-pane";
 import { OutlineView } from "./components/outline-view";
 import { TreeView } from "./components/tree-view";
@@ -33,7 +38,11 @@ export interface ShowViewProps {
   };
   labels: CodeLabels;
   t: (key: string) => string;
-  onNavigate?: (path: string, line: number) => void;
+  onNavigate?: (
+    path: string,
+    line: number,
+    encoding: NavigationPathEncoding
+  ) => void;
 }
 
 const COLLAPSED_KEY = "codect.show.collapsed";
@@ -135,6 +144,10 @@ export function ShowView({ root, codect, labels, t, onNavigate }: ShowViewProps)
   const selectedFile: ShowFile | undefined = files.find(
     (file) => file.path === selectedPath
   );
+  const pathEncoding = showNavigationEncoding(document);
+  const canJump =
+    selectedFile !== undefined &&
+    canNavigatePath(selectedFile.path, pathEncoding);
   const outline = useMemo(
     () => outlineRows(selectedFile?.outline ?? []),
     [selectedFile]
@@ -166,9 +179,11 @@ export function ShowView({ root, codect, labels, t, onNavigate }: ShowViewProps)
 
   const jump = useCallback(
     (line: number) => {
-      if (selectedFile !== undefined) onNavigate?.(selectedFile.path, line);
+      if (selectedFile !== undefined) {
+        onNavigate?.(selectedFile.path, line, pathEncoding);
+      }
     },
-    [selectedFile, onNavigate]
+    [selectedFile, onNavigate, pathEncoding]
   );
 
   return (
@@ -252,7 +267,11 @@ export function ShowView({ root, codect, labels, t, onNavigate }: ShowViewProps)
                   </button>
                   {outlineOpen && (
                     <div className="codect-section-body">
-                      <OutlineView rows={outline} onJump={jump} />
+                      <OutlineView
+                        rows={outline}
+                        onJump={jump}
+                        canJump={canJump}
+                      />
                     </div>
                   )}
                 </div>

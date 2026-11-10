@@ -2,17 +2,18 @@
 //! width for deterministic `show` and `diff` output.
 //!
 //! This module is Git-agnostic by design: it operates on already-produced
-//! [`ProjectedFile`] values and never on repository or Tree-sitter types. The
-//! Git-aware pipeline that supplies those projections lives in the CLI
-//! (TECHNICAL_DESIGN.md section 3).
+//! [`ProjectedFile`] values and [`FileDiff`] events and never on repository or
+//! Tree-sitter types. The Git-aware pipeline that supplies those projections
+//! lives in the CLI (TECHNICAL_DESIGN.md section 3).
 //!
 //! [`project_all`] is all-or-nothing: one file's projection failure aborts the
 //! whole call, and callers must supply projectors in a fixed order so selection
 //! is deterministic. A diff block is emitted only when a path's canonical text
-//! differs, so a body-only change yields empty output.
+//! differs, except for a moved file: a move keeps its rename headers even when
+//! the two focused projections are equal, so a pure move stays visible.
 
 use crate::diagnostic::ProjectionError;
-use crate::diff::unified_hunks;
+use crate::diff::{FileDiff, unified_hunks};
 use crate::language::{LanguageProjector, ProjectionInput};
 use crate::model::{ProjectedFile, ProjectionMode, RepoPath, SupportedPath};
 
@@ -74,50 +75,78 @@ pub fn show_document(files: &[ProjectedFile]) -> String {
     document
 }
 
-pub fn diff_document(old: &[ProjectedFile], new: &[ProjectedFile]) -> String {
-    let mut paths: Vec<&RepoPath> = old
-        .iter()
-        .chain(new.iter())
-        .map(ProjectedFile::path)
-        .collect();
-    paths.sort();
-    paths.dedup();
+pub fn diff_document(diffs: &[FileDiff]) -> String {
+    let mut ordered: Vec<&FileDiff> = diffs.iter().collect();
+    // `FileDiff::path` is the target-side display/selection key: the new path
+    // for an addition, the removed path for a deletion, and the destination
+    // path for a move.
+    ordered.sort_by(|left, right| left.path().cmp(right.path()));
 
     let mut document = String::new();
-    for path in paths {
-        let old_file = find_by_path(old, path);
-        let new_file = find_by_path(new, path);
-        let old_text = old_file.map_or("", ProjectedFile::canonical_text);
-        let new_text = new_file.map_or("", ProjectedFile::canonical_text);
-        if old_text == new_text {
-            continue;
-        }
+    for diff in ordered {
+        match diff {
+            FileDiff::Added { new } => {
+                let new_text = new.canonical_text();
+                if new_text.is_empty() {
+                    continue;
+                }
+                let display = new.path().to_string();
+                push_path_header(&mut document, &display, &display);
+                document.push_str("--- /dev/null\n");
+                document.push_str(&format!("+++ b/{display}\n"));
+                document.push_str(&unified_hunks("", new_text));
+            }
+            FileDiff::Deleted { old } => {
+                let old_text = old.canonical_text();
+                if old_text.is_empty() {
+                    continue;
+                }
+                let display = old.path().to_string();
+                push_path_header(&mut document, &display, &display);
+                document.push_str(&format!("--- a/{display}\n"));
+                document.push_str("+++ /dev/null\n");
+                document.push_str(&unified_hunks(old_text, ""));
+            }
+            FileDiff::Modified { old, new } => {
+                let old_text = old.canonical_text();
+                let new_text = new.canonical_text();
+                if old_text == new_text {
+                    continue;
+                }
+                let display = new.path().to_string();
+                push_path_header(&mut document, &display, &display);
+                document.push_str(&format!("--- a/{display}\n"));
+                document.push_str(&format!("+++ b/{display}\n"));
+                document.push_str(&unified_hunks(old_text, new_text));
+            }
+            FileDiff::Moved { old, new } => {
+                let old_text = old.canonical_text();
+                let new_text = new.canonical_text();
+                // The engine omits this event, but the public renderer must not
+                // print a move that has no content on either requested-mode
+                // side.
+                if old_text.is_empty() && new_text.is_empty() {
+                    continue;
+                }
+                let old_display = old.path().to_string();
+                let new_display = new.path().to_string();
+                push_path_header(&mut document, &old_display, &new_display);
+                document.push_str(&format!("rename from {old_display}\n"));
+                document.push_str(&format!("rename to {new_display}\n"));
 
-        let display = path.to_string();
-        document.push_str(&format!("diff --codect a/{display} b/{display}\n"));
-        document.push_str(&format!(
-            "--- {}\n",
-            side_label(old_file.is_some(), 'a', &display)
-        ));
-        document.push_str(&format!(
-            "+++ {}\n",
-            side_label(new_file.is_some(), 'b', &display)
-        ));
-        document.push_str(&unified_hunks(old_text, new_text));
+                if old_text != new_text {
+                    document.push_str(&format!("--- a/{old_display}\n"));
+                    document.push_str(&format!("+++ b/{new_display}\n"));
+                    document.push_str(&unified_hunks(old_text, new_text));
+                }
+            }
+        }
     }
     document
 }
 
-fn side_label(present: bool, prefix: char, display: &str) -> String {
-    if present {
-        format!("{prefix}/{display}")
-    } else {
-        "/dev/null".to_owned()
-    }
-}
-
-fn find_by_path<'a>(files: &'a [ProjectedFile], path: &RepoPath) -> Option<&'a ProjectedFile> {
-    files.iter().find(|file| file.path() == path)
+fn push_path_header(document: &mut String, old_display: &str, new_display: &str) {
+    document.push_str(&format!("diff --codect a/{old_display} b/{new_display}\n"));
 }
 
 #[cfg(test)]
@@ -126,6 +155,10 @@ mod tests {
     use crate::model::{ItemKind, Language, ProjectedItem, SourceSpan};
 
     fn projected(path: &str, text: &str) -> ProjectedFile {
+        projected_raw(path.as_bytes(), text)
+    }
+
+    fn projected_raw(path: &[u8], text: &str) -> ProjectedFile {
         let path = SupportedPath::new(RepoPath::new(path).unwrap()).unwrap();
         if text.is_empty() {
             return ProjectedFile::try_new(path, Vec::new()).expect("valid fixture");
@@ -181,17 +214,25 @@ mod tests {
 
     #[test]
     fn diff_document_is_empty_when_all_projections_match() {
-        let old = vec![projected("a.rs", "pub fn a();\n")];
-        let new = vec![projected("a.rs", "pub fn a();\n")];
-        assert_eq!(diff_document(&old, &new), "");
-        assert_eq!(diff_document(&[], &[]), "");
+        let same = FileDiff::Modified {
+            old: projected("a.rs", "pub fn a();\n"),
+            new: projected("a.rs", "pub fn a();\n"),
+        };
+        assert_eq!(diff_document(&[same]), "");
+        assert_eq!(diff_document(&[]), "");
     }
 
     #[test]
     fn diff_document_marks_added_and_deleted_files_with_dev_null() {
-        let old = vec![projected("gone.rs", "pub fn gone();\n")];
-        let new = vec![projected("fresh.rs", "pub fn fresh();\n")];
-        let document = diff_document(&old, &new);
+        let diffs = vec![
+            FileDiff::Added {
+                new: projected("fresh.rs", "pub fn fresh();\n"),
+            },
+            FileDiff::Deleted {
+                old: projected("gone.rs", "pub fn gone();\n"),
+            },
+        ];
+        let document = diff_document(&diffs);
 
         assert_eq!(
             document,
@@ -212,9 +253,11 @@ mod tests {
 
     #[test]
     fn diff_document_marks_a_modified_file() {
-        let old = vec![projected("a.rs", "pub fn a() -> u32;\n")];
-        let new = vec![projected("a.rs", "pub fn a() -> u64;\n")];
-        let document = diff_document(&old, &new);
+        let diffs = vec![FileDiff::Modified {
+            old: projected("a.rs", "pub fn a() -> u32;\n"),
+            new: projected("a.rs", "pub fn a() -> u64;\n"),
+        }];
+        let document = diff_document(&diffs);
 
         assert_eq!(
             document,
@@ -230,28 +273,126 @@ mod tests {
     }
 
     #[test]
-    fn diff_document_orders_blocks_by_raw_path_bytes() {
-        let old = vec![projected("b.rs", "old b\n"), projected("a.rs", "old a\n")];
-        let new = vec![projected("b.rs", "new b\n"), projected("a.rs", "new a\n")];
-        let document = diff_document(&old, &new);
+    fn diff_document_renders_a_pure_move_without_content_headers_or_hunks() {
+        let diffs = vec![FileDiff::Moved {
+            old: projected("src/old.rs", "pub fn same();\n"),
+            new: projected("src/new.rs", "pub fn same();\n"),
+        }];
+        let document = diff_document(&diffs);
 
+        assert_eq!(
+            document,
+            concat!(
+                "diff --codect a/src/old.rs b/src/new.rs\n",
+                "rename from src/old.rs\n",
+                "rename to src/new.rs\n",
+            )
+        );
+        assert!(!document.contains("--- "));
+        assert!(!document.contains("+++ "));
+        assert!(!document.contains("@@"));
+    }
+
+    #[test]
+    fn diff_document_omits_a_move_with_two_empty_projections() {
+        let diffs = vec![FileDiff::Moved {
+            old: projected("src/old.rs", ""),
+            new: projected("src/new.rs", ""),
+        }];
+        assert_eq!(diff_document(&diffs), "");
+    }
+
+    #[test]
+    fn diff_document_renders_an_edited_move_with_both_sides_and_hunks() {
+        let diffs = vec![FileDiff::Moved {
+            old: projected("src/old.rs", "pub fn old() -> u32;\n"),
+            new: projected("src/new.rs", "pub fn new() -> u64;\n"),
+        }];
+        let document = diff_document(&diffs);
+
+        assert_eq!(
+            document,
+            concat!(
+                "diff --codect a/src/old.rs b/src/new.rs\n",
+                "rename from src/old.rs\n",
+                "rename to src/new.rs\n",
+                "--- a/src/old.rs\n",
+                "+++ b/src/new.rs\n",
+                "@@ -1 +1 @@\n",
+                "-pub fn old() -> u32;\n",
+                "+pub fn new() -> u64;\n",
+            )
+        );
+    }
+
+    #[test]
+    fn diff_document_escapes_both_move_paths_like_same_path_headers() {
+        let diffs = vec![FileDiff::Moved {
+            old: projected_raw(b"src/\xFF/old.rs", "pub fn same();\n"),
+            new: projected_raw(b"src/\xFE/new.rs", "pub fn same();\n"),
+        }];
+        let document = diff_document(&diffs);
+
+        assert_eq!(
+            document,
+            concat!(
+                "diff --codect a/src/\\xFF/old.rs b/src/\\xFE/new.rs\n",
+                "rename from src/\\xFF/old.rs\n",
+                "rename to src/\\xFE/new.rs\n",
+            )
+        );
+    }
+
+    #[test]
+    fn diff_document_orders_blocks_by_target_path_bytes() {
+        let diffs = vec![
+            FileDiff::Modified {
+                old: projected("b.rs", "old b\n"),
+                new: projected("b.rs", "new b\n"),
+            },
+            FileDiff::Moved {
+                old: projected("zz/old.rs", "same\n"),
+                new: projected("a/renamed.rs", "same\n"),
+            },
+            FileDiff::Modified {
+                old: projected("a.rs", "old a\n"),
+                new: projected("a.rs", "new a\n"),
+            },
+        ];
+        let document = diff_document(&diffs);
+
+        let renamed = document.find("b/a/renamed.rs").expect("renamed block");
         let a = document.find("a/a.rs").expect("a.rs block");
         let b = document.find("a/b.rs").expect("b.rs block");
-        assert!(a < b, "blocks must be in raw path byte order");
+        assert!(
+            a < renamed && renamed < b,
+            "blocks must be ordered by target path bytes: {document:?}"
+        );
     }
 
     #[test]
     fn diff_document_treats_an_empty_projection_as_absent_content() {
-        let old = vec![projected("empty.rs", "")];
-        assert_eq!(diff_document(&old, &[]), "");
+        let diffs = vec![FileDiff::Added {
+            new: projected("empty.rs", ""),
+        }];
+        assert_eq!(diff_document(&diffs), "");
     }
 
     #[test]
     fn rendered_documents_contain_no_escape_bytes() {
-        let old = vec![projected("a.rs", "old\n")];
-        let new = vec![projected("a.rs", "new\n")];
-        assert!(!show_document(&old).contains('\u{1b}'));
-        assert!(!diff_document(&old, &new).contains('\u{1b}'));
+        let files = vec![projected("a.rs", "old\n")];
+        let diffs = vec![
+            FileDiff::Modified {
+                old: projected("a.rs", "old\n"),
+                new: projected("a.rs", "new\n"),
+            },
+            FileDiff::Moved {
+                old: projected("old.rs", "same\n"),
+                new: projected("new.rs", "same\n"),
+            },
+        ];
+        assert!(!show_document(&files).contains('\u{1b}'));
+        assert!(!diff_document(&diffs).contains('\u{1b}'));
     }
 
     fn span() -> SourceSpan {

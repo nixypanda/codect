@@ -25,9 +25,9 @@ use crate::test_support::{
 };
 #[cfg(feature = "diff")]
 use crate::test_support::{
-    commit_search, commit_steps, commits_app, commits_ref, commits_request, diff_app,
-    diff_focus_of, diff_msg, diff_ref, diff_request, file_diff, merge_base_range_app, panes,
-    snapshot_range_app, tail_palette_entries,
+    commit_search, commit_steps, commits_app, commits_app_with, commits_ref, commits_request,
+    diff_app, diff_focus_of, diff_msg, diff_ref, diff_request, file_diff, merge_base_range_app,
+    moved_file, panes, snapshot_range_app, tail_palette_entries,
 };
 #[cfg(feature = "diff")]
 use crate::workspace::BadgeTone;
@@ -271,6 +271,196 @@ fn a_diff_reload_applies_the_fallback_selection_within_the_update() {
     );
 }
 
+#[cfg(feature = "diff")]
+#[test]
+fn an_old_path_scope_returns_the_move_keyed_by_its_target_and_keeps_the_scope_label() {
+    let old = RepoPath::new("src/old.rs").unwrap();
+    let request = DiffRequest {
+        selection: Selection::new(vec![SelectionGroup::Path(old)]),
+        ..diff_request()
+    };
+    let app = base_app(LoadRequest::Diff {
+        base: request.base.clone(),
+        target: request.target.clone(),
+        mode: request.mode,
+        selection: request.selection.clone(),
+        view: DiffView::Range,
+        merge_base: false,
+    });
+    let (next, _) = update(
+        diff_msg(DiffMsg::DiffLoaded {
+            request,
+            result: Ok(vec![moved_file("src/old.rs", "dst/new.rs", "same\n", "same\n")].into()),
+        }),
+        &app,
+    );
+    let next = settle(next);
+
+    assert_eq!(
+        next.workspace.query.scope.label, "src/old.rs",
+        "the label names the user's requested scope"
+    );
+    assert_eq!(
+        selected(&next).as_deref(),
+        Some("dst/new.rs"),
+        "the returned move is selected by its target path"
+    );
+    assert_eq!(
+        next.workspace.files.paths.as_ref(),
+        [RepoPath::new("dst/new.rs").unwrap()]
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn a_moved_file_reload_keeps_the_target_selection_and_refreshes_the_source_label() {
+    let mut app = diff_app(vec![moved_file(
+        "src/old.rs",
+        "dst/kept.rs",
+        "one\ntwo\n",
+        "one\nTWO\n",
+    )]);
+    assert_eq!(selected(&app).as_deref(), Some("dst/kept.rs"));
+    app.plugins.diff.set_body_scroll(1);
+
+    let (next, _) = update(
+        diff_msg(DiffMsg::DiffLoaded {
+            request: diff_request(),
+            result: Ok(vec![moved_file(
+                "other/old.rs",
+                "dst/kept.rs",
+                "one\ntwo\n",
+                "one\nTWO\n",
+            )]
+            .into()),
+        }),
+        &app,
+    );
+    let next = settle(next);
+
+    assert_eq!(
+        selected(&next).as_deref(),
+        Some("dst/kept.rs"),
+        "the target key survives the reload"
+    );
+    assert_eq!(
+        diff_ref(&next).body_scroll(),
+        0,
+        "a reload resets the diff body"
+    );
+    assert_eq!(
+        next.workspace
+            .files
+            .moves
+            .get(&RepoPath::new("dst/kept.rs").unwrap()),
+        Some(&RepoPath::new("other/old.rs").unwrap()),
+        "the source label follows the new move"
+    );
+    assert!(
+        next.plugins
+            .tree
+            .rows
+            .iter()
+            .any(|row| row.label == "other/old.rs → kept.rs")
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn a_moved_file_reload_that_changes_the_target_falls_back_to_the_new_key() {
+    let app = diff_app(vec![moved_file(
+        "src/old.rs",
+        "dst/first.rs",
+        "same\n",
+        "same\n",
+    )]);
+    assert_eq!(selected(&app).as_deref(), Some("dst/first.rs"));
+
+    let (next, _) = update(
+        diff_msg(DiffMsg::DiffLoaded {
+            request: diff_request(),
+            result: Ok(vec![moved_file(
+                "src/old.rs",
+                "dst/second.rs",
+                "same\n",
+                "same\n",
+            )]
+            .into()),
+        }),
+        &app,
+    );
+    let next = settle(next);
+
+    assert_eq!(selected(&next).as_deref(), Some("dst/second.rs"));
+    assert_eq!(
+        next.workspace.files.paths.as_ref(),
+        [RepoPath::new("dst/second.rs").unwrap()]
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn history_places_a_move_once_under_its_target_path() {
+    let app = commits_app_with(
+        3,
+        vec![moved_file("src/old.rs", "dst/new.rs", "same\n", "same\n")],
+    );
+
+    assert_eq!(selected(&app).as_deref(), Some("dst/new.rs"));
+    assert_eq!(
+        app.workspace.files.paths.as_ref(),
+        [RepoPath::new("dst/new.rs").unwrap()]
+    );
+    assert_eq!(
+        app.workspace
+            .files
+            .badges
+            .get(&RepoPath::new("dst/new.rs").unwrap()),
+        Some(&BadgeTone::Moved)
+    );
+    assert!(
+        app.plugins
+            .tree
+            .rows
+            .iter()
+            .any(|row| row.label == "src/old.rs → new.rs")
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn a_commit_step_places_a_move_once_under_its_target_path() {
+    let app = commits_app(3);
+    let (next, _) = update(
+        diff_msg(DiffMsg::StepLoaded {
+            index: 1,
+            result: Ok(vec![moved_file("src/old.rs", "dst/new.rs", "same\n", "same\n")].into()),
+        }),
+        &app,
+    );
+    let next = settle(next);
+
+    assert_eq!(selected(&next).as_deref(), Some("dst/new.rs"));
+    assert_eq!(
+        next.workspace.files.paths.as_ref(),
+        [RepoPath::new("dst/new.rs").unwrap()]
+    );
+    assert_eq!(
+        next.workspace
+            .files
+            .badges
+            .get(&RepoPath::new("dst/new.rs").unwrap()),
+        Some(&BadgeTone::Moved)
+    );
+    assert!(
+        next.plugins
+            .tree
+            .rows
+            .iter()
+            .any(|row| row.label == "src/old.rs → new.rs")
+    );
+}
+
 #[test]
 fn a_show_file_set_has_no_badges() {
     let app = two_files();
@@ -303,6 +493,245 @@ fn a_diff_file_set_badges_added_modified_and_deleted() {
     assert!(text.contains("a.rs A"), "added badge missing: {text}");
     assert!(text.contains("b.rs M"), "modified badge missing: {text}");
     assert!(text.contains("c.rs D"), "deleted badge missing: {text}");
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn a_moved_file_is_one_target_keyed_row_with_a_move_label_and_badge() {
+    let app = diff_app(vec![moved_file(
+        "src/old.rs",
+        "dst/new.rs",
+        "same\n",
+        "same\n",
+    )]);
+
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("dst/new.rs"),
+        "selection uses the target key"
+    );
+    assert_eq!(
+        app.workspace.files.paths.as_ref(),
+        [RepoPath::new("dst/new.rs").unwrap()],
+        "the move is one event under its target path"
+    );
+    assert_eq!(
+        app.workspace
+            .files
+            .badges
+            .get(&RepoPath::new("dst/new.rs").unwrap()),
+        Some(&BadgeTone::Moved)
+    );
+    assert_eq!(
+        app.workspace
+            .files
+            .moves
+            .get(&RepoPath::new("dst/new.rs").unwrap()),
+        Some(&RepoPath::new("src/old.rs").unwrap())
+    );
+
+    let labels: Vec<&str> = app
+        .plugins
+        .tree
+        .rows
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect();
+    assert_eq!(labels, vec!["dst", "src/old.rs → new.rs"]);
+
+    let text = buffer_text(&render(&app, 120, 20));
+    assert!(text.contains("src/old.rs → new.rs"), "{text}");
+    assert!(text.contains("R "), "move badge missing: {text}");
+    assert!(
+        !app.plugins
+            .tree
+            .rows
+            .iter()
+            .any(|row| row.kind.path() == &RepoPath::new("src/old.rs").unwrap()),
+        "the source path is a label, not a second row"
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn a_same_directory_move_label_keeps_both_basenames() {
+    let app = diff_app(vec![moved_file(
+        "src/old.rs",
+        "src/new.rs",
+        "same\n",
+        "same\n",
+    )]);
+    let labels: Vec<&str> = app
+        .plugins
+        .tree
+        .rows
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect();
+    assert_eq!(labels, vec!["src", "old.rs → new.rs"]);
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn a_pure_move_renders_path_titles_and_a_move_empty_state_in_both_panes() {
+    let app = diff_app(vec![moved_file(
+        "src/old.rs",
+        "dst/new.rs",
+        "fn a() {}\n",
+        "fn a() {}\n",
+    )]);
+    let text = buffer_text(&render(&app, 160, 30));
+
+    assert!(text.contains("BASE · src/old.rs"), "{text}");
+    assert!(text.contains("TARGET · dst/new.rs"), "{text}");
+    assert_eq!(
+        text.matches("Moved from src/old.rs to dst/new.rs.").count(),
+        2,
+        "both panes state the move: {text}"
+    );
+    assert!(!text.contains("No text changes"), "{text}");
+    assert!(
+        !text.contains("@@"),
+        "a pure move must not fabricate a hunk: {text}"
+    );
+
+    let target = RepoPath::new("dst/new.rs").unwrap();
+    let highlight = diff_ref(&app)
+        .active_highlight(Some(&target))
+        .expect("a highlight was computed");
+    assert!(
+        !highlight.old.is_empty() && !highlight.new.is_empty(),
+        "both sides are highlighted even with no rows"
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn a_narrow_move_row_keeps_the_target_basename() {
+    let app = diff_app(vec![moved_file(
+        "src/very/deep/directories/old.rs",
+        "dst/new.rs",
+        "same\n",
+        "same\n",
+    )]);
+    let text = buffer_text(&render(&app, 80, 24));
+    let row = text
+        .lines()
+        .find(|line| line.contains('→'))
+        .expect("the move row is visible");
+    assert!(row.contains("new.rs"), "the target must survive: {row}");
+    assert!(
+        !row.contains("old.rs → …"),
+        "the target may not be tail-clipped away: {row}"
+    );
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn a_long_move_keeps_both_basenames_at_80_and_120_columns() {
+    let app = diff_app(vec![moved_file(
+        "src/very/deep/directories/old.rs",
+        "target/other/deep/new.rs",
+        "fn a() {}\n",
+        "fn a() {}\n",
+    )]);
+
+    for width in [80, 120] {
+        let buffer = render(&app, width, 24);
+        let text = buffer_text(&buffer);
+        let title = buffer_row(&buffer, 1);
+        assert!(title.contains("BASE · "), "width {width}: {title}");
+        assert!(title.contains("old.rs"), "width {width}: {title}");
+        assert!(title.contains("TARGET · "), "width {width}: {title}");
+        assert!(title.contains("new.rs"), "width {width}: {title}");
+
+        let from = text
+            .lines()
+            .find(|line| line.contains("from ") && line.contains("old.rs"))
+            .unwrap_or_else(|| panic!("width {width}: no from line in {text}"));
+        let to = text
+            .lines()
+            .find(|line| line.contains("to ") && line.contains("new.rs"))
+            .unwrap_or_else(|| panic!("width {width}: no to line in {text}"));
+        assert!(from.contains("old.rs"), "width {width}: {from}");
+        assert!(to.contains("new.rs"), "width {width}: {to}");
+        assert!(
+            !from.contains("//") && !to.contains("//"),
+            "width {width}: no doubled path separators: {from} / {to}"
+        );
+        assert!(!text.contains("@@"), "width {width}: {text}");
+    }
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn search_feedback_on_a_pure_move_tracks_next_and_previous_without_hunks() {
+    let mut app = diff_app(vec![moved_file(
+        "src/old.rs",
+        "dst/new.rs",
+        "needle old\n",
+        "needle old\n",
+    )]);
+    commit_search(&mut app, "needle");
+    assert_eq!(search_of(&app).matches.len(), 2);
+
+    let buffer = render(&app, 160, 30);
+    let text = buffer_text(&buffer);
+    assert!(text.contains("search old line 1 · 1/2"), "{text}");
+    assert!(text.contains("needle old"), "{text}");
+    assert!(!text.contains("@@"), "{text}");
+    assert!(diff_ref(&app).rows().is_empty(), "no hunk rows");
+
+    let y = row_with(&buffer, "needle old").expect("the matched excerpt is visible");
+    let x = cell_x_of(&buffer, y, "needle").expect("the excerpt starts with the match");
+    let expected = Theme::dark().color(Theme::dark().palette.match_current_bg);
+    assert_eq!(
+        buffer.cell((x, y)).expect("excerpt cell").bg,
+        expected,
+        "the current excerpt match is highlighted"
+    );
+    let narrow = buffer_text(&render(&app, 80, 24));
+    assert!(narrow.contains("search old line 1 · 1/2"), "{narrow}");
+
+    let next = press(&app, &[Key::Char('n')]);
+    let next_text = buffer_text(&render(&next, 160, 30));
+    assert!(next_text.contains("search new line 1 · 2/2"), "{next_text}");
+    assert!(!next_text.contains("@@"), "{next_text}");
+    let next_narrow = buffer_text(&render(&next, 80, 24));
+    assert!(
+        next_narrow.contains("search new line 1 · 2/2"),
+        "{next_narrow}"
+    );
+
+    let back = press(&next, &[Key::Char('N')]);
+    let back_text = buffer_text(&render(&back, 160, 30));
+    assert!(back_text.contains("search old line 1 · 1/2"), "{back_text}");
+    assert!(!back_text.contains("@@"), "{back_text}");
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn an_edited_move_renders_hunks_under_both_paths_and_counts_once() {
+    let app = diff_app(vec![moved_file(
+        "src/old.rs",
+        "dst/new.rs",
+        "fn a() {}\n",
+        "fn a() -> u8 {}\n",
+    )]);
+    let text = buffer_text(&render(&app, 160, 30));
+
+    assert!(text.contains("BASE · src/old.rs"), "{text}");
+    assert!(text.contains("TARGET · dst/new.rs"), "{text}");
+    assert!(text.contains("@@"), "the edit keeps its hunks: {text}");
+    assert!(text.contains("fn a() {}"), "{text}");
+    assert!(text.contains("fn a() -> u8 {}"), "{text}");
+    assert!(text.contains("+1"), "{text}");
+    assert!(text.contains("−1"), "{text}");
+    assert_eq!(
+        diff_ref(&app).diffs().len(),
+        1,
+        "the move is one diff event"
+    );
 }
 
 #[test]
@@ -4723,6 +5152,55 @@ fn search_matches_tags_the_owning_pane() {
     assert_eq!(matches.len(), 2, "both sides match a modified file");
     assert_eq!(matches[0].pane, SearchPane::Old, "the old side comes first");
     assert_eq!(matches[1].pane, SearchPane::New);
+
+    let moved = diff_app(vec![moved_file(
+        "src/old.rs",
+        "dst/new.rs",
+        "needle\n",
+        "needle\n",
+    )]);
+    let matches = diff_ref(&moved).search_matches("needle", &moved.workspace);
+    assert_eq!(
+        matches.len(),
+        2,
+        "a pure move searches both projections despite having no hunk rows"
+    );
+    assert_eq!(matches[0].pane, SearchPane::Old);
+    assert_eq!(matches[1].pane, SearchPane::New);
+}
+
+#[cfg(feature = "diff")]
+#[test]
+fn search_over_a_pure_move_keeps_the_event_visible_and_does_not_fabricate_rows() {
+    let mut app = diff_app(vec![moved_file(
+        "src/old.rs",
+        "dst/new.rs",
+        "needle\n",
+        "needle\n",
+    )]);
+    commit_search(&mut app, "needle");
+    let search = search_of(&app);
+    assert_eq!(search.matches.len(), 2, "both sides are searched");
+    assert_eq!(search.cursor, 0);
+
+    let text = buffer_text(&render(&app, 160, 30));
+    assert!(
+        text.contains("Moved from src/old.rs to dst/new.rs."),
+        "{text}"
+    );
+    assert!(!text.contains("@@"), "{text}");
+    assert!(diff_ref(&app).rows().is_empty(), "no fabricated rows");
+
+    run_request(&mut app, Request::CommitSearch);
+    assert_eq!(
+        diff_ref(&app).body_scroll(),
+        0,
+        "revealing a match with no visual row still targets the event without panicking"
+    );
+    assert!(
+        text.contains("/needle 1/2"),
+        "the status keeps both match sides: {text}"
+    );
 }
 
 #[test]

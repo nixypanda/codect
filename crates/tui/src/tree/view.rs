@@ -21,7 +21,7 @@ use tui_core::render::empty::render_empty;
 use tui_core::render::text::truncate_ellipsis;
 use tui_core::render::theme::{Rgb, Theme};
 
-use super::{RowKind, Tree, TreeRow};
+use super::{RowKind, Tree, TreeRow, move_label_for_width};
 
 pub(crate) fn render(
     state: &Tree,
@@ -174,7 +174,13 @@ fn tree_line(
     let badge = badge(cx, row, theme);
     let badge_width = badge.as_ref().map_or(0, |(label, _)| label.len() + 1);
     let label_width = width.saturating_sub(used + badge_width);
-    let label = truncate_ellipsis(&row.label, label_width);
+    let label = match &row.kind {
+        RowKind::File { path } => cx.workspace.files.moves.get(path).map_or_else(
+            || truncate_ellipsis(&row.label, label_width),
+            |old| move_label_for_width(old, path, label_width),
+        ),
+        RowKind::Directory { .. } => truncate_ellipsis(&row.label, label_width),
+    };
     spans.push(Span::styled(label, base.fg(theme.color(label_color))));
 
     if let Some((label, color)) = badge {
@@ -205,6 +211,7 @@ fn badge(cx: &Cx, row: &TreeRow, theme: &Theme) -> Option<(&'static str, Rgb)> {
         BadgeTone::Added => Some(("A", theme.palette.badge_add)),
         BadgeTone::Modified => Some(("M", theme.palette.badge_mod)),
         BadgeTone::Deleted => Some(("D", theme.palette.badge_del)),
+        BadgeTone::Moved => Some(("R", theme.palette.accent)),
     }
 }
 

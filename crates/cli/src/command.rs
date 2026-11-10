@@ -16,9 +16,8 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use base::{
-    AreaSet, DiagnosticContext, FileDiff, PathSelection, ProjectedFile, ProjectionError,
-    ProjectionMode, RepoPath, Selection, SelectionError, SelectionGroup, SourceSpan, diff_document,
-    show_document,
+    AreaSet, DiagnosticContext, PathSelection, ProjectionError, ProjectionMode, RepoPath,
+    Selection, SelectionError, SelectionGroup, SourceSpan, diff_document, show_document,
 };
 use engine::config::ConfigError;
 use engine::{DiffBase, Engine, EngineError};
@@ -158,26 +157,17 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
                     let diffs = engine
                         .diff(base, target, (*mode).into(), &selection, base_mode)
                         .map_err(engine_failure)?;
-                    let (old, new) = split_diff(diffs);
-                    output::write_document(
-                        DocumentKind::Diff,
-                        &diff_document(&old, &new),
-                        cli.color,
-                    )
-                    .map_err(output_failure)
+                    output::write_document(DocumentKind::Diff, &diff_document(&diffs), cli.color)
+                        .map_err(output_failure)
                 }
                 Format::Json => {
                     let diff = engine
                         .diff_snapshot_outlines(base, target, (*mode).into(), &selection, base_mode)
                         .map_err(engine_failure)?;
-                    output::write_json(&json::diff_document(
-                        base,
-                        target,
-                        (*mode).into(),
-                        &diff,
-                        *merge_base,
-                    ))
-                    .map_err(output_failure)
+                    let document =
+                        json::diff_document(base, target, (*mode).into(), &diff, *merge_base)
+                            .map_err(json_failure)?;
+                    output::write_json(&document).map_err(output_failure)
                 }
             }
         }
@@ -343,25 +333,6 @@ fn worktree_failure(error: WorktreeError) -> CliError {
         help: None,
         source: Box::new(error),
     }
-}
-
-fn split_diff(diffs: Vec<FileDiff>) -> (Vec<ProjectedFile>, Vec<ProjectedFile>) {
-    let mut old = Vec::new();
-    let mut new = Vec::new();
-    for diff in diffs {
-        match diff {
-            FileDiff::Deleted { old: file } => old.push(file),
-            FileDiff::Added { new: file } => new.push(file),
-            FileDiff::Modified {
-                old: old_file,
-                new: new_file,
-            } => {
-                old.push(old_file);
-                new.push(new_file);
-            }
-        }
-    }
-    (old, new)
 }
 
 fn merge_base_mode(base: &str, target: &str, merge_base: bool) -> Result<DiffBase, CliError> {
@@ -612,6 +583,14 @@ fn config_failure(error: ConfigError) -> CliError {
     }
 }
 
+fn json_failure(error: json::DiffDocumentError) -> CliError {
+    CliError {
+        message: error.to_string(),
+        help: None,
+        source: Box::new(error),
+    }
+}
+
 fn selection_failure(error: SelectionError, areas: &AreaSet) -> CliError {
     let names: Vec<&str> = areas.names().collect();
     let help = if names.is_empty() {
@@ -656,6 +635,7 @@ fn git_context(error: &GitError) -> DiagnosticContext {
             ..DiagnosticContext::default()
         },
         GitError::ObjectRead { repository, .. }
+        | GitError::SourceHash { repository, .. }
         | GitError::CommitDecode { repository, .. }
         | GitError::TreeTraversal { repository, .. }
         | GitError::InvalidRepoPath { repository, .. }
@@ -686,6 +666,7 @@ fn git_message(error: &GitError) -> &'static str {
         GitError::RevisionRange { .. } => "a revision range is not supported",
         GitError::NotPeelable { .. } => "the requested revision does not name a commit",
         GitError::ObjectRead { .. } => "a Git object could not be read",
+        GitError::SourceHash { .. } => "source content could not be hashed",
         GitError::CommitDecode { .. } => "a Git commit could not be decoded",
         GitError::NotFirstParentAncestor { .. } => {
             "the base is not on the target's first-parent chain"

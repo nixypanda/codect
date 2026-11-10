@@ -8,15 +8,17 @@ and scope.
 ## Commands
 
 ```text
-codect show --format <text|json> --mode <types|signatures> [--path <PATH> | --area <AREA>]... [REVISION]
-codect show --format json --mode <types|signatures> --stdin    --path <FILE>
-codect show --format json --mode <types|signatures> --worktree --path <FILE>
-codect diff --format <text|json> --mode <types|signatures> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
+codect show --format <text|json> --mode <types|signatures|tests> [--path <PATH> | --area <AREA>]... [REVISION]
+codect show --format json --mode <types|signatures|tests> --stdin    --path <FILE>
+codect show --format json --mode <types|signatures|tests> --worktree --path <FILE>
+codect diff --format <text|json> --mode <types|signatures|tests> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
 - `show` defaults `REVISION` to `HEAD`.
 - `--mode` is required. `types` shows type declarations; `signatures` adds every
-  named function, method, and value signature. Function bodies are never shown.
+  named function, method, and value signature; `tests` is the Signatures
+  projection restricted to tests in Rust and Python. Function bodies are never
+  shown.
 - `--format` defaults to `text`, the canonical projection. `--format json` emits
   the versioned documents described below.
 - `diff` takes two independent revisions (not a range). Both text and JSON diff
@@ -78,11 +80,34 @@ and literal paths only, no globs, no substitutions.
 
 ## Focused diffs
 
-A focused diff compares the selected projections of two snapshots, not their
-complete source text. Implementation-only changes are intentionally invisible:
+A focused diff renders a comparison of the selected projections of two
+snapshots; it never renders complete source text. File-move detection may read
+source bytes solely to pair old and new paths. Implementation-only changes are
+intentionally invisible:
 if a function body changes while its projected declaration is unchanged, the
 focused diff shows no change for that function. Files with equal projections are
-omitted, so an empty result means there are no focused changes.
+omitted, so an empty result means there are no focused changes. The exception is
+a detected **file move**. Codect pairs a removed supported path
+with an added supported path of the same language, first by exact source content
+and then by a fixed source-content similarity threshold. Detection runs over the
+complete snapshots before path or area filtering, so a narrow scope cannot change
+the pairing. A move with at least one nonempty projection is emitted even when
+its two projections are equal: a body-only edit inside a move produces no hunks,
+but the move remains visible. A move whose two requested-mode projections are
+both empty is omitted. Selecting either the
+old or the new path returns the whole move. There is no user-facing similarity
+threshold, and detection does not depend on Git rename configuration.
+
+A pure move renders like Git's rename display, with no content headers or hunks:
+
+```text
+diff --codect a/src/old.rs b/src/new.rs
+rename from src/old.rs
+rename to src/new.rs
+```
+
+An edited move follows the two `rename` lines with `--- a/src/old.rs`,
+`+++ b/src/new.rs`, and ordinary focused hunks.
 
 `:index` reads stage-zero blob bytes. `:worktree` reads tracked regular files on
 disk plus untracked, non-ignored files, and does not follow symlinks; it never
@@ -104,8 +129,16 @@ not appear as spurious changes. Both sides must be commits.
 <canonical projection>
 ```
 
-`diff` uses familiar Git-style headers, `/dev/null` for an absent side, and only
-files whose projections differ.
+`diff` uses familiar Git-style headers and `/dev/null` for an absent side. It
+emits only files whose projections differ, except that a detected move with at
+least one nonempty requested-mode projection is shown even when its projections
+are equal. A move with two empty projections is omitted.
+
+Every emitted path uses Codect's injective display encoding: a literal backslash
+is doubled, LF/CR/TAB become `\n`/`\r`/`\t`, other C0 bytes and DEL become
+`\xNN`, and invalid UTF-8 bytes become `\xNN`. Ordinary valid Unicode, including
+C1 control characters, is unchanged. Ordering and pairing still use raw
+repository-path bytes.
 
 ## Prettier output
 
@@ -127,12 +160,23 @@ marker; pass `--width=<n>` above the content width to avoid it.
 - `codect show --format json` emits `codect.show.v1`: the requested mode's
   projection plus a complete, mode-independent outline for building semantic
   folds. It pairs with the editor projection surface and the Neovim plugin.
-- `codect diff --format json` emits `codect.diff.v1` for commits and the
-  snapshots `:index`, `:worktree`, and `:empty`. The text format accepts the
-  same sides.
+  Show remains at v1; the new producer adds optional
+  `path_encoding: "codect.path.v1"`. Without that marker, `path` uses legacy
+  display semantics and must not be decoded with the new path encoding. Unknown
+  marker values are unsupported for path decoding.
+- `codect diff --format json` emits `codect.diff.v2` for commits and the
+  snapshots `:index`, `:worktree`, and `:empty`, plus the canonical Git
+  empty-tree object ID as an alias for the empty side. The text format accepts
+  the same sides. A moved file has `status: "moved"`, `path` set to the target,
+  `old_path` set to the source, both sides, and `equal` reporting whether the
+  two canonical projections match. Every other status omits `old_path` and
+  carries `equal: false`. Diff v2 always uses the display encoding above for
+  `path`/`old_path`, then normal JSON string escaping; it needs no marker and
+  these are not raw path bytes.
 
 Both are versioned by a `schema` field and documented at
-[`docs/schema/`](schema/). For the exact contract, see
+[`docs/schema/`](schema/). `codect.diff.v1` is archived and is not emitted by
+the current binary. For the exact contract, see
 [CLI and JSON contract](agents/CONTRACT.md).
 
 ## Exit codes
@@ -140,7 +184,7 @@ Both are versioned by a `schema` field and documented at
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including a diff with focused changes and a selection with no supported files (empty output). |
-| `1` | Fatal: no repository, bad revision, absent path, config/area failure, non-UTF-8 source, parse failure. Empty stdout, one diagnostic on stderr. |
+| `1` | Fatal: no repository; bad revision; tree/index/snapshot enumeration; Git object read required for the operation; absent path; config/area failure; or a source selected for projection that is non-UTF-8 or fails to parse. Move-detection discovery reads remain per-file best effort. Empty stdout, one diagnostic on stderr. |
 | `2` | Usage error. |
 
 ## Next

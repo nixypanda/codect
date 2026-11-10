@@ -28,6 +28,15 @@ export function sessionFileAddress(sessionId: string, path: string): string {
   return `${FILE_ADDRESS_PREFIX}session/${encodeSegment(sessionId)}/${encodePath(normalized)}`;
 }
 
+/**
+ * Address an already-decoded, repository-relative path. Codect uses `/` as its
+ * separator and normalizes the path before emission, so a backslash here is a
+ * literal filename character, not a Windows separator; do not rewrite it.
+ */
+export function repoFileAddress(sessionId: string, path: string): string {
+  return `${FILE_ADDRESS_PREFIX}session/${encodeSegment(sessionId)}/${encodePath(path)}`;
+}
+
 export function fileAddressFor(
   sessionId: string,
   cwd: string | undefined,

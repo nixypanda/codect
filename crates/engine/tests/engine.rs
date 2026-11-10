@@ -7,7 +7,7 @@
 
 mod support;
 
-use base::{Area, FileDiff, FileOutlineDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
+use base::{Area, FileOutlineDiff, ProjectionMode, RepoPath, Selection, SelectionGroup};
 use engine::{DiffBase, Engine, EngineError};
 use support::TestRepo;
 
@@ -343,11 +343,7 @@ fn worktree_snapshot_unions_tracked_and_untracked_files() {
         .expect("worktree projection diff");
     let mut names: Vec<String> = projections
         .iter()
-        .map(|diff| match diff {
-            FileDiff::Added { new } => new.path().to_string(),
-            FileDiff::Deleted { old } => old.path().to_string(),
-            FileDiff::Modified { old, .. } => old.path().to_string(),
-        })
+        .map(|diff| diff.path().to_string())
         .collect();
     names.sort();
     assert_eq!(names, ["fresh.rs", "tracked.rs"]);
@@ -387,6 +383,7 @@ fn worktree_membership_excludes_an_ignored_file_named_by_the_other_side() {
                 FileOutlineDiff::Added { .. } => "added",
                 FileOutlineDiff::Deleted { .. } => "deleted",
                 FileOutlineDiff::Modified { .. } => "modified",
+                FileOutlineDiff::Moved { .. } => "moved",
             };
             (file.path().to_string(), status)
         })

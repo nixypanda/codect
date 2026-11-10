@@ -10,8 +10,10 @@ use base::ProjectionMode;
 // Repeated on every help surface so nobody trusts a focused diff without
 // knowing what it deliberately hides (section 14).
 const FOCUSED_DIFF_HELP: &str = "Focused diffs are semantic: implementation-only changes (function bodies, \
-     comments, whitespace) are invisible. Only changes that alter a projected \
-     declaration appear.";
+     comments, whitespace) are invisible, except that a body-only change inside a \
+     detected file move remains visible as a move with no focused hunks. Equal \
+     unmoved files are suppressed, and a move with two empty projections is \
+     omitted. Only changes that alter a projected declaration appear.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -22,7 +24,10 @@ const FOCUSED_DIFF_HELP: &str = "Focused diffs are semantic: implementation-only
                   into canonical Type, Signature, and Test forms and diffs those \
                   projections between two revisions.\n\nFocused diffs are semantic: implementation-only \
                   changes such as function bodies, comments, and whitespace are \
-                  invisible. Only changes that alter a projected declaration appear.",
+                  invisible, except that a body-only change inside a detected file move \
+                  remains visible as a move with no focused hunks. Equal unmoved files \
+                  are suppressed, and a move with two empty projections is omitted. \
+                  Only changes that alter a projected declaration appear.",
     after_help = FOCUSED_DIFF_HELP,
     after_long_help = FOCUSED_DIFF_HELP
 )]
@@ -98,7 +103,7 @@ pub enum Command {
         #[arg(long, value_enum)]
         mode: Mode,
 
-        /// Output format: text hunks or a versioned `codect.diff.v1` document.
+        /// Output format: text hunks or a versioned `codect.diff.v2` document.
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
 

@@ -11,6 +11,7 @@
 
 import React from "react";
 import type { TreeRow } from "../tree";
+import type { DiffFileStatus } from "../../shared/schema";
 import {
   FileTypeIcon,
   classifyFileType,
@@ -18,7 +19,7 @@ import {
   IconFolderOpenRegular,
 } from "../primitives";
 
-export type FileStatus = "added" | "deleted" | "modified";
+export type FileStatus = DiffFileStatus;
 
 export interface TreeViewProps {
   rows: TreeRow[];
@@ -26,12 +27,14 @@ export interface TreeViewProps {
   onSelect: (path: string) => void;
   onToggleDir: (path: string) => void;
   statusOf?: (path: string) => FileStatus | undefined;
+  oldPathOf?: (path: string) => string | undefined;
 }
 
 const BADGE_LETTER: Record<FileStatus, string> = {
   added: "A",
   deleted: "D",
   modified: "M",
+  moved: "R",
 };
 
 const hasFolderIcons =
@@ -76,12 +79,16 @@ export function TreeView({
   onSelect,
   onToggleDir,
   statusOf,
+  oldPathOf,
 }: TreeViewProps) {
   return (
     <div className="codect-tree">
       {rows.map((row) => {
         const selected = row.kind === "file" && row.path === selectedPath;
         const status = row.kind === "file" ? statusOf?.(row.path) : undefined;
+        const oldPath = row.kind === "file" ? oldPathOf?.(row.path) : undefined;
+        const title =
+          oldPath === undefined ? row.path : `${oldPath} → ${row.path}`;
         return (
           <div
             key={`${row.kind}:${row.path}`}
@@ -92,13 +99,18 @@ export function TreeView({
             role="treeitem"
             aria-selected={selected}
             aria-expanded={row.kind === "dir" ? row.expanded : undefined}
-            title={row.path}
+            title={title}
             onClick={() => {
               if (row.kind === "dir") onToggleDir(row.path);
               else onSelect(row.path);
             }}
           >
             <RowIcon row={row} />
+            {oldPath !== undefined && (
+              <span className="codect-row-move" title={`Moved from ${oldPath}`}>
+                {oldPath} →
+              </span>
+            )}
             <span className="codect-row-label">{row.label}</span>
             {status !== undefined && (
               <span className={`codect-badge codect-badge-${status}`}>

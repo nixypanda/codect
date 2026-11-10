@@ -1002,13 +1002,86 @@ fn file_set(diffs: &[FileDiff], empty: EmptyText) -> FileSet {
                 FileDiff::Added { .. } => BadgeTone::Added,
                 FileDiff::Deleted { .. } => BadgeTone::Deleted,
                 FileDiff::Modified { .. } => BadgeTone::Modified,
+                FileDiff::Moved { .. } => BadgeTone::Moved,
             };
             (diff.path().clone(), tone)
+        })
+        .collect();
+    // A move is one event keyed by its target path; the source path is carried
+    // separately for the tree label and never becomes a second row.
+    let moves: BTreeMap<RepoPath, RepoPath> = diffs
+        .iter()
+        .filter_map(|diff| match diff {
+            FileDiff::Moved { old, new } => Some((new.path().clone(), old.path().clone())),
+            _ => None,
         })
         .collect();
     FileSet {
         paths,
         badges: Arc::new(badges),
+        moves: Arc::new(moves),
         empty,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base::{ItemKind, ProjectedFile, ProjectedItem, SourceSpan, SupportedPath};
+    use tui_core::workspace::NO_CHANGES;
+
+    fn projected(path: &str, text: &str) -> ProjectedFile {
+        let path =
+            SupportedPath::new(RepoPath::new(path).expect("valid path")).expect("supported path");
+        ProjectedFile::try_new(
+            path,
+            vec![ProjectedItem {
+                stable_key: "item".to_owned(),
+                parent_key: None,
+                kind: ItemKind::Function,
+                name: "item".to_owned(),
+                span: SourceSpan::new(0, 0, 0, 0, 0, 0),
+                canonical_text: text.to_owned(),
+            }],
+        )
+        .expect("valid fixture")
+    }
+
+    #[test]
+    fn a_move_is_one_target_keyed_file_with_a_source_path() {
+        let diffs = vec![
+            FileDiff::Moved {
+                old: projected("src/old.rs", "same\n"),
+                new: projected("dst/new.rs", "same\n"),
+            },
+            FileDiff::Added {
+                new: projected("added.rs", "a\n"),
+            },
+        ];
+        let set = file_set(&diffs, NO_CHANGES);
+
+        assert_eq!(
+            set.paths.as_ref(),
+            [
+                RepoPath::new("dst/new.rs").unwrap(),
+                RepoPath::new("added.rs").unwrap()
+            ],
+            "the moved event is keyed by its target, never its source"
+        );
+        assert_eq!(
+            set.badges.get(&RepoPath::new("dst/new.rs").unwrap()),
+            Some(&BadgeTone::Moved)
+        );
+        assert_eq!(
+            set.moves.get(&RepoPath::new("dst/new.rs").unwrap()),
+            Some(&RepoPath::new("src/old.rs").unwrap())
+        );
+        assert_eq!(set.moves.len(), 1, "only moves contribute source paths");
+        assert!(
+            !set.paths
+                .iter()
+                .any(|path| path == &RepoPath::new("src/old.rs").unwrap()),
+            "the source path must not be a separate row"
+        );
     }
 }
