@@ -72,7 +72,7 @@ unicode-width = "0.2"
 
 # Syntax highlighting for the TUI. The pure-Rust `fancy-regex` backend avoids
 # an Oniguruma C toolchain; `two-face` supplies bat's syntax grammars, including
-# Elm. Token colors use in-crate Tokyo Night night/day themes.
+# Elm. Token colors use in-crate GitHub-inspired light/dark themes.
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 

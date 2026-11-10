@@ -277,7 +277,7 @@ toml = "1"
 # Terminal frontend only. `ratatui` is built without its default feature bundle
 # so the enabled feature set stays auditable; the crossterm backend is the only
 # backend. `syntect` uses the pure-Rust `fancy-regex` backend, and `two-face`
-# supplies bat's syntax grammars; in-crate Tokyo Night night/day themes color
+# supplies bat's syntax grammars; in-crate GitHub-inspired light/dark themes color
 # tokens. `terminal-colorsaurus` asks the terminal for its background color
 # (OSC 11) to pick the light or dark flavor at startup.
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
@@ -1659,7 +1659,7 @@ Named areas have end-to-end coverage over temporary repositories: selecting an a
   `TestBackend` tests. The fuzzy matcher has its own unit tests, including a
   scoring order between consecutive and scattered matches.
 - `theme.rs` unit tests cover capability resolution (truecolor, 256, 16, and
-  `NO_COLOR`), Tokyo Night night/day palette roles, and the `CODECT_THEME` override:
+  `NO_COLOR`), GitHub-inspired light/dark palette roles, and the `CODECT_THEME` override:
   `dark`/`light` are explicit and unknown values defer to the terminal query.
 - An injected terminal driver covers partial setup and matching cleanup; a PTY
   smoke test runs where the platform supports one. The PTY test waits for the
@@ -2208,8 +2208,8 @@ keeps no persistent cache.
 
 - Syntax grammars come from `two-face`'s bat assets (Elm, Haskell, Python, and
   Rust included). `syntect` uses the pure-Rust `fancy-regex` backend and
-  in-crate Tokyo Night night/day token colors aligned with the UI flavor.
-- Diff rows use Tokyo Night semantic added and removed backgrounds, with a
+  in-crate GitHub-inspired light/dark token colors aligned with the UI flavor.
+- Diff rows use GitHub-inspired semantic added and removed backgrounds, with a
   brighter intra-line emphasis on the bytes that differ, `+`/`-` gutter markers,
   full-width hunk bands, and `⋯ n unchanged lines` indicators for collapsed gaps.
 - Hunk headers and the collapsing of long unchanged runs are computed in the
@@ -2225,7 +2225,7 @@ keeps no persistent cache.
 
 ### 21.7 Design system and theming
 
-- `theme.rs` holds Tokyo Night night/day semantic tokens (surfaces, borders,
+- `theme.rs` holds GitHub-inspired light/dark semantic tokens (surfaces, borders,
   text, accent, status, selection, diff, search, and tree roles) and resolves
   them through a `Capability`: truecolor, the 256-color xterm palette, the 16 ANSI colors, or
   no color. The theme is part of the `Model`, so `view` never reads the

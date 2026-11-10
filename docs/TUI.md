@@ -29,7 +29,7 @@ codect tui diff commits --mode <types|signatures|tests> [--path <PATH> | --area 
 
 *`codect tui show --mode types`: the file tree, the source filtered and folded to the mode, and the status bar.*
 
-The diff panes use Tokyo Night night/day syntax colors and added/deleted line
+The diff panes use GitHub-inspired light/dark syntax colors and added/deleted line
 backgrounds, brighter intra-line emphasis on the bytes that changed, and
 full-width `@@` hunk bands. `NO_COLOR` disables all styling.
 
@@ -171,6 +171,8 @@ terminal. Overlays stay keyboard-driven while they are open.
 
 ## Theming and icons
 
+- Both palettes use GitHub-inspired colors: white or charcoal canvases, neutral
+  text, blue focus accents, and green/red diff backgrounds.
 - `CODECT_THEME=light` switches to the light palette; `dark` is explicit, and
   anything else asks the terminal for its background color and falls back to
   dark. Colors degrade gracefully on terminals that only support 256 or 16

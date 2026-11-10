@@ -7,7 +7,7 @@
 //! call it; nothing above it caches through interior mutability here.
 //
 // Syntax grammars come from `two-face` (bat's syntax bundle). Token colors use
-// Tokyo Night night/day colors so the code agrees with the rest of the UI.
+// GitHub-inspired light/dark colors so the code agrees with the rest of the UI.
 // Diff backgrounds and intra-line emphasis come from the semantic palette.
 //
 // Tabs expand to four columns and runs are never split mid-code-point, so the
@@ -51,8 +51,8 @@ fn assets() -> &'static Assets {
         let syntaxes = two_face::syntax::extra_newlines();
         Assets {
             syntaxes,
-            dark: tokyo_night_theme(Flavor::Dark),
-            light: tokyo_night_theme(Flavor::Light),
+            dark: github_theme(Flavor::Dark),
+            light: github_theme(Flavor::Light),
         }
     })
 }
@@ -66,62 +66,63 @@ fn syn_color(rgb: Rgb) -> SynColor {
     }
 }
 
-// TextMate scopes shared by the bat grammars. These are built from Tokyo
-// Night's night/day colors rather than carrying a second, unrelated theme.
-fn tokyo_night_theme(flavor: Flavor) -> SynTheme {
-    let (foreground, background, comment, red, green, yellow, blue, purple, cyan, orange) =
-        match flavor {
-            Flavor::Dark => (
-                Rgb(0xc0, 0xca, 0xf5),
-                Rgb(0x1a, 0x1b, 0x26),
-                Rgb(0x73, 0x7a, 0xa2),
-                Rgb(0xf7, 0x76, 0x8e),
-                Rgb(0x9e, 0xce, 0x6a),
-                Rgb(0xe0, 0xaf, 0x68),
-                Rgb(0x7a, 0xa2, 0xf7),
-                Rgb(0xbb, 0x9a, 0xf7),
-                Rgb(0x7d, 0xcf, 0xff),
-                Rgb(0xff, 0x9e, 0x64),
-            ),
-            Flavor::Light => (
-                Rgb(0x37, 0x60, 0xbf),
-                Rgb(0xe1, 0xe2, 0xe7),
-                Rgb(0x68, 0x70, 0x9a),
-                Rgb(0xc6, 0x43, 0x43),
-                Rgb(0x58, 0x75, 0x39),
-                Rgb(0x8c, 0x6c, 0x3e),
-                Rgb(0x2e, 0x7d, 0xe9),
-                Rgb(0x78, 0x47, 0xbd),
-                Rgb(0x00, 0x71, 0x97),
-                Rgb(0xb1, 0x5c, 0x00),
-            ),
-        };
+// TextMate scopes shared by the bat grammars, using GitHub's syntax roles.
+fn github_theme(flavor: Flavor) -> SynTheme {
+    let palette = Theme::new(flavor, Capability::TrueColor).palette;
+    let (comment, keyword, string, function, type_name, variable, tag, constant) = match flavor {
+        Flavor::Dark => (
+            palette.text_muted,
+            Rgb(0xff, 0x7b, 0x72),
+            Rgb(0xa5, 0xd6, 0xff),
+            Rgb(0xd2, 0xa8, 0xff),
+            Rgb(0xff, 0xa6, 0x57),
+            Rgb(0xe6, 0xed, 0xf3),
+            Rgb(0x7e, 0xe7, 0x87),
+            Rgb(0x79, 0xc0, 0xff),
+        ),
+        Flavor::Light => (
+            palette.text_muted,
+            Rgb(0xcf, 0x22, 0x2e),
+            Rgb(0x0a, 0x30, 0x69),
+            Rgb(0x82, 0x50, 0xdf),
+            Rgb(0x95, 0x38, 0x00),
+            Rgb(0x1f, 0x23, 0x28),
+            Rgb(0x11, 0x63, 0x29),
+            Rgb(0x05, 0x50, 0xae),
+        ),
+    };
     let mut theme = SynTheme {
         name: Some(
             match flavor {
-                Flavor::Dark => "Tokyo Night Night",
-                Flavor::Light => "Tokyo Night Day",
+                Flavor::Dark => "GitHub Dark",
+                Flavor::Light => "GitHub Light",
             }
             .to_owned(),
         ),
         settings: ThemeSettings {
-            foreground: Some(syn_color(foreground)),
-            background: Some(syn_color(background)),
+            foreground: Some(syn_color(palette.text)),
+            background: Some(syn_color(palette.bg)),
             ..ThemeSettings::default()
         },
         ..SynTheme::default()
     };
     for (selectors, color) in [
         ("comment", comment),
-        ("keyword, storage", purple),
-        ("keyword.operator, punctuation.definition", purple),
-        ("constant.numeric, constant.language", orange),
-        ("string", green),
-        ("entity.name.function, support.function", blue),
-        ("entity.name.type, entity.name.class, support.type", yellow),
-        ("variable.parameter, variable.other.member", red),
-        ("entity.name.tag, entity.other.attribute-name", red),
-        ("support.constant, constant.other", cyan),
+        ("keyword, storage", keyword),
+        ("keyword.operator, punctuation.definition", palette.text),
+        ("constant.numeric, constant.language", constant),
+        ("string", string),
+        ("entity.name.function, support.function", function),
+        (
+            "entity.name.type, entity.name.class, support.type",
+            type_name,
+        ),
+        ("variable.parameter, variable.other.member", variable),
+        ("entity.name.tag", tag),
+        (
+            "entity.other.attribute-name, support.constant, constant.other",
+            constant,
+        ),
     ] {
         theme.scopes.push(ThemeItem {
             scope: selectors
@@ -418,17 +419,17 @@ mod tests {
     }
 
     #[test]
-    fn syntax_tokens_match_tokyo_night_in_both_flavors() {
+    fn syntax_tokens_match_github_in_both_flavors() {
         for (flavor, keyword, string) in [
             (
                 Flavor::Dark,
-                Color::Rgb(0xbb, 0x9a, 0xf7),
-                Color::Rgb(0x9e, 0xce, 0x6a),
+                Color::Rgb(0xff, 0x7b, 0x72),
+                Color::Rgb(0xa5, 0xd6, 0xff),
             ),
             (
                 Flavor::Light,
-                Color::Rgb(0x78, 0x47, 0xbd),
-                Color::Rgb(0x58, 0x75, 0x39),
+                Color::Rgb(0xcf, 0x22, 0x2e),
+                Color::Rgb(0x0a, 0x30, 0x69),
             ),
         ] {
             let theme = Theme::new(flavor, Capability::TrueColor);

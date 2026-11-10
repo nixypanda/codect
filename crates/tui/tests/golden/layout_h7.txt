@@ -7,10 +7,10 @@ terminal too small
                                                                                                     
                                                                                                     
 ## styles
-0: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
-1: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
-2: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
-3: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
-4: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
-5: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
-6: 0-99 fg=#737aa2 bg=#1a1b26 mod=-
+0: 0-99 fg=#8b949e bg=#0d1117 mod=-
+1: 0-99 fg=#8b949e bg=#0d1117 mod=-
+2: 0-99 fg=#8b949e bg=#0d1117 mod=-
+3: 0-99 fg=#8b949e bg=#0d1117 mod=-
+4: 0-99 fg=#8b949e bg=#0d1117 mod=-
+5: 0-99 fg=#8b949e bg=#0d1117 mod=-
+6: 0-99 fg=#8b949e bg=#0d1117 mod=-
