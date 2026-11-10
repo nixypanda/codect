@@ -60,8 +60,9 @@ pub enum Command {
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
 
-        /// Revision to project (branch, tag, or object id); defaults to HEAD.
-        /// Mutually exclusive with `--stdin` and `--worktree`.
+        /// Revision to project (branch, tag, or object id). Omit to project
+        /// supported files on disk (Git-independent). Mutually exclusive with
+        /// `--stdin` and `--worktree`.
         #[arg(value_name = "REVISION")]
         revision: Option<String>,
 
@@ -150,9 +151,10 @@ pub enum TuiCommand {
         #[arg(long, value_enum)]
         mode: Mode,
 
-        /// Revision to project (branch, tag, or object id); defaults to HEAD.
-        #[arg(value_name = "REVISION", default_value = "HEAD")]
-        revision: String,
+        /// Revision to project (branch, tag, or object id). Omit to project
+        /// supported files on disk (Git-independent).
+        #[arg(value_name = "REVISION")]
+        revision: Option<String>,
 
         /// Limit the projection to these paths. Repeatable. A directory includes
         /// everything beneath it, and paths are relative to the current directory.

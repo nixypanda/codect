@@ -102,7 +102,9 @@ fn show_json_worktree(repo: &TestRepo, path: &str, mode: &str) -> Value {
 fn show_json_revision(repo: &TestRepo, path: &str, mode: &str) -> Value {
     let output = codect_in(
         repo,
-        &["show", "--format", "json", "--path", path, "--mode", mode],
+        &[
+            "show", "--format", "json", "--path", path, "--mode", mode, "HEAD",
+        ],
     )
     .output()
     .expect("run codect");

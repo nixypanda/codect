@@ -17,7 +17,7 @@ codect diff --format <text|json> --mode <types|signatures|tests> [--merge-base] 
 `tests` is recognized for Rust and Python only. Elm and Haskell retain nothing
 in that mode, including a module header.
 
-- `show` defaults `REVISION` to `HEAD`.
+- `show` with an omitted `REVISION` projects supported files on disk (Git-independent); an explicit `REVISION` requires Git.
 - `--mode` is required; there is no default.
 - `tests` is the Signatures projection restricted to test declarations, and is
   recognized for Rust and Python only. An Elm or Haskell file retains nothing,
@@ -51,15 +51,15 @@ codect show --format json --mode <types|signatures|tests> --worktree --path <FIL
   and are exclusive with `REVISION` and `--area`.
 - `--stdin` reads the buffer bytes; `--worktree` reads the file from disk.
 - `--worktree` refuses a symlinked target and a resolved path that leaves the
-  repository.
+  root (the repository worktree when inside Git, otherwise the current
+  directory). Both `--stdin` and `--worktree` operate outside Git.
 - These inputs are read-only; all Codect paths are read-only.
-
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. Includes a diff with focused changes and a selection that exists but contains no supported files (empty output). |
-| `1` | Fatal: no repository; bad revision; tree/index/snapshot enumeration; Git object read required for the operation; absent selected path; config/area failure; or a source selected for projection that is non-UTF-8 or fails to parse. Move-detection discovery reads remain per-file best effort. Empty stdout, one diagnostic on stderr. |
+| `1` | Fatal: no repository or worktree when one is required (explicit revision, diff, or in-Git disk show); bad revision; tree/index/snapshot enumeration; Git object read required for the operation; absent selected path; config/area failure; or a source selected for projection that is non-UTF-8 or fails to parse. Move-detection discovery reads remain per-file best effort. Empty stdout, one diagnostic on stderr. |
 | `2` | Usage error, raised through `clap`. |
 
 A selected path that names nothing in the projected revision (or in either side
@@ -152,8 +152,8 @@ Root: `schema`, `input` (`revision` | `stdin` | `worktree`), `revision`
 (string or null), `mode`, and `files`. The new producer also emits the optional
 additive `path_encoding: "codect.path.v1"`. When absent, `path` has legacy
 display semantics; when present with that value, it uses the section above.
-Unknown values are unsupported for path decoding.
-
+Unknown values are unsupported for path decoding. A filesystem projection from an
+omitted revision uses `input: "worktree"` and `revision: null`.
 Each file carries:
 
 - `path`, `language`.

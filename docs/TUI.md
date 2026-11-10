@@ -12,7 +12,8 @@ codect tui diff commits --mode <types|signatures|tests> [--path <PATH> | --area 
 ```
 
 - `tui show` opens a source explorer: a file tree beside the real source of the
-  selected file, folded to the requested mode.
+  selected file, folded to the requested mode. An omitted revision projects
+  supported files on disk (Git-independent); an explicit revision requires Git.
 - `tui diff range` compares the two endpoint snapshots directly; either side
   may be a commit, `:index`, `:worktree`, or `:empty`, as in `codect diff`.
   `--merge-base` replaces the base with the merge base of the two commits and

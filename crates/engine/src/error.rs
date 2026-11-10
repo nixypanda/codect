@@ -33,6 +33,16 @@ pub enum EngineError {
         source: std::io::Error,
     },
 
+    #[error("repository `{root}` has no worktree")]
+    NoWorktree { root: std::path::PathBuf },
+
+    #[error("could not traverse filesystem root `{root}`")]
+    FilesystemTraversal {
+        root: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     /// `.codect.toml` could not supply areas.
     #[error(transparent)]
     Config(#[from] ConfigError),

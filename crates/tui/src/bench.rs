@@ -180,7 +180,7 @@ pub fn show_model(
     height: u16,
 ) -> Model {
     let request = ShowRequest {
-        revision: "HEAD".to_owned(),
+        revision: Some("HEAD".to_owned()),
         mode,
         selection: Selection::all(),
     };
@@ -303,7 +303,7 @@ fn apply(model: Model, msg: Msg) -> Model {
 
 fn show_request() -> ShowRequest {
     ShowRequest {
-        revision: "HEAD".to_owned(),
+        revision: Some("HEAD".to_owned()),
         mode: ProjectionMode::Types,
         selection: Selection::all(),
     }

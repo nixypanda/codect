@@ -330,7 +330,7 @@ fn source_projection_failure(error: ProjectionError) -> EngineError {
 }
 
 pub struct Engine {
-    repository: GitRepository,
+    repository: Option<GitRepository>,
     root: PathBuf,
     canonical_root: OnceLock<Option<PathBuf>>,
 }
@@ -345,9 +345,44 @@ impl Engine {
             .unwrap_or_else(|| repository.git_dir())
             .to_path_buf();
         Ok(Self {
-            repository,
+            repository: Some(repository),
             root,
             canonical_root: OnceLock::new(),
+        })
+    }
+
+    /// Discover Git when present, otherwise build a filesystem-only engine rooted
+    /// at `start`. Only `RepositoryNotFound` becomes a filesystem engine; other
+    /// discovery errors remain fatal.
+    pub fn discover_or_filesystem(start: &Path) -> Result<Self, EngineError> {
+        match Self::discover(start) {
+            Ok(engine) => Ok(engine),
+            Err(EngineError::Git {
+                source: git::GitError::RepositoryNotFound { .. },
+                ..
+            }) => Ok(Self {
+                repository: None,
+                root: start.to_path_buf(),
+                canonical_root: OnceLock::new(),
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn repository(&self) -> Option<&GitRepository> {
+        self.repository.as_ref()
+    }
+
+    fn require_repository(&self) -> Result<&GitRepository, EngineError> {
+        self.repository.as_ref().ok_or_else(|| EngineError::Git {
+            revision: None,
+            source: git::GitError::RepositoryNotFound {
+                start: self.root.clone(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "not a git repository",
+                )),
+            },
         })
     }
 
@@ -355,14 +390,33 @@ impl Engine {
         &self.root
     }
 
+    pub fn has_worktree(&self) -> bool {
+        self.repository
+            .as_ref()
+            .map(|repository| repository.work_dir().is_some())
+            .unwrap_or(true)
+    }
+
+    fn ensure_worktree(&self) -> Result<(), EngineError> {
+        if self.has_worktree() {
+            Ok(())
+        } else {
+            Err(EngineError::NoWorktree {
+                root: self.root.clone(),
+            })
+        }
+    }
+
     pub fn first_parent_steps(
         &self,
         base_spec: &str,
         target_spec: &str,
     ) -> Result<Vec<CommitStep>, EngineError> {
-        let base = self.repository.resolve_commit(base_spec)?;
-        let target = self.repository.resolve_commit(target_spec)?;
-        Ok(self.repository.first_parent_steps(&base, &target)?)
+        let base = self.require_repository()?.resolve_commit(base_spec)?;
+        let target = self.require_repository()?.resolve_commit(target_spec)?;
+        Ok(self
+            .require_repository()?
+            .first_parent_steps(&base, &target)?)
     }
 
     pub fn load_areas(&self) -> Result<AreaSet, EngineError> {
@@ -375,10 +429,10 @@ impl Engine {
         mode: ProjectionMode,
         selection: &Selection,
     ) -> Result<Vec<ProjectedFile>, EngineError> {
-        let revision = self.repository.resolve_commit(revision_spec)?;
+        let revision = self.require_repository()?.resolve_commit(revision_spec)?;
         self.ensure_groups(&revision, revision_spec, selection.groups())?;
         let entries = self
-            .repository
+            .require_repository()?
             .source_entries(&revision)
             .map_err(|source| EngineError::git(source, Some(revision_spec)))?;
 
@@ -404,10 +458,10 @@ impl Engine {
         mode: ProjectionMode,
         selection: &Selection,
     ) -> Result<Vec<FileOutline>, EngineError> {
-        let revision = self.repository.resolve_commit(revision_spec)?;
+        let revision = self.require_repository()?.resolve_commit(revision_spec)?;
         self.ensure_groups(&revision, revision_spec, selection.groups())?;
         let entries = self
-            .repository
+            .require_repository()?
             .source_entries(&revision)
             .map_err(|source| EngineError::git(source, Some(revision_spec)))?;
 
@@ -433,10 +487,10 @@ impl Engine {
         mode: ProjectionMode,
         selection: &Selection,
     ) -> Result<Vec<SourceOutline>, EngineError> {
-        let revision = self.repository.resolve_commit(revision_spec)?;
+        let revision = self.require_repository()?.resolve_commit(revision_spec)?;
         self.ensure_groups(&revision, revision_spec, selection.groups())?;
         let entries = self
-            .repository
+            .require_repository()?
             .source_entries(&revision)
             .map_err(|source| EngineError::git(source, Some(revision_spec)))?;
 
@@ -458,6 +512,170 @@ impl Engine {
             }
         }
         Ok(files)
+    }
+
+    pub fn show_filesystem(
+        &self,
+        mode: ProjectionMode,
+        selection: &Selection,
+    ) -> Result<Vec<ProjectedFile>, EngineError> {
+        self.ensure_worktree()?;
+        let paths = self.filesystem_supported_paths()?;
+        self.ensure_filesystem_groups(selection.groups())?;
+        let mut caches = Caches::default();
+        let mut files = Vec::new();
+        for path in paths {
+            if !selection.scope().matches(&path) {
+                continue;
+            }
+            let Some(bytes) = self.read_worktree_all(&path, &mut caches)? else {
+                continue;
+            };
+            let outline = project_source(&path, &bytes, mode)?;
+            files.push(outline.projection);
+        }
+        Ok(files)
+    }
+
+    pub fn show_filesystem_outlines(
+        &self,
+        mode: ProjectionMode,
+        selection: &Selection,
+    ) -> Result<Vec<FileOutline>, EngineError> {
+        self.ensure_worktree()?;
+        let paths = self.filesystem_supported_paths()?;
+        self.ensure_filesystem_groups(selection.groups())?;
+        let mut caches = Caches::default();
+        let mut files = Vec::new();
+        for path in paths {
+            if !selection.scope().matches(&path) {
+                continue;
+            }
+            let Some(bytes) = self.read_worktree_all(&path, &mut caches)? else {
+                continue;
+            };
+            files.push(project_source(&path, &bytes, mode)?);
+        }
+        Ok(files)
+    }
+
+    pub fn show_filesystem_source_outlines(
+        &self,
+        mode: ProjectionMode,
+        selection: &Selection,
+    ) -> Result<Vec<SourceOutline>, EngineError> {
+        self.ensure_worktree()?;
+        let paths = self.filesystem_supported_paths()?;
+        self.ensure_filesystem_groups(selection.groups())?;
+        let mut caches = Caches::default();
+        let mut files = Vec::new();
+        for path in paths {
+            if !selection.scope().matches(&path) {
+                continue;
+            }
+            let Some(bytes) = self.read_worktree_all(&path, &mut caches)? else {
+                continue;
+            };
+            let outline = project_source(&path, &bytes, mode)?;
+            let source = std::str::from_utf8(&bytes)
+                .map_err(|source| EngineError::WorktreeRead {
+                    path: path.clone(),
+                    source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+                })?
+                .to_owned();
+            files.push(SourceOutline { outline, source });
+        }
+        Ok(files)
+    }
+
+    fn filesystem_supported_paths(&self) -> Result<Vec<RepoPath>, EngineError> {
+        if let Some(repository) = &self.repository {
+            let mut paths: BTreeSet<RepoPath> = repository
+                .index_source_entries()
+                .map_err(|source| EngineError::git(source, None))?
+                .into_iter()
+                .map(|entry| entry.path)
+                .collect();
+            for path in repository
+                .untracked_paths()
+                .map_err(|source| EngineError::git(source, None))?
+            {
+                paths.insert(path);
+            }
+            let mut paths: Vec<RepoPath> = paths.into_iter().collect();
+            paths.sort();
+            paths.dedup();
+            return Ok(paths);
+        }
+
+        let mut paths = Vec::new();
+        let walker = ignore::WalkBuilder::new(&self.root)
+            .hidden(false)
+            .ignore(true)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .require_git(false)
+            .follow_links(false)
+            .max_filesize(None)
+            .build();
+
+        for result in walker {
+            let entry = result.map_err(|source| EngineError::FilesystemTraversal {
+                root: self.root.clone(),
+                source: source
+                    .into_io_error()
+                    .unwrap_or_else(|| std::io::Error::other("directory walk failed")),
+            })?;
+            let Some(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_file() {
+                continue;
+            }
+            let relative = match entry.path().strip_prefix(&self.root) {
+                Ok(relative) => relative,
+                Err(_) => continue,
+            };
+            if relative
+                .components()
+                .any(|component| component.as_os_str() == ".git")
+            {
+                continue;
+            }
+            let bytes = path_to_bytes(relative);
+            let Ok(repo_path) = RepoPath::new(bytes) else {
+                continue;
+            };
+            if repo_path.language().is_none() {
+                continue;
+            }
+            paths.push(repo_path);
+        }
+
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    fn ensure_filesystem_groups(&self, groups: &[SelectionGroup]) -> Result<(), EngineError> {
+        let mut missing = Vec::new();
+        for group in groups {
+            let satisfied = group.paths().iter().any(|path| {
+                std::fs::symlink_metadata(self.root.join(worktree_relative(path))).is_ok()
+            });
+            if !satisfied {
+                missing.push(group.clone());
+            }
+        }
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(EngineError::UnsatisfiedSelection {
+                revisions: "filesystem".to_owned(),
+                missing,
+            })
+        }
     }
 
     pub fn diff(
@@ -532,7 +750,7 @@ impl Engine {
         base: DiffBase,
     ) -> Result<CommitDiff, EngineError> {
         let base_revision = self.resolve_base(base_spec, Some(target_spec), base)?;
-        let target_revision = self.repository.resolve_commit(target_spec)?;
+        let target_revision = self.require_repository()?.resolve_commit(target_spec)?;
         self.ensure_groups_in_diff(
             &base_revision,
             &target_revision,
@@ -818,7 +1036,11 @@ impl Engine {
 
     fn candidate_size(&self, candidate: &Candidate) -> Option<u64> {
         match &candidate.entry {
-            Some(entry) => self.repository.blob_size(&entry.blob_id).ok(),
+            Some(entry) => self
+                .require_repository()
+                .ok()?
+                .blob_size(&entry.blob_id)
+                .ok(),
             None => self
                 .worktree_regular_file(&candidate.path)
                 .ok()
@@ -878,7 +1100,8 @@ impl Engine {
             }
             let mut reader = bytes.as_slice();
             let identity = self
-                .repository
+                .require_repository()
+                .ok()?
                 .hash_blob_stream(&mut reader, bytes.len() as u64)
                 .ok()?;
             let bytes: Arc<[u8]> = bytes.into();
@@ -886,7 +1109,8 @@ impl Engine {
             identity
         } else {
             let identity = self
-                .repository
+                .require_repository()
+                .ok()?
                 .hash_blob_stream(&mut file, before.len)
                 .ok()?;
             let after = FileFingerprint::from_metadata(&file.metadata().ok()?);
@@ -1172,7 +1396,8 @@ impl Engine {
         // A worktree candidate may have been hashed before a later capture, so
         // key the score cache by the captured bytes, not by a stale identity.
         let mut reader = source;
-        self.repository
+        self.require_repository()
+            .ok()?
             .hash_blob_stream(&mut reader, source.len() as u64)
             .ok()
     }
@@ -1183,7 +1408,13 @@ impl Engine {
         caches: &mut Caches,
     ) -> Option<Arc<[u8]>> {
         match &candidate.entry {
-            Some(entry) => read_blob(&self.repository, caches, &entry.blob_id, "").ok(),
+            Some(entry) => read_blob(
+                self.require_repository().unwrap(),
+                caches,
+                &entry.blob_id,
+                "",
+            )
+            .ok(),
             None => self.snapshot_worktree_source(&candidate.path, caches),
         }
     }
@@ -1237,7 +1468,7 @@ impl Engine {
         }
         if spec == ":index" {
             let entries = self
-                .repository
+                .require_repository()?
                 .index_source_entries()
                 .map_err(|e| EngineError::git(e, Some(spec)))?
                 .into_iter()
@@ -1247,14 +1478,14 @@ impl Engine {
         }
         if spec == ":worktree" {
             let mut entries: BTreeSet<RepoPath> = self
-                .repository
+                .require_repository()?
                 .index_source_entries()
                 .map_err(|e| EngineError::git(e, Some(spec)))?
                 .into_iter()
                 .map(|entry| entry.path)
                 .collect();
             for path in self
-                .repository
+                .require_repository()?
                 .untracked_paths()
                 .map_err(|e| EngineError::git(e, Some(spec)))?
             {
@@ -1262,13 +1493,13 @@ impl Engine {
             }
             return Ok(SnapshotSide::Worktree { entries });
         }
-        let revision = self.repository.resolve_commit(spec)?;
+        let revision = self.require_repository()?.resolve_commit(spec)?;
         self.commit_side(spec, revision)
     }
 
     fn commit_side(&self, spec: &str, revision: Revision) -> Result<SnapshotSide, EngineError> {
         let entries = self
-            .repository
+            .require_repository()?
             .source_entries(&revision)
             .map_err(|e| EngineError::git(e, Some(spec)))?
             .into_iter()
@@ -1295,13 +1526,13 @@ impl Engine {
         target_spec: Option<&str>,
         base: DiffBase,
     ) -> Result<Revision, EngineError> {
-        let revision = self.repository.resolve_commit(base_spec)?;
+        let revision = self.require_repository()?.resolve_commit(base_spec)?;
         match base {
             DiffBase::Given => Ok(revision),
             DiffBase::MergeBase => {
                 let target_spec = target_spec.expect("merge-base resolution requires a target");
-                let target = self.repository.resolve_commit(target_spec)?;
-                self.repository
+                let target = self.require_repository()?.resolve_commit(target_spec)?;
+                self.require_repository()?
                     .merge_base(&revision, &target)
                     .map_err(|source| EngineError::git(source, Some(base_spec)))
             }
@@ -1434,7 +1665,7 @@ impl Engine {
         if let Some(expected) = caches.worktree_expected.get(path) {
             let mut reader = bytes.as_slice();
             let actual = self
-                .repository
+                .require_repository()?
                 .hash_blob_stream(&mut reader, bytes.len() as u64)
                 .map_err(|_| worktree_changed(path))?;
             if actual != *expected {
@@ -1527,7 +1758,7 @@ impl Engine {
     ) -> Result<bool, EngineError> {
         for path in group.paths() {
             let exists = self
-                .repository
+                .require_repository()?
                 .path_exists(revision, path)
                 .map_err(|source| EngineError::git(source, Some(revision_spec)))?;
             if exists {
@@ -1651,7 +1882,12 @@ impl Engine {
         if let Some(source) = caches.sources.get(&entry.blob_id) {
             return Ok(Arc::clone(source));
         }
-        let bytes = read_blob(&self.repository, caches, &entry.blob_id, revision_spec)?;
+        let bytes = read_blob(
+            self.require_repository().unwrap(),
+            caches,
+            &entry.blob_id,
+            revision_spec,
+        )?;
         let source: Arc<str> = decode_source(path, &bytes)
             .map_err(|error| self.projection_failure(error, Some(revision_spec)))?
             .into();
@@ -1667,7 +1903,7 @@ impl Engine {
         revision_spec: Option<&str>,
     ) -> EngineError {
         let context = DiagnosticContext {
-            repository: Some(self.repository.git_dir().to_path_buf()),
+            repository: Some(self.root.clone()),
             revision: revision_spec.map(str::to_owned),
             location: Some(Location {
                 path: error.supported_path().clone(),
@@ -1892,6 +2128,18 @@ fn read_blob(
         .into();
     caches.blobs.insert(id.clone(), Arc::clone(&bytes));
     Ok(bytes)
+}
+
+fn path_to_bytes(path: &std::path::Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        path.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        path.to_string_lossy().into_owned().into_bytes()
+    }
 }
 
 #[cfg(test)]

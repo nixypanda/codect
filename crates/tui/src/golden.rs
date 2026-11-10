@@ -196,7 +196,7 @@ fn two_source_files() -> Vec<SourceOutline> {
 fn load_show(theme: Theme, icons: Icons, files: Vec<SourceOutline>) -> App {
     let app = base_app_with(
         LoadRequest::Show {
-            revision: "HEAD".to_owned(),
+            revision: Some("HEAD".to_owned()),
             mode: ProjectionMode::Types,
             selection: Selection::all(),
         },

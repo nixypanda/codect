@@ -63,10 +63,13 @@ The pipeline lives once in `engine` and is shared by the CLI and the TUI.
 `show`:
 
 ```text
-repository path + revision + selection
-  → discover repository → resolve revision → traverse tree
-  → select supported blobs → reject absent selected paths
-  → apply path scope → read blobs → project per language
+root + optional revision + selection
+  → discover Git repository opportunistically (optional for disk projection,
+    root, and tracked-file membership; required for a revision or diff)
+  → resolve revision and traverse its tree when given, otherwise traverse
+    supported files on disk
+  → select supported files → reject absent selected paths
+  → apply path scope → read files → project per language
   → sort by raw path bytes → render file sections
 ```
 

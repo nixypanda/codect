@@ -92,8 +92,6 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         help: None,
         source: Box::new(source),
     })?;
-    let engine = Engine::discover(&start).map_err(engine_failure)?;
-
     match &cli.command {
         CliCommand::Show {
             mode,
@@ -106,6 +104,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         } => {
             let projection_mode: ProjectionMode = (*mode).into();
             if *stdin || *worktree {
+                let engine = Engine::discover_or_filesystem(&start).map_err(engine_failure)?;
                 return run_source_show(
                     *format,
                     projection_mode,
@@ -117,27 +116,57 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
                 );
             }
 
-            let revision_spec = revision.as_deref().unwrap_or("HEAD");
-            let selection = selection_for(paths, areas, &start, &engine)?;
-            match format {
-                Format::Text => {
-                    let files = engine
-                        .show(revision_spec, projection_mode, &selection)
-                        .map_err(engine_failure)?;
-                    output::write_document(DocumentKind::Show, &show_document(&files), cli.color)
+            if let Some(revision_spec) = revision.as_deref() {
+                let engine = Engine::discover(&start).map_err(engine_failure)?;
+                let selection = selection_for(paths, areas, &start, &engine)?;
+                match format {
+                    Format::Text => {
+                        let files = engine
+                            .show(revision_spec, projection_mode, &selection)
+                            .map_err(engine_failure)?;
+                        output::write_document(
+                            DocumentKind::Show,
+                            &show_document(&files),
+                            cli.color,
+                        )
                         .map_err(output_failure)
+                    }
+                    Format::Json => {
+                        let files = engine
+                            .show_outlines(revision_spec, projection_mode, &selection)
+                            .map_err(engine_failure)?;
+                        let document = json::document(
+                            json::Input::Revision,
+                            Some(revision_spec),
+                            projection_mode,
+                            &files,
+                        );
+                        output::write_json(&document).map_err(output_failure)
+                    }
                 }
-                Format::Json => {
-                    let files = engine
-                        .show_outlines(revision_spec, projection_mode, &selection)
-                        .map_err(engine_failure)?;
-                    let document = json::document(
-                        json::Input::Revision,
-                        Some(revision_spec),
-                        projection_mode,
-                        &files,
-                    );
-                    output::write_json(&document).map_err(output_failure)
+            } else {
+                let engine = Engine::discover_or_filesystem(&start).map_err(engine_failure)?;
+                let selection = selection_for(paths, areas, &start, &engine)?;
+                match format {
+                    Format::Text => {
+                        let files = engine
+                            .show_filesystem(projection_mode, &selection)
+                            .map_err(engine_failure)?;
+                        output::write_document(
+                            DocumentKind::Show,
+                            &show_document(&files),
+                            cli.color,
+                        )
+                        .map_err(output_failure)
+                    }
+                    Format::Json => {
+                        let files = engine
+                            .show_filesystem_outlines(projection_mode, &selection)
+                            .map_err(engine_failure)?;
+                        let document =
+                            json::document(json::Input::Worktree, None, projection_mode, &files);
+                        output::write_json(&document).map_err(output_failure)
+                    }
                 }
             }
         }
@@ -150,6 +179,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             paths,
             areas,
         } => {
+            let engine = Engine::discover(&start).map_err(engine_failure)?;
             let base_mode = merge_base_mode(base, target, *merge_base)?;
             let selection = selection_for(paths, areas, &start, &engine)?;
             match format {
@@ -172,7 +202,15 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             }
         }
         #[cfg(feature = "tui")]
-        CliCommand::Tui { command } => run_tui(engine, command, &start, cli.icons),
+        CliCommand::Tui { command } => {
+            let engine = match command {
+                TuiCommand::Show { revision: None, .. } => {
+                    Engine::discover_or_filesystem(&start).map_err(engine_failure)?
+                }
+                _ => Engine::discover(&start).map_err(engine_failure)?,
+            };
+            run_tui(engine, command, &start, cli.icons)
+        }
     }
 }
 
@@ -478,6 +516,16 @@ fn engine_failure(error: EngineError) -> CliError {
             help: None,
             source: Box::new(source),
         },
+        EngineError::NoWorktree { root } => CliError {
+            message: format!("repository `{}` has no worktree", root.display()),
+            help: None,
+            source: Box::new(NoWorktree { root }),
+        },
+        EngineError::FilesystemTraversal { root, source } => CliError {
+            message: format!("could not traverse filesystem root `{}`", root.display()),
+            help: None,
+            source: Box::new(source),
+        },
         EngineError::Config(source) => config_failure(source),
         EngineError::Projection { context, source } => projection_failure(source, *context),
         EngineError::UnsatisfiedSelection { revisions, missing } => {
@@ -506,6 +554,12 @@ fn engine_failure(error: EngineError) -> CliError {
 #[error("no language adapter supports `{path}`")]
 struct UnsupportedPath {
     path: RepoPath,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("repository `{root}` has no worktree")]
+struct NoWorktree {
+    root: std::path::PathBuf,
 }
 
 #[cfg(feature = "tui")]

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/nixypanda/codect/docs/schema/codect.show.v1.json",
   "title": "Codect show document v1",
-  "description": "The versioned JSON document emitted by `codect show --format json` for a committed revision, standard input, or the worktree. Consumers must tolerate unknown fields: fields may be added additively within `codect.show.v1`, so every object permits additional properties while its required fields and value constraints stay strict. A consumer must treat any `schema` value other than `codect.show.v1` as a fatal, explicit version mismatch. New producers add the optional `path_encoding: \"codect.path.v1\"` marker for the injective path display form; documents without it retain the legacy path encoding. Line numbers are ONE-BASED for editor friendliness; byte offsets are ZERO-BASED into the decoded UTF-8 source. `projection` is the requested mode; `outline` is mode-independent and complete, derived from the Signatures superset projection.",
+  "description": "The versioned JSON document emitted by `codect show --format json` for a committed revision, standard input, the worktree, or supported files on disk when no revision is given. Consumers must tolerate unknown fields: fields may be added additively within `codect.show.v1`, so every object permits additional properties while its required fields and value constraints stay strict. A consumer must treat any `schema` value other than `codect.show.v1` as a fatal, explicit version mismatch. New producers add the optional `path_encoding: \"codect.path.v1\"` marker for the injective path display form; documents without it retain the legacy path encoding. Line numbers are ONE-BASED for editor friendliness; byte offsets are ZERO-BASED into the decoded UTF-8 source. `projection` is the requested mode; `outline` is mode-independent and complete, derived from the Signatures superset projection.",
   "type": "object",
   "required": ["schema", "input", "revision", "mode", "files"],
   "additionalProperties": true,
@@ -16,11 +16,11 @@
       "description": "Optional additive path-encoding marker. New producers emit `codect.path.v1`: path fields then use the injective display form where a literal backslash is doubled, newline/CR/tab use `\\n`/`\\r`/`\\t`, other ASCII controls including DEL and invalid UTF-8 bytes use uppercase `\\xNN`, and ordinary Unicode is unchanged; JSON applies its own string escaping on top. Older show v1 producers omit this field and emit legacy paths where valid UTF-8 (including literal backslashes and controls) is raw except invalid bytes as `\\xNN`; a consumer that cannot decode such a path safely must reject it rather than guess. The marker is optional so old documents remain schema-valid and required fields are unchanged."
     },
     "input": {
-      "description": "Which input produced the document. `revision` means a committed revision; `stdin` and `worktree` mean editor-supplied bytes.",
+      "description": "Which input produced the document. `revision` means a committed revision; `stdin` and `worktree` mean editor-supplied bytes; `worktree` also represents a filesystem projection when `show` omits a revision.",
       "enum": ["revision", "stdin", "worktree"]
     },
     "revision": {
-      "description": "The revision spec that was projected, or null for stdin/worktree.",
+      "description": "The revision spec that was projected, or null for stdin/worktree, including a filesystem projection from an omitted revision.",
       "type": ["string", "null"]
     },
     "mode": {

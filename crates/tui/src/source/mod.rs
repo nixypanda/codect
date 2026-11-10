@@ -52,7 +52,7 @@ pub(crate) use update::{Cmd, Msg};
 /// A request to project one revision's source outlines.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShowRequest {
-    pub revision: String,
+    pub revision: Option<String>,
     pub mode: ProjectionMode,
     pub selection: base::Selection,
 }
@@ -88,7 +88,7 @@ const FOLD_SECTION: HelpSection = HelpSection {
 /// The source view's state.
 #[derive(Clone, Debug)]
 pub struct SourceView {
-    pub revision: String,
+    pub revision: Option<String>,
     pub loaded_mode: ProjectionMode,
     pub files: Arc<[SourceOutline]>,
     pub body: ShowBody,
@@ -102,7 +102,7 @@ pub struct SourceView {
 
 impl SourceView {
     /// Build the view for a `show` session. The startup load fills it in.
-    pub(crate) fn new(revision: String, mode: ProjectionMode) -> Self {
+    pub(crate) fn new(revision: Option<String>, mode: ProjectionMode) -> Self {
         Self {
             revision,
             loaded_mode: mode,
@@ -125,7 +125,7 @@ impl SourceView {
     #[cfg_attr(not(feature = "diff"), allow(dead_code))]
     pub(crate) fn inactive() -> Self {
         Self {
-            revision: String::new(),
+            revision: None,
             loaded_mode: ProjectionMode::Types,
             files: Arc::from(Vec::new()),
             body: ShowBody {
@@ -315,7 +315,10 @@ impl Plugin for SourceView {
             return Vec::new();
         }
         vec![Chip {
-            label: self.revision.clone(),
+            label: self
+                .revision
+                .clone()
+                .unwrap_or_else(|| "worktree".to_owned()),
             tone: ChipTone::Neutral,
         }]
     }
@@ -400,7 +403,7 @@ impl Plugin for SourceView {
         if command.name == "revision.edit" {
             return vec![Out::Kernel(Request::OpenPrompt {
                 label: "revision",
-                initial: self.revision.clone(),
+                initial: self.revision.clone().unwrap_or_default(),
                 tag: REVISION_PROMPT_TAG,
             })];
         }
@@ -445,10 +448,17 @@ impl Plugin for SourceView {
     fn perform(engine: &Engine, cmd: Cmd) -> Msg {
         match cmd {
             Cmd::Load(request) => {
-                let result = engine
-                    .show_source_outlines(&request.revision, request.mode, &request.selection)
-                    .map(Arc::from)
-                    .map_err(Box::new);
+                let result = if let Some(revision) = &request.revision {
+                    engine
+                        .show_source_outlines(revision, request.mode, &request.selection)
+                        .map(Arc::from)
+                        .map_err(Box::new)
+                } else {
+                    engine
+                        .show_filesystem_source_outlines(request.mode, &request.selection)
+                        .map(Arc::from)
+                        .map_err(Box::new)
+                };
                 Msg::ShowLoaded { request, result }
             }
         }
