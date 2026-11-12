@@ -710,8 +710,16 @@ fn omitted_show_in_a_bare_repository_fails_with_a_no_worktree_diagnostic() {
             String::from_utf8_lossy(&output.stdout)
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // Long build-directory paths can wrap the message across diagnostic
+        // gutter lines. Check the words without depending on that layout.
+        let words: Vec<_> = stderr
+            .split_whitespace()
+            .filter(|word| !matches!(*word, "|" | "│"))
+            .collect();
         assert!(
-            stderr.contains("has no worktree"),
+            words
+                .windows(3)
+                .any(|words| words == ["has", "no", "worktree"]),
             "stderr must name the missing worktree: {stderr}"
         );
     }
