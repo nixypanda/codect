@@ -1,0 +1,4 @@
+#if DEBUG
+struct A {}
+#else
+#endif

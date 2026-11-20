@@ -1,0 +1,3 @@
+@foo(bar: { ... })
+@deep(bar: outer({ ... }))
+struct S {}

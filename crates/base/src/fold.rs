@@ -92,7 +92,12 @@ pub fn fold_regions(outline: &FileOutline, lines: &[&str]) -> Vec<FoldRegion> {
                 parent_key: entry.item.parent_key.clone(),
                 kind: entry.item.kind,
                 retained,
-                start_line: fold_start(lines, raw_start, |line| folded.is_boundary(position, line)),
+                start_line: fold_start_from(
+                    lines,
+                    raw_start,
+                    |line| folded.is_boundary(position, line),
+                    folded.ancestor_start_floor(position),
+                ),
                 declaration_line: raw_start,
                 end_line: raw_end,
                 level: folded.depth_of(position) + 1,
@@ -103,11 +108,31 @@ pub fn fold_regions(outline: &FileOutline, lines: &[&str]) -> Vec<FoldRegion> {
 }
 
 pub fn fold_start(lines: &[&str], start_line: usize, is_boundary: impl Fn(usize) -> bool) -> usize {
+    fold_start_from(lines, start_line, is_boundary, 1)
+}
+
+/// `fold_start` with a hard lower bound. `floor` is one past the declaration
+/// start of the nearest enclosing declaration that begins on an earlier line.
+/// A child's leading annotation block must never grow up onto an ancestor's
+/// own header line: some languages mark those headers with a character that is
+/// also a line-comment opener (Swift `#if`, Python `#`), so the generic
+/// comment-walk would otherwise claim the guard as the child's annotation and
+/// hide it when the child fold is collapsed. The rule is language-agnostic: it
+/// uses only the outline's parent chain and spans, never grammar knowledge.
+fn fold_start_from(
+    lines: &[&str],
+    start_line: usize,
+    is_boundary: impl Fn(usize) -> bool,
+    floor: usize,
+) -> usize {
     let mut line = start_line;
-    while line > 1 {
+    while line > floor {
         let Some((block_start, form)) = annotation_start(lines, line - 1) else {
             break;
         };
+        if block_start < floor {
+            break;
+        }
         if form == Some(AnnotationForm::Trailing) && block_start > 1 && is_boundary(block_start - 1)
         {
             break;
@@ -176,6 +201,23 @@ impl FoldInput<'_> {
         self.spans.iter().enumerate().any(|(j, &(start, end))| {
             j != i && (start..=end).contains(&line) && !self.is_ancestor(i, j)
         })
+    }
+
+    /// One past the latest declaration-start line of an ancestor that begins
+    /// strictly before item `i`. An ancestor sharing `i`'s own start line (a
+    /// guard header reused by a first conditional branch) is not a boundary:
+    /// both legitimately start there. Returns 1 when there is no such ancestor.
+    fn ancestor_start_floor(&self, i: usize) -> usize {
+        let own_start = self.spans[i].0;
+        self.spans
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i && self.is_ancestor(i, j))
+            .map(|(_, &(start, _))| start)
+            .filter(|&start| start < own_start)
+            .map(|start| start + 1)
+            .max()
+            .unwrap_or(1)
     }
 
     fn depth_of(&self, i: usize) -> usize {
@@ -539,6 +581,11 @@ mod tests {
     fn outline_all(superset: Vec<ProjectedItem>) -> FileOutline {
         assemble_outline(&supported("src/lib.rs"), superset.clone(), superset)
             .expect("valid outline fixture")
+    }
+
+    fn outline_all_swift(superset: Vec<ProjectedItem>) -> FileOutline {
+        assemble_outline(&supported("src/lib.swift"), superset.clone(), superset)
+            .expect("valid swift outline fixture")
     }
 
     #[test]
@@ -1004,5 +1051,150 @@ mod tests {
         let lines = ["pub fn a() {}"];
         assert_eq!(fold_start(&lines, 5, |_| false), 5);
         assert_eq!(annotation_start(&lines, 5), None);
+    }
+
+    // Synthetic Swift conditional outlines. `#if` is deliberately also a
+    // Python comment opener in `annotation_start`; these fixtures prove the
+    // generic ancestor-start floor keeps that from swallowing a guard header.
+
+    #[test]
+    fn a_conditional_guard_is_never_swallowed_by_a_child_declaration() {
+        let lines = [
+            "#if DEBUG",       // 1: GROUP + first BRANCH header
+            "struct A {}",     // 2: A
+            "#elseif RELEASE", // 3: empty BRANCH header
+            "#else",           // 4: BRANCH header
+            "struct B {}",     // 5: B
+            "#endif",          // 6
+        ];
+        let group = "src/lib.swift::cond::if:DEBUG";
+        let b0 = format!("{group}::branch::0::if:DEBUG");
+        let b1 = format!("{group}::branch::1::elseif:RELEASE");
+        let b2 = format!("{group}::branch::2::else");
+        let file = outline_all_swift(vec![
+            projected(group, None, ItemKind::Module, 0, 5),
+            projected(&b0, Some(group), ItemKind::Module, 0, 1),
+            projected("A", Some(&b0), ItemKind::Type, 1, 1),
+            projected(&b1, Some(group), ItemKind::Module, 2, 2),
+            projected(&b2, Some(group), ItemKind::Module, 3, 4),
+            projected("B", Some(&b2), ItemKind::Type, 4, 4),
+        ]);
+
+        let regions = fold_regions(&file, &lines);
+        assert_eq!(regions.len(), 6);
+        // GROUP and the first BRANCH legitimately share the `#if` line.
+        assert_eq!(regions[0].start_line, 1);
+        assert_eq!(regions[0].end_line, 6);
+        assert_eq!(regions[0].level, 1);
+        assert_eq!(
+            regions[1].start_line, 1,
+            "the first BRANCH owns the #if guard"
+        );
+        assert_eq!(regions[1].level, 2);
+        // The child declaration starts at its own line, never at the guard.
+        assert_eq!(regions[2].start_line, 2);
+        assert_eq!(regions[2].declaration_line, 2);
+        assert_eq!(regions[2].end_line, 2);
+        assert_eq!(regions[2].level, 3);
+        // Later guards and their children remain independently visible.
+        assert_eq!(regions[3].start_line, 3);
+        assert_eq!(regions[4].start_line, 4);
+        assert_eq!(regions[5].start_line, 5);
+        assert!(
+            regions.iter().skip(2).all(|region| region.start_line > 1),
+            "no child declaration claims the #if guard line"
+        );
+    }
+
+    #[test]
+    fn nested_conditional_groups_and_empty_branches_keep_every_guard_visible() {
+        let lines = [
+            "#if OUTER",   // 1
+            "#if INNER",   // 2: nested GROUP + first BRANCH
+            "struct Deep", // 3
+            "}",           // 4
+            "#endif",      // 5: closes INNER
+            "#else",       // 6: empty outer BRANCH
+            "#endif",      // 7: closes OUTER
+        ];
+        let outer = "src/lib.swift::cond::if:OUTER";
+        let outer_b0 = format!("{outer}::branch::0::if:OUTER");
+        let inner = format!("{outer_b0}::cond::if:INNER");
+        let inner_b0 = format!("{inner}::branch::0::if:INNER");
+        let file = outline_all_swift(vec![
+            projected(outer, None, ItemKind::Module, 0, 6),
+            projected(&outer_b0, Some(outer), ItemKind::Module, 0, 4),
+            projected(&inner, Some(&outer_b0), ItemKind::Module, 1, 4),
+            projected(&inner_b0, Some(&inner), ItemKind::Module, 1, 3),
+            projected("Deep", Some(&inner_b0), ItemKind::Type, 2, 3),
+            projected(
+                &format!("{outer}::branch::1::else"),
+                Some(outer),
+                ItemKind::Module,
+                5,
+                5,
+            ),
+        ]);
+
+        let regions = fold_regions(&file, &lines);
+        let by_key = |key: &str| {
+            regions
+                .iter()
+                .find(|region| region.stable_key == key)
+                .expect("region exists")
+        };
+        assert_eq!(by_key(outer).start_line, 1, "outer #if guard visible");
+        assert_eq!(
+            by_key(&outer_b0).start_line,
+            1,
+            "outer first BRANCH shares it"
+        );
+        assert_eq!(by_key(&inner).start_line, 2, "nested #if guard visible");
+        assert_eq!(
+            by_key(&inner_b0).start_line,
+            2,
+            "nested first BRANCH shares it"
+        );
+        assert_eq!(
+            by_key("Deep").start_line,
+            3,
+            "child never swallows either guard"
+        );
+        assert_eq!(
+            by_key(&format!("{outer}::branch::1::else")).start_line,
+            6,
+            "empty #else guard visible"
+        );
+    }
+
+    #[test]
+    fn leading_swift_attributes_and_suite_tests_fold_in_without_hiding_the_guard() {
+        let lines = [
+            "#if DEBUG",          // 1
+            "@Suite",             // 2
+            "struct MathTests {", // 3
+            "    @Test",          // 4
+            "    func add() {}",  // 5
+            "}",                  // 6
+            "#endif",             // 7
+        ];
+        let group = "src/lib.swift::cond::if:DEBUG";
+        let branch = format!("{group}::branch::0::if:DEBUG");
+        let file = outline_all_swift(vec![
+            projected(group, None, ItemKind::Module, 0, 6),
+            projected(&branch, Some(group), ItemKind::Module, 0, 5),
+            projected("MathTests", Some(&branch), ItemKind::Type, 2, 5),
+            projected("add", Some("MathTests"), ItemKind::Method, 4, 4),
+        ]);
+
+        let regions = fold_regions(&file, &lines);
+        let suite = &regions[2];
+        let test = &regions[3];
+        assert_eq!(suite.start_line, 2, "@Suite folds into the type");
+        assert_eq!(suite.declaration_line, 3);
+        assert_eq!(test.start_line, 4, "@Test folds into the method");
+        assert_eq!(test.declaration_line, 5);
+        assert_eq!(regions[0].start_line, 1, "the #if guard stays its own row");
+        assert_eq!(regions[1].start_line, 1);
     }
 }

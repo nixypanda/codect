@@ -1,0 +1,5 @@
+#if DEBUG
+struct A {}
+#else
+func f() {}
+#endif

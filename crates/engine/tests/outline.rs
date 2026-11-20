@@ -161,8 +161,12 @@ fn tests_mode_outline_is_the_signatures_superset_and_retains_only_tests() {
         let language = repo_path_of(&path).language();
 
         // Elm and Haskell retain nothing, module header included, so an empty
-        // projection means the same thing in every language.
-        if !matches!(language, Some(Language::Rust) | Some(Language::Python)) {
+        // projection means the same thing in every language. Rust, Python, and
+        // Swift implement test detection.
+        if !matches!(
+            language,
+            Some(Language::Rust) | Some(Language::Python) | Some(Language::Swift)
+        ) {
             let tests = project_source(
                 &repo_path_of(&path),
                 &std::fs::read(&path).unwrap(),

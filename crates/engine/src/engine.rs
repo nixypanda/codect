@@ -44,6 +44,7 @@ use lang_elm::ElmProjector;
 use lang_haskell::HaskellProjector;
 use lang_python::PythonProjector;
 use lang_rust::RustProjector;
+use lang_swift::SwiftProjector;
 
 use crate::config;
 use crate::error::EngineError;
@@ -52,12 +53,16 @@ static ELM_PROJECTOR: ElmProjector = ElmProjector;
 static HASKELL_PROJECTOR: HaskellProjector = HaskellProjector;
 static PYTHON_PROJECTOR: PythonProjector = PythonProjector;
 static RUST_PROJECTOR: RustProjector = RustProjector;
+static SWIFT_PROJECTOR: SwiftProjector = SwiftProjector;
 
-const PROJECTORS: [&dyn LanguageProjector; 4] = [
+// The fixed order preserves the original four languages; Swift is appended so
+// selection stays deterministic and existing projections are unaffected.
+const PROJECTORS: [&dyn LanguageProjector; 5] = [
     &ELM_PROJECTOR,
     &HASKELL_PROJECTOR,
     &PYTHON_PROJECTOR,
     &RUST_PROJECTOR,
+    &SWIFT_PROJECTOR,
 ];
 
 // The canonical Git empty-tree object ids accepted as `:empty`, for SHA-1 and

@@ -20,9 +20,9 @@ const FOCUSED_DIFF_HELP: &str = "Focused diffs are semantic: implementation-only
     name = "codect",
     version,
     about = "Show and diff canonical Type, Signature, and Test projections of Git revisions",
-    long_about = "Codect projects committed Elm, Haskell, Python, and Rust source files \
-                  into canonical Type, Signature, and Test forms and diffs those \
-                  projections between two revisions.\n\nFocused diffs are semantic: implementation-only \
+    long_about = "Codect projects Elm, Haskell, Python, Rust, and Swift source files \
+                  from Git revisions or disk into canonical Type, Signature, and Test \
+                  forms and diffs those projections between two snapshots.\n\nFocused diffs are semantic: implementation-only \
                   changes such as function bodies, comments, and whitespace are \
                   invisible, except that a body-only change inside a detected file move \
                   remains visible as a move with no focused hunks. Equal unmoved files \
@@ -230,7 +230,9 @@ pub enum Mode {
     Types,
     /// Types plus function, method, value, constant, and static signatures.
     Signatures,
-    /// Signatures restricted to test declarations, in Rust and Python.
+    /// Signatures restricted to test declarations, in Rust, Python, and Swift
+    /// (Swift Testing `@Test` and syntactic same-file XCTest; `@Suite` alone
+    /// does not make members tests).
     Tests,
 }
 

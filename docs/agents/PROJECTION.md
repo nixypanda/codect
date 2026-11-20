@@ -2,7 +2,7 @@
 
 Audience: agents and other machine consumers that need to reason about what
 Codect emits. `PRODUCT.md` is authoritative; `TECHNICAL_DESIGN.md` sections
-5–13 and 23–24 hold the full rules.
+5–13, 23, 24, and 25 hold the full rules.
 
 ## Modes
 
@@ -12,7 +12,7 @@ Codect has three implemented projection modes.
 | --- | --- |
 | `types` | Type declarations only: the shape of the code. |
 | `signatures` | Everything in `types`, plus every named function, method, and value signature. |
-| `tests` | The `signatures` projection restricted to test declarations. Rust and Python only. |
+| `tests` | The `signatures` projection restricted to test declarations. Rust, Python, and Swift only. |
 
 Two more modes are planned but not implemented: `public` (public interface
 filtering) and `full` (complete source). The Neovim plugin has a local `full`
@@ -103,6 +103,29 @@ same Python language for this purpose.
   Canonical rendering normalizes a dangling trailing comma inside any bracketed
   list, so adding or removing one is a formatting-only edit.
 
+### Swift
+
+- Selected by the case-sensitive `.swift` extension; parsed with
+  `tree-sitter-swift`, with no compiler, SDK, or SourceKit involved.
+- Types: structs, classes, actors, enums (including nested types) with generics
+  and inheritance; protocols with associated types and typed property
+  requirements; conformance-carrying or non-empty extensions; enum cases;
+  `typealias`/`associatedtype`; typed properties with accessor specifiers and
+  effects; operators; and preserved attributes.
+- Signatures: adds callables and requirements, free functions, globals with
+  only their written type, untyped properties, `init`/`deinit`/`subscript`, and
+  macro declaration signatures.
+- Concrete `func`/method/`init`/`deinit` bodies become `{ ... }`; protocol
+  requirements have no placeholder; computed properties and subscripts render
+  `{ get async throws }`-style specifiers only (`subscript(i: Int) -> Int { get set }`,
+  including setter-only subscripts) and observers `{ willSet didSet }`;
+  initializers and inferred types are absent.
+- Closures inside attribute arguments, parameter defaults, and interpolation are
+  replaced by `{ ... }` at any depth. Conditional guards are token-normalized,
+  never evaluated, and add no indentation; malformed directive sequences and
+  an accessor-position `_read { ... }` (not an ordinary `_read()` call) are
+  fatal.
+
 ### Tests mode
 
 `tests` mode is the `signatures` projection of a language's test declarations,
@@ -120,6 +143,14 @@ Detection rules:
 - Python: a function named `test_*`. A class is retained only when one of its
   methods is a test, covering pytest `Test*` classes and `unittest.TestCase`
   alike. The check runs on the `definition` inside a `decorated_definition`.
+- Swift: a function carrying `@Test` (final path segment, including
+  `@Testing.Test` and `@Test(arguments: ...)`); any enclosing Swift type holding
+  a surviving test is retained as its container, and `@Suite` is optional
+  metadata that alone never makes a member a test. An XCTest method has a
+  non-empty `test` prefix, zero parameters, and no `static`/`class` modifier, in
+  a class directly naming a `XCTestCase`-ending base or an extension targeting
+  such a class declared in the same file. No custom-base inference, cross-file
+  inheritance resolution, setup/teardown helpers, or generated tests.
 - Elm and Haskell: no detection; a file in either language retains nothing.
 
 The filter runs where members are collected, not after the item list is built: a
@@ -127,7 +158,8 @@ nested item's text is already spliced into its ancestor's `canonical_text`, so
 filtering first lets each container compose its fragment from surviving members.
 
 Not detected: macro-generated cases, `#[bench]`, `#[test]` methods inside a
-`#[cfg(test)] impl` block, and Python fixtures.
+`#[cfg(test)] impl` block, Python fixtures, and Swift `@Suite` members without
+`@Test` or XCTest methods reached through a custom or cross-file base.
 
 ## Stable keys
 
@@ -139,6 +171,10 @@ is not displayed by default. Typical forms:
 - Rust inherent impl: normalized target type; trait impl: normalized trait path
   plus normalized target type.
 - Python file module: repository path; class member: class key, kind, name.
+- Swift: `<container_key>::<kind_token>::<name>`, with `kind_token` such as
+  `type`, `trait`, `impl`, `variant`, `type_alias`, `assoc_type`, `field`,
+  `function`, `method`, `constructor`, `value`, `operator`, `macro`, plus
+  synthetic `cond`/`branch`; callables include normalized external labels.
 
 Keys never include byte offsets, so an edit before a declaration does not
 destabilize it. A collision appends a deterministic source-order ordinal.
@@ -181,4 +217,4 @@ TECHNICAL_DESIGN.md section 5.
 - [CLI and JSON contract](CONTRACT.md).
 - [Invariants](INVARIANTS.md).
 - [`docs/PRODUCT.md`](../PRODUCT.md).
-- [`docs/TECHNICAL_DESIGN.md`](../TECHNICAL_DESIGN.md) sections 5–13, 23–24.
+- [`docs/TECHNICAL_DESIGN.md`](../TECHNICAL_DESIGN.md) sections 5–13, 23–25.

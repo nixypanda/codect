@@ -70,7 +70,8 @@ there is nothing for the plugin to open or close.
 
 The plugin's mode vocabulary is its own, independent of the binary's `--mode`. The
 binary also has a `tests` mode (Signatures restricted to test declarations,
-recognized for Rust and Python only). The fold viewer does not expose it: adding
+recognized for Rust, Python, and Swift only). The fold viewer does not expose
+it: adding
 it there means deciding where it sits in the `types -> signatures -> full` cycle
 and how a buffer folds when most declarations are not retained. The Diffview
 adapter does expose it as `:CodectDiffview tests`.

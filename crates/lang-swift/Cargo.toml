@@ -1,0 +1,17 @@
+[package]
+name = "lang-swift"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Swift language adapter. The crate parses Swift sources with tree-sitter-swift
+# and projects Types/Signatures/Tests views into the shared model. Gate A grammar
+# probe helpers remain as library APIs for the regression suite; no diagnostic
+# executable is shipped.
+
+[dependencies]
+base.workspace = true
+tree-sitter.workspace = true
+tree-sitter-swift.workspace = true

@@ -17,7 +17,7 @@
       "const": "codect.diff.v2"
     },
     "mode": {
-      "description": "The projection mode requested on the command line. `tests` is the Signatures projection restricted to test declarations, and is recognized for Rust and Python only; other languages retain nothing, so they project to an empty declaration list. Note that `tests` widens this enum's value set within `codect.diff.v2` rather than adding a field: a consumer that validates `mode` against the enum will reject `tests` as an unknown value, which is the intended loud failure.",
+      "description": "The projection mode requested on the command line. `tests` is the Signatures projection restricted to test declarations, and is recognized for Rust, Python, and Swift only; Elm and Haskell retain nothing, so they project to an empty declaration list. Swift detection is syntactic (`@Test` with any enclosing type as its container — `@Suite` is optional metadata — plus same-file `XCTestCase`-based `test*` methods); it does not resolve custom or cross-file bases and `@Suite` alone does not make members tests. Note that `tests` widens this enum's value set within `codect.diff.v2` rather than adding a field: a consumer that validates `mode` against the enum will reject `tests` as an unknown value, which is the intended loud failure.",
       "enum": [
         "types",
         "signatures",
@@ -87,7 +87,8 @@
             "elm",
             "haskell",
             "python",
-            "rust"
+            "rust",
+            "swift"
           ]
         },
         "status": {

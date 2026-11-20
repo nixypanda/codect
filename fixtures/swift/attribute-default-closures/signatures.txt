@@ -1,0 +1,5 @@
+@foo(bar: { ... })
+@deep(bar: outer({ ... }))
+struct S {
+    func f(_ cb: () -> Void = { ... }, _ d: () -> Void = outer({ ... })) { ... }
+}

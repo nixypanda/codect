@@ -1,0 +1,11 @@
+typealias Handler<T> = (T) -> Void
+
+let globalConst: Int
+
+var globalVar: String
+
+infix operator ??? : AdditionPrecedence
+
+@attached(member, names: named(init)) macro Member()
+
+macro M(_ x: Int) -> Int

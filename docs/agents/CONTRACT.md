@@ -14,16 +14,19 @@ codect show --format <text|json> --mode <types|signatures|tests> [--path <PATH> 
 codect diff --format <text|json> --mode <types|signatures|tests> [--merge-base] [--path <PATH> | --area <AREA>]... <BASE> <TARGET>
 ```
 
-`tests` is recognized for Rust and Python only. Elm and Haskell retain nothing
-in that mode, including a module header.
+`tests` is recognized for Rust, Python, and Swift only. Elm and Haskell retain
+nothing in that mode, including a module header.
 
 - `show` with an omitted `REVISION` projects supported files on disk (Git-independent); an explicit `REVISION` requires Git.
 - `--mode` is required; there is no default.
 - `tests` is the Signatures projection restricted to test declarations, and is
-  recognized for Rust and Python only. An Elm or Haskell file retains nothing,
-  including its module header, so it projects to an empty declaration list. An
-  empty projection therefore does not distinguish "detection unavailable" from
-  "no tests"; `PRODUCT.md` records that as a known gap.
+  recognized for Rust, Python, and Swift only. An Elm or Haskell file retains
+  nothing, including its module header, so it projects to an empty declaration
+  list. An empty projection therefore does not distinguish "detection
+  unavailable" from "no tests"; `PRODUCT.md` records that as a known gap. Swift
+  detection is syntactic (Swift Testing `@Test` with any enclosing type as its
+  container — `@Suite` is optional metadata — plus same-file `XCTestCase`-based
+  `test*` methods).
 - `--format` defaults to `text`. `text` output is the canonical projection and is
   byte-for-byte stable.
 - `--format json` on `diff` additionally accepts the snapshots `:index`,

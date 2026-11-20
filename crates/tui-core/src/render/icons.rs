@@ -43,6 +43,7 @@ impl Icons {
                 Some(Language::Elm) => "\u{e62c}",
                 Some(Language::Haskell) => "\u{e777}",
                 Some(Language::Python) => "\u{e73c}",
+                Some(Language::Swift) => "\u{e755}",
                 None => "\u{f15b}",
             },
         }
@@ -50,8 +51,8 @@ impl Icons {
 }
 
 #[cfg(test)]
-const NERD_GLYPHS: [&str; 6] = [
-    "\u{f07b}", "\u{e7a8}", "\u{e62c}", "\u{e777}", "\u{e73c}", "\u{f15b}",
+const NERD_GLYPHS: [&str; 7] = [
+    "\u{f07b}", "\u{e7a8}", "\u{e62c}", "\u{e777}", "\u{e73c}", "\u{e755}", "\u{f15b}",
 ];
 
 #[cfg(test)]
@@ -70,6 +71,7 @@ mod tests {
         assert_eq!(icons.file(&path("src/Main.elm")), "\u{e62c}");
         assert_eq!(icons.file(&path("src/Main.hs")), "\u{e777}");
         assert_eq!(icons.file(&path("src/app.py")), "\u{e73c}");
+        assert_eq!(icons.file(&path("src/App.swift")), "\u{e755}");
         assert_eq!(icons.file(&path("README.md")), "\u{f15b}");
     }
 

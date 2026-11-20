@@ -10,10 +10,11 @@ sequence as historical context.
 
 The current implementation supports:
 
-- Elm, Haskell, Python, and Rust source files.
+- Elm, Haskell, Python, Rust, and Swift source files.
 - Types, Signatures, and Tests projection modes. Tests mode recognizes tests in
-  Rust and Python only; Elm and Haskell retain nothing, including their module
-  headers, so they project to an empty declaration list.
+  Rust, Python, and Swift (Swift Testing and syntactic XCTest) only; Elm and
+  Haskell retain nothing, including their module headers, so they project to an
+  empty declaration list.
 - Showing a projection for a Git commit, or for supported files on disk when no
   revision is given (inside or outside Git).
 - Diffing projections from two Git commits in text or JSON; JSON also compares
@@ -31,7 +32,7 @@ or implement Public and Full projection modes. The editor projection surface
 | Implementation language | Rust, stable toolchain, Rust 2024 edition |
 | Project structure | Cargo workspace with separate core, language, Git, and CLI crates |
 | Git access | `gix`, read-only, behind an Codect-owned interface |
-| Parsing | Tree-sitter with the Elm, Haskell, Python, and Rust grammars |
+| Parsing | Tree-sitter with the Elm, Haskell, Python, Rust, and Swift grammars |
 | Projection | Language-specific extraction into a small shared projection model |
 | Rendering | Deterministic, language-specific canonical rendering |
 | Diffing | Line-oriented patience diff over canonical projected text |
@@ -94,6 +95,12 @@ crates/
       extract.rs
       render.rs
       syntax.rs
+  lang-swift/
+    src/
+      lib.rs
+      syntax.rs
+      extract.rs
+      render.rs
   engine/
     src/
       lib.rs
@@ -762,6 +769,14 @@ Prefer explicit tree traversal and named field access for hierarchical declarati
 
 Centralize node-kind string constants in each crate's `syntax.rs`. Grammar upgrades should fail focused tests when node names or shapes change.
 
+Swift adds two validations the grammar does not perform: conditional directives
+are flat and malformed sequences parse cleanly, so the adapter reconstructs and
+validates `#if`/`#elseif`/`#else`/`#endif` stacks in every declaration container;
+and an unsupported accessor-position `_read { ... }` is a clean misparse that
+must be detected by an exact identifier followed by an accessor body (never a
+source-prefix test, and never an ordinary `_read()` call). Both failures are
+fatal (section 15). See section 25.
+
 ## 10. Canonical rendering
 
 Canonical rendering leaves an unmoved file's projection and content hunks
@@ -782,7 +797,8 @@ Line breaks are fixed by declaration shape and by a single compile-time width bu
 - A decorator argument or parameter default that is itself a bracketed value (a Python list, dictionary, tuple, call, subscript, or splat) breaks one element per indented line when its own flat form does not fit at its column. A nested type list or value collection re-decides at its own column after an enclosing list breaks; the column the enclosing list's trailing comma will occupy is charged to the item it lands on, so a line never overflows the budget by that comma.
 - A Haskell `type` synonym whose right-hand side does not fit breaks after `=` and then before each type operator, one operator-led item per indented line.
 - Atomic tokens are never split: a line dominated by one long string literal, identifier, or macro attribute body may still exceed the budget, exactly as a conventional formatter leaves it.
-- A broken Python or Rust bracketed list emits a trailing comma; an inline list does not.
+- A broken Python, Rust, or Swift bracketed list emits a trailing comma; an inline list does not.
+- A Swift attribute is token-normalized independent of source whitespace: a single attribute renders inline when it fits; two or more render one per line before the declaration. Conditional directives add no indentation level.
 - Haskell and Elm never emit a trailing comma: broken lists and records use a leading-comma block (`( a\n, b\n)`), matching their existing record style.
 - One union constructor, enum variant, struct field, or record field per indented line when a declaration has a body.
 - One trait or implementation member per indented block.
@@ -1181,8 +1197,8 @@ Rules:
   `--stdin`/`--worktree` input forms; section 14.2 defines the JSON document.
 - `--mode` is required; do not introduce a default before product validation.
 - `--mode tests` is the Signatures projection restricted to test declarations;
-  see section 5. Test detection covers Rust and Python; an Elm or Haskell file
-  retains nothing, including its module header.
+  see section 5. Test detection covers Rust, Python, and Swift; an Elm or Haskell
+  file retains nothing, including its module header.
 - Both diff sides are required. In both `text` and `json`, a side accepts a
   commit, `:index`, `:worktree`, or `:empty` (or the canonical empty-tree
   object ID).
@@ -1556,6 +1572,24 @@ Required Python cases:
   its helper and attributes; a class with no test members that must be dropped
   entirely; and a `unittest.TestCase` class.
 
+Required Swift cases (from the frozen contract in
+`docs/plans/swift-language-contract.md`):
+
+- All declaration families: structs, classes, actors, enums, protocols,
+  extensions, nested types, enum cases, `typealias`, `associatedtype`, typed and
+  untyped properties, globals, operators, and macro declarations.
+- Generics, constraints, inheritance, conformances, constrained extensions,
+  overloads, Unicode/escaped identifiers, and multiline signatures.
+- Nested generic/function/tuple/optional/existential/opaque/metatype types;
+  attributes, defaults, strings with comment-looking text, and long wrapping.
+- Accessors, observers, accessor effects, wrappers, macros, conditional branches,
+  and both test frameworks. Equal projections after body, initializer, comment,
+  and formatting edits; changed projections after type/signature/modifier/guard
+  edits.
+- Stable keys after preceding edits, collisions and filtered sibling collisions,
+  source spans, and valid parent chains. Malformed headers and malformed bodies
+  must be fatal with no partial projection.
+
 Fixture and test file location:
 
 - Unit tests live beside the code they cover.
@@ -1577,7 +1611,7 @@ For every language, prove:
 - Adding a private function changes Signatures output.
 - Reordering declarations changes projected order.
 
-For Rust and Python, additionally prove, of the Tests projection:
+For Rust, Python, and Swift, additionally prove, of the Tests projection:
 
 - Changing a test body, its attributes, or its decorators leaves it unchanged.
 - Adding a non-test function leaves it unchanged.
@@ -2460,3 +2494,98 @@ def parse(text: str) -> int: ...
 
 MAX: int
 ```
+
+## 25. Swift projection
+
+Swift is the fifth language. It is selected by the case-sensitive `.swift`
+extension and implemented in `lang-swift` with `tree-sitter-swift`; no Swift
+compiler, Apple SDK, SourceKit, dependency resolution, or macro expansion is
+used. Its frozen behavior target is
+`docs/plans/swift-language-contract.md`; that contract, not a snapshot of the
+implementation, defines the item kinds, keys, placeholders, conditional
+reconstruction, and Tests rules summarized here.
+
+### 25.1 Modes and rendering
+
+- Types retains the shape of structs/classes/actors/enums (including nested
+  types), protocols (generics, inheritance, associated types, and typed property
+  requirements), conforming extensions and extensions with type-level members,
+  enum cases, `typealias`/`associatedtype`, typed properties with specifiers and
+  effects, operators, and preserved attributes. A conformance header survives
+  with no visible members; a non-conformance extension with only callables is
+  omitted from Types (retained in Signatures); an empty non-conformance
+  extension is omitted in every mode.
+- Signatures is the superset: it adds callables, requirements, free functions,
+  globals with their written type only, untyped properties, `init`, `deinit`,
+  `subscript`, and macro declaration signatures. Each binding pattern of a
+  multi-binding declaration is one item — `Value` for globals, `Field` for
+  type-level properties. A tuple pattern is one item named by its canonical
+  written pattern (`(a, b)`); its tuple annotation stays on the tuple pattern,
+  the initializer is dropped, and element types are never inferred. A shared
+  trailing annotation propagates only through preceding uninitialized simple
+  bindings of the same declaration (`var x, y: Int`), never onto an initialized
+  untyped binding and never across an initialized binding. Each span covers the
+  complete binding including its stripped implementation.
+- Concrete `func`/method/`init`/`deinit` bodies become `{ ... }`; protocol
+  requirements have no placeholder; computed properties and subscripts render
+  specifiers/effects only (`{ get async throws }`,
+  `subscript(i: Int) -> Int { get set }`) and observers render
+  `{ willSet didSet }`; stored initializers are removed; no type is inferred.
+- Every closure inside an attribute argument or parameter default is replaced by
+  `{ ... }` at any depth; executable closures inside string interpolation are
+  stripped while literal text is preserved. Attributes are token-normalized in
+  source order: one inline when it fits, two or more one per line before the
+  declaration.
+- Conditional guards are never evaluated or dropped. A retained sequence keeps
+  all original branch headers in source order, including empty branches; guards
+  are token-normalized (`os(iOS)` == `os ( iOS )`) with comments omitted; a
+  sequence with no retained member is dropped. Directives add no indentation.
+  Branch spans come from source declarations, independent of projection mode.
+- Wrapping uses `base::doc` only, at `base::LINE_WIDTH` (80).
+
+### 25.2 ItemKind mapping, keys, and outline
+
+Swift reuses existing `ItemKind`s; no new kind is added and the active JSON
+schemas widen `language` with `swift` without a schema version bump. Types and
+protocols map to `Type`/`Trait`, extensions to `TraitImplementation`, enum cases
+to `Variant`, `typealias`/`associatedtype` to `TypeAlias`/`AssociatedType`,
+properties to `Field`, callables to `Function`/`Method`/`Constructor`, globals to
+`Value`, operators and macro declarations to `Operator`/`Function`, and
+synthetic conditional groups/branches to `Module`. Keys are mode-independent and
+allocated in a Signatures-superset pass so every Types and Tests key exists in
+the Signatures outline; callable identity includes normalized external argument
+labels.
+
+### 25.3 Grammar limitations and failure policy
+
+Parsing is all-or-nothing: a parser-assignment failure, a `None` parse, or any
+`ERROR`/`MISSING` node anywhere — including inside a stripped body — is fatal.
+In addition:
+
+- Conditional directives are flat and malformed sequences are grammar-valid, so
+  the adapter reconstructs and validates the stack; unmatched or duplicate
+  directives, `#elseif` after `#else`, and missing `#endif` are fatal.
+- Accessor-position `_read { ... }` is not modeled and is fatal, detected by an
+  exact identifier followed by an accessor body (never a prefix match such as
+  `_reader`); ordinary `_read()` calls and `_read(...)` calls in getter bodies
+  are allowed.
+- `async` and some isolation modifiers are anonymous tokens captured
+  token-wise with canonical effect ordering.
+- Braced macro definitions are invalid input and fatal; `macro_definition`
+  and `external_macro_definition` are stripped, and macro invocations never
+  synthesize declarations.
+- There is no macro expansion, type inference, visibility filtering, or
+  cross-file resolution. `precedencegroup` bodies are omitted.
+
+### 25.4 Tests mode
+
+Tests mode is the Signatures filter, not a detail level, and declares no types.
+A function carrying `@Test` (final path segment, including `@Testing.Test` and
+`@Test(arguments: ...)`) is a test; any enclosing Swift type holding a surviving
+test is retained as its container, and `@Suite` is optional metadata that alone
+never makes a member a test. An XCTest method has a `test` prefix with a
+non-empty remainder, zero parameters, and no `static`/`class` modifier, in a
+`class` directly naming a `XCTestCase`-ending base or an `extension` whose target
+is such a class declared in the same file. There is no custom-base inference,
+cross-file inheritance resolution, setup/teardown helper detection, or generated
+test detection. Members are filtered before ancestor text is composed.

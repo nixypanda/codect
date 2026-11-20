@@ -1,0 +1,6 @@
+protocol Repository: AnyObject, Sendable {
+    associatedtype Item: Identifiable where Item.ID == Int
+    var all: [Item] { get async throws }
+    func find(id: Int) -> Item?
+    init(seed: Int)
+}

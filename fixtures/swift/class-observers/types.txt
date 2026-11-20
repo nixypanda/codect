@@ -1,0 +1,5 @@
+final class Counter: Base {
+    private(set) var value: Int { willSet didSet }
+    var doubled: Int { get set }
+    var written: Int { mutating get nonmutating set }
+}

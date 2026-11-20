@@ -795,6 +795,7 @@ dependencies = [
  "lang-haskell",
  "lang-python",
  "lang-rust",
+ "lang-swift",
  "serde",
  "tempfile",
  "thiserror 2.0.20",
@@ -2109,6 +2110,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lang-swift"
+version = "0.2.0"
+dependencies = [
+ "base",
+ "tree-sitter",
+ "tree-sitter-swift",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3355,6 +3365,16 @@ name = "tree-sitter-rust"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-swift"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2688c06564afa397313e0db17d140a73e2c6a47f3884794614246167c9dd5dfd"
 dependencies = [
  "cc",
  "tree-sitter-language",

@@ -1,0 +1,1 @@
+extension Array: Hello where Element: Numeric {}

@@ -355,6 +355,7 @@ fn language_name(language: Language) -> &'static str {
         Language::Haskell => "haskell",
         Language::Python => "python",
         Language::Rust => "rust",
+        Language::Swift => "swift",
     }
 }
 
@@ -396,6 +397,15 @@ mod tests {
             retained: BTreeSet::new(),
             outline: Vec::new(),
         }
+    }
+
+    #[test]
+    fn every_language_has_its_json_name() {
+        assert_eq!(language_name(Language::Elm), "elm");
+        assert_eq!(language_name(Language::Haskell), "haskell");
+        assert_eq!(language_name(Language::Python), "python");
+        assert_eq!(language_name(Language::Rust), "rust");
+        assert_eq!(language_name(Language::Swift), "swift");
     }
 
     #[test]

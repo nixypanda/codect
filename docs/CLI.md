@@ -17,8 +17,8 @@ codect diff --format <text|json> --mode <types|signatures|tests> [--merge-base] 
 - `show` with an omitted `REVISION` projects supported files on disk (Git-independent); an explicit `REVISION` requires Git.
 - `--mode` is required. `types` shows type declarations; `signatures` adds every
   named function, method, and value signature; `tests` is the Signatures
-  projection restricted to tests in Rust and Python. Function bodies are never
-  shown.
+  projection restricted to tests in Rust, Python, and Swift. Function bodies are
+  never shown.
 - `--format` defaults to `text`, the canonical projection. `--format json` emits
   the versioned documents described below.
 - `diff` takes two independent revisions (not a range). Both text and JSON diff
