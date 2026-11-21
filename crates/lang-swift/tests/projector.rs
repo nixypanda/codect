@@ -61,6 +61,34 @@ fn grammar_errors_are_fatal_even_inside_stripped_bodies() {
 }
 
 #[test]
+fn unit_tuple_recovery_does_not_mask_malformed_syntax() {
+    // The empty tuple expression `()` is the pinned grammar's only accepted
+    // recovery. Every other tuple-like recovery or error stays fatal.
+    let path = supported("src/lib.swift");
+    for source in [
+        "func f() { let x = (,) }\n",
+        "func f() { let x = (?) }\n",
+        "func f() { let x = (. ) }\n",
+        "func f() { let x = ( }\n",
+        "func f() { let x = ()) }\n",
+        "func f() { let x = (); let y = ; }\n",
+    ] {
+        let error = SwiftProjector::new()
+            .project(ProjectionInput {
+                path: &path,
+                source,
+                mode: ProjectionMode::Signatures,
+            })
+            .expect_err("malformed syntax must stay fatal");
+        assert!(
+            matches!(error, ProjectionError::ErroneousSyntax { .. }),
+            "{source:?} produced {error:?}"
+        );
+        assert!(error.range().is_some(), "{source:?}");
+    }
+}
+
+#[test]
 fn clean_misparsed_read_accessor_is_fatal_not_silently_accepted() {
     // The grammar accepts `_read { ... }` alone; contract §3/§5.1 require the
     // adapter to reject it in accessor position with its own validation layer,

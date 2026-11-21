@@ -238,6 +238,31 @@ fn swift_explicit_revision_stdin_and_worktree_agree() {
 }
 
 #[test]
+fn swift_unit_tuple_expression_is_accepted_on_stdin() {
+    let repo = TestRepo::init();
+    let source = "func example() { return .success(()) }\n";
+    let output = codect_in(
+        &repo,
+        &[
+            "show",
+            "--stdin",
+            "--path",
+            "src/Example.swift",
+            "--mode",
+            "signatures",
+        ],
+    )
+    .write_stdin(source)
+    .output()
+    .expect("run codect");
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "== src/Example.swift ==\nfunc example() { ... }\n"
+    );
+}
+
+#[test]
 fn swift_tests_mode_is_available_on_stdin_disk_and_json() {
     let repo = TestRepo::init();
     repo.write("src/Tests.swift", SWIFT_TESTS);

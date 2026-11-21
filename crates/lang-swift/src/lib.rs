@@ -5,6 +5,8 @@
 //! files. Parsing, extraction, and canonical rendering are all-or-nothing: any
 //! error or missing node anywhere (including inside a stripped body), an
 //! unsupported `_read` accessor, or a malformed conditional sequence is fatal.
+//! The one exception is the pinned grammar's missing production for the empty
+//! tuple expression `()`; only its exact recovery shape is accepted.
 //!
 //! This module also retains the two Gate A reference algorithms that the frozen
 //! contract specifies and that the grammar-probe tests exercise directly:

@@ -154,8 +154,9 @@ check-tui-core-boundary`, and the `cargo tree` audit in `just check`.
 - Allocation and parser failures are reported, not panicked. Swift additionally
   rejects malformed conditional-directive sequences and an accessor-position
   `_read { ... }` (but allows an ordinary `_read()` call) even when the grammar
-  parses them cleanly; these are fatal like any other selected projection
-  failure.
+  parses them cleanly, and accepts only the pinned grammar's exact recovery for
+  the empty tuple expression `()`; every other ERROR/MISSING node remains fatal
+  like any other selected projection failure.
 - `panic!`, `unwrap`, and `expect` are reserved for tests and statically
   guaranteed initialization.
 

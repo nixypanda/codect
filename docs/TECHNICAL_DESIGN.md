@@ -761,6 +761,8 @@ Rules:
 - Parse UTF-8 source bytes in one operation; incremental parsing is not needed for commit snapshots.
 - Treat a `None` parse result as fatal.
 - Treat a root containing `ERROR` or missing nodes as a fatal projection error.
+  The sole exception is the pinned Swift grammar's missing empty-tuple-expression
+  production, recovered only in its exact shape (section 25.3).
 - Include the first useful error range in the diagnostic.
 - Never guess around erroneous syntax or silently emit a partial file.
 - Continue collecting errors from other files internally, but do not print a focused result that could be mistaken for complete when any supported file failed.
@@ -2560,6 +2562,10 @@ labels.
 
 Parsing is all-or-nothing: a parser-assignment failure, a `None` parse, or any
 `ERROR`/`MISSING` node anywhere — including inside a stripped body — is fatal.
+The sole exception is the pinned grammar's missing production for the empty
+tuple expression `()`: only a missing `!` directly under `bang` under
+`tuple_expression`, whose tuple contains nothing but `(`, that bang, `)`, and
+comments, is accepted; every other `ERROR`/`MISSING` node remains fatal.
 In addition:
 
 - Conditional directives are flat and malformed sequences are grammar-valid, so

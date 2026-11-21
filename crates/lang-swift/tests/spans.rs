@@ -73,6 +73,30 @@ fn spans_cover_the_declared_item_text() {
 }
 
 #[test]
+fn unit_tuple_recovery_does_not_shift_declared_spans() {
+    // The inserted MISSING `!` is zero-width; the recovered tuple must not move
+    // a declaration's span off the exact source text it occupies.
+    let source = "struct S {\n    func f(_ value: () = ()) { return .success(()) }\n}\n";
+    let expected = "func f(_ value: () = ()) { return .success(()) }";
+    let projected = file(source, ProjectionMode::Signatures);
+    let method = projected
+        .items()
+        .iter()
+        .find(|item| item.name.contains("f("))
+        .expect("method item");
+    assert_eq!(
+        &source[method.span.start_byte()..method.span.end_byte()],
+        expected
+    );
+    assert_eq!((method.span.start_line(), method.span.end_line()), (1, 1));
+    assert!(
+        !method.canonical_text.contains('!'),
+        "recovery token leaked: {}",
+        method.canonical_text
+    );
+}
+
+#[test]
 fn retained_item_spans_are_mode_independent() {
     let source = "struct S {\n    var typed: Int\n    func helper() {}\n}\nlet g: Int = 1\n";
     let spans = |mode| {

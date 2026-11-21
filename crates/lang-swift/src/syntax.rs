@@ -5,9 +5,17 @@
 //! failure, an error/missing node anywhere (including inside a stripped body),
 //! an unsupported `_read` accessor, or a malformed conditional sequence is a
 //! fatal `ProjectionError`, so no caller can emit a partial projection.
+//!
+//! The one exception is the pinned grammar's missing production for Swift's
+//! empty tuple expression `()`: only its exact empty-parenthesis recovery shape
+//! is accepted, and every other error or missing node remains fatal.
 
 use base::{ProjectionError, SourceSpan, SupportedPath};
 use tree_sitter::{Node, Parser, Tree};
+
+/// The anonymous token kind Tree-sitter reports for the inserted `!` in its
+/// empty-tuple-expression recovery.
+const MISSING_UNIT_BANG: &str = "!";
 
 /// Tree-sitter node kinds referenced by extraction and rendering.
 pub mod node {
@@ -82,6 +90,10 @@ pub mod node {
     pub const TYPE_PARAMETERS: &str = "type_parameters";
     pub const TYPE_PARAMETER: &str = "type_parameter";
     pub const TYPE_CONSTRAINTS: &str = "type_constraints";
+
+    // Expressions involved in the pinned grammar's empty-tuple recovery.
+    pub const TUPLE_EXPRESSION: &str = "tuple_expression";
+    pub const BANG: &str = "bang";
 
     // Effects.
     pub const THROWS: &str = "throws";
@@ -174,7 +186,7 @@ pub(crate) fn parse(source: &str, path: &SupportedPath) -> Result<Tree, Projecti
             range: whole_file_span(source),
         })?;
 
-    if tree.root_node().has_error() {
+    if tree.root_node().has_error() && !only_empty_tuple_recovery(tree.root_node()) {
         let range = first_error_range(tree.root_node()).unwrap_or_else(|| whole_file_span(source));
         return Err(ProjectionError::ErroneousSyntax {
             path: path.clone(),
@@ -195,6 +207,61 @@ pub(crate) fn parse(source: &str, path: &SupportedPath) -> Result<Tree, Projecti
     }
 
     Ok(tree)
+}
+
+/// The pinned grammar has no production for Swift's empty tuple expression `()`.
+/// It recovers by inserting a missing `!` under a `bang` node inside a
+/// `tuple_expression`, e.g. `(tuple_expression value: (bang (MISSING "!")))`.
+/// Accept only that recovery when the tuple itself contains nothing but `(`,
+/// the inserted bang, `)`, and comments. Every other ERROR/MISSING node remains
+/// fatal, including a missing bang under another parent or a tuple containing a
+/// comma, `?`, or any other token.
+fn only_empty_tuple_recovery(root: Node<'_>) -> bool {
+    let mut stack = vec![root];
+    let mut recoveries = 0usize;
+    while let Some(node) = stack.pop() {
+        if node.is_error() {
+            return false;
+        }
+        if node.is_missing() {
+            if !is_empty_tuple_recovery(node) {
+                return false;
+            }
+            recoveries += 1;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
+        stack.extend(children);
+    }
+    recoveries > 0
+}
+
+fn is_empty_tuple_recovery(missing: Node<'_>) -> bool {
+    if missing.kind() != MISSING_UNIT_BANG {
+        return false;
+    }
+    let Some(bang) = missing.parent() else {
+        return false;
+    };
+    if bang.kind() != node::BANG {
+        return false;
+    }
+    let Some(tuple) = bang.parent() else {
+        return false;
+    };
+    if tuple.kind() != node::TUPLE_EXPRESSION {
+        return false;
+    }
+    let mut cursor = tuple.walk();
+    let mut children = tuple
+        .children(&mut cursor)
+        .filter(|child| !crate::render::is_comment(child.kind()));
+    let (Some(open), Some(middle), Some(close)) =
+        (children.next(), children.next(), children.next())
+    else {
+        return false;
+    };
+    open.kind() == "(" && middle == bang && close.kind() == ")" && children.next().is_none()
 }
 
 pub(crate) fn first_error_range(root: Node<'_>) -> Option<SourceSpan> {

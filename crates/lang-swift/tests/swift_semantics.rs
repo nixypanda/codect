@@ -106,6 +106,48 @@ fn braced_read_accessor_is_unsupported_but_a_read_call_with_argument_is_not() {
     );
 }
 
+// --- empty tuple expression -------------------------------------------------
+
+#[test]
+fn unit_tuple_in_a_return_argument_projects_without_leaking_the_recovery() {
+    let source = "func example() { return .success(()) }\n";
+    assert_eq!(signatures(source), "func example() { ... }\n");
+    assert_eq!(types(source), "");
+}
+
+#[test]
+fn unit_tuple_default_argument_and_type_render_as_written() {
+    let source = "func f(_ value: () = ()) {}\n";
+    assert_eq!(signatures(source), "func f(_ value: () = ()) { ... }\n");
+}
+
+#[test]
+fn nested_and_comment_only_unit_tuples_are_accepted() {
+    let commented = "func f(_ value: () = ( /* unit */ )) {}\n";
+    assert_eq!(signatures(commented), "func f(_ value: () = ()) { ... }\n");
+
+    let nested = "func f(_ value: ((), ()) = ((), ())) {}\n";
+    assert_eq!(
+        signatures(nested),
+        "func f(_ value: ((), ()) = ((), ())) { ... }\n"
+    );
+
+    let in_body = "func f() { _ = (()) }\n";
+    assert_eq!(signatures(in_body), "func f() { ... }\n");
+}
+
+#[test]
+fn unit_tuple_in_a_do_catch_method_is_accepted() {
+    // The shape that motivated the workaround: a `.success(())` return inside
+    // an async `do`/`catch` method. No body statement or recovery token leaks.
+    let source = "final class S {\n    func signOut() async throws {\n        do {\n            try await service.logout()\n            return .success(())\n        } catch {\n            return .failure(error)\n        }\n    }\n}\n";
+    assert_eq!(
+        signatures(source),
+        "final class S {\n    func signOut() async throws { ... }\n}\n"
+    );
+    assert_eq!(types(source), "final class S {}\n");
+}
+
 // --- enum cases -------------------------------------------------------------
 
 #[test]

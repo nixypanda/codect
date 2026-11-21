@@ -224,11 +224,14 @@ These notes explain behavior that is not obvious from the matrix.
   `mutating`/`nonmutating`, isolation modifiers) are captured from source tokens
   with canonical ordering such as `mutating get nonmutating set`.
 - **Grammar limitations.** Parsing is all-or-nothing, with fatal errors for any
-  syntax error — including inside a stripped body. An accessor-position
-  `_read { ... }` is not modeled and is fatal; ordinary `_read()` calls and
-  `_read(...)` calls inside a real getter body are allowed. Braced macro
-  definitions are invalid input and fatal. There is no macro expansion, type
-  inference, cross-file resolution, or public-visibility filtering.
+  syntax error — including inside a stripped body. The pinned grammar has no
+  production for the empty tuple expression `()`; only its exact
+  empty-parenthesis recovery shape is accepted, and every other syntax error
+  remains fatal. An accessor-position `_read { ... }` is not modeled and is
+  fatal; ordinary `_read()` calls and `_read(...)` calls inside a real getter
+  body are allowed. Braced macro definitions are invalid input and fatal. There
+  is no macro expansion, type inference, cross-file resolution, or
+  public-visibility filtering.
 
 ## Test detection
 
