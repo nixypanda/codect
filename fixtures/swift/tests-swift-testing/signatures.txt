@@ -1,0 +1,7 @@
+@Test func basic() { ... }
+
+@Test(arguments: [1, 2]) func parameterized(value: Int) { ... }
+
+@Testing.Test func qualified() { ... }
+
+func notATest() { ... }

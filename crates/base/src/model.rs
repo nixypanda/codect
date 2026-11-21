@@ -42,6 +42,7 @@ pub enum Language {
     Haskell,
     Python,
     Rust,
+    Swift,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -306,6 +307,11 @@ impl RepoPath {
         matches!(self.extension(), Some(b"py" | b"pyi"))
     }
 
+    /// Swift is selected by the case-sensitive `.swift` extension only.
+    pub fn is_swift(&self) -> bool {
+        self.extension() == Some(b"swift")
+    }
+
     pub fn language(&self) -> Option<Language> {
         if self.is_elm() {
             Some(Language::Elm)
@@ -315,6 +321,8 @@ impl RepoPath {
             Some(Language::Haskell)
         } else if self.is_python() {
             Some(Language::Python)
+        } else if self.is_swift() {
+            Some(Language::Swift)
         } else {
             None
         }
@@ -489,14 +497,23 @@ mod tests {
             Some(Language::Python)
         );
         assert_eq!(
+            RepoPath::new("src/App.swift").unwrap().language(),
+            Some(Language::Swift)
+        );
+        assert_eq!(
             RepoPath::new("src/User.elm").unwrap().extension(),
             Some(b"elm".as_slice())
+        );
+        assert_eq!(
+            RepoPath::new("src/App.swift").unwrap().extension(),
+            Some(b"swift".as_slice())
         );
         assert_eq!(RepoPath::new("README.md").unwrap().language(), None);
         assert_eq!(RepoPath::new(".gitignore").unwrap().extension(), None);
         assert_eq!(RepoPath::new("src/Foo.RS").unwrap().language(), None);
         assert_eq!(RepoPath::new("src/Foo.HS").unwrap().language(), None);
         assert_eq!(RepoPath::new("src/Foo.PY").unwrap().language(), None);
+        assert_eq!(RepoPath::new("src/Foo.SWIFT").unwrap().language(), None);
         assert_eq!(RepoPath::new("src/Main.lhs").unwrap().language(), None);
         assert_eq!(RepoPath::new("src/noext").unwrap().language(), None);
         assert_eq!(RepoPath::new("src/trailing.").unwrap().extension(), None);

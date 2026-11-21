@@ -10,6 +10,7 @@ local MODE_FIXTURES = {
   "fixtures/elm/ports-and-infix/input.elm",
   "fixtures/haskell/classes-instances/input.hs",
   "fixtures/python/decorators/input.py",
+  "fixtures/swift/struct-basic/input.swift",
 }
 
 return function(H)

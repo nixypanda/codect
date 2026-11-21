@@ -289,3 +289,106 @@ fn subtree_keys(regions: &[FoldRegion], root: usize) -> Vec<String> {
     }
     keys
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{item_at, supported};
+    use base::{ItemKind, ProjectionMode, RepoPath, SourceOutline, assemble_outline};
+
+    const SOURCE: &str = "#if DEBUG\nstruct A {}\n#else\nfunc f() {}\n#endif\n";
+
+    fn conditional_view() -> (SourceView, RepoPath) {
+        let path = RepoPath::new("a.swift").expect("valid path");
+        let group = "a.swift::cond::if:DEBUG";
+        let branch0 = format!("{group}::branch::0::if:DEBUG");
+        let branch1 = format!("{group}::branch::1::else");
+        let items = vec![
+            item_at(group, None, ItemKind::Module, 0, 4),
+            item_at(&branch0, Some(group), ItemKind::Module, 0, 1),
+            item_at("A", Some(&branch0), ItemKind::Type, 1, 1),
+            item_at(&branch1, Some(group), ItemKind::Module, 2, 3),
+            item_at("f", Some(&branch1), ItemKind::Function, 3, 3),
+        ];
+        // Types keeps the type but drops the callable, as a Swift conditional
+        // with a member of each kind projects.
+        let projection = items[..4].to_vec();
+        let outline =
+            assemble_outline(&supported("a.swift"), projection, items).expect("valid outline");
+        let file = SourceOutline {
+            outline,
+            source: SOURCE.to_owned(),
+        };
+        let mut view = SourceView::new(None, ProjectionMode::Types);
+        view.files = Arc::from(vec![file]);
+        view.ensure_folds(Some(&path));
+        view.ensure_visible_rows(Some(&path));
+        (view, path)
+    }
+
+    #[test]
+    fn a_conditional_child_never_claims_the_guard_start() {
+        let (view, path) = conditional_view();
+        let regions = view.folds.regions(&path).expect("folds are cached");
+        let child = regions
+            .iter()
+            .find(|region| region.stable_key == "A")
+            .expect("the child is outlined");
+        assert_eq!(
+            child.start_line, 2,
+            "the child folds from its own line, not the #if line"
+        );
+        assert_eq!(child.declaration_line, 2);
+        assert_eq!(
+            regions
+                .iter()
+                .filter(|region| region.start_line == 1)
+                .count(),
+            2,
+            "only the GROUP and first BRANCH start at the #if guard"
+        );
+    }
+
+    #[test]
+    fn the_fold_target_at_a_guard_is_the_branch_not_a_child_declaration() {
+        let (mut view, path) = conditional_view();
+        view.body.cursor_line = 1;
+        let regions = view
+            .folds
+            .regions(&path)
+            .expect("folds are cached")
+            .to_vec();
+        let target = view.target_region(&regions).expect("a target at the guard");
+        assert!(
+            regions[target]
+                .stable_key
+                .ends_with("::branch::0::if:DEBUG"),
+            "the guard row targets the conditional branch: {}",
+            regions[target].stable_key
+        );
+    }
+
+    #[test]
+    fn closing_a_conditional_child_keeps_the_guard_source_row_visible() {
+        let (mut view, path) = conditional_view();
+        view.fold_state.set(&path, "A", false);
+        view.ensure_visible_rows(Some(&path));
+        assert!(
+            view.visible_rows()
+                .iter()
+                .any(|row| matches!(row, VisibleRow::Source { line: 1 })),
+            "the #if guard stays a visible source row"
+        );
+        assert!(
+            view.visible_rows().iter().any(|row| matches!(
+                row,
+                VisibleRow::Fold {
+                    line: 2,
+                    summary_line: 2,
+                    ..
+                }
+            )),
+            "the child folds at its own line with its own declaration summary"
+        );
+    }
+}

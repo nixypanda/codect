@@ -192,6 +192,7 @@ function makeMoveFixture() {
   );
   write(dir, "lang/old/point.py", "class Point:\n    x: int\n");
   write(dir, "lang/old/point.rs", "pub struct Point { pub x: i32 }\n");
+  write(dir, "lang/old/Point.swift", "struct Point {\n    var x: Int\n}\n");
 
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "base");
@@ -221,6 +222,7 @@ function makeMoveFixture() {
   git(dir, "mv", "lang/old/point.py", "lang/new/point.py");
   git(dir, "mv", "lang/old/Point.elm", "lang/new/Point.elm");
   git(dir, "mv", "lang/old/Point.hs", "lang/new/Point.hs");
+  git(dir, "mv", "lang/old/Point.swift", "lang/new/Point.swift");
 
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "moves and edits");
@@ -651,7 +653,7 @@ test("stable-key rebasing suppresses false declaration changes in every language
       file.path.startsWith("lang/new/")
   );
   const languages = new Set(allMoves.map((file) => file.language));
-  for (const language of ["elm", "haskell", "python", "rust"]) {
+  for (const language of ["elm", "haskell", "python", "rust", "swift"]) {
     assert.ok(languages.has(language), language);
   }
 
@@ -664,7 +666,12 @@ test("stable-key rebasing suppresses false declaration changes in every language
   }
 
   for (const file of allMoves) {
-    if (file.language !== "python" && file.language !== "rust") continue;
+    if (
+      file.language !== "python" &&
+      file.language !== "rust" &&
+      file.language !== "swift"
+    )
+      continue;
     assert.notEqual(
       file.base.outline[0]?.stable_key,
       file.target.outline[0]?.stable_key,

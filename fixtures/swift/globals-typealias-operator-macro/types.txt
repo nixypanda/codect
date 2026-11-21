@@ -1,0 +1,3 @@
+typealias Handler<T> = (T) -> Void
+
+infix operator ??? : AdditionPrecedence

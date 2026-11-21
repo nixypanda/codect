@@ -13,6 +13,7 @@ lang-elm.workspace = true
 lang-haskell.workspace = true
 lang-python.workspace = true
 lang-rust.workspace = true
+lang-swift.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 ignore.workspace = true

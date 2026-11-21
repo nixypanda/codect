@@ -150,6 +150,7 @@ fn syntax_for(syntaxes: &SyntaxSet, language: Language) -> &SyntaxReference {
         Language::Elm => "elm",
         Language::Haskell => "hs",
         Language::Python => "py",
+        Language::Swift => "swift",
     };
     syntaxes
         .find_syntax_by_extension(extension)
@@ -400,6 +401,34 @@ fn push_run(runs: &mut StyledLine, style: Style, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_language_resolves_to_a_real_syntax() {
+        let assets = assets();
+        let plain = assets.syntaxes.find_syntax_plain_text();
+        for language in [
+            Language::Rust,
+            Language::Elm,
+            Language::Haskell,
+            Language::Python,
+            Language::Swift,
+        ] {
+            let syntax = syntax_for(&assets.syntaxes, language);
+            assert_ne!(
+                syntax.name, plain.name,
+                "{language:?} must not fall back to plain text"
+            );
+        }
+    }
+
+    #[test]
+    fn swift_syntax_highlighting_preserves_the_text() {
+        let text = "struct Point {\n    var x: Double\n}\n";
+        let lines = highlight(text, Language::Swift, &Theme::dark());
+        assert_eq!(lines.len(), text.lines().count());
+        let rendered: String = lines[0].iter().map(|run| run.text.as_str()).collect();
+        assert_eq!(rendered, "struct Point {");
+    }
+
     #[test]
     fn rust_keywords_get_a_foreground_color() {
         let lines = highlight(

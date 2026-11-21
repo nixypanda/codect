@@ -2,8 +2,8 @@
 
 Codect gives selectable focused views and diffs of a codebase. It strips
 implementation bodies so you can read the shape of the code — declarations,
-types, and signatures — without reading how it works. Four languages: Elm,
-Haskell, Python, and Rust.
+types, and signatures — without reading how it works. Five languages: Elm,
+Haskell, Python, Rust, and Swift.
 
 This file is the entry point for agents. It is intentionally short; the linked
 documents hold the detail.
@@ -17,7 +17,7 @@ codect diff --mode <types|signatures|tests> [--merge-base] [--path PATH | --area
 codect show --format json --mode types               # machine-readable projection
 codect show --format json --mode types --stdin --path src/lib.rs
 codect diff --format json --mode signatures HEAD :worktree
-codect show --mode tests --path tests                # Rust and Python only
+codect show --mode tests --path tests                # Rust, Python, and Swift only
 ```
 
 - `show` with an omitted `REVISION` projects supported files on disk (Git-independent); an explicit `REVISION` requires Git. `--mode` is required.
@@ -42,7 +42,8 @@ codect show --mode tests --path tests                # Rust and Python only
   raw source.
 - `tests` is a filter over `signatures`, not a level of detail: it declares no
   types, so it is not self-contained and a type change is invisible to it. It
-  detects tests in Rust and Python only.
+  detects tests in Rust, Python, and Swift (Swift Testing and syntactic XCTest
+  only; `@Suite` alone does not make members tests).
 
 ## Read next
 

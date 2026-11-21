@@ -271,11 +271,21 @@ local function annotation_start(lines, last)
   return nil
 end
 
-function M.fold_start(lines, start_line, is_boundary)
+-- `floor` is one past the declaration start of the nearest ancestor that
+-- begins on an earlier line. A child's leading annotation never grows onto an
+-- ancestor's own header line, which keeps Swift `#if`/`#else` guards visible:
+-- `#` is also a Python comment opener, so the generic comment walk would
+-- otherwise claim the guard as the child's annotation. Grammar-agnostic: only
+-- the outline parent chain and spans are consulted.
+function M.fold_start(lines, start_line, is_boundary, floor)
+  floor = floor or 1
   local line = start_line
-  while line > 1 do
+  while line > floor do
     local block_start, form = annotation_start(lines, line - 1)
     if not block_start then
+      break
+    end
+    if block_start < floor then
       break
     end
     if is_boundary and form == "trailing" and block_start > 1 and is_boundary(block_start - 1) then
@@ -356,11 +366,25 @@ function M.build(file_entry, buf)
     return false
   end
 
+  local function ancestor_start_floor(item)
+    local own = item.span and item.span.start_line or 1
+    local floor = 1
+    for _, other in ipairs(list) do
+      if other ~= item and is_ancestor(item, other.key) then
+        local start = other.span and other.span.start_line or 1
+        if start < own then
+          floor = math.max(floor, start + 1)
+        end
+      end
+    end
+    return floor
+  end
+
   for _, item in ipairs(list) do
     local start = item.span and item.span.start_line or 1
     item.fold_start = M.fold_start(lines, start, function(line)
       return is_boundary(item, line)
-    end)
+    end, ancestor_start_floor(item))
     item.level = math.min(item.depth + 1, 20)
   end
 

@@ -48,6 +48,7 @@ local specs = {
   "test_schema.lua",
   "test_config.lua",
   "test_auto.lua",
+  "test_swift_conditionals.lua",
 }
 
 for _, spec in ipairs(specs) do

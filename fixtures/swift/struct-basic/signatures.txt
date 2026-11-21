@@ -1,0 +1,6 @@
+struct Point: Equatable {
+    var x: Double
+    var y: Double
+    static let origin: Point
+    func shifted(by dx: Double) -> Point { ... }
+}

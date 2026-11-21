@@ -66,10 +66,13 @@ Guarded by: `crates/engine/tests/engine.rs` and CLI diff tests.
 - A consumer tolerates unknown fields; a `schema` value other than the expected
   one is a fatal, explicit version mismatch.
 - Fields may be added additively within a version. Widening an enumerated value
-  set is a compatibility change, not an additive field: `mode` gained `tests`
-  and diff `status` gained `moved`, so a consumer validating either enum rejects
-  the new value. That is intended — a Tests projection must not be read as full
-  Signatures, and a move must not silently become a delete plus an add.
+  set is a compatibility change, not an additive field: `mode` gained `tests`,
+  diff `status` gained `moved`, and `language` gained `swift` (the fifth
+  language), so a consumer validating an enum against an older list rejects the
+  new value. That is intended — a Tests projection must not be read as full
+  Signatures, a move must not silently become a delete plus an add, and a Swift
+  file must not be treated as an unsupported format. The archived
+  `codect.diff.v1.json` is not widened.
 - In v2, a moved file has both sides and a distinct `old_path`; other statuses
   have no `old_path` and carry `equal: false`. The canonical equality of a
   move's projections is carried by `equal`.
@@ -148,7 +151,12 @@ check-tui-core-boundary`, and the `cargo tree` audit in `just check`.
   as `WorktreeRead`. The worktree is not atomic across files; this is not a
   proof against concurrent or malicious mutation.
 - Config files are size-bounded; caches are bounded.
-- Allocation and parser failures are reported, not panicked.
+- Allocation and parser failures are reported, not panicked. Swift additionally
+  rejects malformed conditional-directive sequences and an accessor-position
+  `_read { ... }` (but allows an ordinary `_read()` call) even when the grammar
+  parses them cleanly, and accepts only the pinned grammar's exact recovery for
+  the empty tuple expression `()`; every other ERROR/MISSING node remains fatal
+  like any other selected projection failure.
 - `panic!`, `unwrap`, and `expect` are reserved for tests and statically
   guaranteed initialization.
 

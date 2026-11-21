@@ -1,0 +1,8 @@
+func configure<Value: Codable & Sendable>(
+    _ identifier: String,
+    using decoder: JSONDecoder = JSONDecoder(),
+    forKey key: String = "default-key",
+    withCompletion completion: @escaping (Result<Value, Error>) -> Void
+) async throws -> Value {
+    fatalError()
+}

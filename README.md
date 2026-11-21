@@ -5,7 +5,7 @@
 Selectable focused views and diffs of a codebase. Codect strips implementation
 bodies so a person or a tool can read the shape of the code — declarations,
 types, and signatures — without reading how it works. It supports Elm, Haskell,
-Python, and Rust.
+Python, Rust, and Swift.
 
 ```sh
 codect show --mode signatures --path src/     # outline files on disk
